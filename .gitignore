@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# git
+.coverage
+
 # Temporary planning files
 docs/plans/
 

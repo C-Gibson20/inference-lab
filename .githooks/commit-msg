@@ -1,20 +1,17 @@
 #!/bin/sh
 set -eu
 
-commit_message_file=${1:?commit message file is required}
-first_line=$(sed -n '1p' "$commit_message_file")
-
-pattern='^\[(ingest|retrieval|serving|runtime|storage|provenance|evaluation|profiling|docs|tooling)\] (feat|fix|perf|refactor|docs|test|build|ci|chore)!?: [^[:space:]].*$'
-
-if ! printf '%s\n' "$first_line" | grep -Eq "$pattern"; then
-    cat >&2 <<'EOF'
-Commit rejected: use [<module>] <type>: <description>
-
-<module> must be one of: ingest, retrieval, serving, runtime, storage,
-provenance, evaluation, profiling, docs, tooling.
-<type> must be one of: feat, fix, perf, refactor, docs, test, build, ci, chore.
-Use ! after the type for a breaking change, for example:
-  [retrieval] feat!: change evidence ranking contract
-EOF
-    exit 1
+if [ "$#" -ne 1 ]; then
+    printf '%s\n' 'commit-msg hook requires Git to provide one message-file path.' >&2
+    exit 2
 fi
+
+repo_root=$(git rev-parse --show-toplevel)
+validator="$repo_root/scripts/validate-commit-msg.sh"
+
+if [ ! -x "$validator" ]; then
+    printf '%s\n' "Commit validator is missing or not executable: $validator" >&2
+    exit 2
+fi
+
+exec "$validator" --file "$1"
