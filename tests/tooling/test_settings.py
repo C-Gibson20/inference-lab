@@ -8,7 +8,26 @@ from inference_lab.settings import Settings, get_settings
 
 
 @pytest.fixture(autouse=True)
-def clear_settings_cache() -> Iterator[None]:
+def isolated_settings_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    (tmp_path / "config.toml").write_text(
+        """
+        [models]
+        embedder_path = "/models/qwen3-embedding-0.6b"
+        reranker_path = "/models/bge-reranker-v2"
+        generator_path = "/models/qwen3-27b-q4"
+
+        [runtime]
+        vram_budget_gb = 24
+        max_context_tokens = 8192
+
+        [storage]
+        index_dir = "/data/indexes"
+        metadata_db_path = "/data/metadata.db"
+        """
+    )
+    monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
