@@ -9,6 +9,9 @@ wheels/
 # git
 .coverage
 
+# Configuration files
+config.toml
+
 # Temporary planning files
 docs/plans/
 

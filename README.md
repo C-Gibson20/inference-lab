@@ -24,6 +24,30 @@ The command-line entry point is currently a skeleton:
 uv run inference-lab
 ```
 
+## Configuration
+
+Configuration is loaded from `config.toml` in the project working directory.
+The file is intentionally ignored by Git because model and storage paths are
+specific to each machine or deployment.
+
+Create a local configuration from the tracked example, then update its paths:
+
+```sh
+cp config.example.toml config.toml
+```
+
+The settings loader also supports nested environment-variable overrides. Use
+`__` between the section and field names:
+
+```sh
+MODELS__GENERATOR_PATH=/mnt/models/generator \
+STORAGE__INDEX_DIR=/mnt/data/indexes \
+uv run inference-lab
+```
+
+Run the command from the project root unless the application is given a
+different configuration-loading mechanism in the future.
+
 ## Checks
 
 ```sh

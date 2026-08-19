@@ -1,0 +1,14 @@
+# Copy this file to config.toml and update paths for the local deployment.
+
+[models]
+embedder_path = "/path/to/models/embedder"
+reranker_path = "/path/to/models/reranker"
+generator_path = "/path/to/models/generator"
+
+[runtime]
+vram_budget_gb = 24
+max_context_tokens = 8192
+
+[storage]
+index_dir = "/path/to/data/indexes"
+metadata_db_path = "/path/to/data/metadata.db"
