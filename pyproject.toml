@@ -1,0 +1,31 @@
+[project]
+name = "inference-lab"
+version = "0.1.0"
+description = "Local, provenance-preserving question answering over papers and patents"
+authors = [
+    { name = "C-Gibson20", email = "cg.c0d3@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "requests>=2.34.2",
+]
+
+[project.scripts]
+inference-lab = "inference_lab:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.3",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
