@@ -6,5 +6,8 @@ dist/
 wheels/
 *.egg-info
 
+# Temporary planning files
+docs/plans/
+
 # Virtual environments
 .venv
