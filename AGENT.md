@@ -5,6 +5,17 @@ a local, persistent corpus tool for papers and patents—not a small uploaded-fi
 session app. Evidence and source-span provenance come before answer fluency;
 unsupported answers should abstain.
 
+## Agent role in this repo
+
+Code implementation is done by the maintainer, not by agents, unless
+explicitly asked otherwise in a session. Default agent tasks are:
+- Planning: breaking spec items into issues, proposing build order
+- Review: assessing skeleton/structure/PRs against the spec
+- Docs/tooling: hooks, CI config, non-core-logic scripts (fair game to write)
+
+Do not write or scaffold implementation code in `src/` (or your actual
+module dirs) unless the user explicitly requests it in that session.
+
 ## Architecture
 
 - `src/inference_lab/ingest/`: identify, deduplicate, parse/OCR, preserve spans,
