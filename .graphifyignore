@@ -1,0 +1,7 @@
+# Keep the code graph focused on application code and tests.
+*
+
+!src/
+!src/**
+!tests/
+!tests/**
