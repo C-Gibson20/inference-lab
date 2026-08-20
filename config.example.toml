@@ -12,3 +12,7 @@ max_context_tokens = 8192
 [storage]
 index_dir = "/path/to/data/indexes"
 metadata_db_path = "/path/to/data/metadata.db"
+
+[logging]
+level = "INFO"
+format = "auto"

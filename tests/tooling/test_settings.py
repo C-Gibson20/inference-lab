@@ -121,8 +121,29 @@ def test_invalid_setting_type_is_rejected(tmp_path) -> None:
         TestSettings()
 
 
-def test_logging_settings_default() -> None:
-    configured = get_settings()
+def test_logging_settings_default(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+        [models]
+        embedder_path = "/models/embedder"
+        reranker_path = "/models/reranker"
+        generator_path = "/models/generator"
+
+        [runtime]
+        vram_budget_gb = 24
+
+        [storage]
+        index_dir = "/data/indexes"
+        metadata_db_path = "/data/metadata.db"
+        """
+    )
+
+    class TestSettings(Settings):
+        model_config = Settings.model_config.copy()
+        model_config["toml_file"] = config_file
+
+    configured = TestSettings()
 
     assert configured.logging.level == "INFO"
     assert configured.logging.format == "auto"

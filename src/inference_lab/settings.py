@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     models: ModelPaths
     runtime: RuntimeConfig
     storage: StorageConfig
-    logging: LoggingConfig
+    logging: LoggingConfig = LoggingConfig()
 
     @classmethod
     def settings_customise_sources(
