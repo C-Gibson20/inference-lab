@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel
 from pydantic_settings import (
@@ -26,6 +27,11 @@ class StorageConfig(BaseModel):
     metadata_db_path: Path
 
 
+class LoggingConfig(BaseModel):
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    format: Literal["auto", "console", "json"] = "auto"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         toml_file="config.toml",
@@ -35,6 +41,7 @@ class Settings(BaseSettings):
     models: ModelPaths
     runtime: RuntimeConfig
     storage: StorageConfig
+    logging: LoggingConfig
 
     @classmethod
     def settings_customise_sources(
