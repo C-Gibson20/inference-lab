@@ -1,31 +1,13 @@
-import importlib.util
 import subprocess
-import sys
 from pathlib import Path
-from types import ModuleType
 from unittest.mock import Mock
 
 import pytest
 
-
-SCRIPT = Path(__file__).parents[3] / "scripts" / "graph" / "generate_graph.py"
-
-
-@pytest.fixture
-def graph_module() -> ModuleType:
-    """Load the standalone graph generator without executing its CLI."""
-    spec = importlib.util.spec_from_file_location("generate_graph", SCRIPT)
-    assert spec is not None
-    assert spec.loader is not None
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from inference_lab.tooling import graph as graph_module
 
 
 def test_require_graphify_fails_when_executable_is_missing(
-    graph_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(graph_module.shutil, "which", lambda _: None)
@@ -39,7 +21,6 @@ def test_require_graphify_fails_when_executable_is_missing(
 
 
 def test_require_scan_scope_requires_src_and_tests(
-    graph_module: ModuleType,
     tmp_path: Path,
 ) -> None:
     (tmp_path / "src").mkdir()
@@ -54,7 +35,6 @@ def test_require_scan_scope_requires_src_and_tests(
 
 
 def test_run_graphify_command_sets_working_directory_and_timeout(
-    graph_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -90,7 +70,6 @@ def test_run_graphify_command_sets_working_directory_and_timeout(
 
 
 def test_run_graphify_command_converts_timeout_to_runtime_error(
-    graph_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_run(*args: object, **kwargs: object) -> None:
@@ -103,7 +82,6 @@ def test_run_graphify_command_converts_timeout_to_runtime_error(
 
 
 def test_build_staged_graph_validates_graph_and_tree_outputs(
-    graph_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -137,7 +115,6 @@ def test_build_staged_graph_validates_graph_and_tree_outputs(
 
 
 def test_publish_graph_replaces_stale_output(
-    graph_module: ModuleType,
     tmp_path: Path,
 ) -> None:
     output_root = tmp_path / ".dev"
