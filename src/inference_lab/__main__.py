@@ -1,14 +1,7 @@
-import structlog
+"""Allow ``python -m inference_lab`` to use the project CLI."""
 
-from inference_lab.logging.logging_config import configure_logging
-from inference_lab.settings import get_settings
+from . import main
 
 
-def main() -> None:
-    """Entry point for the command-line interface."""
-    settings = get_settings()
-    configure_logging(settings.logging)
-
-    log = structlog.get_logger(__name__)
-    log.info("startup_completed")
-    log.info("no_command_selected")
+if __name__ == "__main__":
+    main()
