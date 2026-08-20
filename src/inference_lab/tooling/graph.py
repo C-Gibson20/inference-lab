@@ -108,6 +108,21 @@ def build_staged_graph(
         if not graph_path.is_file():
             raise RuntimeError(f"Missing generated graph: {graph_path}")
 
+        cluster_result = run_graphify_command(
+            [
+                "cluster-only",
+                str(stage_root),
+                "--no-label",
+            ]
+        )
+
+        if cluster_result.returncode != 0:
+            raise RuntimeError(cluster_result.stderr.strip())
+
+        report_path = staged_dir / "graph.html"
+        if not report_path.is_file():
+            raise RuntimeError(f"Missing clustered graph report: {report_path}")
+
         tree_result = run_graphify_command(
             [
                 "tree",

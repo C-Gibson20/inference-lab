@@ -98,6 +98,9 @@ def test_build_staged_graph_validates_graph_and_tree_outputs(
             staged_dir = stage_root / "graphify-out"
             staged_dir.mkdir()
             (staged_dir / "graph.json").write_text('{"nodes": [], "edges": []}')
+        elif arguments[0] == "cluster-only":
+            stage_root = Path(arguments[1])
+            (stage_root / "graphify-out" / "graph.html").write_text("<html></html>")
         else:
             tree_path = Path(arguments[arguments.index("--output") + 1])
             tree_path.write_text("<html></html>")
