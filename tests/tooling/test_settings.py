@@ -25,6 +25,10 @@ def isolated_settings_environment(
         [storage]
         index_dir = "/data/indexes"
         metadata_db_path = "/data/metadata.db"
+
+        [logging]
+        level = "DEBUG"
+        format = "json"
         """
     )
     monkeypatch.chdir(tmp_path)
@@ -106,6 +110,83 @@ def test_invalid_setting_type_is_rejected(tmp_path) -> None:
         """
         [runtime]
         vram_budget_gb = "not an int"
+        """
+    )
+
+    class TestSettings(Settings):
+        model_config = Settings.model_config.copy()
+        model_config["toml_file"] = config_file
+
+    with pytest.raises(ValidationError):
+        TestSettings()
+
+
+def test_logging_settings_default() -> None:
+    configured = get_settings()
+
+    assert configured.logging.level == "INFO"
+    assert configured.logging.format == "auto"
+
+
+def test_logging_settings_load_from_toml() -> None:
+    configured = get_settings()
+
+    assert configured.logging.level == "DEBUG"
+    assert configured.logging.format == "json"
+
+
+def test_explicit_logging_settings_override_toml() -> None:
+    configured = Settings(logging={"level": "WARNING"})
+
+    assert configured.logging.level == "WARNING"
+    assert configured.logging.format == "json"
+
+
+def test_nested_logging_level_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOGGING__LEVEL", "ERROR")
+
+    configured = get_settings()
+
+    assert configured.logging.level == "ERROR"
+    assert configured.logging.format == "json"
+
+
+def test_nested_logging_format_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOGGING__FORMAT", "console")
+
+    configured = get_settings()
+
+    assert configured.logging.level == "DEBUG"
+    assert configured.logging.format == "console"
+
+
+def test_invalid_logging_level_is_rejected(tmp_path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+        [logging]
+        level = "TRACE"
+        """
+    )
+
+    class TestSettings(Settings):
+        model_config = Settings.model_config.copy()
+        model_config["toml_file"] = config_file
+
+    with pytest.raises(ValidationError):
+        TestSettings()
+
+
+def test_invalid_logging_format_is_rejected(tmp_path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+        [logging]
+        format = "xml"
         """
     )
 
