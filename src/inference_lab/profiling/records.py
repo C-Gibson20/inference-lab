@@ -2,8 +2,10 @@
 
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Literal
+
+from .utils import utc_now
 
 
 _SNAKE_CASE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
@@ -33,7 +35,7 @@ class ProfilingRecord:
     request_id: str | None = None
     stage_id: str | None = None
     parent_stage_id: str | None = None
-    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = field(default_factory=utc_now)
     record_schema_version: int = 1
 
     def __post_init__(self) -> None:
