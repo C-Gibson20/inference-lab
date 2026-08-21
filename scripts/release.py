@@ -62,6 +62,7 @@ def next_version(current: str, commits: list[tuple[str, str, str, bool]]) -> str
 
 
 def main() -> None:
+    """Preview or apply the next release version and changelog section."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

@@ -1,7 +1,8 @@
 # Backup and restore runbook
 
-> **Status:** Workflow defined; exact commands and storage-specific procedures
-> remain implementation-dependent.
+> **Status:** Workflow and initial backup contract defined by TOOL-04; backup
+> operations, exact commands, and storage-specific procedures are deferred to
+> `STOR-08` after the persistent component interfaces are implemented.
 
 This runbook covers backup and restore of the persistent corpus state. The
 normative policy is defined in the [backup-restore conventions](../conventions/backup-restore.md).
@@ -86,10 +87,35 @@ Portable backups should be used for cross-machine and deterministic-fixture
 testing. Compatible recovery snapshots should be tested separately for fast
 local recovery.
 
+## Initial backup contract
+
+The initial implementation uses immutable, generation-based full portable
+backups. A portable backup contains a logical metadata-store export, canonical
+chunks and provenance, index configuration and generation metadata, a manifest,
+schema information, and checksums. Serialized indexes are included only when
+their format is documented and portable; otherwise they are rebuilt from the
+canonical records during restore. Compatible recovery snapshots are an
+optimization and do not replace this baseline contract.
+
+Backup settings belong under `[storage]` and follow the normal precedence order
+(explicit `Settings(...)` values, environment variables, then `config.toml`):
+
+| Setting | TOML field | Environment override | Default or policy |
+| --- | --- | --- | --- |
+| Backup destination | `storage.backup_dir` | `STORAGE__BACKUP_DIR` | Required when backup operations are enabled. |
+| Restore staging directory | `storage.restore_staging_dir` | `STORAGE__RESTORE_STAGING_DIR` | Required when restore operations are enabled. |
+| Retained generations | `storage.backup_retention_count` | `STORAGE__BACKUP_RETENTION_COUNT` | Defaults to `5`. |
+| Compression | `storage.backup_compression` | `STORAGE__BACKUP_COMPRESSION` | Defaults to `none`. |
+| Automatic backups | `storage.automatic_backup_enabled` | `STORAGE__AUTOMATIC_BACKUP_ENABLED` | Defaults to `false`; explicit backups are the baseline. |
+
+These settings are the selected contract but are not available until the
+backup lifecycle is implemented. Paths must be local filesystem paths, and
+backup and restore must report clear errors for inaccessible or undersized
+destinations.
+
 ## To be completed during implementation
 
 - Final backup and restore commands or API operations.
-- Configuration names, defaults, and environment overrides.
 - Concrete backup layout and storage paths.
 - Database- and index-specific snapshot procedures.
 - Permissions and service-management steps.

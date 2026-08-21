@@ -1,4 +1,7 @@
+"""Safely generate and publish the repository's local Graphify artifacts."""
+
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -16,6 +19,24 @@ OUTPUT_DIR = OUTPUT_ROOT / "graphify-out"
 GRAPHIFY_ROOT = REPO_ROOT
 GRAPHIFY_SCOPE = ("src", "tests")
 GRAPHIFY_TIMEOUT_SECONDS = 300
+REPOSITORY_IDENTIFIER = "."
+OUTPUT_IDENTIFIER = ".dev/graphify-out"
+
+
+class GraphifyFailure(RuntimeError):
+    """Represent a safe, structured Graphify failure without raw diagnostics."""
+
+    def __init__(
+        self,
+        category: str,
+        *,
+        stage: str,
+        returncode: int | None = None,
+    ) -> None:
+        super().__init__(category)
+        self.category = category
+        self.stage = stage
+        self.returncode = returncode
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,7 +77,11 @@ def require_scan_scope(log: structlog.stdlib.BoundLogger) -> bool:
     return True
 
 
-def run_graphify_command(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+def run_graphify_command(
+    arguments: list[str],
+    *,
+    stage: str = "command",
+) -> subprocess.CompletedProcess[str]:
     """Run Graphify from the repository root with a bounded execution time."""
     try:
         return subprocess.run(
@@ -67,28 +92,68 @@ def run_graphify_command(arguments: list[str]) -> subprocess.CompletedProcess[st
             timeout=GRAPHIFY_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"Graphify timed out after {GRAPHIFY_TIMEOUT_SECONDS} seconds"
-        ) from exc
+        raise GraphifyFailure("timeout", stage=stage) from exc
     except OSError as exc:
-        raise RuntimeError(f"Could not start Graphify: {exc}") from exc
+        raise GraphifyFailure("start_failed", stage=stage) from exc
+
+
+def run_graphify_stage(
+    arguments: list[str],
+    *,
+    stage: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run one Graphify stage and discard diagnostics from failed commands."""
+    result = run_graphify_command(arguments, stage=stage)
+    if result.returncode != 0:
+        raise GraphifyFailure(
+            "subprocess_failed",
+            stage=stage,
+            returncode=result.returncode,
+        )
+
+    return result
+
+
+def validate_graph_json(graph_path: Path) -> None:
+    """Validate the minimum Graphify graph structure before publication."""
+    try:
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GraphifyFailure("invalid_output", stage="extract") from exc
+
+    if (
+        not isinstance(graph, dict)
+        or not isinstance(graph.get("nodes"), list)
+        or not isinstance(graph.get("edges"), list)
+    ):
+        raise GraphifyFailure("invalid_output", stage="extract")
+
+
+def validate_html_output(html_path: Path, *, stage: str) -> None:
+    """Require an HTML output containing at least one non-whitespace byte."""
+    try:
+        if not html_path.read_text(encoding="utf-8").strip():
+            raise GraphifyFailure("invalid_output", stage=stage)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise GraphifyFailure("invalid_output", stage=stage) from exc
 
 
 def build_staged_graph(
     log: structlog.stdlib.BoundLogger,
 ) -> tuple[Path, Path]:
+    """Generate and validate Graphify artifacts in an unpublished staging directory."""
     stage_root = Path(tempfile.mkdtemp(prefix=".graphify-refresh-", dir=OUTPUT_ROOT))
     staged_dir = stage_root / "graphify-out"
 
     log.info(
         "graph_generation_started",
-        graphify_root=str(GRAPHIFY_ROOT),
+        graphify_root=REPOSITORY_IDENTIFIER,
         included_scope=list(GRAPHIFY_SCOPE),
-        output_dir=str(OUTPUT_DIR),
+        output_dir=OUTPUT_IDENTIFIER,
     )
 
     try:
-        result = run_graphify_command(
+        run_graphify_stage(
             [
                 "extract",
                 str(GRAPHIFY_ROOT),
@@ -98,32 +163,30 @@ def build_staged_graph(
                 "1",
                 "--out",
                 str(stage_root),
-            ]
+            ],
+            stage="extract",
         )
-
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip())
 
         graph_path = staged_dir / "graph.json"
         if not graph_path.is_file():
-            raise RuntimeError(f"Missing generated graph: {graph_path}")
+            raise GraphifyFailure("missing_output", stage="extract")
+        validate_graph_json(graph_path)
 
-        cluster_result = run_graphify_command(
+        run_graphify_stage(
             [
                 "cluster-only",
                 str(stage_root),
                 "--no-label",
-            ]
+            ],
+            stage="cluster",
         )
-
-        if cluster_result.returncode != 0:
-            raise RuntimeError(cluster_result.stderr.strip())
 
         report_path = staged_dir / "graph.html"
         if not report_path.is_file():
-            raise RuntimeError(f"Missing clustered graph report: {report_path}")
+            raise GraphifyFailure("missing_output", stage="cluster")
+        validate_html_output(report_path, stage="cluster")
 
-        tree_result = run_graphify_command(
+        run_graphify_stage(
             [
                 "tree",
                 "--graph",
@@ -132,43 +195,57 @@ def build_staged_graph(
                 str(staged_dir / "GRAPH_TREE.html"),
                 "--root",
                 ".",
-            ]
+            ],
+            stage="tree",
         )
-
-        if tree_result.returncode != 0:
-            raise RuntimeError(tree_result.stderr.strip())
 
         tree_path = staged_dir / "GRAPH_TREE.html"
         if not tree_path.is_file():
-            raise RuntimeError(f"Missing tree output: {tree_path}")
+            raise GraphifyFailure("missing_output", stage="tree")
+        validate_html_output(tree_path, stage="tree")
 
         return stage_root, staged_dir
 
-    except Exception:
+    except GraphifyFailure:
         shutil.rmtree(stage_root, ignore_errors=True)
         raise
+    except Exception as exc:
+        shutil.rmtree(stage_root, ignore_errors=True)
+        raise GraphifyFailure("generation_failed", stage="build") from exc
 
 
 def publish_graph(stage_root: Path, staged_dir: Path) -> None:
-    """Atomically publish a validated graph and remove stale output."""
+    """Publish a validated graph while retaining the old output on failure."""
     previous_dir = OUTPUT_ROOT / ".graphify-previous"
+    moved_previous = False
+    published = False
 
     try:
         if previous_dir.exists():
-            shutil.rmtree(previous_dir)
+            raise GraphifyFailure("publish_failed", stage="publish")
 
         if OUTPUT_DIR.exists():
             os.replace(OUTPUT_DIR, previous_dir)
+            moved_previous = True
 
         os.replace(staged_dir, OUTPUT_DIR)
+        published = True
 
-    except Exception:
-        if not OUTPUT_DIR.exists() and previous_dir.exists():
-            os.replace(previous_dir, OUTPUT_DIR)
-        raise
+    except Exception as exc:
+        if moved_previous and not OUTPUT_DIR.exists() and previous_dir.exists():
+            try:
+                os.replace(previous_dir, OUTPUT_DIR)
+            except OSError:
+                # Keep the backup in place if rollback itself fails.
+                pass
+        if isinstance(exc, GraphifyFailure):
+            raise
+        raise GraphifyFailure("publish_failed", stage="publish") from exc
 
     finally:
-        shutil.rmtree(previous_dir, ignore_errors=True)
+        if published:
+            # Cleanup is deliberately best-effort after the new output is live.
+            shutil.rmtree(previous_dir, ignore_errors=True)
         shutil.rmtree(stage_root, ignore_errors=True)
 
 
@@ -179,15 +256,24 @@ def refresh_graph(log: structlog.stdlib.BoundLogger) -> bool:
     try:
         stage_root, staged_dir = build_staged_graph(log)
         publish_graph(stage_root, staged_dir)
-    except Exception as exc:
+    except GraphifyFailure as exc:
         log.error(
             "graph_refresh_failed",
-            error_type=type(exc).__name__,
-            error=str(exc),
+            failure_category=exc.category,
+            stage=exc.stage,
+            returncode=exc.returncode,
+        )
+        return False
+    except Exception:
+        log.error(
+            "graph_refresh_failed",
+            failure_category="unexpected_failure",
+            stage="refresh",
+            returncode=None,
         )
         return False
 
-    log.info("graph_refresh_complete", output_dir=str(OUTPUT_DIR))
+    log.info("graph_refresh_complete", output_dir=OUTPUT_IDENTIFIER)
     return True
 
 

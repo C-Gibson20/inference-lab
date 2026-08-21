@@ -24,8 +24,15 @@ The current sections are:
 | `[models]` | Local embedder, reranker, and generator paths |
 | `[runtime]` | VRAM budget and maximum context size |
 | `[storage]` | Persistent index and metadata database paths |
+| `[logging]` | Log level and output format |
 
 Run the application from the directory containing `config.toml`.
+
+There is no generic `[feature_flags]` section. Feature flags are introduced
+only alongside the feature they control, in the relevant typed settings model.
+The owning feature must document each flag's TOML field, environment override,
+default, and operational effect. Until then, a proposed flag is unsupported
+and must be rejected by configuration validation.
 
 ## Source precedence
 
@@ -93,5 +100,9 @@ Every new setting should have:
 
 Domain modules should receive validated settings rather than reading
 `os.environ` directly.
+
+Feature flags follow the same rules. A flag must have a clear owning feature,
+an explicit boolean type and default, and a field-specific environment name;
+flags must not be represented by an untyped dictionary.
 
 Logging settings follow this loading and override strategy.
