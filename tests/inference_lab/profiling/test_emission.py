@@ -1,0 +1,171 @@
+"""Integration tests for structured profiling-record emission."""
+
+import json
+from datetime import UTC, datetime
+from io import StringIO
+
+import pytest
+import structlog
+
+from inference_lab.logging.logging_config import configure_logging
+from inference_lab.profiling.emission import ProfilingRecordLike
+from inference_lab.profiling import (
+    FailureEvent,
+    ResourceMeasurement,
+    StageTiming,
+    emit_record,
+)
+from inference_lab.settings import LoggingConfig
+
+
+def fixed_timestamp() -> datetime:
+    """Return a deterministic UTC timestamp for emitted records."""
+    return datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        StageTiming(
+            event="stage_completed",
+            module="ingest",
+            pipeline_stage="parse",
+            stage_id="parse-1",
+            timestamp=fixed_timestamp(),
+            duration_ms=2.5,
+            status="completed",
+        ),
+        ResourceMeasurement(
+            category="gpu_utilization",
+            unit="percent",
+            value=75.0,
+            timestamp=fixed_timestamp(),
+        ),
+        FailureEvent(
+            failure_category="input",
+            failure_code="malformed_document",
+            module="ingest",
+            pipeline_stage="parse",
+            timestamp=fixed_timestamp(),
+        ),
+    ],
+)
+def test_emits_each_record_as_structured_json(record: ProfilingRecordLike) -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+
+    emit_record(structlog.get_logger("profiling"), record)
+    payload = json.loads(stream.getvalue())
+
+    assert isinstance(payload["event"], str)
+    assert isinstance(payload["timestamp"], str)
+    assert payload["timestamp"].endswith("Z")
+    assert payload["module"] is not None
+    assert "pipeline_stage" in payload
+    assert "document_id" in payload
+    assert "corpus_version" in payload
+    assert payload["level"] in {"info", "warning", "error", "critical"}
+
+
+def test_emitted_record_preserves_context_and_nullable_fields() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+
+    emit_record(
+        structlog.get_logger("profiling"),
+        ResourceMeasurement(
+            category="kv_cache",
+            unit="GiB",
+            value=4.0,
+            timestamp=fixed_timestamp(),
+            module="runtime",
+            pipeline_stage="generate",
+            stage_id="generate-1",
+            run_id="run-1",
+            request_id="request-1",
+            document_id="document-1",
+            corpus_version="corpus-version-1",
+        ),
+    )
+
+    payload = json.loads(stream.getvalue())
+
+    assert payload["module"] == "runtime"
+    assert payload["pipeline_stage"] == "generate"
+    assert payload["stage_id"] == "generate-1"
+    assert payload["run_id"] == "run-1"
+    assert payload["request_id"] == "request-1"
+    assert payload["document_id"] == "document-1"
+    assert payload["corpus_version"] == "corpus-version-1"
+
+
+def test_failure_output_contains_no_raw_payload_fields() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+
+    emit_record(
+        structlog.get_logger("profiling"),
+        FailureEvent(
+            failure_category="internal",
+            failure_code="backend_failed",
+            exception_type="RuntimeError",
+            timestamp=fixed_timestamp(),
+        ),
+    )
+
+    payload = json.loads(stream.getvalue())
+
+    assert payload["exception_type"] == "RuntimeError"
+    assert "message" not in payload
+    assert "traceback" not in payload
+    assert "query" not in payload
+    assert "prompt" not in payload
+    assert "model_output" not in payload
+    assert "secret" not in payload
+
+
+def test_infers_warning_for_unavailable_measurement() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+    emit_record(
+        structlog.get_logger("profiling"),
+        ResourceMeasurement(
+            category="power",
+            unit="watt",
+            value=None,
+            status="unavailable",
+            timestamp=fixed_timestamp(),
+        ),
+    )
+
+    payload = json.loads(stream.getvalue())
+    assert payload["level"] == "warning"
+
+
+def test_infers_error_for_failed_timing_record() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+    emit_record(
+        structlog.get_logger("profiling"),
+        StageTiming(
+            event="stage_completed",
+            module="ingest",
+            pipeline_stage="parse",
+            stage_id="parse-1",
+            timestamp=fixed_timestamp(),
+            duration_ms=2.5,
+            status="failed",
+        ),
+    )
+
+    payload = json.loads(stream.getvalue())
+    assert payload["level"] == "error"
+
+
+def test_rejects_record_without_event() -> None:
+    class InvalidRecord:
+        def to_dict(self) -> dict[str, object]:
+            return {"module": "profiling"}
+
+    with pytest.raises(ValueError, match="non-empty event"):
+        emit_record(object(), InvalidRecord())
