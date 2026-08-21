@@ -18,7 +18,8 @@ def _add_record_fields(
     event_dict: dict[str, Any],
 ) -> dict[str, Any]:
     """Add the stable fields required by the logging conventions."""
-    event_dict["module"] = event_dict.pop("logger", event_dict.get("module"))
+    logger_name = event_dict.pop("logger", None)
+    event_dict.setdefault("module", logger_name)
     for field in _CONTEXT_FIELDS:
         event_dict.setdefault(field, None)
     return event_dict

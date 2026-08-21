@@ -67,6 +67,63 @@ def test_emits_each_record_as_structured_json(record: ProfilingRecordLike) -> No
     assert payload["level"] in {"info", "warning", "error", "critical"}
 
 
+def test_emitted_record_preserves_context_and_nullable_fields() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+
+    emit_record(
+        structlog.get_logger("profiling"),
+        ResourceMeasurement(
+            category="kv_cache",
+            unit="GiB",
+            value=4.0,
+            timestamp=fixed_timestamp(),
+            module="runtime",
+            pipeline_stage="generate",
+            stage_id="generate-1",
+            run_id="run-1",
+            request_id="request-1",
+            document_id="document-1",
+            corpus_version="corpus-version-1",
+        ),
+    )
+
+    payload = json.loads(stream.getvalue())
+
+    assert payload["module"] == "runtime"
+    assert payload["pipeline_stage"] == "generate"
+    assert payload["stage_id"] == "generate-1"
+    assert payload["run_id"] == "run-1"
+    assert payload["request_id"] == "request-1"
+    assert payload["document_id"] == "document-1"
+    assert payload["corpus_version"] == "corpus-version-1"
+
+
+def test_failure_output_contains_no_raw_payload_fields() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+
+    emit_record(
+        structlog.get_logger("profiling"),
+        FailureEvent(
+            failure_category="internal",
+            failure_code="backend_failed",
+            exception_type="RuntimeError",
+            timestamp=fixed_timestamp(),
+        ),
+    )
+
+    payload = json.loads(stream.getvalue())
+
+    assert payload["exception_type"] == "RuntimeError"
+    assert "message" not in payload
+    assert "traceback" not in payload
+    assert "query" not in payload
+    assert "prompt" not in payload
+    assert "model_output" not in payload
+    assert "secret" not in payload
+
+
 def test_infers_warning_for_unavailable_measurement() -> None:
     stream = StringIO()
     configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
