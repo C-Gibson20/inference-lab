@@ -1,3 +1,5 @@
+"""Typed application settings and configuration-source precedence."""
+
 from functools import lru_cache
 from pathlib import Path
 import re
@@ -25,6 +27,8 @@ def _validate_local_path(value: object) -> object:
 
 
 class ModelPaths(BaseModel):
+    """Filesystem locations for the local embedding, reranking, and generator models."""
+
     model_config = ConfigDict(extra="forbid")
 
     embedder_path: Path
@@ -37,6 +41,8 @@ class ModelPaths(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
+    """Hardware and context limits used by the runtime."""
+
     model_config = ConfigDict(extra="forbid")
 
     vram_budget_gb: int = Field(gt=0)
@@ -44,6 +50,8 @@ class RuntimeConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
+    """Filesystem locations for persistent indexes and metadata."""
+
     model_config = ConfigDict(extra="forbid")
 
     index_dir: Path
@@ -55,6 +63,8 @@ class StorageConfig(BaseModel):
 
 
 class LoggingConfig(BaseModel):
+    """Log level and renderer settings for application output."""
+
     model_config = ConfigDict(extra="forbid")
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
@@ -62,6 +72,8 @@ class LoggingConfig(BaseModel):
 
 
 class Settings(BaseSettings):
+    """Validated application settings loaded from explicit, environment, or TOML values."""
+
     model_config = SettingsConfigDict(
         toml_file="config.toml",
         env_nested_delimiter="__",
@@ -82,6 +94,7 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Return configuration sources in descending precedence order."""
         return (
             init_settings,
             env_settings,
@@ -93,4 +106,5 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    """Load and cache the validated settings for the current process."""
     return Settings()

@@ -1,3 +1,5 @@
+"""Configure structured stdout logging for the application."""
+
 import logging
 import sys
 from typing import Any, TextIO

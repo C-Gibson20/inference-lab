@@ -1,3 +1,5 @@
+"""Safely generate and publish the repository's local Graphify artifacts."""
+
 import argparse
 import json
 import os
@@ -139,6 +141,7 @@ def validate_html_output(html_path: Path, *, stage: str) -> None:
 def build_staged_graph(
     log: structlog.stdlib.BoundLogger,
 ) -> tuple[Path, Path]:
+    """Generate and validate Graphify artifacts in an unpublished staging directory."""
     stage_root = Path(tempfile.mkdtemp(prefix=".graphify-refresh-", dir=OUTPUT_ROOT))
     staged_dir = stage_root / "graphify-out"
 
