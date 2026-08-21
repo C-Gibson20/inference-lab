@@ -77,8 +77,86 @@ def test_run_graphify_command_converts_timeout_to_runtime_error(
 
     monkeypatch.setattr(graph_module.subprocess, "run", fake_run)
 
-    with pytest.raises(RuntimeError, match="Graphify timed out"):
+    with pytest.raises(graph_module.GraphifyFailure) as exc_info:
         graph_module.run_graphify_command(["extract", "."])
+
+    assert exc_info.value.category == "timeout"
+    assert exc_info.value.stage == "command"
+
+
+def test_failed_graphify_stage_does_not_log_stderr_or_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / ".dev"
+    output_root.mkdir()
+    graph_module.OUTPUT_ROOT = output_root
+    graph_module.OUTPUT_DIR = output_root / "graphify-out"
+    graph_module.GRAPHIFY_ROOT = tmp_path
+    log = Mock()
+    secret_path = str(tmp_path / "private-source.py")
+
+    def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            arguments,
+            17,
+            "",
+            f"failed while reading {secret_path}",
+        )
+
+    monkeypatch.setattr(graph_module.subprocess, "run", fake_run)
+
+    assert graph_module.refresh_graph(log) is False
+
+    log.error.assert_called_once_with(
+        "graph_refresh_failed",
+        failure_category="subprocess_failed",
+        stage="extract",
+        returncode=17,
+    )
+    assert secret_path not in str(log.mock_calls)
+    assert str(tmp_path) not in str(log.mock_calls)
+
+
+def test_graph_success_logs_repository_relative_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / ".dev"
+    output_root.mkdir()
+    graph_module.OUTPUT_ROOT = output_root
+    graph_module.OUTPUT_DIR = output_root / "graphify-out"
+    graph_module.GRAPHIFY_ROOT = tmp_path
+    log = Mock()
+
+    def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if "extract" in arguments:
+            stage_root = Path(arguments[arguments.index("--out") + 1])
+            staged_dir = stage_root / "graphify-out"
+            staged_dir.mkdir()
+            (staged_dir / "graph.json").write_text('{"nodes": [], "edges": []}')
+        elif "cluster-only" in arguments:
+            stage_root = Path(arguments[arguments.index("cluster-only") + 1])
+            (stage_root / "graphify-out" / "graph.html").write_text("<html></html>")
+        else:
+            tree_path = Path(arguments[arguments.index("--output") + 1])
+            tree_path.write_text("<html></html>")
+
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(graph_module.subprocess, "run", fake_run)
+
+    assert graph_module.refresh_graph(log) is True, log.mock_calls
+
+    assert log.info.call_args_list[0].kwargs == {
+        "graphify_root": ".",
+        "included_scope": ["src", "tests"],
+        "output_dir": ".dev/graphify-out",
+    }
+    assert log.info.call_args_list[1].kwargs == {
+        "output_dir": ".dev/graphify-out",
+    }
+    assert str(tmp_path) not in str(log.mock_calls)
 
 
 def test_build_staged_graph_validates_graph_and_tree_outputs(
@@ -92,7 +170,7 @@ def test_build_staged_graph_validates_graph_and_tree_outputs(
     graph_module.GRAPHIFY_ROOT = tmp_path
     log = Mock()
 
-    def fake_run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
         if arguments[0] == "extract":
             stage_root = Path(arguments[arguments.index("--out") + 1])
             staged_dir = stage_root / "graphify-out"
