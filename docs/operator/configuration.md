@@ -53,6 +53,10 @@ Backup-specific settings are not currently supported; see the
 [backup and restore runbook](backup-restore.md) and TOOL-04 in the implementation
 backlog for their deferred contract.
 
+Feature flags are not currently part of the configuration contract. They will
+be added as typed, feature-owned settings when the corresponding feature is
+introduced; a generic top-level `feature_flags` section is unsupported.
+
 ## Logging
 
 Logs are written to stdout. `console` is intended for interactive use, `json`
