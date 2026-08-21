@@ -1,14 +1,27 @@
 from functools import lru_cache
 from pathlib import Path
+import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
+
+
+_URI_LOCATION = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def _validate_local_path(value: object) -> object:
+    if isinstance(value, str):
+        if not value.strip():
+            raise ValueError("path must not be empty")
+        if _URI_LOCATION.match(value.strip()):
+            raise ValueError("path must be a local filesystem path")
+    return value
 
 
 class ModelPaths(BaseModel):
@@ -18,12 +31,16 @@ class ModelPaths(BaseModel):
     reranker_path: Path
     generator_path: Path
 
+    _validate_paths = field_validator(
+        "embedder_path", "reranker_path", "generator_path", mode="before"
+    )(_validate_local_path)
+
 
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    vram_budget_gb: int
-    max_context_tokens: int = 8192
+    vram_budget_gb: int = Field(gt=0)
+    max_context_tokens: int = Field(default=8192, gt=0)
 
 
 class StorageConfig(BaseModel):
@@ -31,6 +48,10 @@ class StorageConfig(BaseModel):
 
     index_dir: Path
     metadata_db_path: Path
+
+    _validate_paths = field_validator("index_dir", "metadata_db_path", mode="before")(
+        _validate_local_path
+    )
 
 
 class LoggingConfig(BaseModel):

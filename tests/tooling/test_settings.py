@@ -121,6 +121,44 @@ def test_invalid_setting_type_is_rejected(tmp_path) -> None:
         TestSettings()
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("vram_budget_gb", 0),
+        ("vram_budget_gb", -1),
+        ("max_context_tokens", 0),
+        ("max_context_tokens", -1),
+    ],
+)
+def test_non_positive_runtime_setting_is_rejected(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings(runtime={field: value})
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("models", "embedder_path"),
+        ("models", "reranker_path"),
+        ("models", "generator_path"),
+        ("storage", "index_dir"),
+        ("storage", "metadata_db_path"),
+    ],
+)
+def test_empty_path_is_rejected(section: str, field: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(**{section: {field: ""}})
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["https://example.com/model", "s3://bucket/model", "hf://org/model"],
+)
+def test_uri_shaped_model_path_is_rejected(path: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(models={"generator_path": path})
+
+
 def test_unknown_nested_setting_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(
