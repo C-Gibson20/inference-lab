@@ -1,11 +1,10 @@
 # Backup and restore runbook
 
-> **Status:** Provisional. This runbook defines the operator workflow from the
-> backup policy. Exact commands, configuration names, paths, and
-> storage-specific procedures will be added when implementation begins.
+> **Status:** Workflow defined; exact commands and storage-specific procedures
+> remain implementation-dependent.
 
 This runbook covers backup and restore of the persistent corpus state. The
-normative policy is defined in the [backup conventions](../conventions/backup.md).
+normative policy is defined in the [backup-restore conventions](../conventions/backup-restore.md).
 
 ## Recovery objectives
 
