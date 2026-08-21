@@ -44,6 +44,12 @@ class BackendExecutionError(BackendError):
     default_message: ClassVar[str] = "The backend failed while executing the request."
 
 
+class BackendProtocolError(BackendExecutionError):
+    """Raised when a backend violates the runtime stream contract."""
+
+    default_message: ClassVar[str] = "The backend returned an invalid stream."
+
+
 class BackendResourceError(BackendError):
     """Raised for capacity, memory, or unavailable-device failures."""
 

@@ -23,11 +23,15 @@ class BackendCapability(StrEnum):
 
 
 class GenerationEventType(StrEnum):
-    """Kind of event emitted by a generator backend."""
+    """Kind of event emitted by a generator backend.
+
+    Backend failures are raised as typed exceptions from the stream. They are
+    not represented as events, which keeps successful completion distinct from
+    failure and lets callers preserve partial output naturally.
+    """
 
     DELTA = "delta"
     COMPLETED = "completed"
-    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +308,8 @@ class GenerationEvent:
 
     def _validate(self) -> None:
         """Validate event-specific fields."""
+        if not isinstance(self.event_type, GenerationEventType):
+            raise TypeError("event_type must be a GenerationEventType")
         if self.sequence_number < 0:
             raise ValueError("sequence_number must not be negative")
         if self.event_type is GenerationEventType.DELTA:
@@ -316,8 +322,3 @@ class GenerationEvent:
                 raise ValueError("completed events cannot contain text_delta")
             if not self.finish_reason:
                 raise ValueError("completed events require finish_reason")
-        elif self.event_type is GenerationEventType.FAILED:
-            if self.text_delta is not None:
-                raise ValueError("failed events cannot contain text_delta")
-            if self.finish_reason != "error":
-                raise ValueError("failed events require finish_reason='error'")

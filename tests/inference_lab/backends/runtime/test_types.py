@@ -86,6 +86,15 @@ def test_generation_event_rejects_terminal_fields_on_delta() -> None:
         )
 
 
+def test_generation_event_rejects_unknown_event_type() -> None:
+    with pytest.raises(TypeError, match="GenerationEventType"):
+        GenerationEvent(
+            event_type="delta",  # type: ignore[arg-type]
+            sequence_number=0,
+            text_delta="hello",
+        )
+
+
 def test_generation_message_is_structured() -> None:
     message = GenerationMessage(role="user", content="Question")
 

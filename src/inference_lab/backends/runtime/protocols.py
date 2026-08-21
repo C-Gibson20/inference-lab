@@ -79,7 +79,9 @@ class GeneratorBackend(LifecycleBackend, Protocol):
     def generate(self, request: GenerationRequest) -> AsyncIterator[GenerationEvent]:
         """Stream ordered generation events for a request.
 
-        Consumer cancellation must stop the stream without producing a
-        successful completion event. The caller owns retry and recovery policy.
+        Events are text deltas followed by exactly one completion event. Backend
+        failures are raised as typed exceptions, and consumer cancellation must
+        stop the stream without producing a successful completion event. The
+        caller owns retry and recovery policy.
         """
         ...
