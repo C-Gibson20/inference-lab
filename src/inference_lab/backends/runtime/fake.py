@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+import structlog
+
 from .errors import (
     BackendClosedError,
     BackendExecutionError,
@@ -29,6 +31,8 @@ from .types import (
     RerankResult,
     ScoredCandidate,
 )
+
+_LOGGER = structlog.get_logger(__name__)
 
 
 class FakeFailureMode(StrEnum):
@@ -134,15 +138,28 @@ class FakeBackend:
         if self._is_closed:
             raise BackendClosedError()
         self._is_ready = True
+        _LOGGER.info(
+            "backend_load_completed",
+            pipeline_stage="runtime",
+            backend_name=self.metadata.backend_name,
+            model_name=self.metadata.model_name,
+        )
 
     def close(self) -> None:
         """Close the fake; repeated calls are harmless."""
         self._is_ready = False
         self._is_closed = True
+        _LOGGER.info(
+            "backend_close_completed",
+            pipeline_stage="runtime",
+            backend_name=self.metadata.backend_name,
+            model_name=self.metadata.model_name,
+        )
 
     def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
         """Return deterministic vectors in the request's input order."""
         self._ensure_available()
+        self._log_operation_started(BackendOperation.EMBED)
         self._maybe_fail(BackendOperation.EMBED)
         self._config.sync_sleeper(self._config.initial_delay_seconds)
         self._config.sync_sleeper(
@@ -150,6 +167,12 @@ class FakeBackend:
         )
 
         vectors = self._embedding_vectors(len(request.input_texts))
+        _LOGGER.debug(
+            "backend_operation_completed",
+            pipeline_stage="runtime",
+            operation=BackendOperation.EMBED.value,
+            input_count=len(request.input_texts),
+        )
         return EmbeddingResult(
             vectors=vectors,
             model_metadata=self.metadata,
@@ -166,6 +189,7 @@ class FakeBackend:
     def rerank(self, request: RerankRequest) -> RerankResult:
         """Return deterministic scores and contiguous ranks."""
         self._ensure_available()
+        self._log_operation_started(BackendOperation.RERANK)
         self._maybe_fail(BackendOperation.RERANK)
         self._config.sync_sleeper(self._config.initial_delay_seconds)
         self._config.sync_sleeper(
@@ -191,11 +215,19 @@ class FakeBackend:
             )
             for rank, candidate in enumerate(scored[: request.top_k], start=1)
         )
+        _LOGGER.debug(
+            "backend_operation_completed",
+            pipeline_stage="runtime",
+            operation=BackendOperation.RERANK.value,
+            candidate_count=len(request.candidates),
+            result_count=len(ranked),
+        )
         return RerankResult(scored_candidates=ranked, model_metadata=self.metadata)
 
     def generate(self, request: GenerationRequest) -> AsyncIterator[GenerationEvent]:
         """Return a validated asynchronous stream of deterministic text chunks."""
         self._ensure_available()
+        self._log_operation_started(BackendOperation.GENERATE)
         return validate_generation_stream(self._generate_events(request))
 
     async def _generate_events(
@@ -212,7 +244,7 @@ class FakeBackend:
                 self._config.fail_after_generation_chunks is not None
                 and emitted_chunks >= self._config.fail_after_generation_chunks
             ):
-                self._raise_configured_failure()
+                self._raise_configured_failure(BackendOperation.GENERATE)
             await self._config.async_sleeper(self._config.per_chunk_delay_seconds)
             yield GenerationEvent(
                 event_type=GenerationEventType.DELTA,
@@ -222,6 +254,12 @@ class FakeBackend:
             emitted_chunks += 1
 
         self._ensure_available()
+        _LOGGER.debug(
+            "backend_stream_completed",
+            pipeline_stage="runtime",
+            operation=BackendOperation.GENERATE.value,
+            chunk_count=emitted_chunks,
+        )
         yield GenerationEvent(
             event_type=GenerationEventType.COMPLETED,
             sequence_number=emitted_chunks,
@@ -269,15 +307,39 @@ class FakeBackend:
         ):
             return
         if self._config.fail_operation is operation:
-            self._raise_configured_failure()
+            self._raise_configured_failure(operation)
 
-    def _raise_configured_failure(self) -> None:
+    def _raise_configured_failure(self, operation: BackendOperation) -> None:
         """Raise the configured typed failure."""
+        error_type = (
+            "request"
+            if self._config.failure_mode is FakeFailureMode.REQUEST
+            else "resource"
+            if self._config.failure_mode is FakeFailureMode.RESOURCE
+            else "execution"
+        )
+        _LOGGER.warning(
+            "backend_operation_failed",
+            pipeline_stage="runtime",
+            operation=operation.value,
+            error_type=error_type,
+            retryable=error_type == "resource",
+        )
         if self._config.failure_mode is FakeFailureMode.REQUEST:
             raise BackendRequestError()
         if self._config.failure_mode is FakeFailureMode.RESOURCE:
             raise BackendResourceError()
         raise BackendExecutionError()
+
+    def _log_operation_started(self, operation: BackendOperation) -> None:
+        """Log safe operation metadata without request or response payloads."""
+        _LOGGER.debug(
+            "backend_operation_started",
+            pipeline_stage="runtime",
+            operation=operation.value,
+            backend_name=self.metadata.backend_name,
+            model_name=self.metadata.model_name,
+        )
 
     @staticmethod
     def _token_count(text: str) -> int:

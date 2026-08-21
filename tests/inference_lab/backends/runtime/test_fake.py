@@ -1,4 +1,6 @@
 import asyncio
+import json
+from io import StringIO
 
 import pytest
 
@@ -12,6 +14,8 @@ from inference_lab.backends.runtime.fake import (
     FakeBackendConfig,
     FakeFailureMode,
 )
+from inference_lab.logging.logging_config import configure_logging
+from inference_lab.settings import LoggingConfig
 from inference_lab.backends.runtime.types import (
     BackendOperation,
     EmbeddingRequest,
@@ -156,3 +160,31 @@ def test_fake_exposes_configured_delays_to_injected_sleepers() -> None:
 
     assert sync_delays == [0.1, 0.4]
     assert async_delays == [0.1, 0.3, 0.3]
+
+
+def test_fake_logs_safe_metadata_without_payloads() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+    secret = "PRIVATE DOCUMENT CONTENT"
+    backend = FakeBackend(FakeBackendConfig(generation_chunks=(secret,)))
+    backend.load()
+    backend.embed(EmbeddingRequest(input_texts=(secret,)))
+
+    async def consume() -> None:
+        async for _ in backend.generate(
+            GenerationRequest(
+                messages=(GenerationMessage(role="user", content=secret),)
+            )
+        ):
+            pass
+
+    asyncio.run(consume())
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+
+    assert secret not in stream.getvalue()
+    assert {record["event"] for record in records} >= {
+        "backend_load_completed",
+        "backend_operation_started",
+        "backend_operation_completed",
+        "backend_stream_completed",
+    }
