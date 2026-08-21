@@ -7,6 +7,18 @@ import pytest
 from inference_lab.tooling import graph as graph_module
 
 
+def configure_graph_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> tuple[Path, Path]:
+    output_root = tmp_path / ".dev"
+    output_dir = output_root / "graphify-out"
+    monkeypatch.setattr(graph_module, "OUTPUT_ROOT", output_root)
+    monkeypatch.setattr(graph_module, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(graph_module, "GRAPHIFY_ROOT", tmp_path)
+    return output_root, output_dir
+
+
 def test_require_graphify_fails_when_executable_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -21,10 +33,11 @@ def test_require_graphify_fails_when_executable_is_missing(
 
 
 def test_require_scan_scope_requires_src_and_tests(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     (tmp_path / "src").mkdir()
-    graph_module.GRAPHIFY_ROOT = tmp_path
+    monkeypatch.setattr(graph_module, "GRAPHIFY_ROOT", tmp_path)
     log = Mock()
 
     assert graph_module.require_scan_scope(log) is False
@@ -51,7 +64,7 @@ def test_run_graphify_command_sets_working_directory_and_timeout(
         return completed
 
     monkeypatch.setattr(graph_module.subprocess, "run", fake_run)
-    graph_module.REPO_ROOT = tmp_path
+    monkeypatch.setattr(graph_module, "REPO_ROOT", tmp_path)
 
     result = graph_module.run_graphify_command(["--version"])
 
@@ -88,11 +101,8 @@ def test_failed_graphify_stage_does_not_log_stderr_or_paths(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    output_root = tmp_path / ".dev"
+    output_root, _ = configure_graph_paths(monkeypatch, tmp_path)
     output_root.mkdir()
-    graph_module.OUTPUT_ROOT = output_root
-    graph_module.OUTPUT_DIR = output_root / "graphify-out"
-    graph_module.GRAPHIFY_ROOT = tmp_path
     log = Mock()
     secret_path = str(tmp_path / "private-source.py")
 
@@ -122,11 +132,8 @@ def test_graph_success_logs_repository_relative_identifiers(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    output_root = tmp_path / ".dev"
+    output_root, _ = configure_graph_paths(monkeypatch, tmp_path)
     output_root.mkdir()
-    graph_module.OUTPUT_ROOT = output_root
-    graph_module.OUTPUT_DIR = output_root / "graphify-out"
-    graph_module.GRAPHIFY_ROOT = tmp_path
     log = Mock()
 
     def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
@@ -163,11 +170,8 @@ def test_build_staged_graph_validates_graph_and_tree_outputs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    output_root = tmp_path / ".dev"
+    output_root, _ = configure_graph_paths(monkeypatch, tmp_path)
     output_root.mkdir()
-    graph_module.OUTPUT_ROOT = output_root
-    graph_module.OUTPUT_DIR = output_root / "graphify-out"
-    graph_module.GRAPHIFY_ROOT = tmp_path
     log = Mock()
 
     def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
@@ -225,11 +229,8 @@ def test_build_staged_graph_rejects_invalid_outputs(
     stage: str,
     category: str,
 ) -> None:
-    output_root = tmp_path / ".dev"
+    output_root, _ = configure_graph_paths(monkeypatch, tmp_path)
     output_root.mkdir()
-    graph_module.OUTPUT_ROOT = output_root
-    graph_module.OUTPUT_DIR = output_root / "graphify-out"
-    graph_module.GRAPHIFY_ROOT = tmp_path
     log = Mock()
 
     def fake_run(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
@@ -259,8 +260,7 @@ def test_publish_graph_keeps_backup_when_publish_and_rollback_fail(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    output_root = tmp_path / ".dev"
-    output_dir = output_root / "graphify-out"
+    output_root, output_dir = configure_graph_paths(monkeypatch, tmp_path)
     stage_root = output_root / ".graphify-refresh-test"
     staged_dir = stage_root / "graphify-out"
     output_dir.mkdir(parents=True)
@@ -269,8 +269,6 @@ def test_publish_graph_keeps_backup_when_publish_and_rollback_fail(
     (output_dir / "graph.json").write_text("known-good")
     (staged_dir / "graph.json").write_text("fresh")
 
-    graph_module.OUTPUT_ROOT = output_root
-    graph_module.OUTPUT_DIR = output_dir
     real_replace = graph_module.os.replace
     calls = 0
 
@@ -296,10 +294,10 @@ def test_publish_graph_keeps_backup_when_publish_and_rollback_fail(
 
 
 def test_publish_graph_replaces_stale_output(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    output_root = tmp_path / ".dev"
-    output_dir = output_root / "graphify-out"
+    output_root, output_dir = configure_graph_paths(monkeypatch, tmp_path)
     stage_root = output_root / ".graphify-refresh-test"
     staged_dir = stage_root / "graphify-out"
     output_dir.mkdir(parents=True)
@@ -307,9 +305,6 @@ def test_publish_graph_replaces_stale_output(
     staged_dir.mkdir()
     (output_dir / "stale.json").write_text("stale")
     (staged_dir / "graph.json").write_text("fresh")
-
-    graph_module.OUTPUT_ROOT = output_root
-    graph_module.OUTPUT_DIR = output_dir
 
     graph_module.publish_graph(stage_root, staged_dir)
 
