@@ -38,7 +38,7 @@ jobs:
           enable-cache: true
       - run: uv python install
       - run: uv sync --dev --locked
-      - run: uv run pytest -v --cov=src/inference_lab --cov-report=term-missing
+      - run: uv run pytest -v --cov=src/inference_lab --cov-report=term-missing --cov-fail-under=80
 
   commit-lint:
     name: Validate commit messages
