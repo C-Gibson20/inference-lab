@@ -6,15 +6,18 @@ from .errors import (
     BackendError,
     BackendExecutionError,
     BackendNotReadyError,
+    BackendProtocolError,
     BackendRequestError,
     BackendResourceError,
 )
+from .fake import FakeBackend, FakeBackendConfig, FakeFailureMode
 from .protocols import (
     EmbeddingBackend,
     GeneratorBackend,
     LifecycleBackend,
     RerankerBackend,
 )
+from .streaming import validate_generation_stream
 from .types import (
     BackendCapability,
     BackendMetadata,
@@ -44,8 +47,12 @@ __all__ = [
     "BackendMetadata",
     "BackendNotReadyError",
     "BackendOperation",
+    "BackendProtocolError",
     "BackendRequestError",
     "BackendResourceError",
+    "FakeBackend",
+    "FakeBackendConfig",
+    "FakeFailureMode",
     "EmbeddingBackend",
     "EmbeddingOptions",
     "EmbeddingRequest",
@@ -64,4 +71,5 @@ __all__ = [
     "RerankResult",
     "RerankerBackend",
     "ScoredCandidate",
+    "validate_generation_stream",
 ]
