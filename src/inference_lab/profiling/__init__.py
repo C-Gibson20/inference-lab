@@ -1,5 +1,6 @@
 """Reusable profiling helpers; experiment outputs belong in top-level benchmarks/."""
 
+from inference_lab.profiling.emission import emit_record
 from inference_lab.profiling.failures import FailureEvent
 from inference_lab.profiling.records import LogLevel, ProfilingRecord
 from inference_lab.profiling.resources import ResourceMeasurement
@@ -12,4 +13,5 @@ __all__ = [
     "ResourceMeasurement",
     "StageTimer",
     "StageTiming",
+    "emit_record",
 ]
