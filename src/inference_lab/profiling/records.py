@@ -1,14 +1,12 @@
 """Profiling records for inference-lab."""
 
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from .utils import utc_now
+from .utils import utc_now, is_snake_case
 
 
-_SNAKE_CASE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 _LOG_LEVELS = {"debug", "info", "warning", "error", "critical"}
 
 
@@ -49,7 +47,7 @@ class ProfilingRecord:
         if not self.module:
             raise ValueError("module must not be empty")
 
-        if not _SNAKE_CASE.fullmatch(self.event):
+        if not is_snake_case(self.event):
             raise ValueError("event must use snake_case")
 
         if self.level not in _LOG_LEVELS:
