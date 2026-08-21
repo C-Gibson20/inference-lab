@@ -24,6 +24,7 @@ The current sections are:
 | `[models]` | Local embedder, reranker, and generator paths |
 | `[runtime]` | VRAM budget and maximum context size |
 | `[storage]` | Persistent index and metadata database paths |
+| `[logging]` | Log level and output format |
 
 Run the application from the directory containing `config.toml`.
 
