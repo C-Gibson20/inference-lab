@@ -178,9 +178,16 @@ Backup settings are deployment-specific and belong under the existing
 2. Environment variables.
 3. Values in `config.toml`.
 
-### Settings
+### Deferred settings contract
 
-The initial settings are:
+Backup operations and their artifact shape are not implemented yet. Therefore,
+none of the following settings are currently part of the active configuration
+contract. They are the proposed initial settings for TOOL-04 and must be
+implemented together with the backup lifecycle, artifact layout, and restore
+validation. Until then, unsupported backup fields must fail configuration
+validation rather than being silently ignored.
+
+The proposed settings are:
 
 | Setting | TOML field | Environment override | Policy |
 | --- | --- | --- | --- |

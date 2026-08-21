@@ -1,7 +1,7 @@
 # Backup and restore runbook
 
-> **Status:** Workflow defined; exact commands and storage-specific procedures
-> remain implementation-dependent.
+> **Status:** Workflow defined; backup operations, configuration, exact commands,
+> and storage-specific procedures remain deferred under TOOL-04.
 
 This runbook covers backup and restore of the persistent corpus state. The
 normative policy is defined in the [backup-restore conventions](../conventions/backup-restore.md).
