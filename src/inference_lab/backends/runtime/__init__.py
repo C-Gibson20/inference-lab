@@ -1,6 +1,20 @@
 """Model runtime, residency, memory accounting, and workload scheduling."""
 
-from .protocols import EmbeddingBackend, GeneratorBackend, RerankerBackend
+from .errors import (
+    BackendCancelledError,
+    BackendClosedError,
+    BackendError,
+    BackendExecutionError,
+    BackendNotReadyError,
+    BackendRequestError,
+    BackendResourceError,
+)
+from .protocols import (
+    EmbeddingBackend,
+    GeneratorBackend,
+    LifecycleBackend,
+    RerankerBackend,
+)
 from .types import (
     BackendCapability,
     BackendMetadata,
@@ -23,8 +37,15 @@ from .types import (
 
 __all__ = [
     "BackendCapability",
+    "BackendCancelledError",
+    "BackendClosedError",
+    "BackendError",
+    "BackendExecutionError",
     "BackendMetadata",
+    "BackendNotReadyError",
     "BackendOperation",
+    "BackendRequestError",
+    "BackendResourceError",
     "EmbeddingBackend",
     "EmbeddingOptions",
     "EmbeddingRequest",
@@ -37,6 +58,7 @@ __all__ = [
     "GenerationOptions",
     "GenerationRequest",
     "GenerationUsage",
+    "LifecycleBackend",
     "RerankCandidate",
     "RerankRequest",
     "RerankResult",

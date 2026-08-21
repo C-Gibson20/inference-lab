@@ -20,6 +20,14 @@ class StructuralBackend:
     """Test implementation that does not inherit from a runtime protocol."""
 
     metadata: BackendMetadata
+    is_ready: bool
+    is_closed: bool
+
+    def load(self) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
 
     def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
         raise NotImplementedError
