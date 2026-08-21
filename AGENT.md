@@ -40,8 +40,10 @@ single-GPU constraint visible in runtime decisions.
 ## Conventions and boundaries
 
 Use the project’s Conventional Commit format, Ruff formatting/linting, public
-API docstrings, concise comments for reasoning, and privacy-safe standard
-library logging. Do not add third-party model/data APIs to the deployed path.
+API docstrings, concise comments for reasoning, and privacy-safe structured
+logging. Use `structlog` inside `inference_lab`; use standard-library logging
+only for dependencies and process-level handlers. Do not add third-party
+model/data APIs to the deployed path.
 Do not introduce entity graphs until simpler retrieval and structured queries
 are shown insufficient. Do not move domain-specific ADMET experiments into the
 core product boundary.

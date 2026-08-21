@@ -29,8 +29,9 @@ uv run pytest
 
 Use Ruff’s 88-character formatting and keep imports/lint rules clean. Add
 docstrings to public modules, classes, and functions. Comments should explain
-non-obvious reasoning, not restate code. Use standard-library `logging` for
-operational events; do not log documents, queries, or other sensitive content.
+non-obvious reasoning, not restate code. Use `structlog` inside `inference_lab`;
+use standard-library `logging` only for dependencies and process-level handlers.
+Do not log documents, queries, or other sensitive content.
 
 ## Pull requests
 
