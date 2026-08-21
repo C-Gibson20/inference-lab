@@ -181,10 +181,10 @@ Backup settings are deployment-specific and belong under the existing
 ### Selected initial settings contract
 
 Backup operations and their artifact shape are not implemented yet. The
-following settings are the selected initial contract for TOOL-04 and must be
-implemented together with the backup lifecycle, artifact layout, and restore
-validation. Until then, backup fields remain unavailable to the settings
-loader and must not be silently ignored.
+following settings are the selected initial contract from TOOL-04 and will be
+implemented by `STOR-08` together with the backup lifecycle, artifact layout,
+and restore validation. Until then, backup fields remain unavailable to the
+settings loader and must not be silently ignored.
 
 The selected settings are:
 
