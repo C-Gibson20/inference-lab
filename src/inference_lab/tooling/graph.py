@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -111,6 +112,30 @@ def run_graphify_stage(
     return result
 
 
+def validate_graph_json(graph_path: Path) -> None:
+    """Validate the minimum Graphify graph structure before publication."""
+    try:
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GraphifyFailure("invalid_output", stage="extract") from exc
+
+    if (
+        not isinstance(graph, dict)
+        or not isinstance(graph.get("nodes"), list)
+        or not isinstance(graph.get("edges"), list)
+    ):
+        raise GraphifyFailure("invalid_output", stage="extract")
+
+
+def validate_html_output(html_path: Path, *, stage: str) -> None:
+    """Require an HTML output containing at least one non-whitespace byte."""
+    try:
+        if not html_path.read_text(encoding="utf-8").strip():
+            raise GraphifyFailure("invalid_output", stage=stage)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise GraphifyFailure("invalid_output", stage=stage) from exc
+
+
 def build_staged_graph(
     log: structlog.stdlib.BoundLogger,
 ) -> tuple[Path, Path]:
@@ -142,6 +167,7 @@ def build_staged_graph(
         graph_path = staged_dir / "graph.json"
         if not graph_path.is_file():
             raise GraphifyFailure("missing_output", stage="extract")
+        validate_graph_json(graph_path)
 
         run_graphify_stage(
             [
@@ -155,6 +181,7 @@ def build_staged_graph(
         report_path = staged_dir / "graph.html"
         if not report_path.is_file():
             raise GraphifyFailure("missing_output", stage="cluster")
+        validate_html_output(report_path, stage="cluster")
 
         run_graphify_stage(
             [
@@ -172,6 +199,7 @@ def build_staged_graph(
         tree_path = staged_dir / "GRAPH_TREE.html"
         if not tree_path.is_file():
             raise GraphifyFailure("missing_output", stage="tree")
+        validate_html_output(tree_path, stage="tree")
 
         return stage_root, staged_dir
 
@@ -184,25 +212,37 @@ def build_staged_graph(
 
 
 def publish_graph(stage_root: Path, staged_dir: Path) -> None:
-    """Atomically publish a validated graph and remove stale output."""
+    """Publish a validated graph while retaining the old output on failure."""
     previous_dir = OUTPUT_ROOT / ".graphify-previous"
+    moved_previous = False
+    published = False
 
     try:
         if previous_dir.exists():
-            shutil.rmtree(previous_dir)
+            raise GraphifyFailure("publish_failed", stage="publish")
 
         if OUTPUT_DIR.exists():
             os.replace(OUTPUT_DIR, previous_dir)
+            moved_previous = True
 
         os.replace(staged_dir, OUTPUT_DIR)
+        published = True
 
     except Exception as exc:
-        if not OUTPUT_DIR.exists() and previous_dir.exists():
-            os.replace(previous_dir, OUTPUT_DIR)
+        if moved_previous and not OUTPUT_DIR.exists() and previous_dir.exists():
+            try:
+                os.replace(previous_dir, OUTPUT_DIR)
+            except OSError:
+                # Keep the backup in place if rollback itself fails.
+                pass
+        if isinstance(exc, GraphifyFailure):
+            raise
         raise GraphifyFailure("publish_failed", stage="publish") from exc
 
     finally:
-        shutil.rmtree(previous_dir, ignore_errors=True)
+        if published:
+            # Cleanup is deliberately best-effort after the new output is live.
+            shutil.rmtree(previous_dir, ignore_errors=True)
         shutil.rmtree(stage_root, ignore_errors=True)
 
 
