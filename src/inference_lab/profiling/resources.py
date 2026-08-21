@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
+from .records import LogLevel
 from .utils import utc_now
 
 
@@ -131,6 +132,7 @@ class ResourceMeasurement:
             "unit": self.unit,
             "value": self.value,
             "status": self.status,
+            "level": self.level,
             "measurement_kind": self.measurement_kind,
             "timestamp": self.timestamp.isoformat(),
             "module": self.module,
@@ -142,3 +144,10 @@ class ResourceMeasurement:
             "document_id": self.document_id,
             "corpus_version": self.corpus_version,
         }
+
+    @property
+    def level(self) -> LogLevel:
+        """Return the logging severity implied by measurement status."""
+        if self.status in {"unavailable", "unreliable"}:
+            return "warning"
+        return "info"

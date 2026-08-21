@@ -32,6 +32,7 @@ def test_measured_resource_serializes_all_fields() -> None:
         "unit": "percent",
         "value": 72.5,
         "status": "measured",
+        "level": "info",
         "measurement_kind": "sampled",
         "timestamp": "2026-08-21T12:00:00+00:00",
         "module": "runtime",

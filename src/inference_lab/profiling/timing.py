@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal, Self
 
+from .records import LogLevel
 from .resources import utc_now
 
 
@@ -86,6 +87,7 @@ class StageTiming:
         return {
             "event": self.event,
             "module": self.module,
+            "level": self.level,
             "pipeline_stage": self.pipeline_stage,
             "stage_id": self.stage_id,
             "timestamp": self.timestamp.isoformat(),
@@ -99,6 +101,15 @@ class StageTiming:
             "corpus_version": self.corpus_version,
             "parent_stage_id": self.parent_stage_id,
         }
+
+    @property
+    def level(self) -> LogLevel:
+        """Return the logging severity implied by the stage status."""
+        if self.status == "failed":
+            return "error"
+        if self.status == "cancelled":
+            return "warning"
+        return "info"
 
 
 class StageTimer:
