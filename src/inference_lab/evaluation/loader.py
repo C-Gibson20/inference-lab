@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from .datasets import DatasetManifest
 from .cases import EvaluationCase
 from .utils import is_sha256_pattern
+from .versioning import migrate_case_payload, migrate_manifest_payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,8 +81,8 @@ def _load_cases(case_path: Path) -> tuple[EvaluationCase, ...]:
                 ) from error
 
             try:
-                case = EvaluationCase.model_validate(payload)
-            except ValidationError as error:
+                case = EvaluationCase.model_validate(migrate_case_payload(payload))
+            except (ValidationError, ValueError) as error:
                 raise ValueError(
                     f"Invalid evaluation case at {case_path.name}:{line_number}"
                 ) from error
@@ -148,8 +149,10 @@ def load_dataset(manifest_path: Path) -> LoadedDataset:
         raise ValueError(f"Unable to read dataset manifest: {manifest_path}") from error
 
     try:
-        manifest = DatasetManifest.model_validate(manifest_payload)
-    except ValidationError as error:
+        manifest = DatasetManifest.model_validate(
+            migrate_manifest_payload(manifest_payload)
+        )
+    except (ValidationError, ValueError) as error:
         raise ValueError(f"Invalid dataset manifest: {manifest_path}") from error
 
     case_path = _resolve_case_file(manifest_path, manifest.case_file)

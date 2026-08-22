@@ -4,6 +4,14 @@ from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.utils import HELD_OUT_SPLIT, SplitName
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
+from inference_lab.evaluation.serialisation import (
+    atomic_write,
+    evaluation_json_schema,
+    serialise_cases,
+    serialise_manifest,
+    write_dataset,
+    write_json_schema,
+)
 from inference_lab.evaluation.schemas import (
     AbstentionExpectation,
     AnswerClaim,
@@ -23,5 +31,11 @@ __all__ = [
     "LoadedDataset",
     "load_dataset",
     "NumericExpectation",
+    "atomic_write",
+    "evaluation_json_schema",
+    "serialise_cases",
+    "serialise_manifest",
     "SplitName",
+    "write_dataset",
+    "write_json_schema",
 ]

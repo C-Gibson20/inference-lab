@@ -21,6 +21,7 @@ SOURCE_SPAN_ID = "00000000-0000-4000-8000-000000000005"
 
 def _case(case_id: str = "case-001", split: str = "development") -> dict[str, Any]:
     return {
+        "schema_version": "1.0.0",
         "case_id": case_id,
         "question": "What assay was used?",
         "question_type": "lookup",
@@ -57,6 +58,7 @@ def _write_dataset(
     case_path.write_text(contents, encoding="utf-8", newline="")
 
     manifest: dict[str, Any] = {
+        "schema_version": "1.0.0",
         "dataset_id": "baseline-v1",
         "dataset_version": "1",
         "description": "Evaluation fixture",
