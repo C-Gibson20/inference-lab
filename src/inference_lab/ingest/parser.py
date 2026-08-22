@@ -11,6 +11,7 @@ from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.errors import ParserDecodeError
 from inference_lab.provenance import DocumentId, DocumentVersionId
 from inference_lab.settings import Settings
+from inference_lab.ingest.versioning import CURRENT_PARSER_VERSION, ParserVersion
 
 logger = structlog.get_logger(__name__)
 
@@ -111,6 +112,7 @@ class ParsedDocument:
     page_count: int | None
     character_count: int
     token_count: int | None
+    parser_version: ParserVersion = CURRENT_PARSER_VERSION
 
     def __post_init__(self) -> None:
         self._validate()
@@ -121,6 +123,8 @@ class ParsedDocument:
             raise ValueError("invalid_document_id")
         if not isinstance(self.document_version_id, DocumentVersionId):
             raise ValueError("invalid_document_version_id")
+        if not isinstance(self.parser_version, ParserVersion):
+            raise ValueError("invalid_parser_version")
         if not isinstance(self.text, NormalisedText):
             raise ValueError("invalid_normalised_text")
         if not isinstance(self.character_count, int) or isinstance(

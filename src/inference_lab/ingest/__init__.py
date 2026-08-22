@@ -16,6 +16,15 @@ from inference_lab.ingest.sources import (
     StructuralBlock,
     StructuralBlockKind,
 )
+from inference_lab.ingest.serialisation import (
+    parsed_document_payload,
+    serialise_parsed_document,
+)
+from inference_lab.ingest.versioning import (
+    CURRENT_PARSER_VERSION,
+    ParserVersion,
+    generate_source_span_id,
+)
 from inference_lab.ingest.errors import ParserDecodeError
 
 __all__ = [
@@ -32,4 +41,9 @@ __all__ = [
     "SourceSpan",
     "StructuralBlock",
     "StructuralBlockKind",
+    "parsed_document_payload",
+    "serialise_parsed_document",
+    "CURRENT_PARSER_VERSION",
+    "ParserVersion",
+    "generate_source_span_id",
 ]
