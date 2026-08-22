@@ -92,6 +92,7 @@ class NumericExpectation(BaseModel):
 
     key: str = Field(min_length=1)
     value: float
+    acceptable_values: tuple[float, ...] = ()
     absolute_tolerance: float | None = Field(default=None, ge=0)
     relative_tolerance: float | None = Field(default=None, ge=0)
     unit: str | None = None
@@ -102,6 +103,7 @@ class NumericExpectation(BaseModel):
 
         values = (
             self.value,
+            *self.acceptable_values,
             self.absolute_tolerance,
             self.relative_tolerance,
         )
@@ -111,7 +113,7 @@ class NumericExpectation(BaseModel):
 
 
 class ExpectedAnswer(BaseModel):
-    """Machine-checkable expectations for an answer."""
+    """Machine-checkable expectations; summary text is illustrative only."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -120,6 +122,17 @@ class ExpectedAnswer(BaseModel):
     numeric_values: tuple[NumericExpectation, ...] = ()
     date_values: tuple[DateExpectation, ...] = ()
     comparison_order: tuple[str, ...] | None = None
+    acceptable_comparison_orders: tuple[tuple[str, ...], ...] = ()
+
+
+class EvaluationPolicy(BaseModel):
+    """Governance rules for using the held-out split."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    held_out_tuning_allowed: Literal[False] = False
+    held_out_model_selection_allowed: Literal[False] = False
+    held_out_membership_immutable: Literal[True] = True
 
 
 class AbstentionExpectation(BaseModel):

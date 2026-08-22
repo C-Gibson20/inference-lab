@@ -11,6 +11,7 @@ from inference_lab.evaluation.utils import (
     SchemaVersion,
     SplitName,
 )
+from inference_lab.evaluation.schemas import EvaluationPolicy
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 from inference_lab.provenance.identifiers import CorpusId, CorpusVersionId
 
@@ -31,6 +32,7 @@ class DatasetManifest(BaseModel):
     splits: dict[SplitName, tuple[CaseId, ...]]
     provenance: dict[str, str] = Field(default_factory=dict)
     checksums: dict[str, str] = Field(default_factory=dict)
+    evaluation_policy: EvaluationPolicy = Field(default_factory=EvaluationPolicy)
     created_at: AwareDatetime
     updated_at: AwareDatetime
 

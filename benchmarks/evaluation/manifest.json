@@ -10,6 +10,11 @@
   "dataset_id": "baseline-v1",
   "dataset_version": "1",
   "description": "Deterministic evaluation contract fixture",
+  "evaluation_policy": {
+    "held_out_membership_immutable": true,
+    "held_out_model_selection_allowed": false,
+    "held_out_tuning_allowed": false
+  },
   "provenance": {
     "license": "synthetic-fixture",
     "source": "inference-lab"

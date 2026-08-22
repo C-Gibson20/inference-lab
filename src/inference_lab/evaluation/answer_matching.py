@@ -85,7 +85,20 @@ def numeric_matches(expected: NumericExpectation, observed: float) -> bool:
     if not math.isfinite(observed):
         return False
 
-    difference = abs(observed - expected.value)
+    candidates = (expected.value, *expected.acceptable_values)
+    return any(
+        _numeric_value_matches(expected, candidate, observed)
+        for candidate in candidates
+    )
+
+
+def _numeric_value_matches(
+    expected: NumericExpectation,
+    expected_value: float,
+    observed: float,
+) -> bool:
+    """Match one numeric candidate against an observation."""
+    difference = abs(observed - expected_value)
 
     if expected.absolute_tolerance is not None and (
         difference <= expected.absolute_tolerance
@@ -93,7 +106,7 @@ def numeric_matches(expected: NumericExpectation, observed: float) -> bool:
         return True
 
     if expected.relative_tolerance is not None:
-        denominator = max(abs(expected.value), 1e-12)
+        denominator = max(abs(expected_value), 1e-12)
         if difference / denominator <= expected.relative_tolerance:
             return True
 
@@ -112,9 +125,11 @@ def date_matches(expected: DateExpectation, observed: date) -> bool:
 def comparison_matches(
     expected: tuple[str, ...] | None,
     observed: tuple[str, ...] | None,
+    acceptable: tuple[tuple[str, ...], ...] = (),
 ) -> bool:
     """Return whether an observed comparison order matches its expectation."""
-    return expected is None or expected == observed
+    accepted = acceptable or (() if expected is None else (expected,))
+    return not accepted or observed in accepted
 
 
 def match_expected_answer(
@@ -127,8 +142,15 @@ def match_expected_answer(
     abstention_matched = abstention.expected == observed.abstained
 
     if observed.abstained:
+        has_partial_answer = bool(
+            observed.claims
+            or observed.numeric_values
+            or observed.date_values
+            or observed.comparison_order
+        )
+        partial_allowed = not has_partial_answer or abstention.partial_answer_allowed
         return MatchResult(
-            matched=abstention.expected,
+            matched=abstention.expected and partial_allowed,
             abstention_matched=abstention_matched,
         )
 
@@ -163,6 +185,7 @@ def match_expected_answer(
     comparison_mismatch = not comparison_matches(
         expected.comparison_order,
         observed.comparison_order,
+        expected.acceptable_comparison_orders,
     )
 
     required_claim_mismatches = {

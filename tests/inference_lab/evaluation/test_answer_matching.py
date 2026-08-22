@@ -45,6 +45,17 @@ def test_numeric_matching_supports_absolute_and_relative_tolerance() -> None:
     assert not numeric_matches(relative, 111)
 
 
+def test_numeric_matching_accepts_alternative_values() -> None:
+    expected = NumericExpectation(
+        key="value",
+        value=10,
+        acceptable_values=(20, 30),
+    )
+
+    assert numeric_matches(expected, 20)
+    assert not numeric_matches(expected, 21)
+
+
 def test_date_matching_includes_tolerance_boundary() -> None:
     expected = DateExpectation(
         key="publication_date",
@@ -89,6 +100,29 @@ def test_match_expected_answer_reports_required_failures() -> None:
     assert result.mismatched_comparison
 
 
+def test_match_expected_answer_accepts_alternative_comparison_orders() -> None:
+    expected = ExpectedAnswer(
+        acceptable_comparison_orders=(
+            ("compound-a", "compound-b"),
+            ("compound-b", "compound-a"),
+        )
+    )
+    observed = AnswerObservation(
+        claims={},
+        numeric_values={},
+        date_values={},
+        comparison_order=("compound-b", "compound-a"),
+    )
+
+    result = match_expected_answer(
+        expected,
+        AbstentionExpectation(expected=False, reason="not_applicable"),
+        observed,
+    )
+
+    assert result.matched
+
+
 def test_expected_answer_matches_typed_observation() -> None:
     expected = ExpectedAnswer(
         claims=(AnswerClaim(key="assay", acceptable_values=("cell-based",)),),
@@ -125,6 +159,28 @@ def test_abstention_expectations_are_explicit() -> None:
         abstention,
         AnswerObservation(claims={}, numeric_values={}, date_values={}),
     ).matched
+
+
+def test_partial_abstention_respects_policy() -> None:
+    expected = ExpectedAnswer(
+        claims=(AnswerClaim(key="known_fact"),),
+    )
+    observed = AnswerObservation(
+        claims={"known_fact": "known"},
+        numeric_values={},
+        date_values={},
+        abstained=True,
+    )
+
+    disallowed = AbstentionExpectation(
+        expected=True,
+        reason="evidence_insufficient",
+        partial_answer_allowed=False,
+    )
+    allowed = disallowed.model_copy(update={"partial_answer_allowed": True})
+
+    assert not match_expected_answer(expected, disallowed, observed).matched
+    assert match_expected_answer(expected, allowed, observed).matched
 
 
 def test_observations_reject_non_finite_numbers() -> None:

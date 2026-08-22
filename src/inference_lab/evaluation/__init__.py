@@ -1,6 +1,10 @@
 """Question sets, held-out cases, and quality/system metric evaluation."""
 
 from inference_lab.evaluation.cases import EvaluationCase
+from inference_lab.evaluation.coverage import (
+    CoverageReport,
+    validate_benchmark_coverage,
+)
 from inference_lab.evaluation.answer_matching import (
     AnswerObservation,
     MatchResult,
@@ -32,6 +36,7 @@ from inference_lab.evaluation.schemas import (
     AbstentionExpectation,
     AnswerClaim,
     DateExpectation,
+    EvaluationPolicy,
     EvidenceReference,
     ExpectedAnswer,
     NumericExpectation,
@@ -42,6 +47,8 @@ __all__ = [
     "AnswerClaim",
     "AnswerObservation",
     "DateExpectation",
+    "EvaluationPolicy",
+    "CoverageReport",
     "DatasetManifest",
     "EvaluationCase",
     "EvidenceReference",
@@ -68,4 +75,5 @@ __all__ = [
     "date_matches",
     "match_expected_answer",
     "numeric_matches",
+    "validate_benchmark_coverage",
 ]
