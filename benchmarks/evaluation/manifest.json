@@ -1,0 +1,35 @@
+{
+  "case_count": 10,
+  "case_file": "cases.jsonl",
+  "checksums": {
+    "cases.jsonl": "sha256:fa7cdd3bc642aaf33c90b38fbe89f626687322c378859faeb96b83764f3ea91c"
+  },
+  "corpus_id": "00000000-0000-4000-8000-000000000001",
+  "corpus_version": "00000000-0000-4000-8000-000000000002",
+  "created_at": "2026-08-22T00:00:00Z",
+  "dataset_id": "baseline-v1",
+  "dataset_version": "1",
+  "description": "Deterministic evaluation contract fixture",
+  "provenance": {
+    "license": "synthetic-fixture",
+    "source": "inference-lab"
+  },
+  "schema_version": "1.0.0",
+  "splits": {
+    "development": [
+      "case-001",
+      "case-002",
+      "case-003",
+      "case-004",
+      "case-005",
+      "case-006",
+      "case-007",
+      "case-008"
+    ],
+    "held_out": [
+      "case-009",
+      "case-010"
+    ]
+  },
+  "updated_at": "2026-08-22T00:00:00Z"
+}

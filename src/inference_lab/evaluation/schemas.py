@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
+from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -73,6 +75,16 @@ class AnswerClaim(BaseModel):
     description: str | None = None
 
 
+class DateExpectation(BaseModel):
+    """A date expectation with an optional inclusive tolerance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    key: str = Field(min_length=1)
+    value: date
+    tolerance_days: int = Field(default=0, ge=0)
+
+
 class NumericExpectation(BaseModel):
     """A numeric expected answer value."""
 
@@ -84,6 +96,19 @@ class NumericExpectation(BaseModel):
     relative_tolerance: float | None = Field(default=None, ge=0)
     unit: str | None = None
 
+    @model_validator(mode="after")
+    def validate_finite_values(self) -> "NumericExpectation":
+        """Reject non-finite expected values and tolerances."""
+
+        values = (
+            self.value,
+            self.absolute_tolerance,
+            self.relative_tolerance,
+        )
+        if any(value is not None and not math.isfinite(value) for value in values):
+            raise ValueError("Numeric expectations must be finite")
+        return self
+
 
 class ExpectedAnswer(BaseModel):
     """Machine-checkable expectations for an answer."""
@@ -93,6 +118,7 @@ class ExpectedAnswer(BaseModel):
     summary: str | None = None
     claims: tuple[AnswerClaim, ...] = ()
     numeric_values: tuple[NumericExpectation, ...] = ()
+    date_values: tuple[DateExpectation, ...] = ()
     comparison_order: tuple[str, ...] | None = None
 
 

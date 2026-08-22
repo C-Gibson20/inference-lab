@@ -1,6 +1,15 @@
 """Question sets, held-out cases, and quality/system metric evaluation."""
 
 from inference_lab.evaluation.cases import EvaluationCase
+from inference_lab.evaluation.answer_matching import (
+    AnswerObservation,
+    MatchResult,
+    claim_matches,
+    comparison_matches,
+    date_matches,
+    match_expected_answer,
+    numeric_matches,
+)
 from inference_lab.evaluation.utils import HELD_OUT_SPLIT, SplitName
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
@@ -22,6 +31,7 @@ from inference_lab.evaluation.splitting import (
 from inference_lab.evaluation.schemas import (
     AbstentionExpectation,
     AnswerClaim,
+    DateExpectation,
     EvidenceReference,
     ExpectedAnswer,
     NumericExpectation,
@@ -30,6 +40,8 @@ from inference_lab.evaluation.schemas import (
 __all__ = [
     "AbstentionExpectation",
     "AnswerClaim",
+    "AnswerObservation",
+    "DateExpectation",
     "DatasetManifest",
     "EvaluationCase",
     "EvidenceReference",
@@ -39,6 +51,7 @@ __all__ = [
     "LeakageGroup",
     "load_dataset",
     "NumericExpectation",
+    "MatchResult",
     "atomic_write",
     "evaluation_json_schema",
     "serialise_cases",
@@ -50,4 +63,9 @@ __all__ = [
     "validate_no_leakage",
     "write_dataset",
     "write_json_schema",
+    "claim_matches",
+    "comparison_matches",
+    "date_matches",
+    "match_expected_answer",
+    "numeric_matches",
 ]

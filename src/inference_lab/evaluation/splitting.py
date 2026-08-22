@@ -5,21 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Iterable
 
 from inference_lab.evaluation.cases import EvaluationCase
-from inference_lab.evaluation.utils import SplitName
+from inference_lab.evaluation.utils import (
+    SplitName,
+    normalise_text,
+)
 from inference_lab.evaluation.versioning import (
     CURRENT_ALGORITHM_VERSION,
     CURRENT_EVALUATION_VERSION,
     validate_algorithm_version,
 )
 
-
-_WHITESPACE = re.compile(r"\s+")
 _SPLIT_ORDER: tuple[SplitName, ...] = ("train", "development", "held_out")
 
 
@@ -83,12 +82,6 @@ def stable_digest(value: str) -> str:
 def assignment_key(seed: str, group_key: str) -> str:
     """Return a stable key for deterministic assignment of a group."""
     return stable_digest(f"{seed}\x00{group_key}")
-
-
-def normalise_text(value: str) -> str:
-    """Normalize text for duplicate detection only."""
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    return _WHITESPACE.sub(" ", normalized).strip()
 
 
 def question_key(question: str) -> str:
@@ -260,10 +253,13 @@ def generate_splits(
         groups,
         key=lambda group: assignment_key(policy.seed, group.group_key),
     )
+    eligible_splits = tuple(
+        split for split in _SPLIT_ORDER if policy.fractions[split] > 0.0
+    )
 
     for group in ranked_groups:
         split = min(
-            _SPLIT_ORDER,
+            eligible_splits,
             key=lambda candidate: (
                 counts[candidate] - targets[candidate],
                 _SPLIT_ORDER.index(candidate),

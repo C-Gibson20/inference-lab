@@ -126,3 +126,22 @@ def test_split_generation_is_stable_and_preserves_input_order() -> None:
         "case-003",
         "case-004",
     ]
+
+
+def test_zero_fraction_splits_are_never_selected() -> None:
+    cases = (
+        _evaluation_case(
+            "case-001",
+            "Question one",
+            document_id="00000000-0000-4000-8000-000000000006",
+        ),
+        _evaluation_case(
+            "case-002",
+            "Question two",
+            document_id="00000000-0000-4000-8000-000000000007",
+        ),
+    )
+
+    assigned = generate_splits(cases, SplitPolicy(1.0, 0.0, 0.0))
+
+    assert {case.split for case in assigned} == {"train"}
