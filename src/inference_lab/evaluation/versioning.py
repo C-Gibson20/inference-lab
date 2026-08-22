@@ -5,6 +5,16 @@ from typing import Any, Final
 CURRENT_SCHEMA_VERSION: Final[str] = "1.0.0"
 SUPPORTED_SCHEMA_VERSIONS: Final[frozenset[str]] = frozenset({CURRENT_SCHEMA_VERSION})
 
+CURRENT_ALGORITHM_VERSION: Final[str] = "1.0.0"
+SUPPORTED_ALGORITHM_VERSIONS: Final[frozenset[str]] = frozenset(
+    {CURRENT_ALGORITHM_VERSION}
+)
+
+CURRENT_EVALUATION_VERSION: Final[str] = "1.0.0"
+SUPPORTED_EVALUATION_VERSIONS: Final[frozenset[str]] = frozenset(
+    {CURRENT_EVALUATION_VERSION}
+)
+
 
 def validate_schema_version(value: str) -> str:
     """Return a supported schema version or raise ValueError."""
@@ -13,6 +23,26 @@ def validate_schema_version(value: str) -> str:
         raise ValueError(
             f"Unsupported evaluation schema version {value!r}; "
             f"supported versions: {supported}"
+        )
+    return value
+
+
+def validate_algorithm_version(value: str) -> str:
+    """Return a supported algorithm version or raise ValueError."""
+    if value not in SUPPORTED_ALGORITHM_VERSIONS:
+        supported = ", ".join(sorted(SUPPORTED_ALGORITHM_VERSIONS))
+        raise ValueError(
+            f"Unsupported algorithm version {value!r}; supported versions: {supported}"
+        )
+    return value
+
+
+def validate_evaluation_version(value: str) -> str:
+    """Return a supported evaluation version or raise ValueError."""
+    if value not in SUPPORTED_EVALUATION_VERSIONS:
+        supported = ", ".join(sorted(SUPPORTED_EVALUATION_VERSIONS))
+        raise ValueError(
+            f"Unsupported evaluation version {value!r}; supported versions: {supported}"
         )
     return value
 

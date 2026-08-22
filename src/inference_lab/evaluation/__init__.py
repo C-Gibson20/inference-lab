@@ -12,6 +12,13 @@ from inference_lab.evaluation.serialisation import (
     write_dataset,
     write_json_schema,
 )
+from inference_lab.evaluation.splitting import (
+    LeakageGroup,
+    SplitPolicy,
+    build_leakage_groups,
+    generate_splits,
+    validate_no_leakage,
+)
 from inference_lab.evaluation.schemas import (
     AbstentionExpectation,
     AnswerClaim,
@@ -29,6 +36,7 @@ __all__ = [
     "ExpectedAnswer",
     "HELD_OUT_SPLIT",
     "LoadedDataset",
+    "LeakageGroup",
     "load_dataset",
     "NumericExpectation",
     "atomic_write",
@@ -36,6 +44,10 @@ __all__ = [
     "serialise_cases",
     "serialise_manifest",
     "SplitName",
+    "SplitPolicy",
+    "build_leakage_groups",
+    "generate_splits",
+    "validate_no_leakage",
     "write_dataset",
     "write_json_schema",
 ]
