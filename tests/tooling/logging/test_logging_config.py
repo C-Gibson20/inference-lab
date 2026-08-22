@@ -3,6 +3,7 @@ import logging
 from io import StringIO
 
 import structlog
+import pytest
 
 from inference_lab.settings import LoggingConfig
 from inference_lab.logging.logging_config import configure_logging
@@ -113,6 +114,26 @@ def test_stdlib_records_use_structured_renderer() -> None:
     assert record["event"] == "dependency_degraded"
     assert record["level"] == "warning"
     assert record["module"] == "dependency"
+
+
+def test_sensitive_evaluation_fields_are_rejected() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(format="json"), stream=stream)
+
+    with pytest.raises(ValueError, match="sensitive content fields"):
+        structlog.get_logger("evaluation").info(
+            "evaluation_unit_recorded", model_output="private answer"
+        )
+
+    assert stream.getvalue() == ""
+
+
+def test_sensitive_event_names_are_rejected() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(format="json"), stream=stream)
+
+    with pytest.raises(ValueError, match="sensitive content fields"):
+        structlog.get_logger("evaluation").info("model_output")
 
 
 def test_reconfiguring_does_not_duplicate_handlers() -> None:
