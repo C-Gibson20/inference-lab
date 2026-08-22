@@ -3,6 +3,7 @@
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.coverage import (
     CoverageReport,
+    validate_final_benchmark,
     validate_benchmark_coverage,
 )
 from inference_lab.evaluation.answer_matching import (
@@ -76,4 +77,5 @@ __all__ = [
     "match_expected_answer",
     "numeric_matches",
     "validate_benchmark_coverage",
+    "validate_final_benchmark",
 ]

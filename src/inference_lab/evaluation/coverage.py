@@ -1,13 +1,12 @@
 """Benchmark coverage policy and validation."""
 
-from __future__ import annotations
-
 from collections import Counter
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
 from inference_lab.evaluation.cases import EvaluationCase
+from inference_lab.evaluation.splitting import validate_no_leakage
 
 
 DEFAULT_MINIMUM_QUESTION_TYPES: Mapping[str, int] = MappingProxyType(
@@ -86,3 +85,12 @@ def validate_benchmark_coverage(
         held_out_cases=held_out_cases,
         question_type_counts=MappingProxyType(dict(question_type_counts)),
     )
+
+
+def validate_final_benchmark(
+    cases: tuple[EvaluationCase, ...],
+) -> CoverageReport:
+    """Validate final coverage and ensure no leakage group crosses splits."""
+    report = validate_benchmark_coverage(cases)
+    validate_no_leakage(cases)
+    return report

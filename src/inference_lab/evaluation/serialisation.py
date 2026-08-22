@@ -1,7 +1,5 @@
 """Deterministic serialization utilities for evaluation contracts."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import os
@@ -15,6 +13,7 @@ from pydantic import BaseModel
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import _validate_dataset_consistency
+from inference_lab.evaluation.splitting import validate_no_leakage
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
 
@@ -123,6 +122,7 @@ def write_dataset(
 
     ordered_cases = tuple(cases)
     _validate_dataset_consistency(manifest, ordered_cases)
+    validate_no_leakage(ordered_cases)
 
     destination = destination.resolve()
     case_path = _output_case_path(destination, manifest.case_file)
