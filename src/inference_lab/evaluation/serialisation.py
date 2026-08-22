@@ -15,6 +15,7 @@ from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import _validate_dataset_consistency
 from inference_lab.evaluation.splitting import validate_no_leakage
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
+from inference_lab.evaluation.privacy import validate_local_path
 
 
 def _canonical_payload(model: BaseModel) -> dict[str, Any]:
@@ -96,6 +97,7 @@ def _output_case_path(destination: Path, case_file: str) -> Path:
 
     if Path(case_file).is_absolute():
         raise ValueError("case_file must be relative to the dataset destination")
+    validate_local_path(case_file, field_name="case_file")
 
     root = destination.resolve()
     resolved = (root / case_file).resolve()
@@ -124,7 +126,7 @@ def write_dataset(
     _validate_dataset_consistency(manifest, ordered_cases)
     validate_no_leakage(ordered_cases)
 
-    destination = destination.resolve()
+    destination = validate_local_path(destination, field_name="destination")
     case_path = _output_case_path(destination, manifest.case_file)
     case_bytes = serialise_cases(ordered_cases)
     checksum = f"sha256:{hashlib.sha256(case_bytes).hexdigest()}"

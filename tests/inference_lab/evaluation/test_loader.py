@@ -120,6 +120,7 @@ def test_malformed_manifest_json_is_rejected(tmp_path: Path) -> None:
     [
         ("/tmp/cases.jsonl", "relative"),
         ("../cases.jsonl", "inside"),
+        ("https://example.test/cases.jsonl", "local"),
     ],
 )
 def test_case_file_must_be_a_safe_relative_path(

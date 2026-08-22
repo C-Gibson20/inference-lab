@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from .datasets import DatasetManifest
 from .cases import EvaluationCase
 from .utils import is_sha256_pattern
+from .privacy import validate_local_path
 from .versioning import migrate_case_payload, migrate_manifest_payload
 
 
@@ -26,6 +27,7 @@ def _resolve_case_file(manifest_path: Path, case_file: str) -> Path:
 
     if Path(case_file).is_absolute():
         raise ValueError(f"Case file {case_file} must be relative to the manifest")
+    validate_local_path(case_file, field_name="case_file")
 
     dataset_root = manifest_path.parent.resolve()
     resolved_path = (dataset_root / case_file).resolve()
@@ -138,7 +140,7 @@ def _validate_dataset_consistency(
 def load_dataset(manifest_path: Path) -> LoadedDataset:
     """Load and validate one evaluation dataset."""
 
-    manifest_path = manifest_path.resolve()
+    manifest_path = validate_local_path(manifest_path, field_name="manifest_path")
 
     if not manifest_path.is_file():
         raise FileNotFoundError(manifest_path)

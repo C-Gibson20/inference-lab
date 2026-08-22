@@ -10,6 +10,60 @@ from inference_lab.settings import LoggingConfig
 
 _HANDLER_MARKER = "_inference_lab_handler"
 _CONTEXT_FIELDS = ("document_id", "corpus_version", "pipeline_stage")
+_SENSITIVE_LOG_NAMES = frozenset(
+    {
+        "answer",
+        "answers",
+        "answer_content",
+        "answer_text",
+        "completion",
+        "completions",
+        "completion_text",
+        "context_text",
+        "evidence_text",
+        "model_output",
+        "model_outputs",
+        "model_output_text",
+        "output",
+        "outputs",
+        "output_content",
+        "output_text",
+        "passage",
+        "passages",
+        "passage_text",
+        "prompt",
+        "prompts",
+        "prompt_text",
+        "question",
+        "questions",
+        "question_text",
+        "response",
+        "responses",
+        "response_text",
+    }
+)
+
+
+def _is_sensitive_name(name: str) -> bool:
+    """Return whether a structured field name denotes content."""
+    return name.casefold().replace("-", "_") in _SENSITIVE_LOG_NAMES
+
+
+def _reject_sensitive_fields(
+    _logger: Any,
+    _method_name: str,
+    event_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Fail closed when structured logs contain evaluation content fields."""
+
+    sensitive_fields = {key for key in event_dict if _is_sensitive_name(key)}
+    event = event_dict.get("event")
+    if isinstance(event, str) and _is_sensitive_name(event):
+        sensitive_fields.add("event")
+    if sensitive_fields:
+        names = ", ".join(sorted(sensitive_fields))
+        raise ValueError(f"sensitive content fields are not permitted in logs: {names}")
+    return event_dict
 
 
 def _add_record_fields(
@@ -43,6 +97,7 @@ def _configure_structlog(
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.format_exc_info,
+        _reject_sensitive_fields,
         _add_record_fields,
     ]
 

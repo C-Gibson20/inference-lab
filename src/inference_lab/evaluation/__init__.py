@@ -18,6 +18,13 @@ from inference_lab.evaluation.answer_matching import (
 from inference_lab.evaluation.utils import HELD_OUT_SPLIT, SplitName
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
+from inference_lab.evaluation.privacy import validate_local_path
+from inference_lab.evaluation.records import (
+    EvaluationRecord,
+    EvaluationRecorder,
+    EvaluationStatus,
+    evaluation_record_id,
+)
 from inference_lab.evaluation.runs import (
     EvaluationPurpose,
     EvaluationRun,
@@ -62,6 +69,9 @@ __all__ = [
     "EvaluationPurpose",
     "EvaluationRun",
     "EvaluationRunRequest",
+    "EvaluationRecord",
+    "EvaluationRecorder",
+    "EvaluationStatus",
     "CoverageReport",
     "DatasetManifest",
     "EvaluationCase",
@@ -89,11 +99,13 @@ __all__ = [
     "comparison_matches",
     "configuration_digest",
     "create_evaluation_run",
+    "evaluation_record_id",
     "date_matches",
     "match_expected_answer",
     "numeric_matches",
     "validate_run_inputs",
     "validate_run_purpose",
+    "validate_local_path",
     "validate_benchmark_coverage",
     "validate_final_benchmark",
 ]
