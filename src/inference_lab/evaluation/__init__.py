@@ -18,6 +18,16 @@ from inference_lab.evaluation.answer_matching import (
 from inference_lab.evaluation.utils import HELD_OUT_SPLIT, SplitName
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
+from inference_lab.evaluation.runs import (
+    EvaluationPurpose,
+    EvaluationRun,
+    EvaluationRunRequest,
+    compute_run_id,
+    configuration_digest,
+    create_evaluation_run,
+    validate_run_inputs,
+    validate_run_purpose,
+)
 from inference_lab.evaluation.serialisation import (
     atomic_write,
     evaluation_json_schema,
@@ -49,6 +59,9 @@ __all__ = [
     "AnswerObservation",
     "DateExpectation",
     "EvaluationPolicy",
+    "EvaluationPurpose",
+    "EvaluationRun",
+    "EvaluationRunRequest",
     "CoverageReport",
     "DatasetManifest",
     "EvaluationCase",
@@ -72,10 +85,15 @@ __all__ = [
     "write_dataset",
     "write_json_schema",
     "claim_matches",
+    "compute_run_id",
     "comparison_matches",
+    "configuration_digest",
+    "create_evaluation_run",
     "date_matches",
     "match_expected_answer",
     "numeric_matches",
+    "validate_run_inputs",
+    "validate_run_purpose",
     "validate_benchmark_coverage",
     "validate_final_benchmark",
 ]
