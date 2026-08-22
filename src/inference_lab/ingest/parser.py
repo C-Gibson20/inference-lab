@@ -7,6 +7,7 @@ from typing import Literal, Protocol
 import structlog
 import unicodedata
 
+from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.errors import ParserDecodeError
 from inference_lab.provenance import DocumentId, DocumentVersionId
 from inference_lab.settings import Settings
@@ -59,6 +60,9 @@ class ParserInput:
     encoding: str
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
         """Reject invalid metadata before parsing can begin."""
         if not isinstance(self.document_id, DocumentId):
             raise ParserInputError("invalid_document_id")
@@ -76,14 +80,6 @@ class ParserInput:
             raise ParserInputError("invalid_encoding") from error
 
 
-class Parser(Protocol):
-    """Parse one document version into canonical parser output."""
-
-    def parse(self, source: ParserInput, *, settings: Settings) -> object:
-        """Parse a document version into canonical parser output."""
-        ...
-
-
 def decode_source(source: ParserInput) -> str:
     """Decode source bytes strictly into Unicode code-point text."""
 
@@ -98,3 +94,75 @@ def prepare_text(source: ParserInput) -> NormalisedText:
 
     source_text = decode_source(source)
     return NormalisedText(source_text=source_text, text=normalise_text(source_text))
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedDocument:
+    """Canonical parser output for one document version."""
+
+    document_id: DocumentId
+    document_version_id: DocumentVersionId
+    text: NormalisedText
+    blocks: tuple[StructuralBlock, ...]
+    pages: tuple[StructuralBlock, ...] | None
+    sections: tuple[StructuralBlock, ...] | None
+    paragraphs: tuple[StructuralBlock, ...] | None
+    language: str | None
+    page_count: int | None
+    character_count: int
+    token_count: int | None
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate deterministic document-level metadata and source ranges."""
+        if not isinstance(self.document_id, DocumentId):
+            raise ValueError("invalid_document_id")
+        if not isinstance(self.document_version_id, DocumentVersionId):
+            raise ValueError("invalid_document_version_id")
+        if not isinstance(self.text, NormalisedText):
+            raise ValueError("invalid_normalised_text")
+        if not isinstance(self.character_count, int) or isinstance(
+            self.character_count, bool
+        ):
+            raise ValueError("character_count_must_be_integer")
+        if self.token_count is not None and (
+            not isinstance(self.token_count, int) or isinstance(self.token_count, bool)
+        ):
+            raise ValueError("token_count_must_be_integer")
+        source_length = len(self.text.source_text)
+
+        if self.character_count != len(self.text.text):
+            raise ValueError("character_count_mismatch")
+        if self.page_count is not None and self.page_count < 0:
+            raise ValueError("page_count_must_not_be_negative")
+        if self.token_count is not None and self.token_count < 0:
+            raise ValueError("token_count_must_not_be_negative")
+
+        for block in self.blocks:
+            self._validate_block(block)
+            if block.source_span.end_offset > source_length:
+                raise ValueError("source_span_exceeds_source_text")
+
+        for collection in (self.pages, self.sections, self.paragraphs):
+            if collection is not None:
+                for block in collection:
+                    self._validate_block(block)
+                    if block.source_span.end_offset > source_length:
+                        raise ValueError("source_span_exceeds_source_text")
+
+    def _validate_block(self, block: StructuralBlock) -> None:
+        """Validate block type and document-version provenance."""
+        if not isinstance(block, StructuralBlock):
+            raise ValueError("invalid_structural_block")
+        if block.source_span.document_version_id != self.document_version_id:
+            raise ValueError("source_span_document_version_mismatch")
+
+
+class Parser(Protocol):
+    """Parse one document version into canonical parser output."""
+
+    def parse(self, source: ParserInput, *, settings: Settings) -> ParsedDocument:
+        """Parse a document version into canonical parser output."""
+        ...
