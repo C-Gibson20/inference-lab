@@ -11,6 +11,7 @@ from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.errors import ParserDecodeError
 from inference_lab.provenance import DocumentId, DocumentVersionId
 from inference_lab.settings import Settings
+from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.ingest.versioning import CURRENT_PARSER_VERSION, ParserVersion
 
 logger = structlog.get_logger(__name__)
@@ -167,6 +168,6 @@ class ParsedDocument:
 class Parser(Protocol):
     """Parse one document version into canonical parser output."""
 
-    def parse(self, source: ParserInput, *, settings: Settings) -> ParsedDocument:
+    def parse(self, source: ParserInput, *, settings: Settings) -> ParseOutcome:
         """Parse a document version into canonical parser output."""
         ...

@@ -25,7 +25,14 @@ from inference_lab.ingest.versioning import (
     ParserVersion,
     generate_source_span_id,
 )
-from inference_lab.ingest.errors import ParserDecodeError
+from inference_lab.ingest.errors import (
+    ParserDecodeError,
+    ParserFailure,
+    ParserFailureCategory,
+    ParserFailureSeverity,
+    ParserFailureStage,
+)
+from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
 
 __all__ = [
     "Parser",
@@ -46,4 +53,10 @@ __all__ = [
     "CURRENT_PARSER_VERSION",
     "ParserVersion",
     "generate_source_span_id",
+    "ParserFailure",
+    "ParserFailureCategory",
+    "ParserFailureSeverity",
+    "ParserFailureStage",
+    "ParseOutcome",
+    "ParseStatus",
 ]
