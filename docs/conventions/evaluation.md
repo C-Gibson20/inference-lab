@@ -109,8 +109,10 @@ dataset is rejected when a leakage group crosses splits.
 Development cases may support iteration. Held-out membership is immutable and
 must not be used for tuning or model selection. The final corpus-backed
 question set contains 30–50 real questions spanning the question types in the
-project specification; the committed synthetic dataset is only a contract
-fixture.
+project specification. Its held-out subset contains every question type and
+includes both answerable and expected-abstention cases, so final evaluation
+cannot silently omit either a capability category or abstention behavior. The
+committed synthetic dataset is only a contract fixture.
 
 ## Serialization and privacy
 

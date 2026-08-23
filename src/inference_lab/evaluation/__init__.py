@@ -1,8 +1,10 @@
 """Versioned evaluation cases, datasets, and held-out split contracts."""
 
-from inference_lab.evaluation.cases import EvaluationCase
+from inference_lab.evaluation.cases import EvaluationCase, QuestionType
 from inference_lab.evaluation.coverage import (
+    CoveragePolicy,
     CoverageReport,
+    FINAL_BENCHMARK_POLICY,
     validate_benchmark_coverage,
     validate_final_benchmark,
 )
@@ -40,16 +42,19 @@ __all__ = [
     "AnswerClaim",
     "DateExpectation",
     "EvaluationPolicy",
+    "CoveragePolicy",
     "CoverageReport",
     "DatasetManifest",
     "EvaluationCase",
     "EvidenceReference",
     "ExpectedAnswer",
+    "FINAL_BENCHMARK_POLICY",
     "HELD_OUT_SPLIT",
     "LoadedDataset",
     "LeakageGroup",
     "load_dataset",
     "NumericExpectation",
+    "QuestionType",
     "atomic_write",
     "evaluation_json_schema",
     "serialise_cases",

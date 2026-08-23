@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -15,6 +15,25 @@ from inference_lab.evaluation.schemas import (
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
 
+QuestionType = Literal[
+    "lookup",
+    "comparison",
+    "thematic",
+    "aggregation",
+    "follow_up",
+    "difficult_terminology",
+]
+
+QUESTION_TYPES: Final[tuple[QuestionType, ...]] = (
+    "lookup",
+    "comparison",
+    "thematic",
+    "aggregation",
+    "follow_up",
+    "difficult_terminology",
+)
+
+
 class EvaluationCase(BaseModel):
     """One annotated question used by an evaluation dataset."""
 
@@ -23,14 +42,7 @@ class EvaluationCase(BaseModel):
     schema_version: SchemaVersion = CURRENT_SCHEMA_VERSION
     case_id: CaseId
     question: str = Field(min_length=1)
-    question_type: Literal[
-        "lookup",
-        "comparison",
-        "thematic",
-        "aggregation",
-        "follow_up",
-        "difficult_terminology",
-    ]
+    question_type: QuestionType
     context: tuple[str, ...] = ()
     tags: frozenset[str] = frozenset()
     expected_answer: ExpectedAnswer
