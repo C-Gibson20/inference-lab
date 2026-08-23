@@ -16,6 +16,10 @@ ParseStatus = Literal[
     "failed",
 ]
 
+_PARSE_STATUSES: frozenset[str] = frozenset(
+    {"succeeded", "completed_with_recoverable_failures", "failed"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ParseOutcome:
@@ -30,6 +34,17 @@ class ParseOutcome:
 
     def _validate(self) -> None:
         """Prevent inconsistent success, partial, and failure states."""
+        from inference_lab.ingest.parser import ParsedDocument
+
+        if not isinstance(self.status, str) or self.status not in _PARSE_STATUSES:
+            raise ValueError("invalid_parse_status")
+        if self.document is not None and not isinstance(self.document, ParsedDocument):
+            raise ValueError("invalid_parsed_document")
+        if not isinstance(self.failures, tuple):
+            raise ValueError("parse_failures_must_be_tuple")
+        if not all(isinstance(failure, ParserFailure) for failure in self.failures):
+            raise ValueError("invalid_parser_failure")
+
         if self.status == "succeeded":
             if self.document is None:
                 raise ValueError("successful_parse_requires_document")

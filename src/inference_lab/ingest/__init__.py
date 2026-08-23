@@ -31,6 +31,7 @@ from inference_lab.ingest.errors import (
     ParserFailureCategory,
     ParserFailureSeverity,
     ParserFailureStage,
+    ParserFailureUnitKind,
 )
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
 from inference_lab.ingest.text_native import TextNativeParser
@@ -58,6 +59,7 @@ __all__ = [
     "ParserFailureCategory",
     "ParserFailureSeverity",
     "ParserFailureStage",
+    "ParserFailureUnitKind",
     "ParseOutcome",
     "ParseStatus",
     "TextNativeParser",

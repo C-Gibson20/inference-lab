@@ -1,9 +1,18 @@
 """Represent the version of the parser used to process a document."""
 
+import re
 import uuid
 from dataclasses import dataclass
 
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
+
+_IMPLEMENTATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+_SEMANTIC_VERSION_PATTERN = re.compile(
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,20 +27,20 @@ class ParserVersion:
         self._validate()
 
     def _validate(self) -> None:
-        """Reject incomplete parser-version components."""
+        """Require unambiguous canonical parser-version components."""
 
-        if not isinstance(self.implementation, str) or not self.implementation.strip():
-            raise ValueError("parser_implementation_must_not_be_empty")
-        if (
-            not isinstance(self.contract_version, str)
-            or not self.contract_version.strip()
-        ):
-            raise ValueError("parser_contract_version_must_not_be_empty")
-        if (
-            not isinstance(self.normalisation_version, str)
-            or not self.normalisation_version.strip()
-        ):
-            raise ValueError("normalisation_version_must_not_be_empty")
+        if not isinstance(
+            self.implementation, str
+        ) or not _IMPLEMENTATION_PATTERN.fullmatch(self.implementation):
+            raise ValueError("parser_implementation_must_be_slug")
+        if not isinstance(
+            self.contract_version, str
+        ) or not _SEMANTIC_VERSION_PATTERN.fullmatch(self.contract_version):
+            raise ValueError("parser_contract_version_must_be_semantic_version")
+        if not isinstance(
+            self.normalisation_version, str
+        ) or not _SEMANTIC_VERSION_PATTERN.fullmatch(self.normalisation_version):
+            raise ValueError("normalisation_version_must_be_semantic_version")
 
     @property
     def value(self) -> str:
@@ -53,6 +62,7 @@ CURRENT_PARSER_VERSION = ParserVersion(
 def generate_source_span_id(
     document_version_id: DocumentVersionId,
     *,
+    parser_version: ParserVersion,
     ordinal: int,
     kind: str,
     start_offset: int,
@@ -62,6 +72,8 @@ def generate_source_span_id(
 
     if not isinstance(document_version_id, DocumentVersionId):
         raise ValueError("invalid_document_version_id")
+    if not isinstance(parser_version, ParserVersion):
+        raise ValueError("invalid_parser_version")
     if not _is_integer(ordinal):
         raise ValueError("source_span_ordinal_must_be_integer")
     if not isinstance(kind, str):
@@ -79,7 +91,10 @@ def generate_source_span_id(
     if not kind:
         raise ValueError("source_span_kind_must_not_be_empty")
 
-    name = f"ordinal={ordinal};kind={kind};start={start_offset};end={end_offset}"
+    name = (
+        f"parser={parser_version.value};ordinal={ordinal};kind={kind};"
+        f"start={start_offset};end={end_offset}"
+    )
     namespace = uuid.UUID(document_version_id.as_str())
     generated = uuid.uuid5(namespace, name)
     return SourceSpanId.from_str(str(generated))

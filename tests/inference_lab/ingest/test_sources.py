@@ -4,6 +4,7 @@ import pytest
 
 from inference_lab.ingest import (
     BoundingBox,
+    CURRENT_PARSER_VERSION,
     generate_source_span_id,
     normalise_text,
     SourceSpan,
@@ -35,6 +36,7 @@ def _block(
         source_span_id=source_span_id
         or generate_source_span_id(
             document_version_id,
+            parser_version=CURRENT_PARSER_VERSION,
             ordinal=ordinal,
             kind=kind,
             start_offset=start_offset,

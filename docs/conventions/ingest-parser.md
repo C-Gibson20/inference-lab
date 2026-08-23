@@ -62,7 +62,17 @@ Canonical document text must equal the defined normalization of
 slice selected by its span. A completed document rejects arbitrary or stale
 block text, collection aliases, and source-span identifiers.
 
-Blocks are emitted in source order. Source-span identifiers are deterministic UUIDs derived from the document version, block ordinal, block kind, and source range. Repeating a parse with the same input, settings, and parser version must produce byte-identical canonical serialization.
+Blocks are emitted in source order. Source-span identifiers are deterministic
+UUIDs derived from the document version, parser version, block ordinal, block
+kind, and source range. A parser-version change creates a distinct span
+identity even when the other inputs are unchanged. Repeating a parse with the
+same input, settings, and parser version must produce byte-identical canonical
+serialization.
+
+Parser implementations use lowercase hyphenated slugs. Contract and
+normalization versions use canonical Semantic Versioning, including optional
+prerelease and build metadata. These restrictions keep the combined parser
+version unambiguous and safe to use in deterministic identity derivation.
 
 ### Failure handling and logging
 
@@ -70,5 +80,17 @@ The baseline reports named failures for invalid input, oversized source,
 decode failure, and invalid output. Malformed source must never result in a
 partial document. Failure records contain category, severity, and pipeline
 stage, but not source text, paths, raw bytes, or other payload data.
+
+Failure category determines severity and stage. Input, decoding, malformed
+source, invalid-output, and size failures are fatal and document-level.
+`malformed_unit` and `unsupported_structure` are recoverable structure-stage
+failures and must identify an omitted structural unit by its closed unit kind
+and zero-based index. Unit kind and index are either both present or both
+absent.
+
+Outcome statuses, documents, and failures are validated at runtime. Failure
+collections are immutable tuples. A successful outcome has one document and
+no failures; a recoverable outcome has one document and only recoverable
+failures; a failed outcome has no document and at least one fatal failure.
 
 Parser lifecycle and failure events use privacy-safe structured logging through `structlog`. Log fields may include stable document identity, parser version, failure category, source byte count, output character count, and emitted record count where applicable.

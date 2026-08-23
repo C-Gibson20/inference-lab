@@ -204,6 +204,7 @@ class ParsedDocument:
             raise ValueError("block_text_source_span_mismatch")
         expected_span_id = generate_source_span_id(
             self.document_version_id,
+            parser_version=self.parser_version,
             ordinal=ordinal,
             kind=block.kind,
             start_offset=span.start_offset,

@@ -5,6 +5,7 @@ import pytest
 from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.ingest.errors import ParserFailure
 from inference_lab.ingest import (
+    CURRENT_PARSER_VERSION,
     generate_source_span_id,
     SourceSpan,
     StructuralBlock,
@@ -22,6 +23,7 @@ def make_fixture_parsed_document(*, include_paragraph: bool = True) -> ParsedDoc
     span = SourceSpan(
         source_span_id=generate_source_span_id(
             document_version_id,
+            parser_version=CURRENT_PARSER_VERSION,
             ordinal=0,
             kind="paragraph",
             start_offset=0,
@@ -133,4 +135,46 @@ def test_failed_outcome_cannot_contain_document() -> None:
             status="failed",
             document=make_fixture_parsed_document(),
             failures=(failure,),
+        )
+
+
+def test_parse_outcome_rejects_unknown_status() -> None:
+    with pytest.raises(ValueError, match="invalid_parse_status"):
+        ParseOutcome(
+            status="unknown",  # type: ignore[arg-type]
+            document=None,
+            failures=(),
+        )
+
+
+def test_parse_outcome_requires_immutable_failures() -> None:
+    failure = ParserFailure(
+        category="decode_failed",
+        severity="fatal",
+        stage="decode",
+    )
+
+    with pytest.raises(ValueError, match="parse_failures_must_be_tuple"):
+        ParseOutcome(
+            status="failed",
+            document=None,
+            failures=[failure],  # type: ignore[arg-type]
+        )
+
+
+def test_parse_outcome_rejects_invalid_document() -> None:
+    with pytest.raises(ValueError, match="invalid_parsed_document"):
+        ParseOutcome(
+            status="succeeded",
+            document="not-a-document",  # type: ignore[arg-type]
+            failures=(),
+        )
+
+
+def test_parse_outcome_rejects_invalid_failure_member() -> None:
+    with pytest.raises(ValueError, match="invalid_parser_failure"):
+        ParseOutcome(
+            status="failed",
+            document=None,
+            failures=("not-a-failure",),  # type: ignore[arg-type]
         )

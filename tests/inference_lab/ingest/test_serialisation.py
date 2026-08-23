@@ -1,6 +1,7 @@
 """Tests for document serialisation."""
 
 from inference_lab.ingest import (
+    CURRENT_PARSER_VERSION,
     generate_source_span_id,
     NormalisedText,
     ParsedDocument,
@@ -20,6 +21,7 @@ def make_fixture_parsed_document(*, include_paragraph: bool = True) -> ParsedDoc
     span = SourceSpan(
         source_span_id=generate_source_span_id(
             document_version_id,
+            parser_version=CURRENT_PARSER_VERSION,
             ordinal=0,
             kind="paragraph",
             start_offset=0,
