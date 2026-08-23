@@ -159,6 +159,7 @@ class FakeBackend:
     def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
         """Return deterministic vectors in the request's input order."""
         self._ensure_available()
+        self._ensure_operation_supported(BackendOperation.EMBED)
         self._log_operation_started(BackendOperation.EMBED)
         self._maybe_fail(BackendOperation.EMBED)
         self._config.sync_sleeper(self._config.initial_delay_seconds)
@@ -189,6 +190,7 @@ class FakeBackend:
     def rerank(self, request: RerankRequest) -> RerankResult:
         """Return deterministic scores and contiguous ranks."""
         self._ensure_available()
+        self._ensure_operation_supported(BackendOperation.RERANK)
         self._log_operation_started(BackendOperation.RERANK)
         self._maybe_fail(BackendOperation.RERANK)
         self._config.sync_sleeper(self._config.initial_delay_seconds)
@@ -227,6 +229,7 @@ class FakeBackend:
     def generate(self, request: GenerationRequest) -> AsyncIterator[GenerationEvent]:
         """Return a validated asynchronous stream of deterministic text chunks."""
         self._ensure_available()
+        self._ensure_operation_supported(BackendOperation.GENERATE)
         self._log_operation_started(BackendOperation.GENERATE)
         return validate_generation_stream(self._generate_events(request))
 
@@ -298,6 +301,13 @@ class FakeBackend:
             raise BackendClosedError()
         if not self._is_ready:
             raise BackendNotReadyError()
+
+    def _ensure_operation_supported(self, operation: BackendOperation) -> None:
+        """Reject operations that the configured metadata does not advertise."""
+        if operation not in self.metadata.supported_operations:
+            raise BackendRequestError(
+                f"{operation.value} operation is not supported by this backend"
+            )
 
     def _maybe_fail(self, operation: BackendOperation) -> None:
         """Raise a configured failure for an operation, if requested."""

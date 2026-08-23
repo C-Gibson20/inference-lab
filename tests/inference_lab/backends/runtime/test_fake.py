@@ -7,6 +7,7 @@ import pytest
 from inference_lab.backends.runtime.errors import (
     BackendExecutionError,
     BackendNotReadyError,
+    BackendRequestError,
     BackendResourceError,
 )
 from inference_lab.backends.runtime.fake import (
@@ -17,6 +18,7 @@ from inference_lab.backends.runtime.fake import (
 from inference_lab.logging.logging_config import configure_logging
 from inference_lab.settings import LoggingConfig
 from inference_lab.backends.runtime.types import (
+    BackendMetadata,
     BackendOperation,
     EmbeddingRequest,
     GenerationEventType,
@@ -32,6 +34,45 @@ def test_fake_requires_load_before_inference() -> None:
 
     with pytest.raises(BackendNotReadyError):
         backend.embed(EmbeddingRequest(input_texts=("one",)))
+
+
+@pytest.mark.parametrize("operation", tuple(BackendOperation))
+def test_fake_rejects_operations_not_advertised_by_metadata(
+    operation: BackendOperation,
+) -> None:
+    supported_operations = tuple(
+        candidate for candidate in BackendOperation if candidate is not operation
+    )
+    backend = FakeBackend(
+        FakeBackendConfig(
+            metadata=BackendMetadata(
+                backend_name="fake",
+                model_name="fake-model",
+                model_revision="test",
+                supported_operations=supported_operations,
+                capabilities=(),
+                embedding_dimensions=3,
+            )
+        )
+    )
+    backend.load()
+
+    with pytest.raises(BackendRequestError, match=operation.value):
+        if operation is BackendOperation.EMBED:
+            backend.embed(EmbeddingRequest(input_texts=("one",)))
+        elif operation is BackendOperation.RERANK:
+            backend.rerank(
+                RerankRequest(
+                    query="query",
+                    candidates=(RerankCandidate(candidate_id="a", candidate_text="A"),),
+                )
+            )
+        else:
+            backend.generate(
+                GenerationRequest(
+                    messages=(GenerationMessage(role="user", content="Hi"),)
+                )
+            )
 
 
 def test_fake_embedding_is_deterministic_and_ordered() -> None:
