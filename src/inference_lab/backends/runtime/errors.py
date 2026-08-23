@@ -13,7 +13,15 @@ class BackendError(RuntimeError):
         self, message: str | None = None, *, retryable: bool | None = None
     ) -> None:
         """Create an error with an optional caller-visible retry hint."""
-        super().__init__(message or self.default_message)
+        if message is not None:
+            if not isinstance(message, str):
+                raise TypeError("message must be a string or None")
+            if not message:
+                raise ValueError("message must not be empty")
+        if retryable is not None and not isinstance(retryable, bool):
+            raise TypeError("retryable must be a boolean or None")
+
+        super().__init__(self.default_message if message is None else message)
         self.retryable = self.default_retryable if retryable is None else retryable
 
 

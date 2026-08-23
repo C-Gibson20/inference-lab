@@ -5,6 +5,7 @@ from inference_lab.provenance.identifiers import (
     CorpusVersionId,
     DocumentId,
     DocumentVersionId,
+    RecordId,
     SourceSpanId,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "CorpusVersionId",
     "DocumentId",
     "DocumentVersionId",
+    "RecordId",
     "SourceSpanId",
 ]

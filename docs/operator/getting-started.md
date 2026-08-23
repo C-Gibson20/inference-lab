@@ -37,8 +37,9 @@ runtime values.
 ## Current status
 
 The entry point is currently a skeleton. Ingest, search, and answer commands
-will be added through the dependency-ordered serving work. Once `SERV-01` is
-available, this page will include a complete clean-checkout walkthrough:
+will be added through the dependency-ordered serving work. Once the first
+executable query workflow is available, this page will include a complete
+clean-checkout walkthrough:
 
 1. prepare a deterministic or local corpus;
 2. ingest it incrementally;

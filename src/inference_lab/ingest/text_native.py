@@ -7,14 +7,14 @@ import structlog
 from inference_lab.ingest.errors import ParserDecodeError, ParserFailure
 from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.ingest.parser import (
-    ParsedDocument,
-    ParserInputError,
-    ParserInput,
     NormalisedText,
+    ParsedDocument,
+    ParserInput,
+    ParserInputError,
     prepare_text,
 )
 from inference_lab.ingest.sources import SourceSpan, StructuralBlock
-from inference_lab.ingest.utils import normalise_text
+from inference_lab.ingest.utils import normalise_source_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     generate_source_span_id,
@@ -23,34 +23,26 @@ from inference_lab.settings import Settings
 
 logger = structlog.get_logger(__name__)
 
-_BLANK_LINE_SEPARATOR = re.compile(r"(?:\r\n|\r|\n)[ \t]*(?:(?:\r\n|\r|\n)[ \t]*)+")
-_EDGE_BLANK_LINES = re.compile(r"(?:[ \t]*(?:\r\n|\r|\n))+")
+_LINE_ENDING = r"(?:\r\n|\r(?!\n)|\n)"
+_BLANK_LINE_SEPARATOR = re.compile(rf"{_LINE_ENDING}(?:[ \t]*{_LINE_ENDING})+")
+_LEADING_BLANK_LINES = re.compile(rf"(?:[ \t]*{_LINE_ENDING})+")
 
 
 def _paragraph_ranges(source_text: str) -> tuple[tuple[int, int], ...]:
     """Return ordered non-empty paragraph ranges in decoded source text."""
-
     ranges: list[tuple[int, int]] = []
     cursor = 0
-    leading_blank_lines = _EDGE_BLANK_LINES.match(source_text)
+    leading_blank_lines = _LEADING_BLANK_LINES.match(source_text)
     if leading_blank_lines is not None:
         cursor = leading_blank_lines.end()
 
-    trailing_blank_lines = _EDGE_BLANK_LINES.search(source_text, cursor)
-    content_end = (
-        trailing_blank_lines.start()
-        if trailing_blank_lines is not None
-        and trailing_blank_lines.end() == len(source_text)
-        else len(source_text)
-    )
-
-    for separator in _BLANK_LINE_SEPARATOR.finditer(source_text, cursor, content_end):
+    for separator in _BLANK_LINE_SEPARATOR.finditer(source_text, cursor):
         if separator.start() > cursor:
             ranges.append((cursor, separator.start()))
         cursor = separator.end()
 
-    if cursor < content_end:
-        ranges.append((cursor, content_end))
+    if cursor < len(source_text):
+        ranges.append((cursor, len(source_text)))
 
     return tuple(ranges)
 
@@ -60,7 +52,6 @@ def _paragraph_blocks(
     source_text: str,
 ) -> tuple[StructuralBlock, ...]:
     """Create ordered paragraph blocks with deterministic source spans."""
-
     blocks: list[StructuralBlock] = []
 
     for ordinal, (start_offset, end_offset) in enumerate(
@@ -68,6 +59,7 @@ def _paragraph_blocks(
     ):
         source_span_id = generate_source_span_id(
             source.document_version_id,
+            parser_version=CURRENT_PARSER_VERSION,
             ordinal=ordinal,
             kind="paragraph",
             start_offset=start_offset,
@@ -81,7 +73,7 @@ def _paragraph_blocks(
         )
         block = StructuralBlock(
             kind="paragraph",
-            text=normalise_text(source_text[start_offset:end_offset]),
+            text=normalise_source_text(source_text[start_offset:end_offset]),
             source_span=span,
         )
         blocks.append(block)
@@ -145,7 +137,6 @@ class TextNativeParser:
         settings: Settings,
     ) -> ParseOutcome:
         """Parse one text-native document into a validated outcome."""
-
         document_id = (
             str(source.document_id) if isinstance(source, ParserInput) else None
         )

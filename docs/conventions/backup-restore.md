@@ -33,7 +33,7 @@ corpus state rather than as independent files.
 - Models.
 - Temporary caches.
 - Logs and profiling output.
-- Other reproducible operational artifacts.
+- Other reproducible operational artefacts.
 
 Original documents require a separate source-data backup or availability
 policy. A restore is not operationally complete unless cited source files are
@@ -81,21 +81,21 @@ It contains:
 - Canonical chunks, provenance, and other records required to rebuild indexes.
 - Index configuration and generation metadata.
 - A manifest, schema version, and checksums.
-- Serialized indexes only when their format is documented and portable.
+- Serialised indexes only when their format is documented and portable.
 
 Portable backups support fixture reproduction, cross-machine testing, and
 recovery after index-format changes. Indexes may be rebuilt from the canonical
-records when a portable serialized index is unavailable or incompatible.
+records when a portable serialised index is unavailable or incompatible.
 
 ### Recovery snapshot
 
-A recovery snapshot is optimized for fast restore on compatible software and
+A recovery snapshot is optimised for fast restore on compatible software and
 storage. It may use database-native backups, index-native snapshots, or
 storage-level copy-on-write snapshots, provided that the same corpus-version
 boundary and manifest rules apply.
 
 Recovery snapshots may depend on a particular index format, software version,
-filesystem, or storage platform. They are an optimization and must not replace
+filesystem, or storage platform. They are an optimisation and must not replace
 the portable backup contract.
 
 ## Compatibility and migration
@@ -133,7 +133,7 @@ The restore process must:
 - Reject the backup when direct restore, conversion, and rebuild are not safe.
 
 Portable backups include canonical chunks and provenance so that indexes can
-be rebuilt when their serialized formats are incompatible.
+be rebuilt when their serialised formats are incompatible.
 
 ### Backups from newer builds
 
@@ -180,11 +180,11 @@ Backup settings are deployment-specific and belong under the existing
 
 ### Selected initial settings contract
 
-Backup operations and their artifact shape are not implemented yet. The
-following settings are the selected initial contract from TOOL-04 and will be
-implemented by `STOR-08` together with the backup lifecycle, artifact layout,
-and restore validation. Until then, backup fields remain unavailable to the
-settings loader and must not be silently ignored.
+Backup operations and their artefact shape are not implemented yet. The
+following settings are the selected initial contract and will be implemented
+together with the backup lifecycle, artefact layout, and restore validation.
+Until then, backup fields remain unavailable to the settings loader and must
+not be silently ignored.
 
 The selected settings are:
 
@@ -255,7 +255,7 @@ reproducible fixtures, straightforward restore, and cross-machine testing.
 Incremental backups are in scope as future work if measurements show that full
 backups require excessive time or storage.
 
-## Restore behavior
+## Restore behaviour
 
 Restoration must be staged, validated, and non-destructive. The active
 installation must remain unchanged until the complete restored state is ready
@@ -286,7 +286,7 @@ to activate.
 
 ### Restore forms
 
-Portable backups may require index rebuilding when serialized indexes are
+Portable backups may require index rebuilding when serialised indexes are
 unavailable or incompatible. The restore must report when reconstruction
 occurred.
 

@@ -5,8 +5,7 @@ import uuid
 
 import pytest
 
-from inference_lab.provenance import identifiers as identifiers_module
-from inference_lab.provenance.identifiers import (
+from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
     DocumentId,
@@ -14,11 +13,21 @@ from inference_lab.provenance.identifiers import (
     RecordId,
     SourceSpanId,
 )
-
+from inference_lab.provenance import identifiers as identifiers_module
 
 KNOWN_UUID = uuid.UUID("12345678-1234-4abc-8def-123456789abc")
 
-IDENTIFIER_TYPES = (
+type Identifier = (
+    CorpusId
+    | CorpusVersionId
+    | DocumentId
+    | DocumentVersionId
+    | RecordId
+    | SourceSpanId
+)
+type IdentifierType = type[Identifier]
+
+IDENTIFIER_TYPES: tuple[IdentifierType, ...] = (
     DocumentId,
     DocumentVersionId,
     RecordId,
@@ -30,7 +39,8 @@ IDENTIFIER_TYPES = (
 
 @pytest.mark.parametrize("identifier_type", IDENTIFIER_TYPES)
 def test_generate_returns_canonical_uuid_for_requested_domain(
-    identifier_type: type, monkeypatch: pytest.MonkeyPatch
+    identifier_type: IdentifierType,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(identifiers_module.uuid, "uuid4", lambda: KNOWN_UUID)
 
@@ -42,7 +52,7 @@ def test_generate_returns_canonical_uuid_for_requested_domain(
 
 
 @pytest.mark.parametrize("identifier_type", IDENTIFIER_TYPES)
-def test_from_str_round_trips_canonical_value(identifier_type: type) -> None:
+def test_from_str_round_trips_canonical_value(identifier_type: IdentifierType) -> None:
     original = identifier_type.generate()
     restored = identifier_type.from_str(str(original))
 
@@ -64,13 +74,16 @@ def test_from_str_round_trips_canonical_value(identifier_type: type) -> None:
         "ABCDEFAB-1234-4ABC-8DEF-ABCDEFABCDEF",
     ],
 )
-def test_rejects_noncanonical_values(identifier_type: type, value: str) -> None:
+def test_rejects_noncanonical_values(
+    identifier_type: IdentifierType,
+    value: str,
+) -> None:
     with pytest.raises(ValueError):
         identifier_type.from_str(value)
 
 
 @pytest.mark.parametrize("identifier_type", IDENTIFIER_TYPES)
-def test_rejects_non_string_values(identifier_type: type) -> None:
+def test_rejects_non_string_values(identifier_type: IdentifierType) -> None:
     with pytest.raises(TypeError):
         identifier_type.from_str(None)  # type: ignore[arg-type]
 
@@ -87,7 +100,8 @@ def test_identifiers_are_immutable() -> None:
     ("left_type", "right_type"), tuple(itertools.combinations(IDENTIFIER_TYPES, 2))
 )
 def test_identifier_equality_includes_concrete_domain(
-    left_type: type, right_type: type
+    left_type: IdentifierType,
+    right_type: IdentifierType,
 ) -> None:
     value = str(KNOWN_UUID)
 

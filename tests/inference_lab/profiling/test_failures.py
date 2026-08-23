@@ -12,7 +12,7 @@ def fixed_timestamp() -> datetime:
     return datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 
 
-def test_failed_event_serializes_operational_fields() -> None:
+def test_failed_event_serialises_operational_fields() -> None:
     record = FailureEvent(
         failure_category="input",
         failure_code="malformed_document",
@@ -25,7 +25,7 @@ def test_failed_event_serializes_operational_fields() -> None:
         retry_count=1,
         partial=True,
         exception_type="ValueError",
-        timestamp=fixed_timestamp(),
+        observed_at=fixed_timestamp(),
     )
 
     assert record.to_dict() == {
@@ -45,7 +45,8 @@ def test_failed_event_serializes_operational_fields() -> None:
         "retry_count": 1,
         "partial": True,
         "exception_type": "ValueError",
-        "timestamp": "2026-08-21T12:00:00+00:00",
+        "observed_at": "2026-08-21T12:00:00+00:00",
+        "record_schema_version": 2,
     }
 
 
@@ -57,7 +58,7 @@ def test_degraded_measurement_event_is_warning() -> None:
         status="degraded",
         level="warning",
         recoverable=True,
-        timestamp=fixed_timestamp(),
+        observed_at=fixed_timestamp(),
     )
 
     assert record.event == "unit_degraded"
@@ -71,7 +72,7 @@ def test_cancelled_event_requires_cancelled_status() -> None:
         failure_code="request_cancelled",
         status="cancelled",
         level="warning",
-        timestamp=fixed_timestamp(),
+        observed_at=fixed_timestamp(),
     )
 
     assert record.to_dict()["status"] == "cancelled"
@@ -93,6 +94,94 @@ def test_failure_status_and_event_must_agree() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"event": "failed"}, "valid failure event"),
+        ({"failure_category": "unknown"}, "failure_category must be supported"),
+        ({"status": "unknown"}, "status must be valid"),
+        ({"level": "info"}, "failure level must be warning or error"),
+    ],
+)
+def test_failure_discriminants_must_be_supported(
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    values: dict[str, object] = {
+        "failure_category": "internal",
+        "failure_code": "unexpected_error",
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match=message):
+        FailureEvent(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"module": ""},
+        {"pipeline_stage": ""},
+        {"stage_id": ""},
+    ],
+)
+def test_failure_context_fields_reject_empty_strings(
+    overrides: dict[str, object],
+) -> None:
+    values: dict[str, object] = {
+        "failure_category": "internal",
+        "failure_code": "unexpected_error",
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        FailureEvent(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field_name", ["recoverable", "partial"])
+def test_failure_boolean_flags_require_booleans(field_name: str) -> None:
+    values: dict[str, object] = {
+        "failure_category": "internal",
+        "failure_code": "unexpected_error",
+        field_name: 1,
+    }
+
+    with pytest.raises(ValueError, match=f"{field_name} must be a boolean"):
+        FailureEvent(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("status", "event", "level", "message"),
+    [
+        ("degraded", "unit_failed", "warning", "must use unit_degraded"),
+        ("failed", "unit_failed", "warning", "failed records must use error"),
+        ("cancelled", "unit_failed", "error", "cancelled records must use warning"),
+    ],
+)
+def test_failure_status_controls_event_and_level(
+    status: str,
+    event: str,
+    level: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        FailureEvent(
+            failure_category="internal",
+            failure_code="unexpected_error",
+            status=status,  # type: ignore[arg-type]
+            event=event,  # type: ignore[arg-type]
+            level=level,  # type: ignore[arg-type]
+        )
+
+
+def test_cancelled_category_requires_cancelled_status() -> None:
+    with pytest.raises(ValueError, match="cancelled category"):
+        FailureEvent(
+            failure_category="cancelled",
+            failure_code="request_cancelled",
+        )
+
+
 def test_measurement_unavailable_must_be_degraded() -> None:
     with pytest.raises(ValueError, match="measurement_unavailable"):
         FailureEvent(
@@ -111,21 +200,37 @@ def test_retry_count_must_be_non_negative_integer(retry_count: object) -> None:
         )
 
 
-def test_exception_metadata_must_not_contain_newlines() -> None:
-    with pytest.raises(ValueError, match="exception_type"):
+@pytest.mark.parametrize(
+    "exception_type",
+    ["", "ValueError: secret", "ValueError secret", "package/Class", "Error\nsecret"],
+)
+def test_exception_metadata_must_be_qualified_type_name(
+    exception_type: str,
+) -> None:
+    with pytest.raises(ValueError, match="qualified exception class name"):
         FailureEvent(
             failure_category="internal",
             failure_code="unexpected_error",
-            exception_type="ValueError\nsecret payload",
+            exception_type=exception_type,
         )
 
 
-def test_naive_and_non_utc_timestamps_are_rejected() -> None:
-    with pytest.raises(ValueError, match="timezone-aware UTC"):
+def test_qualified_exception_type_is_accepted() -> None:
+    record = FailureEvent(
+        failure_category="internal",
+        failure_code="unexpected_error",
+        exception_type="builtins.RuntimeError",
+    )
+
+    assert record.exception_type == "builtins.RuntimeError"
+
+
+def test_naive_and_non_utc_observation_times_are_rejected() -> None:
+    with pytest.raises(ValueError, match="observed_at must be timezone-aware UTC"):
         FailureEvent(
             failure_category="internal",
             failure_code="unexpected_error",
-            timestamp=datetime(2026, 8, 21, 12, 0),
+            observed_at=datetime(2026, 8, 21, 12, 0),
         )
 
     non_utc = datetime(
@@ -136,9 +241,18 @@ def test_naive_and_non_utc_timestamps_are_rejected() -> None:
         0,
         tzinfo=timezone(timedelta(hours=1)),
     )
-    with pytest.raises(ValueError, match="timestamp must be in UTC"):
+    with pytest.raises(ValueError, match="observed_at must be in UTC"):
         FailureEvent(
             failure_category="internal",
             failure_code="unexpected_error",
-            timestamp=non_utc,
+            observed_at=non_utc,
+        )
+
+
+def test_failure_event_rejects_invalid_schema_version() -> None:
+    with pytest.raises(ValueError, match="record_schema_version"):
+        FailureEvent(
+            failure_category="internal",
+            failure_code="unexpected_error",
+            record_schema_version=0,
         )

@@ -1,18 +1,22 @@
 """Deterministic parsing contracts and text-native document parsing."""
 
 import codecs
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import structlog
 
-from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.errors import ParserDecodeError
+from inference_lab.ingest.outcomes import ParseOutcome
+from inference_lab.ingest.sources import StructuralBlock
+from inference_lab.ingest.utils import normalise_source_text
+from inference_lab.ingest.versioning import (
+    CURRENT_PARSER_VERSION,
+    ParserVersion,
+    generate_source_span_id,
+)
 from inference_lab.provenance import DocumentId, DocumentVersionId
 from inference_lab.settings import Settings
-from inference_lab.ingest.outcomes import ParseOutcome
-from inference_lab.ingest.utils import normalise_text
-from inference_lab.ingest.versioning import CURRENT_PARSER_VERSION, ParserVersion
 
 logger = structlog.get_logger(__name__)
 
@@ -36,12 +40,29 @@ class ParserInputError(ValueError):
         self.category = category
 
 
+def _is_text_encoding(encoding: str) -> bool:
+    """Return whether the named codec decodes bytes into text."""
+    try:
+        codec = codecs.lookup(encoding)
+        decoded, _ = codec.decode(b"", "strict")
+    except Exception:
+        # Codec implementations are registry extensions. Treat any decoder
+        # incompatibility as invalid input rather than leaking it past this boundary.
+        return False
+    return isinstance(decoded, str)
+
+
 @dataclass(frozen=True, slots=True)
 class NormalisedText:
     """Pair canonical text with the decoded source coordinate space."""
 
     source_text: str
-    text: str
+    text: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_text, str):
+            raise ValueError("source_text_must_be_string")
+        object.__setattr__(self, "text", normalise_source_text(self.source_text))
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,26 +90,23 @@ class ParserInput:
             raise ParserInputError("unsupported_media_type")
         if not isinstance(self.encoding, str) or not self.encoding.strip():
             raise ParserInputError("missing_encoding")
-        try:
-            codecs.lookup(self.encoding)
-        except LookupError as error:
-            raise ParserInputError("invalid_encoding") from error
+        if not _is_text_encoding(self.encoding):
+            raise ParserInputError("invalid_encoding")
 
 
 def decode_source(source: ParserInput) -> str:
     """Decode source bytes strictly into Unicode code-point text."""
-
     try:
         return source.content.decode(source.encoding, errors="strict")
-    except UnicodeDecodeError as error:
-        raise ParserDecodeError(source.encoding) from error
+    except UnicodeDecodeError:
+        pass
+    raise ParserDecodeError(source.encoding)
 
 
 def prepare_text(source: ParserInput) -> NormalisedText:
     """Decode and normalise one parser input deterministically."""
-
     source_text = decode_source(source)
-    return NormalisedText(source_text=source_text, text=normalise_text(source_text))
+    return NormalisedText(source_text=source_text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +147,8 @@ class ParsedDocument:
             not isinstance(self.token_count, int) or isinstance(self.token_count, bool)
         ):
             raise ValueError("token_count_must_be_integer")
+        if not isinstance(self.blocks, tuple):
+            raise ValueError("blocks_must_be_tuple")
         source_length = len(self.text.source_text)
 
         if self.character_count != len(self.text.text):
@@ -138,24 +158,77 @@ class ParsedDocument:
         if self.token_count is not None and self.token_count < 0:
             raise ValueError("token_count_must_not_be_negative")
 
-        for block in self.blocks:
-            self._validate_block(block)
-            if block.source_span.end_offset > source_length:
-                raise ValueError("source_span_exceeds_source_text")
+        previous_start_offset = -1
+        for ordinal, block in enumerate(self.blocks):
+            self._validate_block(
+                block,
+                ordinal=ordinal,
+                source_length=source_length,
+            )
+            if block.source_span.start_offset < previous_start_offset:
+                raise ValueError("blocks_must_be_in_source_order")
+            previous_start_offset = block.source_span.start_offset
 
-        for collection in (self.pages, self.sections, self.paragraphs):
-            if collection is not None:
-                for block in collection:
-                    self._validate_block(block)
-                    if block.source_span.end_offset > source_length:
-                        raise ValueError("source_span_exceeds_source_text")
+        self._validate_typed_collection(self.pages, kind="page", name="pages")
+        self._validate_typed_collection(
+            self.sections,
+            kind="section",
+            name="sections",
+        )
+        self._validate_typed_collection(
+            self.paragraphs,
+            kind="paragraph",
+            name="paragraphs",
+        )
 
-    def _validate_block(self, block: StructuralBlock) -> None:
-        """Validate block type and document-version provenance."""
+    def _validate_block(
+        self,
+        block: StructuralBlock,
+        *,
+        ordinal: int,
+        source_length: int,
+    ) -> None:
+        """Validate one canonical block and its source provenance."""
         if not isinstance(block, StructuralBlock):
             raise ValueError("invalid_structural_block")
-        if block.source_span.document_version_id != self.document_version_id:
+        span = block.source_span
+        if span.document_version_id != self.document_version_id:
             raise ValueError("source_span_document_version_mismatch")
+        if span.end_offset > source_length:
+            raise ValueError("source_span_exceeds_source_text")
+        source_text = self.text.source_text[span.start_offset : span.end_offset]
+        if block.text != normalise_source_text(source_text):
+            raise ValueError("block_text_source_span_mismatch")
+        expected_span_id = generate_source_span_id(
+            self.document_version_id,
+            parser_version=self.parser_version,
+            ordinal=ordinal,
+            kind=block.kind,
+            start_offset=span.start_offset,
+            end_offset=span.end_offset,
+        )
+        if span.source_span_id != expected_span_id:
+            raise ValueError("source_span_id_mismatch")
+
+    def _validate_typed_collection(
+        self,
+        collection: tuple[StructuralBlock, ...] | None,
+        *,
+        kind: Literal["page", "section", "paragraph"],
+        name: Literal["pages", "sections", "paragraphs"],
+    ) -> None:
+        """Require typed collections to be exact immutable block projections."""
+        expected = tuple(block for block in self.blocks if block.kind == kind)
+        if collection is None:
+            if expected:
+                raise ValueError(f"{name}_missing_for_blocks")
+            return
+        if not isinstance(collection, tuple):
+            raise ValueError(f"{name}_must_be_tuple")
+        if any(block.kind != kind for block in collection):
+            raise ValueError(f"{name}_contain_wrong_block_kind")
+        if collection != expected:
+            raise ValueError(f"{name}_must_match_blocks")
 
 
 class Parser(Protocol):

@@ -1,21 +1,45 @@
 """Emit profiling records through the application structured logger."""
 
-from __future__ import annotations
+from typing import Final, Protocol, get_args
 
-from collections.abc import Mapping
-from typing import Any, Protocol
+from inference_lab.profiling.types import LogLevel
 
 
 class ProfilingRecordLike(Protocol):
-    """The serialization contract required by the profiling emitter."""
+    """The serialisation contract required by the profiling emitter."""
 
     def to_dict(self) -> dict[str, object]:
         """Return structured fields for one profiling record."""
+        ...
 
 
-_LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
+class ProfilingLogger(Protocol):
+    """The structured severity methods required by the profiling emitter."""
+
+    def debug(self, event: str, **fields: object) -> object:
+        """Emit a debug record."""
+        ...
+
+    def info(self, event: str, **fields: object) -> object:
+        """Emit an informational record."""
+        ...
+
+    def warning(self, event: str, **fields: object) -> object:
+        """Emit a warning record."""
+        ...
+
+    def error(self, event: str, **fields: object) -> object:
+        """Emit an error record."""
+        ...
+
+    def critical(self, event: str, **fields: object) -> object:
+        """Emit a critical record."""
+        ...
+
+
+_LOG_LEVELS: Final[frozenset[LogLevel]] = frozenset(get_args(LogLevel))
 _REQUIRED_FIELDS = (
-    "timestamp",
+    "observed_at",
     "module",
     "pipeline_stage",
     "document_id",
@@ -23,17 +47,7 @@ _REQUIRED_FIELDS = (
 )
 
 
-def _default_level(fields: Mapping[str, object]) -> str:
-    """Infer severity for record types without an explicit log level."""
-    status = fields.get("status")
-    if status in {"failed"}:
-        return "error"
-    if status in {"cancelled", "degraded", "unavailable", "unreliable"}:
-        return "warning"
-    return "info"
-
-
-def emit_record(logger: Any, record: ProfilingRecordLike) -> None:
+def emit_record(logger: ProfilingLogger, record: ProfilingRecordLike) -> None:
     """Emit one profiling record through a structlog-compatible logger.
 
     The adapter preserves the record's structured fields, supplies the
@@ -47,8 +61,7 @@ def emit_record(logger: Any, record: ProfilingRecordLike) -> None:
 
     level = fields.get("level")
     if level is None:
-        level = _default_level(fields)
-        fields["level"] = level
+        raise ValueError("profiling records must provide an explicit log level")
     if not isinstance(level, str) or level not in _LOG_LEVELS:
         raise ValueError("profiling records must provide a valid log level")
 
@@ -57,5 +70,5 @@ def emit_record(logger: Any, record: ProfilingRecordLike) -> None:
 
     log_method = getattr(logger, level, None)
     if not callable(log_method):
-        raise TypeError(f"logger does not provide a {level} method")
+        raise TypeError(f"logger does not provide the required {level} method")
     log_method(event, **fields)

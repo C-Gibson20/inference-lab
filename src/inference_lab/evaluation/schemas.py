@@ -1,14 +1,27 @@
 """Reusable schemas for evaluation datasets."""
 
-from __future__ import annotations
-
 import math
+import re
+from datetime import date, datetime
 from typing import Literal
-from datetime import date
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
-from inference_lab.provenance.identifiers import (
+from inference_lab.evaluation.utils import (
+    EvidenceId,
+    ExpectationKey,
+    normalise_for_duplicate_detection,
+)
+from inference_lab.provenance import (
     CorpusVersionId,
     DocumentId,
     DocumentVersionId,
@@ -16,20 +29,118 @@ from inference_lab.provenance.identifiers import (
     SourceSpanId,
 )
 
+type _CanonicalIdentifier = (
+    CorpusVersionId | DocumentId | DocumentVersionId | RecordId | SourceSpanId
+)
 
-def _canonical_id(value: str, identifier_type: type) -> str:
-    """Validate an ID using a PROV-01 identifier type."""
+
+def _canonical_id(value: str, identifier_type: type[_CanonicalIdentifier]) -> str:
+    """Validate an ID using a provenance identifier type."""
     return identifier_type.from_str(value).as_str()
 
 
+def _require_non_blank(value: str | None, *, field_name: str) -> str | None:
+    """Reject a present string that contains no meaningful text."""
+    if value is not None and not value.strip():
+        raise ValueError(f"{field_name} must not be blank")
+    return value
+
+
+def _validate_unique_strings(values: tuple[str, ...], *, field_name: str) -> None:
+    """Reject blank or normalised-duplicate strings."""
+    normalised = tuple(normalise_for_duplicate_detection(value) for value in values)
+    if any(not value for value in normalised):
+        raise ValueError(f"{field_name} must not contain blank values")
+    if len(normalised) != len(set(normalised)):
+        raise ValueError(f"{field_name} must contain unique values")
+
+
+def _validate_unique_ids(values: tuple[str, ...], *, field_name: str) -> None:
+    """Reject duplicate identifiers where order is semantically meaningful."""
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field_name} must contain unique evidence IDs")
+
+
+def _reject_boolean_numbers(value: object) -> object:
+    """Reject booleans before Pydantic can coerce them to numbers."""
+    values = value if isinstance(value, (list, tuple)) else (value,)
+    if any(isinstance(item, bool) for item in values if item is not None):
+        raise ValueError("Boolean values are not numeric expectations")
+    return value
+
+
+def _validate_provenance_ids(
+    *,
+    corpus_version: str,
+    document_id: str,
+    document_version_id: str | None,
+    source_span_id: str | None,
+    record_id: str | None,
+) -> None:
+    """Validate required and present optional provenance identifiers."""
+    _canonical_id(corpus_version, CorpusVersionId)
+    _canonical_id(document_id, DocumentId)
+    if document_version_id is not None:
+        _canonical_id(document_version_id, DocumentVersionId)
+    if source_span_id is not None:
+        _canonical_id(source_span_id, SourceSpanId)
+    if record_id is not None:
+        _canonical_id(record_id, RecordId)
+
+
+def _validate_source_span_evidence_shape(
+    *,
+    document_version_id: str | None,
+    source_span_id: str | None,
+    record_id: str | None,
+) -> None:
+    """Require the exact identifier shape for source-span evidence."""
+    if document_version_id is None or source_span_id is None:
+        raise ValueError(
+            "source_span evidence requires document_version_id and source_span_id"
+        )
+    if record_id is not None:
+        raise ValueError("source_span evidence cannot contain record_id")
+
+
+def _validate_record_evidence_shape(
+    *,
+    source_span_id: str | None,
+    record_id: str | None,
+) -> None:
+    """Require the exact identifier shape for record evidence."""
+    if record_id is None:
+        raise ValueError("record evidence requires record_id")
+    if source_span_id is not None:
+        raise ValueError("record evidence cannot contain source_span_id")
+
+
+def _validate_document_evidence_shape(
+    *,
+    role: str,
+    document_version_id: str | None,
+    source_span_id: str | None,
+    record_id: str | None,
+) -> None:
+    """Require the exact role and identifier shape for document evidence."""
+    if role == "authoritative":
+        raise ValueError("document-level evidence cannot be authoritative")
+    if any(
+        value is not None for value in (document_version_id, source_span_id, record_id)
+    ):
+        raise ValueError(
+            "document evidence cannot contain version, span, or record IDs"
+        )
+
+
 class EvidenceReference(BaseModel):
-    """Evidence associated with an evaluation case."""
+    """One case-local reference to expected source evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    evidence_id: EvidenceId
     kind: Literal["source_span", "record", "document"] = "source_span"
     role: Literal["authoritative", "context"] = "authoritative"
-
     corpus_version: str
     document_id: str
     document_version_id: str | None = None
@@ -38,29 +149,47 @@ class EvidenceReference(BaseModel):
 
     @model_validator(mode="after")
     def validate_ids_and_shape(self) -> "EvidenceReference":
-        """Validate provenance identifiers and evidence granularity."""
-        _canonical_id(self.corpus_version, CorpusVersionId)
-        _canonical_id(self.document_id, DocumentId)
-
-        if self.document_version_id is not None:
-            _canonical_id(self.document_version_id, DocumentVersionId)
-        if self.source_span_id is not None:
-            _canonical_id(self.source_span_id, SourceSpanId)
-        if self.record_id is not None:
-            _canonical_id(self.record_id, RecordId)
+        """Validate provenance identifiers and exact evidence granularity."""
+        _validate_provenance_ids(
+            corpus_version=self.corpus_version,
+            document_id=self.document_id,
+            document_version_id=self.document_version_id,
+            source_span_id=self.source_span_id,
+            record_id=self.record_id,
+        )
 
         if self.kind == "source_span":
-            if self.document_version_id is None or self.source_span_id is None:
-                raise ValueError(
-                    "source_span evidence requires document_version_id "
-                    "and source_span_id"
-                )
-        elif self.kind == "record" and self.record_id is None:
-            raise ValueError("record evidence requires record_id")
-        elif self.kind == "document" and self.role == "authoritative":
-            raise ValueError("document-level evidence cannot be authoritative")
+            _validate_source_span_evidence_shape(
+                document_version_id=self.document_version_id,
+                source_span_id=self.source_span_id,
+                record_id=self.record_id,
+            )
+        elif self.kind == "record":
+            _validate_record_evidence_shape(
+                source_span_id=self.source_span_id,
+                record_id=self.record_id,
+            )
+        else:
+            _validate_document_evidence_shape(
+                role=self.role,
+                document_version_id=self.document_version_id,
+                source_span_id=self.source_span_id,
+                record_id=self.record_id,
+            )
 
         return self
+
+    @property
+    def location_key(self) -> tuple[str, ...]:
+        """Return the provenance location independent of its case-local ID."""
+        return (
+            self.kind,
+            self.corpus_version,
+            self.document_id,
+            self.document_version_id or "",
+            self.source_span_id or "",
+            self.record_id or "",
+        )
 
 
 class AnswerClaim(BaseModel):
@@ -68,11 +197,31 @@ class AnswerClaim(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    key: str = Field(min_length=1)
-    required: bool = True
+    key: ExpectationKey
+    evidence_ids: tuple[EvidenceId, ...] = Field(min_length=1)
+    required: StrictBool = True
     acceptable_values: tuple[str, ...] = ()
-    normalized_values: tuple[str, ...] = ()
+    normalised_values: tuple[str, ...] = ()
     description: str | None = None
+
+    @model_validator(mode="after")
+    def validate_claim(self) -> "AnswerClaim":
+        """Require a meaningful, unambiguous claim annotation."""
+        _validate_unique_ids(self.evidence_ids, field_name="evidence_ids")
+        _validate_unique_strings(
+            self.acceptable_values,
+            field_name="acceptable_values",
+        )
+        _validate_unique_strings(
+            self.normalised_values,
+            field_name="normalised_values",
+        )
+        _require_non_blank(self.description, field_name="description")
+        if not (self.acceptable_values or self.normalised_values or self.description):
+            raise ValueError(
+                "Claims require accepted values, normalised values, or a description"
+            )
+        return self
 
 
 class DateExpectation(BaseModel):
@@ -80,9 +229,26 @@ class DateExpectation(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    key: str = Field(min_length=1)
+    key: ExpectationKey
+    evidence_ids: tuple[EvidenceId, ...] = Field(min_length=1)
     value: date
-    tolerance_days: int = Field(default=0, ge=0)
+    tolerance_days: StrictInt = Field(default=0, ge=0)
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def validate_date_value(cls, value: object) -> object:
+        """Accept dates and ISO date strings without datetime coercion."""
+        if isinstance(value, datetime):
+            raise ValueError("Date expectations cannot contain datetimes")
+        if isinstance(value, str) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError("Date expectations must use YYYY-MM-DD")
+        return value
+
+    @model_validator(mode="after")
+    def validate_evidence_ids(self) -> "DateExpectation":
+        """Reject duplicate evidence links."""
+        _validate_unique_ids(self.evidence_ids, field_name="evidence_ids")
+        return self
 
 
 class NumericExpectation(BaseModel):
@@ -90,17 +256,30 @@ class NumericExpectation(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    key: str = Field(min_length=1)
-    value: float
-    acceptable_values: tuple[float, ...] = ()
-    absolute_tolerance: float | None = Field(default=None, ge=0)
-    relative_tolerance: float | None = Field(default=None, ge=0)
+    key: ExpectationKey
+    evidence_ids: tuple[EvidenceId, ...] = Field(min_length=1)
+    value: StrictFloat
+    acceptable_values: tuple[StrictFloat, ...] = ()
+    absolute_tolerance: StrictFloat | None = Field(default=None, ge=0)
+    relative_tolerance: StrictFloat | None = Field(default=None, ge=0)
     unit: str | None = None
 
-    @model_validator(mode="after")
-    def validate_finite_values(self) -> "NumericExpectation":
-        """Reject non-finite expected values and tolerances."""
+    @field_validator(
+        "value",
+        "acceptable_values",
+        "absolute_tolerance",
+        "relative_tolerance",
+        mode="before",
+    )
+    @classmethod
+    def reject_boolean_numbers(cls, value: object) -> object:
+        """Reject booleans rather than coercing them to zero or one."""
+        return _reject_boolean_numbers(value)
 
+    @model_validator(mode="after")
+    def validate_values(self) -> "NumericExpectation":
+        """Validate finite values, unique alternatives, and evidence links."""
+        _validate_unique_ids(self.evidence_ids, field_name="evidence_ids")
         values = (
             self.value,
             *self.acceptable_values,
@@ -109,11 +288,16 @@ class NumericExpectation(BaseModel):
         )
         if any(value is not None and not math.isfinite(value) for value in values):
             raise ValueError("Numeric expectations must be finite")
+        if len(self.acceptable_values) != len(set(self.acceptable_values)):
+            raise ValueError("acceptable_values must contain unique numbers")
+        if self.value in self.acceptable_values:
+            raise ValueError("acceptable_values cannot repeat the primary value")
+        _require_non_blank(self.unit, field_name="unit")
         return self
 
 
 class ExpectedAnswer(BaseModel):
-    """Machine-checkable expectations; summary text is illustrative only."""
+    """Evidence-linked expectations; summary text is illustrative only."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -123,6 +307,78 @@ class ExpectedAnswer(BaseModel):
     date_values: tuple[DateExpectation, ...] = ()
     comparison_order: tuple[str, ...] | None = None
     acceptable_comparison_orders: tuple[tuple[str, ...], ...] = ()
+    comparison_evidence_ids: tuple[EvidenceId, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_expectations(self) -> "ExpectedAnswer":
+        """Reject ambiguous keys and contradictory comparison annotations."""
+        _require_non_blank(self.summary, field_name="summary")
+
+        keys = tuple(
+            item.key for item in (*self.claims, *self.numeric_values, *self.date_values)
+        )
+        if len(keys) != len(set(keys)):
+            raise ValueError("Expected-answer keys must be unique across value types")
+
+        if self.comparison_order is None:
+            if self.acceptable_comparison_orders:
+                raise ValueError(
+                    "acceptable comparison orders require comparison_order"
+                )
+            if self.comparison_evidence_ids:
+                raise ValueError("comparison evidence requires comparison_order")
+            return self
+
+        _validate_unique_strings(
+            self.comparison_order,
+            field_name="comparison_order",
+        )
+        if len(self.comparison_order) < 2:
+            raise ValueError("comparison_order requires at least two values")
+        _validate_unique_ids(
+            self.comparison_evidence_ids,
+            field_name="comparison_evidence_ids",
+        )
+        if not self.comparison_evidence_ids:
+            raise ValueError("comparison_order requires comparison evidence")
+
+        expected_members = set(self.comparison_order)
+        seen_orders: set[tuple[str, ...]] = {self.comparison_order}
+        for order in self.acceptable_comparison_orders:
+            _validate_unique_strings(order, field_name="acceptable_comparison_orders")
+            if set(order) != expected_members or len(order) != len(
+                self.comparison_order
+            ):
+                raise ValueError(
+                    "Acceptable comparison orders must contain the expected values"
+                )
+            if order in seen_orders:
+                raise ValueError("Comparison orders must be unique")
+            seen_orders.add(order)
+
+        return self
+
+    @property
+    def has_expectations(self) -> bool:
+        """Return whether the answer has a machine-checkable characteristic."""
+        return bool(
+            self.claims
+            or self.numeric_values
+            or self.date_values
+            or self.comparison_order
+        )
+
+    @property
+    def evidence_ids(self) -> tuple[str, ...]:
+        """Return evidence IDs referenced by all expected characteristics."""
+        return (
+            tuple(
+                evidence_id
+                for item in (*self.claims, *self.numeric_values, *self.date_values)
+                for evidence_id in item.evidence_ids
+            )
+            + self.comparison_evidence_ids
+        )
 
 
 class EvaluationPolicy(BaseModel):
@@ -134,13 +390,26 @@ class EvaluationPolicy(BaseModel):
     held_out_model_selection_allowed: Literal[False] = False
     held_out_membership_immutable: Literal[True] = True
 
+    @field_validator(
+        "held_out_tuning_allowed",
+        "held_out_model_selection_allowed",
+        "held_out_membership_immutable",
+        mode="before",
+    )
+    @classmethod
+    def reject_boolean_coercion(cls, value: object) -> object:
+        """Require actual booleans for held-out governance fields."""
+        if not isinstance(value, bool):
+            raise ValueError("Evaluation policy values must be booleans")
+        return value
+
 
 class AbstentionExpectation(BaseModel):
-    """Expected abstention behavior."""
+    """Expected abstention behaviour."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    expected: bool
+    expected: StrictBool
     reason: Literal[
         "evidence_absent",
         "evidence_insufficient",
@@ -148,4 +417,21 @@ class AbstentionExpectation(BaseModel):
         "deliberately_unanswerable",
         "not_applicable",
     ]
-    partial_answer_allowed: bool = False
+    partial_answer_allowed: StrictBool = False
+
+    @model_validator(mode="after")
+    def validate_semantics(self) -> "AbstentionExpectation":
+        """Keep the reason and partial-answer policy internally consistent."""
+        if self.expected:
+            if self.reason == "not_applicable":
+                raise ValueError("Expected abstention requires a substantive reason")
+        else:
+            if self.reason != "not_applicable":
+                raise ValueError(
+                    "Non-abstention cases must use reason 'not_applicable'"
+                )
+            if self.partial_answer_allowed:
+                raise ValueError(
+                    "partial_answer_allowed applies only when abstention is expected"
+                )
+        return self

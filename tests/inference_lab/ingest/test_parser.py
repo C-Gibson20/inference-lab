@@ -1,15 +1,17 @@
 """Tests for parser contract."""
 
+import traceback
+
 import pytest
 
 from inference_lab.ingest import (
     NormalisedText,
+    ParsedDocument,
     Parser,
     ParserDecodeError,
     ParserInput,
     ParserInputError,
-    normalise_text,
-    ParsedDocument,
+    normalise_source_text,
     prepare_text,
 )
 from inference_lab.provenance import (
@@ -99,6 +101,27 @@ def test_invalid_encoding_is_rejected() -> None:
         )
 
     assert error.value.category == "invalid_encoding"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    ["base64_codec", "hex_codec", "rot_13", "uu_codec", "zlib_codec"],
+)
+def test_non_text_codec_is_rejected(encoding: str) -> None:
+    with pytest.raises(ParserInputError) as error:
+        ParserInput(
+            document_id=DocumentId.generate(),
+            document_version_id=DocumentVersionId.generate(),
+            content=b"private source",
+            media_type="text/plain",
+            encoding=encoding,
+        )
+
+    assert error.value.category == "invalid_encoding"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
 
 
 def test_invalid_document_id_is_rejected() -> None:
@@ -127,7 +150,7 @@ def test_invalid_document_version_id_is_rejected() -> None:
     assert error.value.category == "invalid_document_version_id"
 
 
-def test_prepare_text_normalizes_newlines_and_unicode() -> None:
+def test_prepare_text_normalises_newlines_and_unicode() -> None:
     source = ParserInput(
         document_id=DocumentId.generate(),
         document_version_id=DocumentVersionId.generate(),
@@ -142,15 +165,15 @@ def test_prepare_text_normalizes_newlines_and_unicode() -> None:
     assert prepared.text == "A\nB\né"
 
 
-def test_normalization_preserves_whitespace() -> None:
-    assert normalise_text("  A \n\n B\t") == "  A \n\n B\t"
+def test_normalisation_preserves_whitespace() -> None:
+    assert normalise_source_text("  A \n\n B\t") == "  A \n\n B\t"
 
 
 def test_malformed_source_bytes_are_rejected() -> None:
     source = ParserInput(
         document_id=DocumentId.generate(),
         document_version_id=DocumentVersionId.generate(),
-        content=b"\xff",
+        content=b"private source \xff",
         media_type="text/plain",
         encoding="utf-8",
     )
@@ -160,6 +183,9 @@ def test_malformed_source_bytes_are_rejected() -> None:
 
     assert error.value.category == "decode_failed"
     assert error.value.encoding == "utf-8"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    assert "private source" not in "".join(traceback.format_exception(error.value))
 
 
 def test_prepare_text_is_deterministic() -> None:
@@ -183,14 +209,26 @@ def test_prepare_text_preserves_empty_content() -> None:
         encoding="utf-8",
     )
 
-    assert prepare_text(source) == NormalisedText(source_text="", text="")
+    assert prepare_text(source) == NormalisedText(source_text="")
+
+
+def test_normalised_text_rejects_non_string_source() -> None:
+    with pytest.raises(ValueError, match="source_text_must_be_string"):
+        NormalisedText(source_text=b"source")  # type: ignore[arg-type]
+
+
+def test_normalised_text_derives_canonical_text() -> None:
+    text = NormalisedText(source_text="A\r\ne\u0301")
+
+    assert text.source_text == "A\r\ne\u0301"
+    assert text.text == "A\né"
 
 
 def test_parsed_document_distinguishes_absent_and_empty_structure() -> None:
     parsed = ParsedDocument(
         document_id=DocumentId.generate(),
         document_version_id=DocumentVersionId.generate(),
-        text=NormalisedText(source_text="", text=""),
+        text=NormalisedText(source_text=""),
         blocks=(),
         pages=None,
         sections=None,
@@ -211,7 +249,7 @@ def test_parsed_document_rejects_character_count_mismatch() -> None:
         ParsedDocument(
             document_id=DocumentId.generate(),
             document_version_id=DocumentVersionId.generate(),
-            text=NormalisedText(source_text="A", text="A"),
+            text=NormalisedText(source_text="A"),
             blocks=(),
             pages=None,
             sections=None,

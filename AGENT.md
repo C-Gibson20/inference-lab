@@ -19,7 +19,7 @@ module dirs) unless the user explicitly requests it in that session.
 ## Architecture
 
 - `src/inference_lab/ingest/`: identify, deduplicate, parse/OCR, preserve spans,
-  chunk, summarize, and extract.
+  chunk, summarise, and extract.
 - `src/inference_lab/provenance/`: stable document/version identity and lineage.
 - `src/inference_lab/storage/`: persistent metadata and indexes.
 - `src/inference_lab/retrieval/`: lexical, dense, metadata, summary, and
@@ -44,13 +44,16 @@ API docstrings, concise comments for reasoning, and privacy-safe structured
 logging. Use `structlog` inside `inference_lab`; use standard-library logging
 only for dependencies and process-level handlers. Do not add third-party
 model/data APIs to the deployed path.
+
+Follow the [Python style conventions](docs/conventions/python-style.md),
+including the absolute-import policy for production modules.
 Do not introduce entity graphs until simpler retrieval and structured queries
 are shown insufficient. Do not move domain-specific ADMET experiments into the
 core product boundary.
 
 Avoid changing `docs/spec.md` to justify an implementation. Update it only when
 the product decision itself changes. Avoid committing generated caches, model
-artifacts, confidential documents, or benchmark outputs containing sensitive
+artefacts, confidential documents, or benchmark outputs containing sensitive
 data.
 
 ## Validation
@@ -60,10 +63,11 @@ From the repository root, run:
 ```sh
 uv run ruff check .
 uv run ruff format --check .
+uv run pyright
 uv run pytest
 ```
 
 For changes affecting retrieval or answering, also update or run the relevant
 evaluation cases and check citation correctness, faithfulness, latency, and
 memory—not only Recall@10. For changes affecting ingest or runtime, report
-incremental behavior, throughput, memory, and failure modes when measurable.
+incremental behaviour, throughput, memory, and failure modes when measurable.

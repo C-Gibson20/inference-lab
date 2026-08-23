@@ -2,7 +2,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).parents[2]
 PRE_COMMIT = REPO_ROOT / ".githooks" / "pre-commit"
 COMMIT_MSG = REPO_ROOT / ".githooks" / "commit-msg"
@@ -41,6 +40,7 @@ def test_pre_commit_runs_lint_and_format_checks(tmp_path: Path) -> None:
     assert calls.read_text().splitlines() == [
         "run ruff check .",
         "run ruff format --check .",
+        "run pyright",
     ]
 
 

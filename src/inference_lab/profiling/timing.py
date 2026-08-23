@@ -1,26 +1,30 @@
 """Deterministic stage timing records and context-manager instrumentation."""
 
-from __future__ import annotations
-
 import asyncio
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Literal, Self
+from datetime import datetime
+from types import TracebackType
+from typing import Final, Literal, Self, get_args
 
-from .records import LogLevel
-from .resources import utc_now
-
+from inference_lab.profiling._validation import validate_utc_datetime
+from inference_lab.profiling.types import LogLevel
+from inference_lab.profiling.utils import utc_now
+from inference_lab.profiling.versioning import (
+    CURRENT_RECORD_SCHEMA_VERSION,
+    validate_record_schema_version,
+)
 
 Clock = Callable[[], int]
-TimestampFactory = Callable[[], datetime]
+ObservationTimeFactory = Callable[[], datetime]
 RecordEmitter = Callable[["StageTiming"], None]
 Event = Literal["stage_started", "stage_completed"]
 Status = Literal["started", "completed", "failed", "cancelled"]
 
-_EVENTS = frozenset({"stage_started", "stage_completed"})
-_STATUSES = frozenset({"started", "completed", "failed", "cancelled"})
+_EVENTS: Final[frozenset[Event]] = frozenset(get_args(Event))
+_STATUSES: Final[frozenset[Status]] = frozenset(get_args(Status))
 
 
 def _validate_non_negative_integer(value: int | None, field_name: str) -> None:
@@ -31,6 +35,22 @@ def _validate_non_negative_integer(value: int | None, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a non-negative integer")
 
 
+def _validate_non_negative_duration(
+    value: int | float | None,
+    field_name: str,
+) -> None:
+    """Validate an optional finite, non-negative duration."""
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ValueError(f"{field_name} must be a finite non-negative number")
+
+
 @dataclass(frozen=True, slots=True)
 class StageTiming:
     """A structured start or completion record for one pipeline stage."""
@@ -39,7 +59,7 @@ class StageTiming:
     module: str
     pipeline_stage: str
     stage_id: str
-    timestamp: datetime = field(default_factory=utc_now)
+    observed_at: datetime = field(default_factory=utc_now)
     duration_ms: float | None = None
     items_processed: int | None = None
     records_emitted: int | None = None
@@ -49,6 +69,7 @@ class StageTiming:
     document_id: str | None = None
     corpus_version: str | None = None
     parent_stage_id: str | None = None
+    record_schema_version: int = CURRENT_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         self._validate()
@@ -73,14 +94,11 @@ class StageTiming:
             raise ValueError("stage_started records must not have a duration")
         if self.event == "stage_completed" and self.duration_ms is None:
             raise ValueError("stage_completed records must have a duration")
-        if self.duration_ms is not None and self.duration_ms < 0:
-            raise ValueError("duration_ms must be non-negative")
+        _validate_non_negative_duration(self.duration_ms, "duration_ms")
         _validate_non_negative_integer(self.items_processed, "items_processed")
         _validate_non_negative_integer(self.records_emitted, "records_emitted")
-        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
-            raise ValueError("timestamp must be timezone-aware UTC")
-        if self.timestamp.utcoffset() != timedelta(0):
-            raise ValueError("timestamp must be in UTC")
+        validate_utc_datetime(self.observed_at, "observed_at")
+        validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:
         """Return the timing record as structured logging fields."""
@@ -90,7 +108,7 @@ class StageTiming:
             "level": self.level,
             "pipeline_stage": self.pipeline_stage,
             "stage_id": self.stage_id,
-            "timestamp": self.timestamp.isoformat(),
+            "observed_at": self.observed_at.isoformat(),
             "duration_ms": self.duration_ms,
             "items_processed": self.items_processed,
             "records_emitted": self.records_emitted,
@@ -100,6 +118,7 @@ class StageTiming:
             "document_id": self.document_id,
             "corpus_version": self.corpus_version,
             "parent_stage_id": self.parent_stage_id,
+            "record_schema_version": self.record_schema_version,
         }
 
     @property
@@ -128,7 +147,7 @@ class StageTimer:
         stage_id: str,
         emit: RecordEmitter,
         clock: Clock = time.monotonic_ns,
-        timestamp_factory: TimestampFactory = utc_now,
+        observed_at_factory: ObservationTimeFactory = utc_now,
         run_id: str | None = None,
         request_id: str | None = None,
         document_id: str | None = None,
@@ -140,15 +159,15 @@ class StageTimer:
             raise TypeError("emit must be callable")
         if not callable(clock):
             raise TypeError("clock must be callable")
-        if not callable(timestamp_factory):
-            raise TypeError("timestamp_factory must be callable")
+        if not callable(observed_at_factory):
+            raise TypeError("observed_at_factory must be callable")
 
         self._module = module
         self._pipeline_stage = pipeline_stage
         self._stage_id = stage_id
         self._emit = emit
         self._clock = clock
-        self._timestamp_factory = timestamp_factory
+        self._observed_at_factory = observed_at_factory
         self._run_id = run_id
         self._request_id = request_id
         self._document_id = document_id
@@ -174,7 +193,7 @@ class StageTimer:
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
-        traceback: object | None,
+        traceback: TracebackType | None,
     ) -> bool:
         """Emit completion timing and propagate any stage exception."""
         del exc_value, traceback
@@ -192,7 +211,12 @@ class StageTimer:
             status = "failed"
 
         self._finished = True
-        self._emit(self._build_record("stage_completed", status, duration_ms))
+        try:
+            completion = self._build_record("stage_completed", status, duration_ms)
+            self._emit(completion)
+        except BaseException:
+            if exc_type is None:
+                raise
         return False
 
     def set_counts(
@@ -221,7 +245,7 @@ class StageTimer:
             module=self._module,
             pipeline_stage=self._pipeline_stage,
             stage_id=self._stage_id,
-            timestamp=self._timestamp_factory(),
+            observed_at=self._observed_at_factory(),
             duration_ms=duration_ms,
             items_processed=(
                 self._items_processed if event == "stage_completed" else None

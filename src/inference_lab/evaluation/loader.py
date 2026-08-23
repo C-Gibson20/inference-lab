@@ -1,32 +1,34 @@
 """Load and validate evaluation datasets."""
 
-from dataclasses import dataclass
-from pathlib import Path
 import hashlib
 import json
+from dataclasses import dataclass
+from io import StringIO
+from pathlib import Path
 
 from pydantic import ValidationError
 
-from .datasets import DatasetManifest
-from .cases import EvaluationCase
-from .utils import is_sha256_pattern
-from .privacy import validate_local_path
-from .versioning import migrate_case_payload, migrate_manifest_payload
+from inference_lab.evaluation.cases import EvaluationCase
+from inference_lab.evaluation.datasets import DatasetManifest
+from inference_lab.evaluation.privacy import validate_local_path
+from inference_lab.evaluation.versioning import (
+    validate_case_payload_version,
+    validate_manifest_payload_version,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class LoadedDataset:
-    """A validated evaluation manifest and ordered cases"""
+    """A validated evaluation manifest and ordered cases."""
 
     manifest: DatasetManifest
     cases: tuple[EvaluationCase, ...]
 
 
 def _resolve_case_file(manifest_path: Path, case_file: str) -> Path:
-    """Resolve a manifest-owned case file without allowing traversal"""
-
+    """Resolve a manifest-owned case file without allowing traversal."""
     if Path(case_file).is_absolute():
-        raise ValueError(f"Case file {case_file} must be relative to the manifest")
+        raise ValueError("Case file must be relative to the manifest")
     validate_local_path(case_file, field_name="case_file")
 
     dataset_root = manifest_path.parent.resolve()
@@ -34,62 +36,50 @@ def _resolve_case_file(manifest_path: Path, case_file: str) -> Path:
 
     try:
         resolved_path.relative_to(dataset_root)
-    except ValueError as error:
-        raise ValueError(
-            f"Case file {case_file} must remain inside the dataset directory"
-        ) from error
+    except ValueError:
+        raise ValueError("Case file must remain inside the dataset directory") from None
 
     if not resolved_path.is_file():
-        raise ValueError(f"Case file {case_file} does not exist")
+        raise ValueError("Case file does not exist")
 
     return resolved_path
 
 
-def _verify_checksum(case_path: Path, expected: str | None) -> None:
+def _verify_checksum(case_bytes: bytes, expected: str | None) -> None:
     """Verify a case-file checksum when one is declared."""
-
     if expected is None:
-        raise ValueError(f"Missing checksum for case file: {case_path.name}")
+        raise ValueError("Missing checksum for case file")
 
-    if not is_sha256_pattern(expected):
-        raise ValueError(
-            f"Checksum for case file {case_path.name} must use SHA256 format (sha256:<64 hex digits>)"
-        )
-
-    digest = hashlib.sha256(case_path.read_bytes()).hexdigest()
+    digest = hashlib.sha256(case_bytes).hexdigest()
     actual = f"sha256:{digest}"
 
     if actual != expected:
-        raise ValueError(f"Checksum mismatch for case file {case_path.name}")
+        raise ValueError("Checksum mismatch for case file")
 
 
-def _load_cases(case_path: Path) -> tuple[EvaluationCase, ...]:
+def _load_cases(case_bytes: bytes) -> tuple[EvaluationCase, ...]:
     """Load ordered evaluation cases from a JSONL file."""
-
     cases: list[EvaluationCase] = []
+    try:
+        case_text = case_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("Case file must contain valid UTF-8") from None
 
-    with case_path.open("r", encoding="utf-8", newline="") as stream:
-        for line_number, line in enumerate(stream, start=1):
-            if not line.strip():
-                raise ValueError(
-                    f"Blank JSONL record at {case_path.name}:{line_number}"
-                )
+    for line_number, line in enumerate(StringIO(case_text, newline=""), start=1):
+        if not line.strip():
+            raise ValueError(f"Blank JSONL record at line {line_number}")
 
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise ValueError(
-                    f"Invalid JSONL record at {case_path.name}:{line_number}"
-                ) from error
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid JSONL record at line {line_number}") from None
 
-            try:
-                case = EvaluationCase.model_validate(migrate_case_payload(payload))
-            except (ValidationError, ValueError) as error:
-                raise ValueError(
-                    f"Invalid evaluation case at {case_path.name}:{line_number}"
-                ) from error
+        try:
+            case = EvaluationCase.model_validate(validate_case_payload_version(payload))
+        except (ValidationError, ValueError):
+            raise ValueError(f"Invalid evaluation case at line {line_number}") from None
 
-            cases.append(case)
+        cases.append(case)
 
     return tuple(cases)
 
@@ -98,7 +88,6 @@ def _validate_dataset_consistency(
     manifest: DatasetManifest, cases: tuple[EvaluationCase, ...]
 ) -> None:
     """Validate relationships between the manifest and loaded cases."""
-
     if len(cases) != manifest.case_count:
         raise ValueError("Manifest case_count does not match the number of JSONL cases")
 
@@ -137,29 +126,32 @@ def _validate_dataset_consistency(
                 )
 
 
-def load_dataset(manifest_path: Path) -> LoadedDataset:
+def load_dataset(manifest_path: str | Path) -> LoadedDataset:
     """Load and validate one evaluation dataset."""
-
     manifest_path = validate_local_path(manifest_path, field_name="manifest_path")
 
     if not manifest_path.is_file():
-        raise FileNotFoundError(manifest_path)
+        raise FileNotFoundError("Dataset manifest does not exist")
 
     try:
         manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"Unable to read dataset manifest: {manifest_path}") from error
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise ValueError("Unable to read dataset manifest") from None
 
     try:
         manifest = DatasetManifest.model_validate(
-            migrate_manifest_payload(manifest_payload)
+            validate_manifest_payload_version(manifest_payload)
         )
-    except (ValidationError, ValueError) as error:
-        raise ValueError(f"Invalid dataset manifest: {manifest_path}") from error
+    except (ValidationError, ValueError):
+        raise ValueError("Invalid dataset manifest") from None
 
     case_path = _resolve_case_file(manifest_path, manifest.case_file)
-    _verify_checksum(case_path, manifest.checksums.get(manifest.case_file))
-    cases = _load_cases(case_path)
+    try:
+        case_bytes = case_path.read_bytes()
+    except OSError:
+        raise ValueError("Unable to read case file") from None
+    _verify_checksum(case_bytes, manifest.checksums.get(manifest.case_file))
+    cases = _load_cases(case_bytes)
     _validate_dataset_consistency(manifest, cases)
 
     return LoadedDataset(manifest=manifest, cases=cases)

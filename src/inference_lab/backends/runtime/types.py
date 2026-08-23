@@ -2,7 +2,13 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Literal
+from typing import Final, Literal, get_args
+
+from inference_lab.backends.runtime._validation import (
+    validate_finite_number,
+    validate_integer,
+    validate_non_empty_string,
+)
 
 
 class BackendOperation(StrEnum):
@@ -14,7 +20,7 @@ class BackendOperation(StrEnum):
 
 
 class BackendCapability(StrEnum):
-    """Optional behavior supported by a backend."""
+    """Optional behaviour supported by a backend."""
 
     BATCHING = "batching"
     STREAMING = "streaming"
@@ -34,6 +40,13 @@ class GenerationEventType(StrEnum):
     COMPLETED = "completed"
 
 
+GenerationRole = Literal["system", "user", "assistant", "tool"]
+
+_GENERATION_ROLES: Final[frozenset[GenerationRole]] = frozenset(
+    get_args(GenerationRole)
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BackendMetadata:
     """Stable identity and capabilities reported by a backend."""
@@ -50,14 +63,43 @@ class BackendMetadata:
 
     def _validate(self) -> None:
         """Validate backend identity and capability metadata."""
-        if not self.backend_name:
-            raise ValueError("backend_name must not be empty")
-        if not self.model_name:
-            raise ValueError("model_name must not be empty")
-        if not self.model_revision:
-            raise ValueError("model_revision must not be empty")
-        if self.embedding_dimensions is not None and self.embedding_dimensions <= 0:
-            raise ValueError("embedding_dimensions must be positive")
+        validate_non_empty_string(self.backend_name, "backend_name")
+        validate_non_empty_string(self.model_name, "model_name")
+        validate_non_empty_string(self.model_revision, "model_revision")
+        if not isinstance(self.supported_operations, tuple):
+            raise TypeError("supported_operations must be a tuple")
+        if not self.supported_operations:
+            raise ValueError("supported_operations must not be empty")
+        if any(
+            not isinstance(operation, BackendOperation)
+            for operation in self.supported_operations
+        ):
+            raise TypeError("supported_operations must contain BackendOperation values")
+        if len(set(self.supported_operations)) != len(self.supported_operations):
+            raise ValueError("supported_operations must not contain duplicates")
+        if not isinstance(self.capabilities, tuple):
+            raise TypeError("capabilities must be a tuple")
+        if any(
+            not isinstance(capability, BackendCapability)
+            for capability in self.capabilities
+        ):
+            raise TypeError("capabilities must contain BackendCapability values")
+        if len(set(self.capabilities)) != len(self.capabilities):
+            raise ValueError("capabilities must not contain duplicates")
+
+        supports_generation = BackendOperation.GENERATE in self.supported_operations
+        supports_streaming = BackendCapability.STREAMING in self.capabilities
+        if supports_generation != supports_streaming:
+            raise ValueError(
+                "generate operation and streaming capability must be advertised together"
+            )
+
+        if self.embedding_dimensions is not None:
+            validate_integer(self.embedding_dimensions, "embedding_dimensions")
+            if self.embedding_dimensions <= 0:
+                raise ValueError("embedding_dimensions must be positive")
+            if BackendOperation.EMBED not in self.supported_operations:
+                raise ValueError("embedding_dimensions requires the embed operation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,15 +107,19 @@ class EmbeddingOptions:
     """Optional controls for embedding generation."""
 
     dimensions: int | None = None
-    normalize: bool = False
+    normalise: bool = False
 
     def __post_init__(self) -> None:
         self._validate()
 
     def _validate(self) -> None:
         """Validate embedding options."""
-        if self.dimensions is not None and self.dimensions <= 0:
-            raise ValueError("dimensions must be positive")
+        if self.dimensions is not None:
+            validate_integer(self.dimensions, "dimensions")
+            if self.dimensions <= 0:
+                raise ValueError("dimensions must be positive")
+        if not isinstance(self.normalise, bool):
+            raise TypeError("normalise must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,10 +134,16 @@ class EmbeddingRequest:
 
     def _validate(self) -> None:
         """Validate embedding inputs."""
+        if not isinstance(self.input_texts, tuple):
+            raise TypeError("input_texts must be a tuple")
         if not self.input_texts:
             raise ValueError("input_texts must not be empty")
+        if any(not isinstance(text, str) for text in self.input_texts):
+            raise TypeError("input_texts must contain strings")
         if any(not text for text in self.input_texts):
             raise ValueError("input_texts must not contain empty text")
+        if not isinstance(self.options, EmbeddingOptions):
+            raise TypeError("options must be EmbeddingOptions")
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +158,8 @@ class EmbeddingUsage:
 
     def _validate(self) -> None:
         """Validate embedding usage counts."""
+        validate_integer(self.input_tokens, "input_tokens")
+        validate_integer(self.total_tokens, "total_tokens")
         if self.input_tokens < 0 or self.total_tokens < 0:
             raise ValueError("token counts must not be negative")
         if self.total_tokens < self.input_tokens:
@@ -125,8 +179,21 @@ class EmbeddingResult:
 
     def _validate(self) -> None:
         """Validate vector count and dimensions."""
+        if not isinstance(self.vectors, tuple):
+            raise TypeError("vectors must be a tuple")
         if not self.vectors:
             raise ValueError("vectors must not be empty")
+        if any(not isinstance(vector, tuple) for vector in self.vectors):
+            raise TypeError("vectors must contain tuples")
+        for vector in self.vectors:
+            for value in vector:
+                validate_finite_number(value, "vector values")
+        if not isinstance(self.model_metadata, BackendMetadata):
+            raise TypeError("model_metadata must be BackendMetadata")
+        if BackendOperation.EMBED not in self.model_metadata.supported_operations:
+            raise ValueError("embedding result metadata must advertise embed")
+        if self.usage is not None and not isinstance(self.usage, EmbeddingUsage):
+            raise TypeError("usage must be EmbeddingUsage or None")
         dimensions = len(self.vectors[0])
         if dimensions == 0:
             raise ValueError("vectors must not be empty vectors")
@@ -149,10 +216,8 @@ class RerankCandidate:
 
     def _validate(self) -> None:
         """Validate candidate identity and text."""
-        if not self.candidate_id:
-            raise ValueError("candidate_id must not be empty")
-        if not self.candidate_text:
-            raise ValueError("candidate_text must not be empty")
+        validate_non_empty_string(self.candidate_id, "candidate_id")
+        validate_non_empty_string(self.candidate_text, "candidate_text")
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,12 +233,22 @@ class RerankRequest:
 
     def _validate(self) -> None:
         """Validate reranking inputs."""
-        if not self.query:
-            raise ValueError("query must not be empty")
+        validate_non_empty_string(self.query, "query")
+        if not isinstance(self.candidates, tuple):
+            raise TypeError("candidates must be a tuple")
         if not self.candidates:
             raise ValueError("candidates must not be empty")
-        if self.top_k is not None and self.top_k <= 0:
-            raise ValueError("top_k must be positive")
+        if any(
+            not isinstance(candidate, RerankCandidate) for candidate in self.candidates
+        ):
+            raise TypeError("candidates must contain RerankCandidate values")
+        candidate_ids = tuple(candidate.candidate_id for candidate in self.candidates)
+        if len(set(candidate_ids)) != len(candidate_ids):
+            raise ValueError("candidate IDs must be unique")
+        if self.top_k is not None:
+            validate_integer(self.top_k, "top_k")
+            if self.top_k <= 0:
+                raise ValueError("top_k must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,8 +264,9 @@ class ScoredCandidate:
 
     def _validate(self) -> None:
         """Validate reranking output values."""
-        if not self.candidate_id:
-            raise ValueError("candidate_id must not be empty")
+        validate_non_empty_string(self.candidate_id, "candidate_id")
+        validate_finite_number(self.score, "score")
+        validate_integer(self.rank, "rank")
         if self.rank <= 0:
             raise ValueError("rank must be positive")
 
@@ -206,28 +282,53 @@ class RerankResult:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate rank uniqueness and ordering."""
+        """Validate candidate identity, rank, score ordering, and metadata."""
+        if not isinstance(self.scored_candidates, tuple):
+            raise TypeError("scored_candidates must be a tuple")
+        if not self.scored_candidates:
+            raise ValueError("scored_candidates must not be empty")
+        if any(
+            not isinstance(candidate, ScoredCandidate)
+            for candidate in self.scored_candidates
+        ):
+            raise TypeError("scored_candidates must contain ScoredCandidate values")
+        if not isinstance(self.model_metadata, BackendMetadata):
+            raise TypeError("model_metadata must be BackendMetadata")
+        if BackendOperation.RERANK not in self.model_metadata.supported_operations:
+            raise ValueError("rerank result metadata must advertise rerank")
+
+        candidate_ids = tuple(
+            candidate.candidate_id for candidate in self.scored_candidates
+        )
+        if len(set(candidate_ids)) != len(candidate_ids):
+            raise ValueError("scored candidate IDs must be unique")
         ranks = tuple(candidate.rank for candidate in self.scored_candidates)
         if len(set(ranks)) != len(ranks):
             raise ValueError("ranks must be unique")
         if ranks != tuple(range(1, len(ranks) + 1)):
             raise ValueError("ranks must be contiguous and start at one")
+        scores = tuple(candidate.score for candidate in self.scored_candidates)
+        if scores != tuple(sorted(scores, reverse=True)):
+            raise ValueError("scores must be ordered from highest to lowest")
 
 
 @dataclass(frozen=True, slots=True)
 class GenerationMessage:
     """One message in a structured generation prompt."""
 
-    role: Literal["system", "user", "assistant", "tool"]
+    role: GenerationRole
     content: str
 
     def __post_init__(self) -> None:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate message content."""
-        if not self.content:
-            raise ValueError("content must not be empty")
+        """Validate message role and content."""
+        if not isinstance(self.role, str):
+            raise TypeError("role must be a string")
+        if self.role not in _GENERATION_ROLES:
+            raise ValueError("role must be a supported generation role")
+        validate_non_empty_string(self.content, "content")
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,14 +346,28 @@ class GenerationOptions:
 
     def _validate(self) -> None:
         """Validate generation options."""
-        if self.maximum_output_tokens is not None and self.maximum_output_tokens <= 0:
-            raise ValueError("maximum_output_tokens must be positive")
-        if self.temperature is not None and self.temperature < 0:
-            raise ValueError("temperature must not be negative")
-        if self.top_p is not None and not 0 < self.top_p <= 1:
-            raise ValueError("top_p must be greater than zero and at most one")
+        if self.maximum_output_tokens is not None:
+            validate_integer(self.maximum_output_tokens, "maximum_output_tokens")
+            if self.maximum_output_tokens <= 0:
+                raise ValueError("maximum_output_tokens must be positive")
+        if self.temperature is not None:
+            validate_finite_number(self.temperature, "temperature")
+            if self.temperature < 0:
+                raise ValueError("temperature must not be negative")
+        if self.top_p is not None:
+            validate_finite_number(self.top_p, "top_p")
+            if not 0 < self.top_p <= 1:
+                raise ValueError("top_p must be greater than zero and at most one")
+        if not isinstance(self.stop_sequences, tuple):
+            raise TypeError("stop_sequences must be a tuple")
+        if any(not isinstance(sequence, str) for sequence in self.stop_sequences):
+            raise TypeError("stop_sequences must contain strings")
         if any(not sequence for sequence in self.stop_sequences):
             raise ValueError("stop_sequences must not contain empty strings")
+        if len(set(self.stop_sequences)) != len(self.stop_sequences):
+            raise ValueError("stop_sequences must not contain duplicates")
+        if self.seed is not None:
+            validate_integer(self.seed, "seed")
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,10 +383,16 @@ class GenerationRequest:
 
     def _validate(self) -> None:
         """Validate generation inputs."""
+        if not isinstance(self.messages, tuple):
+            raise TypeError("messages must be a tuple")
         if not self.messages:
             raise ValueError("messages must not be empty")
-        if self.request_id is not None and not self.request_id:
-            raise ValueError("request_id must not be empty")
+        if any(not isinstance(message, GenerationMessage) for message in self.messages):
+            raise TypeError("messages must contain GenerationMessage values")
+        if not isinstance(self.options, GenerationOptions):
+            raise TypeError("options must be GenerationOptions")
+        if self.request_id is not None:
+            validate_non_empty_string(self.request_id, "request_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +408,9 @@ class GenerationUsage:
 
     def _validate(self) -> None:
         """Validate generation usage counts."""
+        validate_integer(self.input_tokens, "input_tokens")
+        validate_integer(self.output_tokens, "output_tokens")
+        validate_integer(self.total_tokens, "total_tokens")
         if min(self.input_tokens, self.output_tokens, self.total_tokens) < 0:
             raise ValueError("token counts must not be negative")
         if self.total_tokens != self.input_tokens + self.output_tokens:
@@ -310,15 +434,16 @@ class GenerationEvent:
         """Validate event-specific fields."""
         if not isinstance(self.event_type, GenerationEventType):
             raise TypeError("event_type must be a GenerationEventType")
+        validate_integer(self.sequence_number, "sequence_number")
         if self.sequence_number < 0:
             raise ValueError("sequence_number must not be negative")
         if self.event_type is GenerationEventType.DELTA:
-            if not self.text_delta:
-                raise ValueError("delta events require text_delta")
+            validate_non_empty_string(self.text_delta, "text_delta")
             if self.finish_reason is not None or self.usage is not None:
                 raise ValueError("delta events cannot contain terminal fields")
         elif self.event_type is GenerationEventType.COMPLETED:
             if self.text_delta is not None:
                 raise ValueError("completed events cannot contain text_delta")
-            if not self.finish_reason:
-                raise ValueError("completed events require finish_reason")
+            validate_non_empty_string(self.finish_reason, "finish_reason")
+            if self.usage is not None and not isinstance(self.usage, GenerationUsage):
+                raise TypeError("usage must be GenerationUsage or None")

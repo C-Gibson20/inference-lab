@@ -8,7 +8,6 @@ import pytest
 import structlog
 
 from inference_lab.logging.logging_config import configure_logging
-from inference_lab.profiling.emission import ProfilingRecordLike
 from inference_lab.profiling import (
     FailureEvent,
     ResourceMeasurement,
@@ -31,26 +30,27 @@ def fixed_timestamp() -> datetime:
             module="ingest",
             pipeline_stage="parse",
             stage_id="parse-1",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
             duration_ms=2.5,
             status="completed",
         ),
         ResourceMeasurement(
-            category="gpu_utilization",
-            unit="percent",
+            category="gpu_utilisation",
             value=75.0,
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
         ),
         FailureEvent(
             failure_category="input",
             failure_code="malformed_document",
             module="ingest",
             pipeline_stage="parse",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
         ),
     ],
 )
-def test_emits_each_record_as_structured_json(record: ProfilingRecordLike) -> None:
+def test_emits_each_record_as_structured_json(
+    record: StageTiming | ResourceMeasurement | FailureEvent,
+) -> None:
     stream = StringIO()
     configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
 
@@ -60,11 +60,13 @@ def test_emits_each_record_as_structured_json(record: ProfilingRecordLike) -> No
     assert isinstance(payload["event"], str)
     assert isinstance(payload["timestamp"], str)
     assert payload["timestamp"].endswith("Z")
+    assert payload["observed_at"] == "2026-08-21T12:00:00+00:00"
     assert payload["module"] is not None
     assert "pipeline_stage" in payload
     assert "document_id" in payload
     assert "corpus_version" in payload
     assert payload["level"] in {"info", "warning", "error", "critical"}
+    assert payload["record_schema_version"] == 2
 
 
 def test_emitted_record_preserves_context_and_nullable_fields() -> None:
@@ -75,9 +77,8 @@ def test_emitted_record_preserves_context_and_nullable_fields() -> None:
         structlog.get_logger("profiling"),
         ResourceMeasurement(
             category="kv_cache",
-            unit="GiB",
             value=4.0,
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
             module="runtime",
             pipeline_stage="generate",
             stage_id="generate-1",
@@ -109,7 +110,7 @@ def test_failure_output_contains_no_raw_payload_fields() -> None:
             failure_category="internal",
             failure_code="backend_failed",
             exception_type="RuntimeError",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
         ),
     )
 
@@ -124,17 +125,16 @@ def test_failure_output_contains_no_raw_payload_fields() -> None:
     assert "secret" not in payload
 
 
-def test_infers_warning_for_unavailable_measurement() -> None:
+def test_emits_warning_for_unavailable_measurement() -> None:
     stream = StringIO()
     configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
     emit_record(
         structlog.get_logger("profiling"),
         ResourceMeasurement(
             category="power",
-            unit="watt",
             value=None,
             status="unavailable",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
         ),
     )
 
@@ -142,7 +142,7 @@ def test_infers_warning_for_unavailable_measurement() -> None:
     assert payload["level"] == "warning"
 
 
-def test_infers_error_for_failed_timing_record() -> None:
+def test_emits_error_for_failed_timing_record() -> None:
     stream = StringIO()
     configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
     emit_record(
@@ -152,7 +152,7 @@ def test_infers_error_for_failed_timing_record() -> None:
             module="ingest",
             pipeline_stage="parse",
             stage_id="parse-1",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
             duration_ms=2.5,
             status="failed",
         ),
@@ -168,4 +168,40 @@ def test_rejects_record_without_event() -> None:
             return {"module": "profiling"}
 
     with pytest.raises(ValueError, match="non-empty event"):
-        emit_record(object(), InvalidRecord())
+        emit_record(object(), InvalidRecord())  # type: ignore[arg-type]
+
+
+def test_rejects_record_without_explicit_log_level() -> None:
+    class InvalidRecord:
+        def to_dict(self) -> dict[str, object]:
+            return {"event": "custom_event", "module": "profiling"}
+
+    with pytest.raises(ValueError, match="explicit log level"):
+        emit_record(object(), InvalidRecord())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("level", ["notice", 10, True])
+def test_rejects_record_with_invalid_log_level(level: object) -> None:
+    class InvalidRecord:
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "event": "custom_event",
+                "level": level,
+                "module": "profiling",
+            }
+
+    with pytest.raises(ValueError, match="valid log level"):
+        emit_record(object(), InvalidRecord())  # type: ignore[arg-type]
+
+
+def test_rejects_logger_without_required_severity_method() -> None:
+    class ValidRecord:
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "event": "custom_event",
+                "level": "info",
+                "module": "profiling",
+            }
+
+    with pytest.raises(TypeError, match="required info method"):
+        emit_record(object(), ValidRecord())  # type: ignore[arg-type]

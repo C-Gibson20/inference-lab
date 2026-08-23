@@ -1,9 +1,9 @@
 """Structural protocols for model runtime backends."""
 
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from .types import (
+from inference_lab.backends.runtime.types import (
     BackendMetadata,
     EmbeddingRequest,
     EmbeddingResult,
@@ -14,8 +14,9 @@ from .types import (
 )
 
 
+@runtime_checkable
 class LifecycleBackend(Protocol):
-    """Backend with explicit loading, readiness, and shutdown behavior."""
+    """Backend with explicit loading, readiness, and shutdown behaviour."""
 
     @property
     def metadata(self) -> BackendMetadata:
@@ -49,6 +50,7 @@ class LifecycleBackend(Protocol):
         ...
 
 
+@runtime_checkable
 class EmbeddingBackend(LifecycleBackend, Protocol):
     """Backend capable of generating embeddings for text batches."""
 
@@ -61,6 +63,7 @@ class EmbeddingBackend(LifecycleBackend, Protocol):
         ...
 
 
+@runtime_checkable
 class RerankerBackend(LifecycleBackend, Protocol):
     """Backend capable of scoring candidates against a query."""
 
@@ -73,6 +76,7 @@ class RerankerBackend(LifecycleBackend, Protocol):
         ...
 
 
+@runtime_checkable
 class GeneratorBackend(LifecycleBackend, Protocol):
     """Backend capable of asynchronously streaming generated text."""
 

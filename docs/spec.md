@@ -17,7 +17,7 @@ A session tool for a handful of uploaded files is a separate product. It may be 
 1. **Evidence before fluency.** Answers must be grounded in source passages, not merely plausible retrieved text.
 2. **Hybrid retrieval.** Exact terms, semantic similarity, metadata, summaries, and structured data each solve different classes of question.
 3. **Derived knowledge remains traceable.** Every summary, extraction, and aggregate links back to source documents and spans.
-4. **Measure before optimizing.** The project’s question set is the primary test suite.
+4. **Measure before optimising.** The project’s question set is the primary test suite.
 5. **Keep the deployed system local.** Development and benchmarking may use public models and public corpora; confidential deployment data may not leave the machine.
 
 ## Supported questions
@@ -48,7 +48,7 @@ Documents
   → identify, deduplicate, parse, OCR when needed
   → preserve pages, sections, layout, and source spans
   → chunk and index
-  → summarize and extract structured facts
+  → summarise and extract structured facts
 
 Question
   → rewrite using conversation state
@@ -123,7 +123,7 @@ Initial fields include:
 - publication and priority identifiers;
 - methods, outcomes, and relevant measurements.
 
-Each extraction stores the normalized value, original mention, source span, model version, and confidence. Aggregations must be reproducible from stored records and must expose uncertainty where normalization is ambiguous.
+Each extraction stores the normalised value, original mention, source span, model version, and confidence. Aggregations must be reproducible from stored records and must expose uncertainty where normalisation is ambiguous.
 
 Entity graphs are out of scope until retrieval, structured extraction, and simpler relationship queries have been shown to be insufficient.
 
@@ -173,24 +173,24 @@ The initial model plan is:
 
 | Role | Initial choice | Notes |
 | --- | --- | --- |
-| Embedder | Qwen3-Embedding-0.6B or BGE-M3 | Validate license, quality, and memory use before committing |
+| Embedder | Qwen3-Embedding-0.6B or BGE-M3 | Validate licence, quality, and memory use before committing |
 | Reranker | BGE-reranker-v2 | Rerank approximately 100 candidates to approximately 5–10 |
-| Generator | Qwen3.8-27B-class model at Q4 | Deliberately optimized for a 24GB single-GPU constraint |
+| Generator | Qwen3.8-27B-class model at Q4 | Deliberately optimised for a 24GB single-GPU constraint |
 | OCR | Ingest-only OCR model or system | Run only for scanned pages |
 
-The 27B generator is a deliberate project constraint, not merely a default model choice. Its quality and broad capability reduce the risk of ruling out useful corpus-level behaviour too early. The 24GB limit creates the central systems challenge: model residency, KV-cache use, batching, scheduling, quantization, memory bandwidth, and thermal behavior must be engineered carefully.
+The 27B generator is a deliberate project constraint, not merely a default model choice. Its quality and broad capability reduce the risk of ruling out useful corpus-level behaviour too early. The 24GB limit creates the central systems challenge: model residency, KV-cache use, batching, scheduling, quantisation, memory bandwidth, and thermal behaviour must be engineered carefully.
 
-The same generator may be used for ingest initially. This creates a known shared-resource risk: summarization, extraction, and answering may bottleneck one another or expose different quality requirements. The first implementation should measure that risk before introducing additional model complexity. Smaller or specialized models remain fallback options if observation shows that they are necessary for throughput, latency, or reliability.
+The same generator may be used for ingest initially. This creates a known shared-resource risk: summarisation, extraction, and answering may bottleneck one another or expose different quality requirements. The first implementation should measure that risk before introducing additional model complexity. Smaller or specialised models remain fallback options if observation shows that they are necessary for throughput, latency, or reliability.
 
 The runtime must support a scheduler for:
 
 - latency-sensitive generation;
-- batch summarization and extraction;
+- batch summarisation and extraction;
 - embedding;
 - reranking;
 - CPU parsing, OCR, storage, and index updates.
 
-Benchmark model residency, model swapping, microbatching, concurrent workloads, quantization, power limits, and thermal behavior. Report quality together with throughput and memory use.
+Benchmark model residency, model swapping, microbatching, concurrent workloads, quantisation, power limits, and thermal behaviour. Report quality together with throughput and memory use.
 
 ## Memory and storage accounting
 
@@ -221,7 +221,7 @@ Each question should record:
 - supporting documents;
 - supporting passages or structured records;
 - acceptable alternative answers;
-- whether abstention is the correct behavior.
+- whether abstention is the correct behaviour.
 
 Keep a held-out subset for final evaluation.
 
@@ -249,10 +249,10 @@ Systems:
 - end-to-end latency;
 - tokens per second;
 - ingest pages/minute and tokens/second;
-- GPU utilization and VRAM;
-- CPU utilization;
+- GPU utilisation and VRAM;
+- CPU utilisation;
 - storage throughput;
-- power and thermal behavior where measurable.
+- power and thermal behaviour where measurable.
 
 The system is not considered improved if Recall@10 rises while citation correctness or answer faithfulness falls.
 
@@ -278,7 +278,7 @@ Add answer generation, citations, citation verification, abstention, source navi
 
 ### Phase 4 — Ingest knowledge layer
 
-Add structured extraction, normalization, document summaries, topic summaries, aggregation queries, versioning, and invalidation.
+Add structured extraction, normalisation, document summaries, topic summaries, aggregation queries, versioning, and invalidation.
 
 **Gate:** derived records remain traceable and incremental ingest does not recompute unchanged work.
 
@@ -290,7 +290,7 @@ Add the scheduler, persistent caches, session handling, batching, model residenc
 
 ### Phase 6 — Interface and hardening
 
-Add chat, inline citations, jump-to-source, dataset upload, failure recovery, corpus updates, restart behavior, and operational privacy checks.
+Add chat, inline citations, jump-to-source, dataset upload, failure recovery, corpus updates, restart behaviour, and operational privacy checks.
 
 ## Development model
 

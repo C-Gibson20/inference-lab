@@ -1,14 +1,26 @@
 """Document ingestion contracts and pipeline stages."""
 
+from inference_lab.ingest.errors import (
+    ParserDecodeError,
+    ParserFailure,
+    ParserFailureCategory,
+    ParserFailureSeverity,
+    ParserFailureStage,
+    ParserFailureUnitKind,
+)
+from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
 from inference_lab.ingest.parser import (
     NormalisedText,
-    Parser,
     ParsedDocument,
+    Parser,
     ParserInput,
     ParserInputError,
     decode_source,
-    normalise_text,
     prepare_text,
+)
+from inference_lab.ingest.serialisation import (
+    parsed_document_payload,
+    serialise_parsed_document,
 )
 from inference_lab.ingest.sources import (
     BoundingBox,
@@ -16,49 +28,39 @@ from inference_lab.ingest.sources import (
     StructuralBlock,
     StructuralBlockKind,
 )
-from inference_lab.ingest.serialisation import (
-    parsed_document_payload,
-    serialise_parsed_document,
-)
+from inference_lab.ingest.text_native import TextNativeParser
+from inference_lab.ingest.utils import normalise_source_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,
     generate_source_span_id,
 )
-from inference_lab.ingest.errors import (
-    ParserDecodeError,
-    ParserFailure,
-    ParserFailureCategory,
-    ParserFailureSeverity,
-    ParserFailureStage,
-)
-from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
-from inference_lab.ingest.text_native import TextNativeParser
 
 __all__ = [
-    "Parser",
-    "ParsedDocument",
-    "ParserInput",
-    "ParserInputError",
-    "ParserDecodeError",
-    "NormalisedText",
-    "decode_source",
-    "normalise_text",
-    "prepare_text",
-    "BoundingBox",
-    "SourceSpan",
-    "StructuralBlock",
-    "StructuralBlockKind",
-    "parsed_document_payload",
-    "serialise_parsed_document",
     "CURRENT_PARSER_VERSION",
-    "ParserVersion",
-    "generate_source_span_id",
+    "BoundingBox",
+    "NormalisedText",
+    "ParseOutcome",
+    "ParseStatus",
+    "ParsedDocument",
+    "Parser",
+    "ParserDecodeError",
     "ParserFailure",
     "ParserFailureCategory",
     "ParserFailureSeverity",
     "ParserFailureStage",
-    "ParseOutcome",
-    "ParseStatus",
+    "ParserFailureUnitKind",
+    "ParserInput",
+    "ParserInputError",
+    "ParserVersion",
+    "SourceSpan",
+    "StructuralBlock",
+    "StructuralBlockKind",
     "TextNativeParser",
+    "decode_source",
+    "generate_source_span_id",
+    "normalise_source_text",
+    "parsed_document_payload",
+    "prepare_text",
+    "serialise_parsed_document",
 ]

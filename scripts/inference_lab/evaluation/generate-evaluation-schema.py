@@ -1,14 +1,13 @@
-"""Generate the published evaluation JSON schema artifact."""
+"""Generate the published evaluation JSON schema artefact."""
 
 import argparse
 from pathlib import Path
 
-from inference_lab.evaluation.serialisation import write_json_schema
+from inference_lab.evaluation import write_json_schema
 
 
 def main() -> None:
     """Generate an evaluation schema at the requested destination."""
-
     parser = argparse.ArgumentParser()
     parser.add_argument("destination", type=Path)
     arguments = parser.parse_args()

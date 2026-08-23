@@ -2,11 +2,11 @@ import json
 import logging
 from io import StringIO
 
-import structlog
 import pytest
+import structlog
 
-from inference_lab.settings import LoggingConfig
 from inference_lab.logging.logging_config import configure_logging
+from inference_lab.settings import LoggingConfig
 
 
 class FakeStream(StringIO):

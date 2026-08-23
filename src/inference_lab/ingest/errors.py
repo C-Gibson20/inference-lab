@@ -1,7 +1,7 @@
 """Error classes for handling parsing and decoding failures."""
 
-from typing import Literal
 from dataclasses import dataclass
+from typing import Final, Literal, get_args
 
 ParserFailureCategory = Literal[
     "invalid_input",
@@ -24,6 +24,46 @@ ParserFailureStage = Literal[
     "output",
 ]
 
+ParserFailureUnitKind = Literal[
+    "page",
+    "section",
+    "paragraph",
+    "table",
+    "figure_caption",
+    "other",
+]
+
+_FAILURE_POLICIES: dict[
+    ParserFailureCategory,
+    tuple[ParserFailureSeverity, ParserFailureStage],
+] = {
+    "invalid_input": ("fatal", "input"),
+    "unsupported_format": ("fatal", "input"),
+    "invalid_encoding": ("fatal", "input"),
+    "source_too_large": ("fatal", "input"),
+    "decode_failed": ("fatal", "decode"),
+    "malformed_source": ("fatal", "structure"),
+    "malformed_unit": ("recoverable", "structure"),
+    "unsupported_structure": ("recoverable", "structure"),
+    "invalid_output": ("fatal", "output"),
+}
+
+_FAILURE_CATEGORIES: Final[frozenset[ParserFailureCategory]] = frozenset(
+    get_args(ParserFailureCategory)
+)
+_FAILURE_SEVERITIES: Final[frozenset[ParserFailureSeverity]] = frozenset(
+    get_args(ParserFailureSeverity)
+)
+_FAILURE_STAGES: Final[frozenset[ParserFailureStage]] = frozenset(
+    get_args(ParserFailureStage)
+)
+_FAILURE_UNIT_KINDS: Final[frozenset[ParserFailureUnitKind]] = frozenset(
+    get_args(ParserFailureUnitKind)
+)
+
+if _FAILURE_POLICIES.keys() != _FAILURE_CATEGORIES:
+    raise RuntimeError("parser failure policies must cover every failure category")
+
 
 class ParserDecodeError(UnicodeError):
     """Represent a source decoding failure without exposing source content."""
@@ -43,7 +83,7 @@ class ParserFailure:
     category: ParserFailureCategory
     severity: ParserFailureSeverity
     stage: ParserFailureStage
-    unit_kind: str | None = None
+    unit_kind: ParserFailureUnitKind | None = None
     unit_index: int | None = None
 
     def __post_init__(self) -> None:
@@ -51,9 +91,30 @@ class ParserFailure:
 
     def _validate(self) -> None:
         """Validate failure identity and location metadata."""
+        if (
+            not isinstance(self.category, str)
+            or self.category not in _FAILURE_CATEGORIES
+        ):
+            raise ValueError("invalid_parser_failure_category")
+        if (
+            not isinstance(self.severity, str)
+            or self.severity not in _FAILURE_SEVERITIES
+        ):
+            raise ValueError("invalid_parser_failure_severity")
+        if not isinstance(self.stage, str) or self.stage not in _FAILURE_STAGES:
+            raise ValueError("invalid_parser_failure_stage")
 
-        if self.unit_kind is not None and not self.unit_kind.strip():
-            raise ValueError("failure_unit_kind_must_not_be_empty")
+        expected_severity, expected_stage = _FAILURE_POLICIES[self.category]
+        if self.severity != expected_severity:
+            raise ValueError("failure_severity_does_not_match_category")
+        if self.stage != expected_stage:
+            raise ValueError("failure_stage_does_not_match_category")
+
+        if self.unit_kind is not None and (
+            not isinstance(self.unit_kind, str)
+            or self.unit_kind not in _FAILURE_UNIT_KINDS
+        ):
+            raise ValueError("invalid_failure_unit_kind")
 
         if self.unit_index is not None:
             if not isinstance(self.unit_index, int) or isinstance(
@@ -63,5 +124,11 @@ class ParserFailure:
             if self.unit_index < 0:
                 raise ValueError("failure_unit_index_must_be_non_negative")
 
-        if self.severity == "fatal" and self.unit_index is not None:
+        has_unit_kind = self.unit_kind is not None
+        has_unit_index = self.unit_index is not None
+        if has_unit_kind != has_unit_index:
+            raise ValueError("failure_unit_location_must_be_complete")
+        if self.severity == "fatal" and has_unit_kind:
             raise ValueError("fatal_failure_must_not_identify_partial_unit")
+        if self.severity == "recoverable" and not has_unit_kind:
+            raise ValueError("recoverable_failure_requires_unit_location")

@@ -5,8 +5,7 @@ from pydantic import ValidationError
 
 from inference_lab.evaluation.datasets import DatasetManifest
 
-
-BASE = {
+BASE: dict[str, object] = {
     "dataset_id": "baseline-v1",
     "dataset_version": "1",
     "description": "Evaluation fixture",
@@ -24,7 +23,7 @@ BASE = {
 
 
 def test_manifest_accepts_explicit_disjoint_splits() -> None:
-    manifest = DatasetManifest(**BASE)
+    manifest = DatasetManifest.model_validate(BASE)
 
     assert manifest.case_count == 2
 
@@ -37,11 +36,81 @@ def test_manifest_rejects_duplicate_split_membership() -> None:
     }
 
     with pytest.raises(ValidationError, match="exactly one split"):
-        DatasetManifest(**invalid)
+        DatasetManifest.model_validate(invalid)
 
 
 def test_manifest_rejects_unsupported_schema_version() -> None:
     invalid = dict(BASE, schema_version="9.0.0")
 
     with pytest.raises(ValidationError, match="Unsupported evaluation schema"):
-        DatasetManifest(**invalid)
+        DatasetManifest.model_validate(invalid)
+
+
+def test_manifest_rejects_coerced_counts_and_reversed_timestamps() -> None:
+    with pytest.raises(ValidationError):
+        DatasetManifest.model_validate(dict(BASE, case_count=True))
+
+    invalid = dict(BASE, updated_at="2026-08-21T23:59:59Z")
+    with pytest.raises(ValidationError, match="earlier than created_at"):
+        DatasetManifest.model_validate(invalid)
+
+
+def test_manifest_rejects_blank_fields_and_incomplete_split_inventory() -> None:
+    with pytest.raises(ValidationError, match="must not be blank"):
+        DatasetManifest.model_validate(dict(BASE, description=" "))
+
+    missing_held_out = dict(BASE, splits={"development": ("case-001", "case-002")})
+    with pytest.raises(ValidationError, match="include 'held_out'"):
+        DatasetManifest.model_validate(missing_held_out)
+
+    wrong_count = dict(BASE, case_count=3)
+    with pytest.raises(ValidationError, match="case_count"):
+        DatasetManifest.model_validate(wrong_count)
+
+
+def test_manifest_nested_mappings_are_defensive_and_immutable() -> None:
+    splits = {
+        "development": ["case-001"],
+        "held_out": ["case-002"],
+    }
+    provenance = {"source": "curated"}
+    checksums = {"cases.jsonl": "sha256:" + "a" * 64}
+    manifest = DatasetManifest.model_validate(
+        dict(
+            BASE,
+            splits=splits,
+            provenance=provenance,
+            checksums=checksums,
+        )
+    )
+
+    splits["held_out"].append("case-003")
+    provenance["source"] = "changed"
+    checksums["cases.jsonl"] = "sha256:" + "b" * 64
+
+    assert manifest.splits["held_out"] == ("case-002",)
+    assert manifest.provenance["source"] == "curated"
+    assert manifest.checksums["cases.jsonl"] == "sha256:" + "a" * 64
+
+    with pytest.raises(TypeError):
+        manifest.splits["held_out"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        manifest.provenance["source"] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        manifest.checksums["cases.jsonl"] = "changed"  # type: ignore[index]
+
+
+def test_manifest_checksum_inventory_is_exact() -> None:
+    with pytest.raises(ValidationError, match="only the case file"):
+        DatasetManifest.model_validate(
+            dict(
+                BASE,
+                checksums={
+                    "cases.jsonl": "sha256:" + "a" * 64,
+                    "other.jsonl": "sha256:" + "b" * 64,
+                },
+            )
+        )
+
+    with pytest.raises(ValidationError, match="SHA256 format"):
+        DatasetManifest.model_validate(dict(BASE, checksums={"cases.jsonl": "invalid"}))

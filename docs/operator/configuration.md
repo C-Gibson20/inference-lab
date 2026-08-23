@@ -51,7 +51,7 @@ The configuration loader must reject missing required values and invalid types.
 It must not substitute guessed model paths, storage paths, or runtime values.
 Backup-specific settings are defined but not yet available; see the
 [backup and restore runbook](backup-restore.md) for the selected contract and
-`STOR-08` in the implementation backlog.
+current implementation status.
 
 Feature flags are not currently part of the configuration contract. They will
 be added as typed, feature-owned settings when the corresponding feature is

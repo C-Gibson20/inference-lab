@@ -6,8 +6,10 @@ from typing import Annotated, Final, Literal
 
 from pydantic import AfterValidator, Field
 
-from inference_lab.evaluation.versioning import validate_schema_version
-
+from inference_lab.evaluation.versioning import (
+    CURRENT_SCHEMA_VERSION,
+    validate_schema_version,
+)
 
 CaseId = DatasetId = Annotated[
     str,
@@ -18,12 +20,33 @@ CaseId = DatasetId = Annotated[
     ),
 ]
 
+EvidenceId = Annotated[
+    str,
+    Field(
+        min_length=3,
+        max_length=64,
+        pattern=r"^evidence-[a-z0-9][a-z0-9-]{0,54}$",
+    ),
+]
+
+ExpectationKey = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_]{0,63}$",
+    ),
+]
+
 SplitName = Literal["train", "development", "held_out"]
 HELD_OUT_SPLIT: Final[SplitName] = "held_out"
 
 SchemaVersion = Annotated[
     str,
-    Field(validate_default=True),
+    Field(
+        validate_default=True,
+        json_schema_extra={"const": CURRENT_SCHEMA_VERSION},
+    ),
     AfterValidator(validate_schema_version),
 ]
 
@@ -36,7 +59,7 @@ def is_sha256_pattern(s: str) -> bool:
     return bool(_SHA256_PATTERN.fullmatch(s))
 
 
-def normalise_text(value: str) -> str:
-    """Normalize text for duplicate detection only."""
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    return _WHITESPACE.sub(" ", normalized).strip()
+def normalise_for_duplicate_detection(value: str) -> str:
+    """Normalise text only for deterministic duplicate detection."""
+    normalised = unicodedata.normalize("NFKC", value).casefold()
+    return _WHITESPACE.sub(" ", normalised).strip()

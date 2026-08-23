@@ -1,16 +1,18 @@
 from collections.abc import AsyncIterator
 
-from inference_lab.backends.runtime.protocols import (
-    EmbeddingBackend,
-    GeneratorBackend,
-    RerankerBackend,
-)
-from inference_lab.backends.runtime.types import (
+from inference_lab.backends.runtime import (
+    BackendCapability,
     BackendMetadata,
+    BackendOperation,
+    EmbeddingBackend,
     EmbeddingRequest,
     EmbeddingResult,
+    FakeBackend,
     GenerationEvent,
     GenerationRequest,
+    GeneratorBackend,
+    LifecycleBackend,
+    RerankerBackend,
     RerankRequest,
     RerankResult,
 )
@@ -19,9 +21,20 @@ from inference_lab.backends.runtime.types import (
 class StructuralBackend:
     """Test implementation that does not inherit from a runtime protocol."""
 
-    metadata: BackendMetadata
-    is_ready: bool
-    is_closed: bool
+    metadata = BackendMetadata(
+        backend_name="structural",
+        model_name="test-model",
+        model_revision="test",
+        supported_operations=(
+            BackendOperation.EMBED,
+            BackendOperation.RERANK,
+            BackendOperation.GENERATE,
+        ),
+        capabilities=(BackendCapability.STREAMING,),
+        embedding_dimensions=3,
+    )
+    is_ready = False
+    is_closed = False
 
     def load(self) -> None:
         raise NotImplementedError
@@ -42,10 +55,36 @@ class StructuralBackend:
 def test_backend_protocols_are_structural() -> None:
     backend = StructuralBackend()
 
-    embedding_backend: EmbeddingBackend = backend
-    reranker_backend: RerankerBackend = backend
-    generator_backend: GeneratorBackend = backend
+    assert isinstance(backend, LifecycleBackend)
+    assert isinstance(backend, EmbeddingBackend)
+    assert isinstance(backend, RerankerBackend)
+    assert isinstance(backend, GeneratorBackend)
 
-    assert embedding_backend is backend
-    assert reranker_backend is backend
-    assert generator_backend is backend
+
+def test_fake_backend_satisfies_each_public_runtime_protocol() -> None:
+    backend = FakeBackend()
+
+    assert isinstance(backend, LifecycleBackend)
+    assert isinstance(backend, EmbeddingBackend)
+    assert isinstance(backend, RerankerBackend)
+    assert isinstance(backend, GeneratorBackend)
+
+
+def test_incomplete_backend_does_not_satisfy_operation_protocols() -> None:
+    class LifecycleOnly:
+        metadata = StructuralBackend.metadata
+        is_ready = False
+        is_closed = False
+
+        def load(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    backend = LifecycleOnly()
+
+    assert isinstance(backend, LifecycleBackend)
+    assert not isinstance(backend, EmbeddingBackend)
+    assert not isinstance(backend, RerankerBackend)
+    assert not isinstance(backend, GeneratorBackend)

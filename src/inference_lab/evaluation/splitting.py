@@ -1,25 +1,23 @@
 """Deterministic dataset splitting and leakage prevention."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import math
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Final, Iterable, get_args
 
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.utils import (
     SplitName,
-    normalise_text,
+    normalise_for_duplicate_detection,
 )
 from inference_lab.evaluation.versioning import (
-    CURRENT_ALGORITHM_VERSION,
-    CURRENT_EVALUATION_VERSION,
-    validate_algorithm_version,
+    CURRENT_SPLIT_ALGORITHM_VERSION,
+    validate_split_algorithm_version,
 )
 
-_SPLIT_ORDER: tuple[SplitName, ...] = ("train", "development", "held_out")
+_SPLIT_ORDER: Final[tuple[SplitName, ...]] = get_args(SplitName)
+_DEFAULT_SPLIT_SEED = "inference-lab-default-split"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,14 +27,19 @@ class SplitPolicy:
     train_fraction: float
     development_fraction: float
     held_out_fraction: float
-    algorithm_version: str = CURRENT_ALGORITHM_VERSION
-    seed: str = CURRENT_EVALUATION_VERSION
+    algorithm_version: str = CURRENT_SPLIT_ALGORITHM_VERSION
+    seed: str = _DEFAULT_SPLIT_SEED
     near_duplicate_threshold: float = 0.9
 
     def __post_init__(self) -> None:
         """Validate policy values and version compatibility."""
         for name, fraction in self.fractions.items():
-            if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+            if (
+                isinstance(fraction, bool)
+                or not isinstance(fraction, (int, float))
+                or not math.isfinite(fraction)
+                or not 0.0 <= fraction <= 1.0
+            ):
                 raise ValueError(f"{name} must be finite and between 0.0 and 1.0")
 
         if not math.isclose(
@@ -47,14 +50,17 @@ class SplitPolicy:
         if not self.seed:
             raise ValueError("seed must not be empty")
 
-        if not math.isfinite(self.near_duplicate_threshold) or not (
-            0.0 <= self.near_duplicate_threshold <= 1.0
+        if (
+            isinstance(self.near_duplicate_threshold, bool)
+            or not isinstance(self.near_duplicate_threshold, (int, float))
+            or not math.isfinite(self.near_duplicate_threshold)
+            or not 0.0 <= self.near_duplicate_threshold <= 1.0
         ):
             raise ValueError(
                 "near_duplicate_threshold must be finite and between 0.0 and 1.0"
             )
 
-        validate_algorithm_version(self.algorithm_version)
+        validate_split_algorithm_version(self.algorithm_version)
 
     @property
     def fractions(self) -> dict[SplitName, float]:
@@ -85,26 +91,28 @@ def assignment_key(seed: str, group_key: str) -> str:
 
 
 def question_key(question: str) -> str:
-    """Return a stable key for a normalized question."""
-    return stable_digest(normalise_text(question))
+    """Return a stable key for a normalised question."""
+    return stable_digest(normalise_for_duplicate_detection(question))
 
 
 def token_set(value: str) -> frozenset[str]:
-    """Return normalized tokens for duplicate detection."""
-    return frozenset(normalise_text(value).split())
+    """Return normalised tokens for duplicate detection."""
+    return frozenset(normalise_for_duplicate_detection(value).split())
 
 
 def jaccard_similarity(left: frozenset[str], right: frozenset[str]) -> float:
     """Return the Jaccard similarity between two token sets."""
-
     union = left | right
     return 1.0 if not union else len(left & right) / len(union)
 
 
 def answer_fingerprint(case: EvaluationCase) -> str:
     """Build a stable fingerprint from typed expected-answer data."""
-
     payload = case.expected_answer.model_dump(mode="json")
+    payload.pop("comparison_evidence_ids", None)
+    for field_name in ("claims", "numeric_values", "date_values"):
+        for expectation in payload[field_name]:
+            expectation.pop("evidence_ids", None)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return stable_digest(encoded)
 
@@ -134,7 +142,6 @@ class _UnionFind:
 
     def find(self, index: int) -> int:
         """Return the root for an index with path compression."""
-
         parent = self._parents[index]
         if parent != index:
             self._parents[index] = self.find(parent)
@@ -142,7 +149,6 @@ class _UnionFind:
 
     def union(self, left: int, right: int) -> None:
         """Join two indexes deterministically."""
-
         left_root = self.find(left)
         right_root = self.find(right)
         if left_root == right_root:
@@ -154,51 +160,74 @@ class _UnionFind:
             self._parents[left_root] = right_root
 
 
-def build_leakage_groups(
-    cases: Iterable[EvaluationCase],
-    *,
-    near_duplicate_threshold: float = 0.9,
-) -> tuple[LeakageGroup, ...]:
-    """Build transitive leakage groups from cases and stable annotations."""
-
-    ordered_cases = tuple(cases)
-    if not ordered_cases:
+def _validate_leakage_group_inputs(
+    cases: tuple[EvaluationCase, ...],
+    near_duplicate_threshold: float,
+) -> None:
+    """Validate leakage-group inputs before building indexes."""
+    if not cases:
         raise ValueError("At least one case is required")
-    if not math.isfinite(near_duplicate_threshold) or not (
-        0.0 <= near_duplicate_threshold <= 1.0
+    if (
+        isinstance(near_duplicate_threshold, bool)
+        or not isinstance(near_duplicate_threshold, (int, float))
+        or not math.isfinite(near_duplicate_threshold)
+        or not 0.0 <= near_duplicate_threshold <= 1.0
     ):
         raise ValueError(
             "near_duplicate_threshold must be finite and between 0.0 and 1.0"
         )
 
-    case_ids = [case.case_id for case in ordered_cases]
+    case_ids = [case.case_id for case in cases]
     if len(case_ids) != len(set(case_ids)):
         raise ValueError("Evaluation case IDs must be unique")
 
-    union_find = _UnionFind(len(ordered_cases))
-    key_owner: dict[str, int] = {}
-    tokens = [token_set(case.question) for case in ordered_cases]
 
-    for index, case in enumerate(ordered_cases):
-        keys = {
-            f"question:{question_key(case.question)}",
-            f"answer:{answer_fingerprint(case)}",
-            *evidence_group_keys(case),
-        }
-        for key in keys:
+def _grouping_keys(case: EvaluationCase) -> set[str]:
+    """Return exact-match grouping keys for one evaluation case."""
+    keys = {
+        f"question:{question_key(case.question)}",
+        *evidence_group_keys(case),
+    }
+    if case.expected_answer.has_expectations or case.expected_answer.summary:
+        keys.add(f"answer:{answer_fingerprint(case)}")
+    return keys
+
+
+def _union_exact_matches(
+    cases: tuple[EvaluationCase, ...],
+    union_find: _UnionFind,
+) -> None:
+    """Join cases sharing an exact question, evidence, or answer key."""
+    key_owner: dict[str, int] = {}
+    for index, case in enumerate(cases):
+        for key in _grouping_keys(case):
             owner = key_owner.setdefault(key, index)
             union_find.union(index, owner)
 
-    for left in range(len(ordered_cases)):
-        for right in range(left + 1, len(ordered_cases)):
+
+def _union_near_duplicate_questions(
+    cases: tuple[EvaluationCase, ...],
+    union_find: _UnionFind,
+    near_duplicate_threshold: float,
+) -> None:
+    """Join cases whose normalised question tokens meet the similarity threshold."""
+    tokens = [token_set(case.question) for case in cases]
+    for left in range(len(cases)):
+        for right in range(left + 1, len(cases)):
             if (
                 jaccard_similarity(tokens[left], tokens[right])
                 >= near_duplicate_threshold
             ):
                 union_find.union(left, right)
 
+
+def _materialise_leakage_groups(
+    cases: tuple[EvaluationCase, ...],
+    union_find: _UnionFind,
+) -> tuple[LeakageGroup, ...]:
+    """Build deterministically ordered leakage groups from union-find roots."""
     grouped: dict[int, list[EvaluationCase]] = {}
-    for index, case in enumerate(ordered_cases):
+    for index, case in enumerate(cases):
         grouped.setdefault(union_find.find(index), []).append(case)
 
     groups = []
@@ -208,8 +237,25 @@ def build_leakage_groups(
             "group\x00" + "\x00".join(case.case_id for case in sorted_cases)
         )
         groups.append(LeakageGroup(group_key=group_key, cases=sorted_cases))
-
     return tuple(sorted(groups, key=lambda group: group.group_key))
+
+
+def build_leakage_groups(
+    cases: Iterable[EvaluationCase],
+    *,
+    near_duplicate_threshold: float = 0.9,
+) -> tuple[LeakageGroup, ...]:
+    """Build transitive leakage groups from cases and stable annotations."""
+    ordered_cases = tuple(cases)
+    _validate_leakage_group_inputs(ordered_cases, near_duplicate_threshold)
+    union_find = _UnionFind(len(ordered_cases))
+    _union_exact_matches(ordered_cases, union_find)
+    _union_near_duplicate_questions(
+        ordered_cases,
+        union_find,
+        near_duplicate_threshold,
+    )
+    return _materialise_leakage_groups(ordered_cases, union_find)
 
 
 def validate_no_leakage(
@@ -218,7 +264,6 @@ def validate_no_leakage(
     near_duplicate_threshold: float = 0.9,
 ) -> None:
     """Reject leakage groups that cross persisted split assignments."""
-
     groups = build_leakage_groups(
         cases,
         near_duplicate_threshold=near_duplicate_threshold,
@@ -236,29 +281,28 @@ def generate_splits(
     policy: SplitPolicy,
 ) -> tuple[EvaluationCase, ...]:
     """Assign leakage groups to deterministic train, development, and held-out splits."""
-
     ordered_cases = tuple(cases)
     groups = build_leakage_groups(
         ordered_cases,
         near_duplicate_threshold=policy.near_duplicate_threshold,
     )
-    targets = {
+    targets: dict[SplitName, float] = {
         split: fraction * len(ordered_cases)
         for split, fraction in policy.fractions.items()
     }
-    counts = dict.fromkeys(_SPLIT_ORDER, 0)
+    counts: dict[SplitName, int] = dict.fromkeys(_SPLIT_ORDER, 0)
     assignments: dict[str, SplitName] = {}
 
     ranked_groups = sorted(
         groups,
         key=lambda group: assignment_key(policy.seed, group.group_key),
     )
-    eligible_splits = tuple(
+    eligible_splits: tuple[SplitName, ...] = tuple(
         split for split in _SPLIT_ORDER if policy.fractions[split] > 0.0
     )
 
     for group in ranked_groups:
-        split = min(
+        split: SplitName = min(
             eligible_splits,
             key=lambda candidate: (
                 counts[candidate] - targets[candidate],
@@ -269,7 +313,9 @@ def generate_splits(
         counts[split] += len(group.cases)
 
     assigned_cases = tuple(
-        case.model_copy(update={"split": assignments[case.case_id]})
+        EvaluationCase.model_validate(
+            case.model_dump(mode="python") | {"split": assignments[case.case_id]}
+        )
         for case in ordered_cases
     )
     validate_no_leakage(

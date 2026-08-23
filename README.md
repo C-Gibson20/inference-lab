@@ -54,6 +54,7 @@ different configuration-loading mechanism in the future.
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
+uv run pyright
 ```
 
 Release versioning is derived from committed headers. Preview or apply the next

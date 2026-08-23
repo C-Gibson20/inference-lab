@@ -12,8 +12,8 @@ deployment.
   environment overrides.
 - [Running queries](querying.md): current query status and the operator
   workflow as serving capabilities land.
-- [Evaluation operations](evaluation.md): run identity, local-only evaluation,
-  privacy-safe records, and failure handling.
+- [Evaluation dataset operations](evaluation.md): local validation,
+  deterministic writing, held-out governance, and privacy boundaries.
 - [Backup and restore](backup-restore.md): recover persistent corpus state.
 
 Normative configuration, logging, and backup policy is defined in
@@ -23,10 +23,10 @@ to apply that policy.
 ## Documentation status
 
 The command-line entry point currently starts a skeleton application. The
-first executable ingest-and-search workflow will be documented with `SERV-01`.
+first executable ingest-and-search workflow will be documented when it is
+implemented.
 Answer generation, citation verification, sessions, chat, corpus updates, and
-privacy checks will extend these pages with their corresponding `SERV-*`
-changes.
+privacy checks will extend these pages as those capabilities become available.
 
 When an operator-facing command or setting changes, update the relevant page in
 the same change and verify the examples from a clean local configuration.

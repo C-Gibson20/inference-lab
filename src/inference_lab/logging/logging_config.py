@@ -2,9 +2,10 @@
 
 import logging
 import sys
-from typing import Any, TextIO
+from typing import TextIO
 
 import structlog
+from structlog.typing import EventDict, WrappedLogger
 
 from inference_lab.settings import LoggingConfig
 
@@ -50,12 +51,11 @@ def _is_sensitive_name(name: str) -> bool:
 
 
 def _reject_sensitive_fields(
-    _logger: Any,
+    _logger: WrappedLogger,
     _method_name: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
+    event_dict: EventDict,
+) -> EventDict:
     """Fail closed when structured logs contain evaluation content fields."""
-
     sensitive_fields = {key for key in event_dict if _is_sensitive_name(key)}
     event = event_dict.get("event")
     if isinstance(event, str) and _is_sensitive_name(event):
@@ -67,10 +67,10 @@ def _reject_sensitive_fields(
 
 
 def _add_record_fields(
-    _logger: Any,
+    _logger: WrappedLogger,
     _method_name: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
+    event_dict: EventDict,
+) -> EventDict:
     """Add the stable fields required by the logging conventions."""
     logger_name = event_dict.pop("logger", None)
     event_dict.setdefault("module", logger_name)
@@ -82,11 +82,11 @@ def _add_record_fields(
 def _configure_structlog(
     format_name: str,
     *,
-    colors: bool,
+    colours: bool,
 ) -> structlog.stdlib.ProcessorFormatter:
     """Configure structlog and return the formatter for stdlib handlers."""
     renderer = (
-        structlog.dev.ConsoleRenderer(colors=colors)
+        structlog.dev.ConsoleRenderer(colors=colours)
         if format_name == "console"
         else structlog.processors.JSONRenderer()
     )
@@ -163,7 +163,7 @@ def configure_logging(
 
     formatter = _configure_structlog(
         format_name,
-        colors=format_name == "console" and output_stream.isatty(),
+        colours=format_name == "console" and output_stream.isatty(),
     )
     handler = _configure_stdlib(formatter, config, stream=output_stream)
     _configure_root_logger(handler, config.level)

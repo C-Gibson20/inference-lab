@@ -2,7 +2,15 @@
 
 from pathlib import Path
 
-from inference_lab.ingest import ParserInput
+from inference_lab.ingest import (
+    CURRENT_PARSER_VERSION,
+    NormalisedText,
+    ParsedDocument,
+    ParserInput,
+    SourceSpan,
+    StructuralBlock,
+    generate_source_span_id,
+)
 from inference_lab.provenance import DocumentId, DocumentVersionId
 from inference_lab.settings import (
     IngestConfig,
@@ -24,7 +32,6 @@ FIXTURE_DOCUMENT_VERSION_ID = DocumentVersionId.from_str(
 
 def fixture_bytes(name: str) -> bytes:
     """Read one named fixture, decoding ``.bin`` fixtures from ASCII hex."""
-
     candidate = (FIXTURE_ROOT / name).resolve()
     root = FIXTURE_ROOT.resolve()
 
@@ -70,4 +77,38 @@ def fixture_settings(*, max_source_bytes: int = 50 * 1024 * 1024) -> Settings:
             metadata_db_path=Path("fixture/metadata.db"),
         ),
         ingest=IngestConfig(max_source_bytes=max_source_bytes),
+    )
+
+
+def fixture_parsed_document(*, include_paragraph: bool = True) -> ParsedDocument:
+    """Build a valid parsed document with optional paragraph structure."""
+    document_version_id = DocumentVersionId.generate()
+    span = SourceSpan(
+        source_span_id=generate_source_span_id(
+            document_version_id,
+            parser_version=CURRENT_PARSER_VERSION,
+            ordinal=0,
+            kind="paragraph",
+            start_offset=0,
+            end_offset=1,
+        ),
+        document_version_id=document_version_id,
+        start_offset=0,
+        end_offset=1,
+    )
+    block = StructuralBlock(kind="paragraph", text="A", source_span=span)
+    blocks = (block,) if include_paragraph else ()
+
+    return ParsedDocument(
+        document_id=DocumentId.generate(),
+        document_version_id=document_version_id,
+        text=NormalisedText(source_text="A"),
+        blocks=blocks,
+        pages=None,
+        sections=None,
+        paragraphs=blocks,
+        language=None,
+        page_count=None,
+        character_count=1,
+        token_count=None,
     )

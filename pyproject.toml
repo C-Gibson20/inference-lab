@@ -23,6 +23,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "graphifyy==0.9.47",
+    "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.3",
@@ -33,7 +34,31 @@ target-version = "py313"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "D100", "D101", "D102", "D103"]
+select = [
+    "ANN401",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D202",
+    "D400",
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "I",
+    "RUF022",
+    "TID252",
+]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D"]
+"tests/**" = ["D100", "D101", "D102", "D103", "D104"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"

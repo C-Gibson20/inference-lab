@@ -1,6 +1,6 @@
 """Model runtime, residency, memory accounting, and workload scheduling."""
 
-from .errors import (
+from inference_lab.backends.runtime.errors import (
     BackendCancelledError,
     BackendClosedError,
     BackendError,
@@ -10,15 +10,19 @@ from .errors import (
     BackendRequestError,
     BackendResourceError,
 )
-from .fake import FakeBackend, FakeBackendConfig, FakeFailureMode
-from .protocols import (
+from inference_lab.backends.runtime.fake import (
+    FakeBackend,
+    FakeBackendConfig,
+    FakeFailureMode,
+)
+from inference_lab.backends.runtime.protocols import (
     EmbeddingBackend,
     GeneratorBackend,
     LifecycleBackend,
     RerankerBackend,
 )
-from .streaming import validate_generation_stream
-from .types import (
+from inference_lab.backends.runtime.streaming import validate_generation_stream
+from inference_lab.backends.runtime.types import (
     BackendCapability,
     BackendMetadata,
     BackendOperation,
@@ -31,6 +35,7 @@ from .types import (
     GenerationMessage,
     GenerationOptions,
     GenerationRequest,
+    GenerationRole,
     GenerationUsage,
     RerankCandidate,
     RerankRequest,
@@ -39,8 +44,8 @@ from .types import (
 )
 
 __all__ = [
-    "BackendCapability",
     "BackendCancelledError",
+    "BackendCapability",
     "BackendClosedError",
     "BackendError",
     "BackendExecutionError",
@@ -50,21 +55,22 @@ __all__ = [
     "BackendProtocolError",
     "BackendRequestError",
     "BackendResourceError",
-    "FakeBackend",
-    "FakeBackendConfig",
-    "FakeFailureMode",
     "EmbeddingBackend",
     "EmbeddingOptions",
     "EmbeddingRequest",
     "EmbeddingResult",
     "EmbeddingUsage",
-    "GeneratorBackend",
+    "FakeBackend",
+    "FakeBackendConfig",
+    "FakeFailureMode",
     "GenerationEvent",
     "GenerationEventType",
     "GenerationMessage",
     "GenerationOptions",
     "GenerationRequest",
+    "GenerationRole",
     "GenerationUsage",
+    "GeneratorBackend",
     "LifecycleBackend",
     "RerankCandidate",
     "RerankRequest",

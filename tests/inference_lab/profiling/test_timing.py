@@ -32,7 +32,7 @@ def test_successful_stage_emits_start_and_completion() -> None:
         stage_id="parse-1",
         emit=records.append,
         clock=FakeClock(1_000_000_000, 1_025_000_000),
-        timestamp_factory=fixed_timestamp,
+        observed_at_factory=fixed_timestamp,
     ) as timer:
         timer.set_counts(items_processed=1, records_emitted=4)
 
@@ -57,13 +57,47 @@ def test_stage_exception_is_recorded_and_re_raised() -> None:
             stage_id="parse-1",
             emit=records.append,
             clock=FakeClock(10, 1_000_010),
-            timestamp_factory=fixed_timestamp,
+            observed_at_factory=fixed_timestamp,
         ):
             raise RuntimeError("parse failed")
 
     assert records[-1].event == "stage_completed"
     assert records[-1].status == "failed"
     assert records[-1].duration_ms == 1.0
+
+
+def test_completion_emission_failure_does_not_mask_stage_failure() -> None:
+    def emit(record: StageTiming) -> None:
+        if record.event == "stage_completed":
+            raise RuntimeError("profiling emission failed")
+
+    with pytest.raises(ValueError, match="stage failed"):
+        with StageTimer(
+            module="ingest",
+            pipeline_stage="parse",
+            stage_id="parse-1",
+            emit=emit,
+            clock=FakeClock(10, 20),
+            observed_at_factory=fixed_timestamp,
+        ):
+            raise ValueError("stage failed")
+
+
+def test_completion_emission_failure_surfaces_after_successful_stage() -> None:
+    def emit(record: StageTiming) -> None:
+        if record.event == "stage_completed":
+            raise RuntimeError("profiling emission failed")
+
+    with pytest.raises(RuntimeError, match="profiling emission failed"):
+        with StageTimer(
+            module="ingest",
+            pipeline_stage="parse",
+            stage_id="parse-1",
+            emit=emit,
+            clock=FakeClock(10, 20),
+            observed_at_factory=fixed_timestamp,
+        ):
+            pass
 
 
 def test_cancelled_stage_is_recorded() -> None:
@@ -76,7 +110,7 @@ def test_cancelled_stage_is_recorded() -> None:
             stage_id="generate-1",
             emit=records.append,
             clock=FakeClock(100, 200),
-            timestamp_factory=fixed_timestamp,
+            observed_at_factory=fixed_timestamp,
         ):
             raise asyncio.CancelledError
 
@@ -92,7 +126,7 @@ def test_nested_stage_context_preserves_parent_id() -> None:
         stage_id="parse-1",
         emit=records.append,
         clock=FakeClock(0, 30),
-        timestamp_factory=fixed_timestamp,
+        observed_at_factory=fixed_timestamp,
     ):
         with StageTimer(
             module="ingest",
@@ -101,7 +135,7 @@ def test_nested_stage_context_preserves_parent_id() -> None:
             parent_stage_id="parse-1",
             emit=records.append,
             clock=FakeClock(10, 20),
-            timestamp_factory=fixed_timestamp,
+            observed_at_factory=fixed_timestamp,
         ):
             pass
 
@@ -117,7 +151,7 @@ def test_timer_cannot_be_reused() -> None:
         stage_id="parse-1",
         emit=records.append,
         clock=FakeClock(0, 1),
-        timestamp_factory=fixed_timestamp,
+        observed_at_factory=fixed_timestamp,
     )
 
     with timer:
@@ -137,19 +171,19 @@ def test_negative_counter_is_rejected(field: str) -> None:
         stage_id="parse-1",
         emit=records.append,
         clock=FakeClock(0, 1),
-        timestamp_factory=fixed_timestamp,
+        observed_at_factory=fixed_timestamp,
     ) as timer:
         with pytest.raises(ValueError, match="non-negative integer"):
             timer.set_counts(**{field: -1})
 
 
-def test_timing_record_serializes_nullable_fields() -> None:
+def test_timing_record_serialises_nullable_fields() -> None:
     record = StageTiming(
         event="stage_completed",
         module="profiling",
         pipeline_stage="parse",
         stage_id="parse-1",
-        timestamp=fixed_timestamp(),
+        observed_at=fixed_timestamp(),
         duration_ms=2.5,
         status="completed",
     )
@@ -159,4 +193,34 @@ def test_timing_record_serializes_nullable_fields() -> None:
     assert payload["duration_ms"] == 2.5
     assert payload["items_processed"] is None
     assert payload["records_emitted"] is None
-    assert payload["timestamp"] == "2026-08-21T12:00:00+00:00"
+    assert payload["observed_at"] == "2026-08-21T12:00:00+00:00"
+    assert payload["record_schema_version"] == 2
+
+
+@pytest.mark.parametrize(
+    "duration_ms",
+    [float("nan"), float("inf"), float("-inf"), True, "1.0"],
+)
+def test_timing_record_rejects_invalid_duration(duration_ms: object) -> None:
+    with pytest.raises(ValueError, match="finite non-negative number"):
+        StageTiming(
+            event="stage_completed",
+            module="profiling",
+            pipeline_stage="parse",
+            stage_id="parse-1",
+            duration_ms=duration_ms,  # type: ignore[arg-type]
+            status="completed",
+        )
+
+
+def test_timing_record_rejects_invalid_schema_version() -> None:
+    with pytest.raises(ValueError, match="record_schema_version"):
+        StageTiming(
+            event="stage_completed",
+            module="profiling",
+            pipeline_stage="parse",
+            stage_id="parse-1",
+            duration_ms=1.0,
+            status="completed",
+            record_schema_version=0,
+        )

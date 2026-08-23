@@ -1,39 +1,24 @@
-"""Question sets, held-out cases, and quality/system metric evaluation."""
+"""Versioned evaluation cases, datasets, and held-out split contracts."""
 
-from inference_lab.evaluation.cases import EvaluationCase
+from inference_lab.evaluation.cases import EvaluationCase, QuestionType
 from inference_lab.evaluation.coverage import (
+    FINAL_BENCHMARK_POLICY,
+    CoveragePolicy,
     CoverageReport,
-    validate_final_benchmark,
     validate_benchmark_coverage,
+    validate_final_benchmark,
 )
-from inference_lab.evaluation.answer_matching import (
-    AnswerObservation,
-    MatchResult,
-    claim_matches,
-    comparison_matches,
-    date_matches,
-    match_expected_answer,
-    numeric_matches,
-)
-from inference_lab.evaluation.utils import HELD_OUT_SPLIT, SplitName
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
 from inference_lab.evaluation.privacy import validate_local_path
-from inference_lab.evaluation.records import (
-    EvaluationRecord,
-    EvaluationRecorder,
-    EvaluationStatus,
-    evaluation_record_id,
-)
-from inference_lab.evaluation.runs import (
-    EvaluationPurpose,
-    EvaluationRun,
-    EvaluationRunRequest,
-    compute_run_id,
-    configuration_digest,
-    create_evaluation_run,
-    validate_run_inputs,
-    validate_run_purpose,
+from inference_lab.evaluation.schemas import (
+    AbstentionExpectation,
+    AnswerClaim,
+    DateExpectation,
+    EvaluationPolicy,
+    EvidenceReference,
+    ExpectedAnswer,
+    NumericExpectation,
 )
 from inference_lab.evaluation.serialisation import (
     atomic_write,
@@ -50,62 +35,38 @@ from inference_lab.evaluation.splitting import (
     generate_splits,
     validate_no_leakage,
 )
-from inference_lab.evaluation.schemas import (
-    AbstentionExpectation,
-    AnswerClaim,
-    DateExpectation,
-    EvaluationPolicy,
-    EvidenceReference,
-    ExpectedAnswer,
-    NumericExpectation,
-)
+from inference_lab.evaluation.utils import HELD_OUT_SPLIT, SplitName
 
 __all__ = [
+    "FINAL_BENCHMARK_POLICY",
+    "HELD_OUT_SPLIT",
     "AbstentionExpectation",
     "AnswerClaim",
-    "AnswerObservation",
-    "DateExpectation",
-    "EvaluationPolicy",
-    "EvaluationPurpose",
-    "EvaluationRun",
-    "EvaluationRunRequest",
-    "EvaluationRecord",
-    "EvaluationRecorder",
-    "EvaluationStatus",
+    "CoveragePolicy",
     "CoverageReport",
     "DatasetManifest",
+    "DateExpectation",
     "EvaluationCase",
+    "EvaluationPolicy",
     "EvidenceReference",
     "ExpectedAnswer",
-    "HELD_OUT_SPLIT",
-    "LoadedDataset",
     "LeakageGroup",
-    "load_dataset",
+    "LoadedDataset",
     "NumericExpectation",
-    "MatchResult",
-    "atomic_write",
-    "evaluation_json_schema",
-    "serialise_cases",
-    "serialise_manifest",
+    "QuestionType",
     "SplitName",
     "SplitPolicy",
+    "atomic_write",
     "build_leakage_groups",
+    "evaluation_json_schema",
     "generate_splits",
+    "load_dataset",
+    "serialise_cases",
+    "serialise_manifest",
+    "validate_benchmark_coverage",
+    "validate_final_benchmark",
+    "validate_local_path",
     "validate_no_leakage",
     "write_dataset",
     "write_json_schema",
-    "claim_matches",
-    "compute_run_id",
-    "comparison_matches",
-    "configuration_digest",
-    "create_evaluation_run",
-    "evaluation_record_id",
-    "date_matches",
-    "match_expected_answer",
-    "numeric_matches",
-    "validate_run_inputs",
-    "validate_run_purpose",
-    "validate_local_path",
-    "validate_benchmark_coverage",
-    "validate_final_benchmark",
 ]

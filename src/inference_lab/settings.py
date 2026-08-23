@@ -1,8 +1,8 @@
 """Typed application settings and configuration-source precedence."""
 
+import re
 from functools import lru_cache
 from pathlib import Path
-import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -12,7 +12,6 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
-
 
 _URI_LOCATION = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 

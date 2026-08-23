@@ -1,9 +1,19 @@
 """Represent the version of the parser used to process a document."""
 
+import re
 import uuid
 from dataclasses import dataclass
 
+from inference_lab.ingest.utils import is_strict_integer
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
+
+_IMPLEMENTATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+_SEMANTIC_VERSION_PATTERN = re.compile(
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,34 +28,33 @@ class ParserVersion:
         self._validate()
 
     def _validate(self) -> None:
-        """Reject incomplete parser-version components."""
-
-        if not isinstance(self.implementation, str) or not self.implementation.strip():
-            raise ValueError("parser_implementation_must_not_be_empty")
-        if (
-            not isinstance(self.contract_version, str)
-            or not self.contract_version.strip()
-        ):
-            raise ValueError("parser_contract_version_must_not_be_empty")
-        if (
-            not isinstance(self.normalisation_version, str)
-            or not self.normalisation_version.strip()
-        ):
-            raise ValueError("normalisation_version_must_not_be_empty")
+        """Require unambiguous canonical parser-version components."""
+        if not isinstance(
+            self.implementation, str
+        ) or not _IMPLEMENTATION_PATTERN.fullmatch(self.implementation):
+            raise ValueError("parser_implementation_must_be_slug")
+        if not isinstance(
+            self.contract_version, str
+        ) or not _SEMANTIC_VERSION_PATTERN.fullmatch(self.contract_version):
+            raise ValueError("parser_contract_version_must_be_semantic_version")
+        if not isinstance(
+            self.normalisation_version, str
+        ) or not _SEMANTIC_VERSION_PATTERN.fullmatch(self.normalisation_version):
+            raise ValueError("normalisation_version_must_be_semantic_version")
 
     @property
     def value(self) -> str:
-        """Return the canonical serialized parser-version identifier."""
+        """Return the canonical serialised parser-version identifier."""
         return (
             f"{self.implementation}/"
             f"contract-{self.contract_version}/"
-            f"normalization-{self.normalisation_version}"
+            f"normalisation-{self.normalisation_version}"
         )
 
 
 CURRENT_PARSER_VERSION = ParserVersion(
     implementation="text-native",
-    contract_version="1.0.0",
+    contract_version="2.0.0",
     normalisation_version="1.0.0",
 )
 
@@ -53,22 +62,24 @@ CURRENT_PARSER_VERSION = ParserVersion(
 def generate_source_span_id(
     document_version_id: DocumentVersionId,
     *,
+    parser_version: ParserVersion,
     ordinal: int,
     kind: str,
     start_offset: int,
     end_offset: int,
 ) -> SourceSpanId:
     """Create a stable source-span ID for one document-version representation."""
-
     if not isinstance(document_version_id, DocumentVersionId):
         raise ValueError("invalid_document_version_id")
-    if not _is_integer(ordinal):
+    if not isinstance(parser_version, ParserVersion):
+        raise ValueError("invalid_parser_version")
+    if not is_strict_integer(ordinal):
         raise ValueError("source_span_ordinal_must_be_integer")
     if not isinstance(kind, str):
         raise ValueError("source_span_kind_must_be_string")
     if not kind.strip():
         raise ValueError("source_span_kind_must_not_be_empty")
-    if not _is_integer(start_offset) or not _is_integer(end_offset):
+    if not is_strict_integer(start_offset) or not is_strict_integer(end_offset):
         raise ValueError("source_span_offsets_must_be_integers")
     if ordinal < 0:
         raise ValueError("source_span_ordinal_must_be_non_negative")
@@ -79,12 +90,10 @@ def generate_source_span_id(
     if not kind:
         raise ValueError("source_span_kind_must_not_be_empty")
 
-    name = f"ordinal={ordinal};kind={kind};start={start_offset};end={end_offset}"
+    name = (
+        f"parser={parser_version.value};ordinal={ordinal};kind={kind};"
+        f"start={start_offset};end={end_offset}"
+    )
     namespace = uuid.UUID(document_version_id.as_str())
     generated = uuid.uuid5(namespace, name)
     return SourceSpanId.from_str(str(generated))
-
-
-def _is_integer(value: object) -> bool:
-    """Return whether a runtime value is an integer but not a boolean."""
-    return isinstance(value, int) and not isinstance(value, bool)

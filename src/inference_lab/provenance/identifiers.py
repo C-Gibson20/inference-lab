@@ -1,10 +1,7 @@
 """Immutable, typed identifiers used by the provenance domain."""
 
-from __future__ import annotations
-
 import uuid
 from typing import Self, final
-
 
 __all__ = [
     "CorpusId",
@@ -20,7 +17,7 @@ class _Identifier:
     """Base value object for opaque, UUID-backed identifiers.
 
     Concrete subclasses define distinct identity domains. Two identifiers
-    with the same serialized value but different concrete types are therefore
+    with the same serialised value but different concrete types are therefore
     not equal.
     """
 
@@ -59,11 +56,11 @@ class _Identifier:
         return canonical
 
     def as_str(self) -> str:
-        """Return the canonical serialized identifier value."""
+        """Return the canonical serialised identifier value."""
         return self._value
 
     def __str__(self) -> str:
-        """Return the canonical serialized identifier value."""
+        """Return the canonical serialised identifier value."""
         return self._value
 
     def __repr__(self) -> str:

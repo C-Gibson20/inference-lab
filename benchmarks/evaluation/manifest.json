@@ -2,7 +2,7 @@
   "case_count": 10,
   "case_file": "cases.jsonl",
   "checksums": {
-    "cases.jsonl": "sha256:fa7cdd3bc642aaf33c90b38fbe89f626687322c378859faeb96b83764f3ea91c"
+    "cases.jsonl": "sha256:40da3561225139a108c45d687d85df2e62a1cbf748cbd1d3c261498d642280bd"
   },
   "corpus_id": "00000000-0000-4000-8000-000000000001",
   "corpus_version": "00000000-0000-4000-8000-000000000002",
@@ -16,10 +16,10 @@
     "held_out_tuning_allowed": false
   },
   "provenance": {
-    "license": "synthetic-fixture",
+    "licence": "synthetic-fixture",
     "source": "inference-lab"
   },
-  "schema_version": "1.0.0",
+  "schema_version": "3.0.0",
   "splits": {
     "development": [
       "case-001",

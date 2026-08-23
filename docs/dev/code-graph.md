@@ -2,7 +2,7 @@
 
 ## Scope
 
-The code graph is a local developer tool for visualizing application structure
+The code graph is a local developer tool for visualising application structure
 and dependencies. It is not part of the deployed product and does not inspect
 the corpus, models, queries, prompts, or runtime data.
 
@@ -14,7 +14,7 @@ Graphify scans the repository root in code-only mode. The tracked
 
 This scope keeps the graph focused on production code, tests, and their
 relationships. Developer scripts, documentation, configuration, caches, and
-other repository artifacts are excluded.
+other repository artefacts are excluded.
 
 ## Installation
 
@@ -46,7 +46,7 @@ The command:
 1. validates the Graphify installation and required scope directories;
 2. extracts the scoped code graph without LLM or network-based extraction;
 3. clusters the extracted graph without community-label generation;
-4. generates the local HTML tree visualization;
+4. generates the local HTML tree visualisation;
 5. validates the generated outputs; and
 6. publishes the new graph after the complete refresh succeeds.
 
@@ -63,21 +63,21 @@ uv run python scripts/graph/generate_graph.py \
 Generated files are written under the ignored `.dev/graphify-out/` directory:
 
 - `graph.json`: dependency and structure graph data;
-- `graph.html`: clustered community visualization;
-- `GRAPH_TREE.html`: browser-openable hierarchy visualization;
+- `graph.html`: clustered community visualisation;
+- `GRAPH_TREE.html`: browser-openable hierarchy visualisation;
 - Graphify manifest and local cache files.
 
-Generated artifacts are reproducible developer output. They must not be
+Generated artefacts are reproducible developer output. They must not be
 committed, backed up as corpus state, or treated as application data.
 
-## Refresh behavior
+## Refresh behaviour
 
 Refreshes are staged under a temporary directory in `.dev/`. The existing
-graph remains available while extraction, clustering, and visualization run.
+graph remains available while extraction, clustering, and visualisation run.
 The current output is replaced only after `graph.json`, `graph.html`, and
 `GRAPH_TREE.html` have been validated.
 
-If extraction, visualization, validation, or publication fails, the previous
+If extraction, visualisation, validation, or publication fails, the previous
 usable graph is restored or retained and the temporary output is removed.
 Stale files from an earlier graph are therefore not carried into a successful
 refresh.

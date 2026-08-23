@@ -9,10 +9,10 @@ locations and record lineage are specified by their later build-order issues.
 
 The system uses a distinct opaque identifier type for each identity domain:
 
-| Serialized field | Python type | Meaning | Stability boundary |
+| Serialised field | Python type | Meaning | Stability boundary |
 | --- | --- | --- | --- |
 | `document_id` | `DocumentId` | One logical document across source versions | Stable across file moves, renames, and unchanged re-ingest |
-| `document_version_id` | `DocumentVersionId` | One immutable source version | Changes when the source artifact changes |
+| `document_version_id` | `DocumentVersionId` | One immutable source version | Changes when the source artefact changes |
 | `record_id` | `RecordId` | One canonical or derived record | Stable for the lifetime of that record |
 | `corpus_id` | `CorpusId` | One persistent corpus | Stable across corpus snapshots |
 | `corpus_version` | `CorpusVersionId` | One immutable corpus snapshot | Changes when a new corpus state is committed |
@@ -25,7 +25,7 @@ fields.
 
 Identifier values are immutable, hashable, and domain-specific. Identifiers
 from different domains are not equal or interchangeable, even when their UUID
-strings match. Serialized field names use the full names in the table above;
+strings match. Serialised field names use the full names in the table above;
 use `document_id`, never `doc_id`, and `corpus_version`, never
 `corpus_version_id`.
 
@@ -84,5 +84,5 @@ These conventions define identifier value objects only. They do not implement:
 - record lineage, version metadata, invalidation, or graph traversal;
 - parser, OCR, chunking, extraction, or summary generation.
 
-Those behaviors are implemented by the dependency-ordered provenance, storage,
+Those behaviours are implemented by the dependency-ordered provenance, storage,
 and ingest issues.
