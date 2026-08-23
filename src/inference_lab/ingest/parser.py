@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 import structlog
-import unicodedata
 
 from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.errors import ParserDecodeError
 from inference_lab.provenance import DocumentId, DocumentVersionId
 from inference_lab.settings import Settings
 from inference_lab.ingest.outcomes import ParseOutcome
+from inference_lab.ingest.utils import normalise_text
 from inference_lab.ingest.versioning import CURRENT_PARSER_VERSION, ParserVersion
 
 logger = structlog.get_logger(__name__)
@@ -25,13 +25,6 @@ ParserInputErrorCategory = Literal[
     "missing_encoding",
     "invalid_encoding",
 ]
-
-
-def normalise_text(source_text: str) -> str:
-    """Apply the deterministic canonical text-normalisation policy."""
-
-    newline_normalised = source_text.replace("\r\n", "\n").replace("\r", "\n")
-    return unicodedata.normalize("NFC", newline_normalised)
 
 
 class ParserInputError(ValueError):
