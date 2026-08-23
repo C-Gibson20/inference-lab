@@ -1,7 +1,6 @@
 """Tests for reusable evaluation schemas."""
 
 from datetime import date, datetime
-from typing import TypedDict
 
 import pytest
 from pydantic import ValidationError
@@ -16,30 +15,13 @@ from inference_lab.evaluation.schemas import (
     NumericExpectation,
 )
 
-
-class EvidenceIds(TypedDict):
-    """Typed keyword fixture for evidence-reference identifiers."""
-
-    evidence_id: str
-    corpus_version: str
-    document_id: str
-    document_version_id: str
-    source_span_id: str
-
-
-IDS: EvidenceIds = {
-    "evidence_id": "evidence-primary",
-    "corpus_version": "00000000-0000-4000-8000-000000000002",
-    "document_id": "00000000-0000-4000-8000-000000000003",
-    "document_version_id": "00000000-0000-4000-8000-000000000004",
-    "source_span_id": "00000000-0000-4000-8000-000000000005",
-}
+from .fixtures import EVIDENCE_IDS
 
 
 def test_source_span_evidence_is_serializable() -> None:
-    evidence = EvidenceReference(**IDS)
+    evidence = EvidenceReference(**EVIDENCE_IDS)
 
-    assert evidence.model_dump() == IDS | {
+    assert evidence.model_dump() == EVIDENCE_IDS | {
         "kind": "source_span",
         "role": "authoritative",
         "record_id": None,
@@ -50,19 +32,19 @@ def test_evidence_kinds_require_exact_identifier_shapes() -> None:
     with pytest.raises(ValidationError, match="source_span evidence"):
         EvidenceReference(
             evidence_id="evidence-primary",
-            corpus_version=IDS["corpus_version"],
-            document_id=IDS["document_id"],
+            corpus_version=EVIDENCE_IDS["corpus_version"],
+            document_id=EVIDENCE_IDS["document_id"],
         )
 
     with pytest.raises(ValidationError, match="cannot contain record_id"):
         EvidenceReference(
-            **IDS,
+            **EVIDENCE_IDS,
             record_id="00000000-0000-4000-8000-000000000006",
         )
 
     with pytest.raises(ValidationError, match="cannot contain source_span_id"):
         EvidenceReference(
-            **IDS,
+            **EVIDENCE_IDS,
             kind="record",
             record_id="00000000-0000-4000-8000-000000000006",
         )
@@ -70,17 +52,17 @@ def test_evidence_kinds_require_exact_identifier_shapes() -> None:
     with pytest.raises(ValidationError, match="record evidence requires record_id"):
         EvidenceReference(
             evidence_id="evidence-primary",
-            corpus_version=IDS["corpus_version"],
-            document_id=IDS["document_id"],
+            corpus_version=EVIDENCE_IDS["corpus_version"],
+            document_id=EVIDENCE_IDS["document_id"],
             kind="record",
         )
 
     with pytest.raises(ValidationError, match="cannot contain version"):
-        EvidenceReference(**IDS, kind="document", role="context")
+        EvidenceReference(**EVIDENCE_IDS, kind="document", role="context")
 
 
 def test_provenance_ids_must_be_canonical_uuids() -> None:
-    invalid = dict(IDS, document_id="document-1")
+    invalid = dict(EVIDENCE_IDS, document_id="document-1")
 
     with pytest.raises(ValidationError, match="valid UUID"):
         EvidenceReference.model_validate(invalid)
@@ -90,8 +72,8 @@ def test_authoritative_document_evidence_is_rejected() -> None:
     with pytest.raises(ValidationError, match="cannot be authoritative"):
         EvidenceReference(
             evidence_id="evidence-primary",
-            corpus_version=IDS["corpus_version"],
-            document_id=IDS["document_id"],
+            corpus_version=EVIDENCE_IDS["corpus_version"],
+            document_id=EVIDENCE_IDS["document_id"],
             kind="document",
         )
 

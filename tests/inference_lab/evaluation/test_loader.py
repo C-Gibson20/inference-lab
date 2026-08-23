@@ -5,98 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from inference_lab.evaluation.loader import load_dataset
-from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
-CORPUS_ID = "00000000-0000-4000-8000-000000000001"
-CORPUS_VERSION = "00000000-0000-4000-8000-000000000002"
-DOCUMENT_ID = "00000000-0000-4000-8000-000000000003"
-DOCUMENT_VERSION_ID = "00000000-0000-4000-8000-000000000004"
-SOURCE_SPAN_ID = "00000000-0000-4000-8000-000000000005"
-
-
-def _case(case_id: str = "case-001", split: str = "development") -> dict[str, Any]:
-    return {
-        "schema_version": CURRENT_SCHEMA_VERSION,
-        "case_id": case_id,
-        "question": "What assay was used?",
-        "question_type": "lookup",
-        "expected_answer": {
-            "claims": (
-                {
-                    "key": "assay",
-                    "description": "The assay used by the study",
-                    "evidence_ids": ("evidence-primary",),
-                },
-            )
-        },
-        "evidence": [
-            {
-                "evidence_id": "evidence-primary",
-                "kind": "source_span",
-                "role": "authoritative",
-                "corpus_version": CORPUS_VERSION,
-                "document_id": DOCUMENT_ID,
-                "document_version_id": DOCUMENT_VERSION_ID,
-                "source_span_id": SOURCE_SPAN_ID,
-            }
-        ],
-        "abstention": {"expected": False, "reason": "not_applicable"},
-        "split": split,
-    }
-
-
-def _write_dataset(
-    directory: Path,
-    cases: list[dict[str, Any]] | None = None,
-    *,
-    manifest_overrides: dict[str, Any] | None = None,
-    case_text: str | None = None,
-) -> Path:
-    case_path = directory / "cases.jsonl"
-    case_records = cases if cases is not None else [_case()]
-    contents = case_text
-    if contents is None:
-        contents = "".join(
-            f"{json.dumps(case, sort_keys=True)}\n" for case in case_records
-        )
-    case_path.write_text(contents, encoding="utf-8", newline="")
-
-    manifest: dict[str, Any] = {
-        "schema_version": CURRENT_SCHEMA_VERSION,
-        "dataset_id": "baseline-v1",
-        "dataset_version": "1",
-        "description": "Evaluation fixture",
-        "corpus_id": CORPUS_ID,
-        "corpus_version": CORPUS_VERSION,
-        "case_file": "cases.jsonl",
-        "case_count": len(case_records),
-        "splits": {
-            "development": [case["case_id"] for case in case_records],
-            "held_out": [],
-        },
-        "checksums": {
-            "cases.jsonl": (
-                "sha256:" + hashlib.sha256(case_path.read_bytes()).hexdigest()
-            )
-        },
-        "created_at": "2026-08-22T00:00:00Z",
-        "updated_at": "2026-08-22T00:00:00Z",
-    }
-    manifest.update(manifest_overrides or {})
-    manifest_path = directory / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
-    return manifest_path
+from .fixtures import case_payload, write_dataset_fixture
 
 
 def test_load_dataset_returns_ordered_validated_dataset(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(
+    manifest_path = write_dataset_fixture(
         tmp_path,
-        cases=[_case("case-001"), _case("case-002")],
+        cases=[case_payload("case-001"), case_payload("case-002")],
         manifest_overrides={
             "splits": {
                 "development": ["case-001", "case-002"],
@@ -135,7 +55,7 @@ def test_malformed_manifest_json_is_rejected(tmp_path: Path) -> None:
 def test_case_file_must_be_a_safe_relative_path(
     tmp_path: Path, case_file: str, message: str
 ) -> None:
-    manifest_path = _write_dataset(
+    manifest_path = write_dataset_fixture(
         tmp_path,
         manifest_overrides={
             "case_file": case_file,
@@ -148,7 +68,7 @@ def test_case_file_must_be_a_safe_relative_path(
 
 
 def test_missing_case_file_is_rejected(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(tmp_path)
+    manifest_path = write_dataset_fixture(tmp_path)
     (tmp_path / "cases.jsonl").unlink()
 
     with pytest.raises(ValueError, match="does not exist"):
@@ -168,7 +88,7 @@ def test_checksum_failures_are_rejected(
     checksums: dict[str, str],
     message: str,
 ) -> None:
-    manifest_path = _write_dataset(
+    manifest_path = write_dataset_fixture(
         tmp_path, manifest_overrides={"checksums": checksums}
     )
 
@@ -177,7 +97,7 @@ def test_checksum_failures_are_rejected(
 
 
 def test_malformed_jsonl_is_rejected(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(tmp_path, case_text="not-json\n")
+    manifest_path = write_dataset_fixture(tmp_path, case_text="not-json\n")
     case_path = tmp_path / "cases.jsonl"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["checksums"]["cases.jsonl"] = (
@@ -190,7 +110,7 @@ def test_malformed_jsonl_is_rejected(tmp_path: Path) -> None:
 
 
 def test_blank_jsonl_record_is_rejected(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(tmp_path, case_text="\n")
+    manifest_path = write_dataset_fixture(tmp_path, case_text="\n")
     case_path = tmp_path / "cases.jsonl"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["checksums"]["cases.jsonl"] = (
@@ -203,7 +123,7 @@ def test_blank_jsonl_record_is_rejected(tmp_path: Path) -> None:
 
 
 def test_case_file_must_be_valid_utf8(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(tmp_path)
+    manifest_path = write_dataset_fixture(tmp_path)
     case_path = tmp_path / "cases.jsonl"
     case_path.write_bytes(b"\xff")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -220,7 +140,7 @@ def test_checksum_and_parsing_use_one_case_file_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest_path = _write_dataset(tmp_path)
+    manifest_path = write_dataset_fixture(tmp_path)
     case_path = tmp_path / "cases.jsonl"
     original_read_bytes = Path.read_bytes
     case_reads = 0
@@ -245,7 +165,7 @@ def test_case_file_read_failures_are_privacy_safe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest_path = _write_dataset(tmp_path)
+    manifest_path = write_dataset_fixture(tmp_path)
 
     def fail_read(_path: Path) -> bytes:
         raise OSError("/sensitive/path/cases.jsonl")
@@ -260,9 +180,9 @@ def test_case_file_read_failures_are_privacy_safe(
 
 
 def test_duplicate_case_ids_are_rejected(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(
+    manifest_path = write_dataset_fixture(
         tmp_path,
-        cases=[_case("case-001"), _case("case-001")],
+        cases=[case_payload("case-001"), case_payload("case-001")],
         manifest_overrides={
             "splits": {
                 "development": ["case-001", "case-002"],
@@ -276,7 +196,7 @@ def test_duplicate_case_ids_are_rejected(tmp_path: Path) -> None:
 
 
 def test_case_count_must_match_loaded_cases(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(
+    manifest_path = write_dataset_fixture(
         tmp_path,
         manifest_overrides={
             "case_count": 2,
@@ -292,9 +212,9 @@ def test_case_count_must_match_loaded_cases(tmp_path: Path) -> None:
 
 
 def test_manifest_must_contain_every_loaded_case(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(
+    manifest_path = write_dataset_fixture(
         tmp_path,
-        cases=[_case("case-001"), _case("case-002")],
+        cases=[case_payload("case-001"), case_payload("case-002")],
         manifest_overrides={
             "splits": {
                 "development": ["case-001", "case-003"],
@@ -308,7 +228,7 @@ def test_manifest_must_contain_every_loaded_case(tmp_path: Path) -> None:
 
 
 def test_case_split_must_match_manifest(tmp_path: Path) -> None:
-    manifest_path = _write_dataset(
+    manifest_path = write_dataset_fixture(
         tmp_path,
         manifest_overrides={"splits": {"held_out": ["case-001"]}},
     )
@@ -318,11 +238,11 @@ def test_case_split_must_match_manifest(tmp_path: Path) -> None:
 
 
 def test_evidence_corpus_version_must_match_manifest(tmp_path: Path) -> None:
-    invalid_case = _case()
+    invalid_case = case_payload()
     invalid_case["evidence"][0]["corpus_version"] = (
         "00000000-0000-4000-8000-000000000006"
     )
-    manifest_path = _write_dataset(tmp_path, cases=[invalid_case])
+    manifest_path = write_dataset_fixture(tmp_path, cases=[invalid_case])
 
     with pytest.raises(ValueError, match="corpus version"):
         load_dataset(manifest_path)

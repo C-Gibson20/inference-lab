@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from inference_lab.evaluation.cases import EvaluationCase
 
-from .test_schemas import IDS
+from .fixtures import EVIDENCE_IDS
 
 
 def _evidence(
@@ -15,7 +15,7 @@ def _evidence(
     role: Literal["authoritative", "context"] = "authoritative",
     evidence_id: str = "evidence-primary",
 ) -> tuple[dict[str, object], ...]:
-    return (dict(IDS, evidence_id=evidence_id, role=role),)
+    return (dict(EVIDENCE_IDS, evidence_id=evidence_id, role=role),)
 
 
 def _answer(*, evidence_id: str = "evidence-primary") -> dict[str, object]:
@@ -67,13 +67,13 @@ def test_case_rejects_duplicate_or_unreferenced_evidence() -> None:
     duplicate_location = _case_payload()
     duplicate_location["evidence"] = (
         *_evidence(),
-        dict(IDS, evidence_id="evidence-secondary"),
+        dict(EVIDENCE_IDS, evidence_id="evidence-secondary"),
     )
     with pytest.raises(ValidationError, match="locations must be unique"):
         EvaluationCase.model_validate(duplicate_location)
 
     unreferenced = _case_payload()
-    second = dict(IDS)
+    second = dict(EVIDENCE_IDS)
     second.update(
         {
             "evidence_id": "evidence-secondary",

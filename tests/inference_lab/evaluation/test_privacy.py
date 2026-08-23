@@ -9,7 +9,7 @@ from inference_lab.evaluation.loader import load_dataset
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.serialisation import atomic_write, write_json_schema
 
-from .test_loader import _case, _write_dataset
+from .fixtures import case_payload, write_dataset_fixture
 
 
 @pytest.mark.parametrize(
@@ -79,10 +79,10 @@ def test_loader_errors_do_not_repeat_sensitive_absolute_paths(tmp_path: Path) ->
 
 def test_case_validation_errors_suppress_sensitive_payloads(tmp_path: Path) -> None:
     sensitive_question = "Confidential compound codename AURORA"
-    invalid_case = _case()
+    invalid_case = case_payload()
     invalid_case["question"] = sensitive_question
     invalid_case["expected_answer"]["claims"][0]["evidence_ids"] = ("evidence-missing",)
-    manifest_path = _write_dataset(tmp_path, cases=[invalid_case])
+    manifest_path = write_dataset_fixture(tmp_path, cases=[invalid_case])
 
     with pytest.raises(ValueError, match="Invalid evaluation case") as caught:
         load_dataset(manifest_path)

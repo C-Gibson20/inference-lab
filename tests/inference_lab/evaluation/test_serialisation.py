@@ -24,7 +24,7 @@ from inference_lab.evaluation.serialisation import (
 )
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
-from .test_loader import CORPUS_ID, CORPUS_VERSION, _case
+from .fixtures import CORPUS_ID, CORPUS_VERSION, case_payload
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 SCHEMA_GENERATOR = (
@@ -37,7 +37,7 @@ SCHEMA_GENERATOR = (
 
 
 def _evaluation_case(case_id: str = "case-001") -> EvaluationCase:
-    case = EvaluationCase.model_validate(_case(case_id))
+    case = EvaluationCase.model_validate(case_payload(case_id))
     return EvaluationCase.model_validate(
         case.model_dump(mode="python") | {"tags": frozenset({"zeta", "alpha"})}
     )

@@ -16,10 +16,10 @@ from inference_lab.evaluation.splitting import (
     validate_no_leakage,
 )
 
-from .test_loader import (
+from .fixtures import (
     CORPUS_VERSION,
     DOCUMENT_ID,
-    _case,
+    case_payload,
 )
 
 
@@ -32,7 +32,7 @@ def _evaluation_case(
     evidence_id: str = "evidence-primary",
     answer_description: str | None = None,
 ) -> EvaluationCase:
-    payload = _case(case_id, split)
+    payload = case_payload(case_id, split)
     payload["question"] = question
     payload["expected_answer"] = {
         "summary": answer_description or case_id,

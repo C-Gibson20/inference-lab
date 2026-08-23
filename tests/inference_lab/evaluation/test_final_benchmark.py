@@ -13,8 +13,7 @@ from inference_lab.evaluation import (
     write_dataset,
 )
 
-from .test_coverage import _benchmark_cases
-from .test_loader import CORPUS_ID, CORPUS_VERSION
+from .fixtures import CORPUS_ID, CORPUS_VERSION, benchmark_cases
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 FIXTURE_MANIFEST = REPOSITORY_ROOT / "benchmarks" / "evaluation" / "manifest.json"
@@ -51,7 +50,7 @@ def test_documented_validator_rejects_contract_fixture_without_traceback() -> No
 
 
 def test_documented_validator_accepts_complete_benchmark(tmp_path: Path) -> None:
-    cases = _benchmark_cases()
+    cases = benchmark_cases()
     manifest = DatasetManifest.model_validate(
         {
             "dataset_id": "accepted-benchmark",
