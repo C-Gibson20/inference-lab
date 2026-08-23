@@ -209,14 +209,26 @@ def test_prepare_text_preserves_empty_content() -> None:
         encoding="utf-8",
     )
 
-    assert prepare_text(source) == NormalisedText(source_text="", text="")
+    assert prepare_text(source) == NormalisedText(source_text="")
+
+
+def test_normalised_text_rejects_non_string_source() -> None:
+    with pytest.raises(ValueError, match="source_text_must_be_string"):
+        NormalisedText(source_text=b"source")  # type: ignore[arg-type]
+
+
+def test_normalised_text_derives_canonical_text() -> None:
+    text = NormalisedText(source_text="A\r\ne\u0301")
+
+    assert text.source_text == "A\r\ne\u0301"
+    assert text.text == "A\né"
 
 
 def test_parsed_document_distinguishes_absent_and_empty_structure() -> None:
     parsed = ParsedDocument(
         document_id=DocumentId.generate(),
         document_version_id=DocumentVersionId.generate(),
-        text=NormalisedText(source_text="", text=""),
+        text=NormalisedText(source_text=""),
         blocks=(),
         pages=None,
         sections=None,
@@ -237,7 +249,7 @@ def test_parsed_document_rejects_character_count_mismatch() -> None:
         ParsedDocument(
             document_id=DocumentId.generate(),
             document_version_id=DocumentVersionId.generate(),
-            text=NormalisedText(source_text="A", text="A"),
+            text=NormalisedText(source_text="A"),
             blocks=(),
             pages=None,
             sections=None,

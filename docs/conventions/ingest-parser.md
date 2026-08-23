@@ -36,6 +36,12 @@ text, ordered structural blocks, paragraph aliases, and character count. It
 uses explicit `None` for unavailable pages, sections, language, page count,
 and token count.
 
+`blocks` and every available typed collection are immutable tuples. Blocks
+are ordered by non-decreasing source start offset. `pages`, `sections`, and
+`paragraphs`, when available, are exact ordered projections of `blocks` for
+their corresponding block kind; a block of one of those kinds requires its
+typed collection to be available.
+
 `NormalisedText.source_text` is the strictly decoded source coordinate space. `NormalisedText.text` is NFC-normalized text with CRLF and CR converted to LF. Whitespace is otherwise preserved. Empty input is a successful empty document; an unavailable structure is `None`, while a present empty collection is `()`.
 
 Paragraph boundaries are derived from `source_text` before normalization. LF,
@@ -50,6 +56,11 @@ content. Indentation and other whitespace on content lines are preserved.
 
 Every emitted block has a `SourceSpan` linked to the input `DocumentVersionId`. Offsets are half-open Unicode code-point offsets into
 `source_text`: `[start_offset, end_offset)`. They are not byte offsets and are not offsets into normalized text.
+
+Canonical document text must equal the defined normalization of
+`source_text`. Each block's text must likewise equal the normalized source
+slice selected by its span. A completed document rejects arbitrary or stale
+block text, collection aliases, and source-span identifiers.
 
 Blocks are emitted in source order. Source-span identifiers are deterministic UUIDs derived from the document version, block ordinal, block kind, and source range. Repeating a parse with the same input, settings, and parser version must produce byte-identical canonical serialization.
 

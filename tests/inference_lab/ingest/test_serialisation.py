@@ -1,6 +1,7 @@
 """Tests for document serialisation."""
 
 from inference_lab.ingest import (
+    generate_source_span_id,
     NormalisedText,
     ParsedDocument,
     SourceSpan,
@@ -11,14 +12,19 @@ from inference_lab.ingest import (
 from inference_lab.provenance import (
     DocumentId,
     DocumentVersionId,
-    SourceSpanId,
 )
 
 
 def make_fixture_parsed_document(*, include_paragraph: bool = True) -> ParsedDocument:
     document_version_id = DocumentVersionId.generate()
     span = SourceSpan(
-        source_span_id=SourceSpanId.generate(),
+        source_span_id=generate_source_span_id(
+            document_version_id,
+            ordinal=0,
+            kind="paragraph",
+            start_offset=0,
+            end_offset=1,
+        ),
         document_version_id=document_version_id,
         start_offset=0,
         end_offset=1,
@@ -30,7 +36,7 @@ def make_fixture_parsed_document(*, include_paragraph: bool = True) -> ParsedDoc
     return ParsedDocument(
         document_id=DocumentId.generate(),
         document_version_id=document_version_id,
-        text=NormalisedText(source_text="A", text="A"),
+        text=NormalisedText(source_text="A"),
         blocks=blocks,
         pages=None,
         sections=None,
