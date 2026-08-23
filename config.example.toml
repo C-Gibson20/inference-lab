@@ -16,3 +16,6 @@ metadata_db_path = "/path/to/data/metadata.db"
 [logging]
 level = "INFO"
 format = "auto"
+
+[ingest]
+max_source_bytes = 52428800

@@ -71,6 +71,14 @@ class LoggingConfig(BaseModel):
     format: Literal["auto", "console", "json"] = "auto"
 
 
+class IngestConfig(BaseModel):
+    """Limits and controls for batch document ingestion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_source_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+
+
 class Settings(BaseSettings):
     """Validated application settings loaded from explicit, environment, or TOML values."""
 
@@ -84,6 +92,7 @@ class Settings(BaseSettings):
     runtime: RuntimeConfig
     storage: StorageConfig
     logging: LoggingConfig = LoggingConfig()
+    ingest: IngestConfig = IngestConfig()
 
     @classmethod
     def settings_customise_sources(
@@ -107,4 +116,4 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Load and cache the validated settings for the current process."""
-    return Settings()
+    return Settings()  # pyright: ignore[reportCallIssue]

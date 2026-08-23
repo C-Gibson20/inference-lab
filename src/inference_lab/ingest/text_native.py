@@ -126,6 +126,15 @@ def _failure_outcome(failure: ParserFailure) -> ParseOutcome:
     return ParseOutcome(status="failed", document=None, failures=(failure,))
 
 
+def _source_size_failure() -> ParserFailure:
+    """Create the safe failure record for an oversized source."""
+    return ParserFailure(
+        category="source_too_large",
+        severity="fatal",
+        stage="input",
+    )
+
+
 class TextNativeParser:
     """Parse deterministic text/plain document inputs."""
 
@@ -136,7 +145,6 @@ class TextNativeParser:
         settings: Settings,
     ) -> ParseOutcome:
         """Parse one text-native document into a validated outcome."""
-        del settings
 
         document_id = (
             str(source.document_id) if isinstance(source, ParserInput) else None
@@ -156,6 +164,20 @@ class TextNativeParser:
                 "document_parse_failed",
                 error_category=failure.category,
                 failure_severity=failure.severity,
+            )
+            return _failure_outcome(failure)
+
+        source_size_bytes = len(source.content)
+        max_source_bytes = settings.ingest.max_source_bytes
+
+        if source_size_bytes > max_source_bytes:
+            failure = _source_size_failure()
+            log.error(
+                "document_parse_failed",
+                error_category=failure.category,
+                failure_severity=failure.severity,
+                source_size_bytes=source_size_bytes,
+                max_source_bytes=max_source_bytes,
             )
             return _failure_outcome(failure)
 
@@ -192,6 +214,7 @@ class TextNativeParser:
             parser_version=document.parser_version.value,
             character_count=document.character_count,
             records_emitted=len(document.blocks),
+            source_size_bytes=source_size_bytes,
         )
 
         return ParseOutcome(

@@ -12,6 +12,7 @@ ParserFailureCategory = Literal[
     "malformed_unit",
     "unsupported_structure",
     "invalid_output",
+    "source_too_large",
 ]
 
 ParserFailureSeverity = Literal["fatal", "recoverable"]

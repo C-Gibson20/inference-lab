@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     ParserInput,
@@ -17,6 +18,7 @@ from inference_lab.settings import (
     RuntimeConfig,
     Settings,
     StorageConfig,
+    IngestConfig,
 )
 
 
@@ -30,7 +32,7 @@ def make_source(content: bytes) -> ParserInput:
     )
 
 
-def make_settings() -> Settings:
+def make_settings(*, max_source_bytes: int = 50 * 1024 * 1024) -> Settings:
     return Settings(
         models=ModelPaths(
             embedder_path=Path("fixture/embedder"),
@@ -42,6 +44,7 @@ def make_settings() -> Settings:
             index_dir=Path("fixture/index"),
             metadata_db_path=Path("fixture/metadata.db"),
         ),
+        ingest=IngestConfig(max_source_bytes=max_source_bytes),
     )
 
 
@@ -180,3 +183,55 @@ def test_parser_returns_canonical_normalized_text() -> None:
 
     assert outcome.document is not None
     assert outcome.document.text.text == "A\nB\né"
+
+
+def test_source_at_size_limit_is_accepted() -> None:
+    outcome = TextNativeParser().parse(
+        make_source(b"A" * 4),
+        settings=make_settings(max_source_bytes=4),
+    )
+
+    assert outcome.status == "succeeded"
+
+
+def test_source_over_size_limit_fails_before_decoding() -> None:
+    outcome = TextNativeParser().parse(
+        make_source(b"A" * 5),
+        settings=make_settings(max_source_bytes=4),
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.document is None
+    assert outcome.failures[0].category == "source_too_large"
+    assert outcome.failures[0].severity == "fatal"
+
+
+def test_size_limit_precedes_decoding() -> None:
+    outcome = TextNativeParser().parse(
+        make_source(b"\xff\xff"),
+        settings=make_settings(max_source_bytes=1),
+    )
+
+    assert outcome.failures[0].category == "source_too_large"
+
+
+def test_parser_emits_privacy_safe_failure_log() -> None:
+    source = make_source(b"secret text")
+
+    with capture_logs() as logs:
+        outcome = TextNativeParser().parse(
+            source,
+            settings=make_settings(max_source_bytes=1),
+        )
+
+    assert outcome.status == "failed"
+    failure_log = next(
+        record for record in logs if record["event"] == "document_parse_failed"
+    )
+
+    assert failure_log["pipeline_stage"] == "parse"
+    assert failure_log["document_id"] == str(source.document_id)
+    assert failure_log["error_category"] == "source_too_large"
+    assert "secret text" not in str(logs)
+    assert "content" not in failure_log
+    assert "path" not in failure_log

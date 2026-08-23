@@ -1,5 +1,5 @@
-from pathlib import Path
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -29,6 +29,9 @@ def isolated_settings_environment(
         [logging]
         level = "DEBUG"
         format = "json"
+
+        [ingest]
+        max_source_bytes = 1048576
         """
     )
     monkeypatch.chdir(tmp_path)
@@ -37,15 +40,24 @@ def isolated_settings_environment(
     get_settings.cache_clear()
 
 
+def _load_settings(settings_type: type[Settings]) -> Settings:
+    """Load a Settings subclass from its configured external sources."""
+    return settings_type()  # pyright: ignore[reportCallIssue]
+
+
 def test_explicit_runtime_settings_override_toml() -> None:
-    configured = Settings(runtime={"vram_budget_gb": 12})
+    configured = Settings(  # pyright: ignore[reportCallIssue]
+        runtime={"vram_budget_gb": 12}
+    )
 
     assert configured.runtime.vram_budget_gb == 12
     assert configured.runtime.max_context_tokens == 8192
 
 
 def test_explicit_nested_model_setting_overrides_toml() -> None:
-    configured = Settings(models={"generator_path": "/tmp/test-generator"})
+    configured = Settings(  # pyright: ignore[reportCallIssue]
+        models={"generator_path": "/tmp/test-generator"}
+    )
 
     assert configured.models.generator_path == Path("/tmp/test-generator")
     assert configured.models.embedder_path == Path("/models/qwen3-embedding-0.6b")
@@ -101,7 +113,7 @@ def test_missing_required_setting_is_rejected(tmp_path) -> None:
         model_config["toml_file"] = config_file
 
     with pytest.raises(ValidationError):
-        TestSettings()
+        _load_settings(TestSettings)
 
 
 def test_invalid_setting_type_is_rejected(tmp_path) -> None:
@@ -118,7 +130,7 @@ def test_invalid_setting_type_is_rejected(tmp_path) -> None:
         model_config["toml_file"] = config_file
 
     with pytest.raises(ValidationError):
-        TestSettings()
+        _load_settings(TestSettings)
 
 
 @pytest.mark.parametrize(
@@ -132,7 +144,9 @@ def test_invalid_setting_type_is_rejected(tmp_path) -> None:
 )
 def test_non_positive_runtime_setting_is_rejected(field: str, value: int) -> None:
     with pytest.raises(ValidationError):
-        Settings(runtime={field: value})
+        Settings(  # pyright: ignore[reportCallIssue]
+            runtime={field: value}
+        )
 
 
 @pytest.mark.parametrize(
@@ -147,7 +161,7 @@ def test_non_positive_runtime_setting_is_rejected(field: str, value: int) -> Non
 )
 def test_empty_path_is_rejected(section: str, field: str) -> None:
     with pytest.raises(ValidationError):
-        Settings(**{section: {field: ""}})
+        Settings(**{section: {field: ""}})  # pyright: ignore
 
 
 @pytest.mark.parametrize(
@@ -156,12 +170,14 @@ def test_empty_path_is_rejected(section: str, field: str) -> None:
 )
 def test_uri_shaped_model_path_is_rejected(path: str) -> None:
     with pytest.raises(ValidationError):
-        Settings(models={"generator_path": path})
+        Settings(  # pyright: ignore[reportCallIssue]
+            models={"generator_path": path}
+        )
 
 
 def test_unknown_nested_setting_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        Settings(
+        Settings(  # pyright: ignore[reportCallIssue]
             storage={
                 "index_dir": "/data/indexes",
                 "metadata_db_path": "/data/metadata.db",
@@ -194,7 +210,7 @@ def test_unknown_nested_toml_setting_is_rejected(tmp_path: Path) -> None:
         model_config["toml_file"] = config_file
 
     with pytest.raises(ValidationError):
-        TestSettings()
+        _load_settings(TestSettings)
 
 
 def test_logging_settings_default(tmp_path: Path) -> None:
@@ -219,7 +235,7 @@ def test_logging_settings_default(tmp_path: Path) -> None:
         model_config = Settings.model_config.copy()
         model_config["toml_file"] = config_file
 
-    configured = TestSettings()
+    configured = _load_settings(TestSettings)
 
     assert configured.logging.level == "INFO"
     assert configured.logging.format == "auto"
@@ -233,7 +249,9 @@ def test_logging_settings_load_from_toml() -> None:
 
 
 def test_explicit_logging_settings_override_toml() -> None:
-    configured = Settings(logging={"level": "WARNING"})
+    configured = Settings(  # pyright: ignore[reportCallIssue]
+        logging={"level": "WARNING"}
+    )
 
     assert configured.logging.level == "WARNING"
     assert configured.logging.format == "json"
@@ -275,7 +293,7 @@ def test_invalid_logging_level_is_rejected(tmp_path) -> None:
         model_config["toml_file"] = config_file
 
     with pytest.raises(ValidationError):
-        TestSettings()
+        _load_settings(TestSettings)
 
 
 def test_invalid_logging_format_is_rejected(tmp_path) -> None:
@@ -292,4 +310,55 @@ def test_invalid_logging_format_is_rejected(tmp_path) -> None:
         model_config["toml_file"] = config_file
 
     with pytest.raises(ValidationError):
-        TestSettings()
+        _load_settings(TestSettings)
+
+
+def test_ingest_size_setting_loads_from_toml() -> None:
+    configured = get_settings()
+
+    assert configured.ingest.max_source_bytes == 1048576
+
+
+def test_ingest_size_setting_has_safe_default(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+        [models]
+        embedder_path = "/models/embedder"
+        reranker_path = "/models/reranker"
+        generator_path = "/models/generator"
+
+        [runtime]
+        vram_budget_gb = 24
+
+        [storage]
+        index_dir = "/data/indexes"
+        metadata_db_path = "/data/metadata.db"
+        """
+    )
+
+    class TestSettings(Settings):
+        model_config = Settings.model_config.copy()
+        model_config["toml_file"] = config_file
+
+    configured = _load_settings(TestSettings)
+
+    assert configured.ingest.max_source_bytes == 50 * 1024 * 1024
+
+
+def test_ingest_size_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INGEST__MAX_SOURCE_BYTES", "2048")
+
+    configured = get_settings()
+
+    assert configured.ingest.max_source_bytes == 2048
+
+
+@pytest.mark.parametrize("value", [0, -1, "not-an-int"])
+def test_invalid_ingest_size_is_rejected(value: object) -> None:
+    with pytest.raises(ValidationError):
+        Settings(  # pyright: ignore[reportCallIssue]
+            ingest={"max_source_bytes": value}
+        )
