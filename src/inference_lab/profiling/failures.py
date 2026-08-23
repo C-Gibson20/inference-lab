@@ -36,6 +36,93 @@ _QUALIFIED_EXCEPTION_TYPE = re.compile(
 )
 
 
+def _validate_identity_and_context(
+    *,
+    event: FailureEventName,
+    failure_category: FailureCategory,
+    failure_code: str,
+    module: str,
+    pipeline_stage: str | None,
+    stage_id: str | None,
+) -> None:
+    """Validate failure discriminants and operational context fields."""
+    if event not in _FAILURE_EVENTS:
+        raise ValueError("event must be a valid failure event")
+    if failure_category not in _FAILURE_CATEGORIES:
+        raise ValueError("failure_category must be supported")
+    if not failure_code or not is_snake_case(failure_code):
+        raise ValueError("failure_code must use non-empty snake_case")
+    if not module:
+        raise ValueError("module must not be empty")
+    if pipeline_stage == "":
+        raise ValueError("pipeline_stage must not be empty")
+    if stage_id == "":
+        raise ValueError("stage_id must not be empty")
+
+
+def _validate_state_relationships(
+    *,
+    event: FailureEventName,
+    failure_category: FailureCategory,
+    status: FailureStatus,
+    level: LogLevel,
+) -> None:
+    """Validate relationships among failure category, event, status, and level."""
+    if status not in _FAILURE_STATUSES:
+        raise ValueError("status must be valid")
+    if level not in _FAILURE_LEVELS:
+        raise ValueError("failure level must be warning or error")
+    if status == "degraded" and event != "unit_degraded":
+        raise ValueError("degraded records must use unit_degraded")
+    if status != "degraded" and event != "unit_failed":
+        raise ValueError("failed and cancelled records must use unit_failed")
+    if status == "degraded" and level != "warning":
+        raise ValueError("degraded records must use warning level")
+    if status == "failed" and level != "error":
+        raise ValueError("failed records must use error level")
+    if status == "cancelled" and level != "warning":
+        raise ValueError("cancelled records must use warning level")
+    if failure_category == "cancelled" and status != "cancelled":
+        raise ValueError("cancelled category must use cancelled status")
+    if failure_category == "measurement_unavailable" and status != "degraded":
+        raise ValueError("measurement_unavailable must use degraded status")
+
+
+def _validate_retry_fields(
+    *,
+    recoverable: bool,
+    retry_count: int,
+    partial: bool,
+) -> None:
+    """Validate recovery, retry, and partial-result fields."""
+    if isinstance(recoverable, bool) is False:
+        raise ValueError("recoverable must be a boolean")
+    if (
+        isinstance(retry_count, bool)
+        or not isinstance(retry_count, int)
+        or retry_count < 0
+    ):
+        raise ValueError("retry_count must be a non-negative integer")
+    if isinstance(partial, bool) is False:
+        raise ValueError("partial must be a boolean")
+
+
+def _validate_exception_type(exception_type: str | None) -> None:
+    """Validate privacy-safe exception type metadata when present."""
+    if exception_type is not None and not _QUALIFIED_EXCEPTION_TYPE.fullmatch(
+        exception_type
+    ):
+        raise ValueError("exception_type must be a qualified exception class name")
+
+
+def _validate_observed_at(observed_at: datetime) -> None:
+    """Require a timezone-aware UTC observation timestamp."""
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise ValueError("observed_at must be timezone-aware UTC")
+    if observed_at.utcoffset() != timedelta(0):
+        raise ValueError("observed_at must be in UTC")
+
+
 @dataclass(frozen=True, slots=True)
 class FailureEvent:
     """A privacy-safe record describing a failed or degraded unit of work.
@@ -66,56 +153,27 @@ class FailureEvent:
 
     def __post_init__(self) -> None:
         """Validate failure identity, severity, status, and privacy fields."""
-        if self.event not in _FAILURE_EVENTS:
-            raise ValueError("event must be a valid failure event")
-        if self.failure_category not in _FAILURE_CATEGORIES:
-            raise ValueError("failure_category must be supported")
-        if not self.failure_code or not is_snake_case(self.failure_code):
-            raise ValueError("failure_code must use non-empty snake_case")
-        if not self.module:
-            raise ValueError("module must not be empty")
-        if self.pipeline_stage == "":
-            raise ValueError("pipeline_stage must not be empty")
-        if self.stage_id == "":
-            raise ValueError("stage_id must not be empty")
-        if self.status not in _FAILURE_STATUSES:
-            raise ValueError("status must be valid")
-        if self.level not in _FAILURE_LEVELS:
-            raise ValueError("failure level must be warning or error")
-        if self.status == "degraded" and self.event != "unit_degraded":
-            raise ValueError("degraded records must use unit_degraded")
-        if self.status != "degraded" and self.event != "unit_failed":
-            raise ValueError("failed and cancelled records must use unit_failed")
-        if self.status == "degraded" and self.level != "warning":
-            raise ValueError("degraded records must use warning level")
-        if self.status == "failed" and self.level != "error":
-            raise ValueError("failed records must use error level")
-        if self.status == "cancelled" and self.level != "warning":
-            raise ValueError("cancelled records must use warning level")
-        if self.failure_category == "cancelled" and self.status != "cancelled":
-            raise ValueError("cancelled category must use cancelled status")
-        if self.failure_category == "measurement_unavailable":
-            if self.status != "degraded":
-                raise ValueError("measurement_unavailable must use degraded status")
-        if isinstance(self.recoverable, bool) is False:
-            raise ValueError("recoverable must be a boolean")
-        if (
-            isinstance(self.retry_count, bool)
-            or not isinstance(self.retry_count, int)
-            or self.retry_count < 0
-        ):
-            raise ValueError("retry_count must be a non-negative integer")
-        if isinstance(self.partial, bool) is False:
-            raise ValueError("partial must be a boolean")
-        if self.exception_type is not None:
-            if not _QUALIFIED_EXCEPTION_TYPE.fullmatch(self.exception_type):
-                raise ValueError(
-                    "exception_type must be a qualified exception class name"
-                )
-        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
-            raise ValueError("observed_at must be timezone-aware UTC")
-        if self.observed_at.utcoffset() != timedelta(0):
-            raise ValueError("observed_at must be in UTC")
+        _validate_identity_and_context(
+            event=self.event,
+            failure_category=self.failure_category,
+            failure_code=self.failure_code,
+            module=self.module,
+            pipeline_stage=self.pipeline_stage,
+            stage_id=self.stage_id,
+        )
+        _validate_state_relationships(
+            event=self.event,
+            failure_category=self.failure_category,
+            status=self.status,
+            level=self.level,
+        )
+        _validate_retry_fields(
+            recoverable=self.recoverable,
+            retry_count=self.retry_count,
+            partial=self.partial,
+        )
+        _validate_exception_type(self.exception_type)
+        _validate_observed_at(self.observed_at)
         validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:

@@ -94,6 +94,94 @@ def test_failure_status_and_event_must_agree() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"event": "failed"}, "valid failure event"),
+        ({"failure_category": "unknown"}, "failure_category must be supported"),
+        ({"status": "unknown"}, "status must be valid"),
+        ({"level": "info"}, "failure level must be warning or error"),
+    ],
+)
+def test_failure_discriminants_must_be_supported(
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    values: dict[str, object] = {
+        "failure_category": "internal",
+        "failure_code": "unexpected_error",
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match=message):
+        FailureEvent(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"module": ""},
+        {"pipeline_stage": ""},
+        {"stage_id": ""},
+    ],
+)
+def test_failure_context_fields_reject_empty_strings(
+    overrides: dict[str, object],
+) -> None:
+    values: dict[str, object] = {
+        "failure_category": "internal",
+        "failure_code": "unexpected_error",
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        FailureEvent(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field_name", ["recoverable", "partial"])
+def test_failure_boolean_flags_require_booleans(field_name: str) -> None:
+    values: dict[str, object] = {
+        "failure_category": "internal",
+        "failure_code": "unexpected_error",
+        field_name: 1,
+    }
+
+    with pytest.raises(ValueError, match=f"{field_name} must be a boolean"):
+        FailureEvent(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("status", "event", "level", "message"),
+    [
+        ("degraded", "unit_failed", "warning", "must use unit_degraded"),
+        ("failed", "unit_failed", "warning", "failed records must use error"),
+        ("cancelled", "unit_failed", "error", "cancelled records must use warning"),
+    ],
+)
+def test_failure_status_controls_event_and_level(
+    status: str,
+    event: str,
+    level: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        FailureEvent(
+            failure_category="internal",
+            failure_code="unexpected_error",
+            status=status,  # type: ignore[arg-type]
+            event=event,  # type: ignore[arg-type]
+            level=level,  # type: ignore[arg-type]
+        )
+
+
+def test_cancelled_category_requires_cancelled_status() -> None:
+    with pytest.raises(ValueError, match="cancelled category"):
+        FailureEvent(
+            failure_category="cancelled",
+            failure_code="request_cancelled",
+        )
+
+
 def test_measurement_unavailable_must_be_degraded() -> None:
     with pytest.raises(ValueError, match="measurement_unavailable"):
         FailureEvent(
