@@ -45,3 +45,21 @@ them into project-owned names.
 A spelling correction to a persisted or public project contract is an
 incompatible change and requires the owning schema or contract version to
 advance. Do not add aliases solely to preserve a superseded first implementation.
+
+## Package docstrings
+
+Every production `__init__.py` has a concise docstring that identifies the
+package's owned responsibility. This includes deliberately retained
+architectural packages whose implementation is scheduled for later work. A
+docstring must describe a real boundary; generic text such as "package" or
+"utilities" does not justify an otherwise unnecessary package marker.
+
+Do not make the `src/`, `scripts/`, or `benchmarks/` layout directories Python
+packages. Remove empty package markers for obsolete, duplicate, generated-output,
+or undocumented boundaries instead of adding filler docstrings. Architecture
+placeholders are retained only when the package boundary is documented in
+`AGENT.md` or the product specification.
+
+Test `__init__.py` files are import-isolation markers rather than public
+packages and are exempt from the package-docstring rule. They may still carry a
+docstring when it usefully describes shared fixtures or test scope.

@@ -40,6 +40,7 @@ select = [
     "D101",
     "D102",
     "D103",
+    "D104",
     "D202",
     "D400",
     "E4",
@@ -52,7 +53,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D100", "D101", "D102", "D103"]
+"tests/**" = ["D100", "D101", "D102", "D103", "D104"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
