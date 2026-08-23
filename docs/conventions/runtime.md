@@ -2,9 +2,9 @@
 
 The `inference_lab.backends.runtime` package defines the model-backend boundary
 used by retrieval, serving, ingest, evaluation, and later runtime scheduling.
-RUN-01 provides protocols, immutable request and result values, typed errors,
-stream validation, and a deterministic fake. It does not select or integrate a
-real model implementation.
+It provides protocols, immutable request and result values, typed errors,
+stream validation, and a deterministic fake. It does not select or integrate
+a real model implementation.
 
 ## Public API and protocol detection
 
@@ -126,10 +126,10 @@ retryability. They must not include input text, candidate text, prompts,
 generated chunks, raw exception messages, model output, credentials, or
 sensitive paths.
 
-## RUN-01 scope boundary
+## Scope boundary
 
-RUN-01 does not include a tokenizer or local model (`RUN-02`), memory accounting
-(`RUN-03`), real embedding/reranking/generation integrations (`RUN-04` through
-`RUN-06`), cache lifecycle operations (`RUN-07`), or scheduling, residency, and
-microbatching (`RUN-08` through `RUN-10`). Those issues build on these contracts
-without changing the fake into a production model backend.
+The runtime contract layer does not include a tokenizer or local model, memory
+accounting, real embedding, reranking, or generation integrations, cache
+lifecycle operations, scheduling, residency, or microbatching. Those
+capabilities build on these contracts without changing the fake into a
+production model backend.

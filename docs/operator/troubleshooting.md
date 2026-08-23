@@ -26,10 +26,10 @@ and whether the path is shared with another active installation.
 ## No query result is available
 
 The current command is a skeleton and does not yet expose the query workflow.
-After `SERV-01` lands, check that the corpus was ingested, the persistent index
-is available, and the documented query command is being run from the correct
-deployment directory. An empty result is not by itself evidence of a failed
-operation.
+After the first executable query workflow is available, check that the corpus
+was ingested, the persistent index is available, and the documented query
+command is being run from the correct deployment directory. An empty result is
+not by itself evidence of a failed operation.
 
 ## Logs need inspection
 

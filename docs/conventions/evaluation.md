@@ -1,11 +1,11 @@
 # Evaluation dataset conventions
 
-EVAL-01 defines the immutable, versioned input contract used by later
-evaluation work. It owns evaluation cases, expected-answer annotations,
-evidence references, abstention expectations, dataset manifests, explicit
-split membership, deterministic serialization, and validated local loading.
-It does not execute an evaluation or decide whether a system answer is
-correct.
+The evaluation dataset layer defines the immutable, versioned input contract
+used by evaluation workflows. It owns evaluation cases, expected-answer
+annotations, evidence references, abstention expectations, dataset manifests,
+explicit split membership, deterministic serialization, and validated local
+loading. It does not execute an evaluation or decide whether a system answer
+is correct.
 
 ## Local-only boundary
 
@@ -57,9 +57,9 @@ conversation context, expected-answer characteristics, evidence references,
 an explicit abstention expectation, and its persisted split.
 
 Expected-answer data is an annotation format. It may describe accepted claims,
-numeric values and tolerances, dates, or comparison ordering. EVAL-01 does not
-define a generated-answer parser, semantic judge, matching algorithm, quality
-metric, or pass/fail threshold.
+numeric values and tolerances, dates, or comparison ordering. The dataset
+contract does not define a generated-answer parser, semantic judge, matching
+algorithm, quality metric, or pass/fail threshold.
 
 Expectation keys are unique across claim, numeric, and date values. Numeric
 values are finite and do not accept booleans or numeric strings. Dates use
@@ -75,14 +75,14 @@ Every evidence reference has a case-local `evidence_id`. Claims, numeric and
 date expectations, and comparison expectations identify their supporting
 evidence through these IDs. References must resolve within the same case and
 must point to authoritative evidence. This makes claim-level citation and
-completeness evaluation possible without making EVAL-01 responsible for the
-later scoring algorithm.
+completeness evaluation possible without making the dataset contract
+responsible for scoring policy.
 
-Evidence references use PROV-01 identifiers and retain the corpus version,
-document identity, and exactly the source-span or structured-record identity
-required by their evidence kind. Document-level references are contextual and
-cannot be authoritative. Duplicate case-local IDs and duplicate provenance
-locations are rejected.
+Evidence references use the canonical provenance identifier types and retain
+the corpus version, document identity, and exactly the source-span or
+structured-record identity required by their evidence kind. Document-level
+references are contextual and cannot be authoritative. Duplicate case-local
+IDs and duplicate provenance locations are rejected.
 
 Answerable cases require at least one evidence-linked expected characteristic,
 and every authoritative reference must support one of those characteristics.
@@ -146,14 +146,13 @@ outputs, document text, credentials, and sensitive paths must not appear in
 operational logs. Dataset validation errors should identify the failed field or
 record without copying its content into a log record.
 
-## EVAL-01 scope boundary
+## Scope boundary
 
-EVAL-01 does not define retrieval metrics or reproducible run execution
-(`EVAL-03`), a held-out retrieval report or Recall@10 gate (`EVAL-04`), answer
-matching, citation and faithfulness metrics, or abstention accuracy (`EVAL-05`),
-OCR evaluation (`EVAL-06`), extraction and aggregation metrics (`EVAL-07`), or
-systems and session acceptance (`EVAL-09` and `EVAL-10`).
+The dataset contract does not define retrieval metrics, reproducible run
+execution, held-out retrieval reports, answer matching, citation and
+faithfulness metrics, abstention accuracy, OCR evaluation, extraction and
+aggregation metrics, or system and session acceptance.
 
-Those later issues consume the EVAL-01 dataset contract. They may introduce
-versioned result records and algorithm identities without making scoring
-policy part of the dataset format.
+Those evaluation capabilities consume the dataset contract. They may introduce
+versioned result records and algorithm identities without making scoring policy
+part of the dataset format.

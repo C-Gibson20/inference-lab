@@ -33,7 +33,7 @@ from inference_lab.provenance import (
 
 
 def _canonical_id(value: str, identifier_type: type) -> str:
-    """Validate an ID using a PROV-01 identifier type."""
+    """Validate an ID using a provenance identifier type."""
     return identifier_type.from_str(value).as_str()
 
 

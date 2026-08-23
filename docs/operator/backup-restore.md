@@ -1,8 +1,8 @@
 # Backup and restore runbook
 
-> **Status:** Workflow and initial backup contract defined by TOOL-04; backup
-> operations, exact commands, and storage-specific procedures are deferred to
-> `STOR-08` after the persistent component interfaces are implemented.
+> **Status:** The workflow and initial backup contract are defined. Backup
+> operations, exact commands, and storage-specific procedures remain deferred
+> until the persistent component interfaces are implemented.
 
 This runbook covers backup and restore of the persistent corpus state. The
 normative policy is defined in the [backup-restore conventions](../conventions/backup-restore.md).

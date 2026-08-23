@@ -90,8 +90,8 @@ experiment artifact.
 | --- | --- | --- |
 | Stage timing and record serialization | `profiling/` | `benchmarks/` |
 | Resource and failure record schemas | `profiling/` | `benchmarks/` |
-| GPU/CPU/power/thermal samplers | PROF-03 | PROF-01 record contracts |
-| Cold/warm, residency, swapping, batching, and concurrency matrices | `benchmarks/`, PROF-04 | reusable profiling records |
+| GPU/CPU/power/thermal samplers | `profiling/` sampler integrations | profiling record schemas |
+| Cold/warm, residency, swapping, batching, and concurrency matrices | `benchmarks/` | reusable profiling records |
 | Retry and recovery policy | Consuming pipeline | `FailureEvent` |
 | Persistent experiment results | `benchmarks/` | operational stdout logging |
 
@@ -100,9 +100,9 @@ record contracts merely to support one benchmark. Conversely, benchmark code
 must not duplicate the timing, resource, or failure schemas already provided by
 `profiling/`.
 
-## Completion boundary for PROF-01
+## Record-layer completion boundary
 
-PROF-01 is complete when a deterministic caller can emit timing, resource, and
-failure records through the structured logging stream, while a benchmark can
-independently collect and analyze those records without requiring profiling
-code to know the experiment design.
+The profiling record layer is complete when a deterministic caller can emit
+timing, resource, and failure records through the structured logging stream,
+while a benchmark can independently collect and analyze those records without
+requiring profiling code to know the experiment design.

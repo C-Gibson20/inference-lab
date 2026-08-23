@@ -1,8 +1,8 @@
 # Evaluation dataset operations
 
-EVAL-01 exposes a Python library for creating and validating local evaluation
-datasets. Evaluation execution, result records, and quality reports are added
-by their later build-order issues.
+The evaluation package exposes a Python library for creating and validating
+local evaluation datasets. Evaluation execution, result records, and quality
+reports are outside the current package boundary.
 
 ## Validate a dataset
 
