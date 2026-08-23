@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Literal
+from typing import Final, Literal, get_args
 
 from ._validation import (
     validate_finite_number,
@@ -40,7 +40,11 @@ class GenerationEventType(StrEnum):
     COMPLETED = "completed"
 
 
-_GENERATION_ROLES = frozenset({"system", "user", "assistant", "tool"})
+GenerationRole = Literal["system", "user", "assistant", "tool"]
+
+_GENERATION_ROLES: Final[frozenset[GenerationRole]] = frozenset(
+    get_args(GenerationRole)
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,7 +316,7 @@ class RerankResult:
 class GenerationMessage:
     """One message in a structured generation prompt."""
 
-    role: Literal["system", "user", "assistant", "tool"]
+    role: GenerationRole
     content: str
 
     def __post_init__(self) -> None:
