@@ -38,6 +38,14 @@ and token count.
 
 `NormalisedText.source_text` is the strictly decoded source coordinate space. `NormalisedText.text` is NFC-normalized text with CRLF and CR converted to LF. Whitespace is otherwise preserved. Empty input is a successful empty document; an unavailable structure is `None`, while a present empty collection is `()`.
 
+Paragraph boundaries are derived from `source_text` before normalization. LF,
+CRLF, and CR are line endings. One or more lines containing only spaces or
+tabs (including no characters) separate paragraphs; separator characters are
+excluded from both adjacent source spans. Leading blank lines and trailing
+blank-line separators do not produce empty blocks. A single line ending
+within a paragraph, including its final line ending, remains paragraph
+content. Indentation and other whitespace on content lines are preserved.
+
 ### Source spans and provenance
 
 Every emitted block has a `SourceSpan` linked to the input `DocumentVersionId`. Offsets are half-open Unicode code-point offsets into

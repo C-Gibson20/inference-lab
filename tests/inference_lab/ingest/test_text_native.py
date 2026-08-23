@@ -8,6 +8,7 @@ import pytest
 from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
+    ParserInput,
     TextNativeParser,
     serialise_parsed_document,
 )
@@ -19,6 +20,17 @@ from .fixtures import (
     fixture_settings,
     fixture_source,
 )
+
+
+def _source(source_text: str) -> ParserInput:
+    """Build an inline source with stable fixture provenance."""
+    return ParserInput(
+        document_id=FIXTURE_DOCUMENT_ID,
+        document_version_id=FIXTURE_DOCUMENT_VERSION_ID,
+        content=source_text.encode("utf-8"),
+        media_type="text/plain",
+        encoding="utf-8",
+    )
 
 
 def test_text_native_parser_emits_ordered_paragraphs() -> None:
@@ -73,14 +85,58 @@ def test_blank_edges_do_not_create_empty_paragraphs() -> None:
     assert [block.text for block in outcome.document.paragraphs or ()] == ["A"]
 
 
-def test_single_blank_edge_lines_do_not_enter_paragraph_text() -> None:
+def test_single_leading_blank_line_does_not_create_empty_paragraph() -> None:
     outcome = TextNativeParser().parse(
-        fixture_source("edge_blank.txt"),
+        _source("\nA\n"),
         settings=fixture_settings(),
     )
 
     assert outcome.document is not None
-    assert [block.text for block in outcome.document.paragraphs or ()] == ["A"]
+    assert [block.text for block in outcome.document.paragraphs or ()] == ["A\n"]
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n", "\r"])
+def test_paragraph_boundaries_preserve_content_indentation(
+    line_ending: str,
+) -> None:
+    source_text = f"A{line_ending} \t{line_ending}  B{line_ending}"
+    second_start = len(f"A{line_ending} \t{line_ending}")
+    outcome = TextNativeParser().parse(
+        _source(source_text),
+        settings=fixture_settings(),
+    )
+
+    assert outcome.document is not None
+    paragraphs = outcome.document.paragraphs
+    assert paragraphs is not None
+    assert [paragraph.text for paragraph in paragraphs] == ["A", "  B\n"]
+    assert [
+        (paragraph.source_span.start_offset, paragraph.source_span.end_offset)
+        for paragraph in paragraphs
+    ] == [(0, 1), (second_start, len(source_text))]
+
+
+@pytest.mark.parametrize(
+    ("source_text", "expected_text"),
+    [
+        ("A\n", "A\n"),
+        ("A\nB\n", "A\nB\n"),
+        ("A\n\n", "A"),
+    ],
+)
+def test_trailing_line_ending_handling_is_content_independent(
+    source_text: str,
+    expected_text: str,
+) -> None:
+    outcome = TextNativeParser().parse(
+        _source(source_text),
+        settings=fixture_settings(),
+    )
+
+    assert outcome.document is not None
+    assert [block.text for block in outcome.document.paragraphs or ()] == [
+        expected_text
+    ]
 
 
 def test_empty_document_is_a_successful_empty_parse() -> None:

@@ -23,8 +23,9 @@ from inference_lab.settings import Settings
 
 logger = structlog.get_logger(__name__)
 
-_BLANK_LINE_SEPARATOR = re.compile(r"(?:\r\n|\r|\n)[ \t]*(?:(?:\r\n|\r|\n)[ \t]*)+")
-_EDGE_BLANK_LINES = re.compile(r"(?:[ \t]*(?:\r\n|\r|\n))+")
+_LINE_ENDING = r"(?:\r\n|\r(?!\n)|\n)"
+_BLANK_LINE_SEPARATOR = re.compile(rf"{_LINE_ENDING}(?:[ \t]*{_LINE_ENDING})+")
+_LEADING_BLANK_LINES = re.compile(rf"(?:[ \t]*{_LINE_ENDING})+")
 
 
 def _paragraph_ranges(source_text: str) -> tuple[tuple[int, int], ...]:
@@ -32,25 +33,17 @@ def _paragraph_ranges(source_text: str) -> tuple[tuple[int, int], ...]:
 
     ranges: list[tuple[int, int]] = []
     cursor = 0
-    leading_blank_lines = _EDGE_BLANK_LINES.match(source_text)
+    leading_blank_lines = _LEADING_BLANK_LINES.match(source_text)
     if leading_blank_lines is not None:
         cursor = leading_blank_lines.end()
 
-    trailing_blank_lines = _EDGE_BLANK_LINES.search(source_text, cursor)
-    content_end = (
-        trailing_blank_lines.start()
-        if trailing_blank_lines is not None
-        and trailing_blank_lines.end() == len(source_text)
-        else len(source_text)
-    )
-
-    for separator in _BLANK_LINE_SEPARATOR.finditer(source_text, cursor, content_end):
+    for separator in _BLANK_LINE_SEPARATOR.finditer(source_text, cursor):
         if separator.start() > cursor:
             ranges.append((cursor, separator.start()))
         cursor = separator.end()
 
-    if cursor < content_end:
-        ranges.append((cursor, content_end))
+    if cursor < len(source_text):
+        ranges.append((cursor, len(source_text)))
 
     return tuple(ranges)
 
