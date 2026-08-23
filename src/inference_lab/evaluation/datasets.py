@@ -22,6 +22,7 @@ from inference_lab.evaluation.utils import (
     HELD_OUT_SPLIT,
     SchemaVersion,
     SplitName,
+    is_sha256_pattern,
 )
 from inference_lab.evaluation.schemas import EvaluationPolicy
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
@@ -77,6 +78,12 @@ class DatasetManifest(BaseModel):
             raise ValueError("case_count must match total split IDs")
         if self.updated_at < self.created_at:
             raise ValueError("updated_at cannot be earlier than created_at")
+
+        if self.checksums:
+            if set(self.checksums) != {self.case_file}:
+                raise ValueError("checksums must contain only the case file")
+            if not is_sha256_pattern(self.checksums[self.case_file]):
+                raise ValueError("Case-file checksum must use SHA256 format")
 
         object.__setattr__(self, "splits", MappingProxyType(dict(self.splits)))
         object.__setattr__(

@@ -29,9 +29,17 @@ Construct validated `EvaluationCase` and `DatasetManifest` values, then use
 `write_dataset(...)`. The writer serializes cases deterministically and places
 the calculated case-file checksum in the returned manifest.
 
-The destination and case file must be local. The case file is relative to the
-dataset directory and cannot escape it. Preserve the returned manifest as the
-authoritative version; do not edit split membership or checksums manually.
+The destination must be a new local directory that does not already exist. The
+writer stages and validates the complete dataset before publishing that
+directory atomically; it will not update or overwrite an existing dataset. Use
+a new destination for every immutable dataset version.
+
+The case file is relative to the dataset directory and cannot escape it.
+Preserve the returned manifest as the authoritative version; do not edit split
+membership or checksums manually. Interrupted or rejected writes leave no
+published partial dataset, although an operating-system failure may require an
+operator to inspect the destination parent for a writer-owned hidden `.staging`
+directory.
 
 The manifest exposes split membership, provenance metadata, and checksums as
 immutable mappings. Create a new validated dataset version instead of mutating

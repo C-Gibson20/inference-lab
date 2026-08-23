@@ -14,6 +14,10 @@ locations, including HTTP, cloud-storage, and other remote schemes, are
 rejected. Dataset loading and dataset serialization validate this boundary
 before reading or writing files.
 
+The boundary rejects URI schemes before and after `Path` coercion, UNC-style
+network locations, empty paths, and NUL characters. Rejected values are not
+included in errors intended for operational logs.
+
 Evaluation may read the selected local dataset and corpus references. It must
 not send questions, evidence, prompts, answers, model traffic, or evaluation
 artifacts to a remote service.
@@ -42,7 +46,9 @@ manifest cannot alter the validated dataset identity or held-out membership.
 
 The loader verifies the case-file checksum, unique case IDs, case count, split
 membership, per-case split values, and evidence corpus versions. A case file
-must remain inside its dataset directory.
+must remain inside its dataset directory. Checksum verification and JSONL
+parsing use the same in-memory byte snapshot so a concurrent file change cannot
+substitute unverified case content.
 
 ## Evaluation cases
 
@@ -110,7 +116,16 @@ fixture.
 
 Cases are serialized as deterministic UTF-8 JSONL. Manifests are serialized as
 deterministic, human-reviewable JSON. Dataset writing calculates the case-file
-checksum rather than trusting a caller-supplied digest.
+checksum rather than trusting a caller-supplied digest. A published manifest's
+checksum inventory contains exactly its case file.
+
+Dataset publication targets a new, absent directory. The writer creates a
+sibling staging directory on the same filesystem, writes and flushes every
+file, reloads the staged manifest through the normal validation boundary,
+flushes directory metadata, and atomically renames the complete directory into
+place. It never overwrites an existing dataset. A failure before publication
+removes only the writer-owned staging directory and leaves any existing or
+competing destination untouched.
 
 `evaluation_json_schema()` publishes one standards-compliant JSON Schema using
 Draft 2020-12. Its `oneOf` branches validate either a complete manifest or one

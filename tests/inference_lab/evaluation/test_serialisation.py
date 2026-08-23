@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.datasets import DatasetManifest
-from inference_lab.evaluation.loader import load_dataset
+from inference_lab.evaluation.loader import LoadedDataset, load_dataset
 from inference_lab.evaluation.serialisation import (
     atomic_write,
     evaluation_json_schema,
@@ -32,17 +33,19 @@ def _evaluation_case(case_id: str = "case-001") -> EvaluationCase:
 
 
 def _manifest(case_ids: tuple[str, ...] = ("case-001",)) -> DatasetManifest:
-    return DatasetManifest(
-        dataset_id="baseline-v1",
-        dataset_version="1",
-        description="Evaluation fixture",
-        corpus_id=CORPUS_ID,
-        corpus_version=CORPUS_VERSION,
-        case_file="cases.jsonl",
-        case_count=len(case_ids),
-        splits={"development": case_ids, "held_out": ()},
-        created_at="2026-08-22T00:00:00Z",
-        updated_at="2026-08-22T00:00:00Z",
+    return DatasetManifest.model_validate(
+        {
+            "dataset_id": "baseline-v1",
+            "dataset_version": "1",
+            "description": "Evaluation fixture",
+            "corpus_id": CORPUS_ID,
+            "corpus_version": CORPUS_VERSION,
+            "case_file": "cases.jsonl",
+            "case_count": len(case_ids),
+            "splits": {"development": case_ids, "held_out": ()},
+            "created_at": "2026-08-22T00:00:00Z",
+            "updated_at": "2026-08-22T00:00:00Z",
+        }
     )
 
 
@@ -81,15 +84,16 @@ def test_write_dataset_calculates_checksum_and_can_be_loaded(
     tmp_path: Path,
 ) -> None:
     cases = (_evaluation_case(),)
-    final_manifest = write_dataset(tmp_path, _manifest(), cases)
+    destination = tmp_path / "dataset"
+    final_manifest = write_dataset(destination, _manifest(), cases)
 
-    case_bytes = (tmp_path / "cases.jsonl").read_bytes()
+    case_bytes = (destination / "cases.jsonl").read_bytes()
     expected_checksum = "sha256:" + hashlib.sha256(case_bytes).hexdigest()
 
     assert final_manifest.checksums == {"cases.jsonl": expected_checksum}
     with pytest.raises(TypeError):
         final_manifest.checksums["cases.jsonl"] = "changed"  # type: ignore[index]
-    loaded = load_dataset(tmp_path / "manifest.json")
+    loaded = load_dataset(destination / "manifest.json")
     assert loaded.cases == cases
 
 
@@ -99,7 +103,124 @@ def test_write_dataset_rejects_case_path_escape(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="inside"):
-        write_dataset(tmp_path, manifest, (_evaluation_case(),))
+        write_dataset(tmp_path / "dataset", manifest, (_evaluation_case(),))
+
+    absolute = DatasetManifest.model_validate(
+        _manifest().model_dump(mode="python") | {"case_file": "/tmp/cases.jsonl"}
+    )
+    with pytest.raises(ValueError, match="relative"):
+        write_dataset(tmp_path / "dataset", absolute, (_evaluation_case(),))
+
+    manifest_collision = DatasetManifest.model_validate(
+        _manifest().model_dump(mode="python") | {"case_file": "manifest.json"}
+    )
+    with pytest.raises(ValueError, match="cannot be manifest.json"):
+        write_dataset(
+            tmp_path / "dataset",
+            manifest_collision,
+            (_evaluation_case(),),
+        )
+
+
+def test_write_dataset_rejects_remote_destination() -> None:
+    with pytest.raises(ValueError, match="local filesystem path"):
+        write_dataset(
+            "https://example.test/dataset",
+            _manifest(),
+            (_evaluation_case(),),
+        )
+
+
+def test_write_dataset_never_overwrites_an_existing_destination(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "dataset"
+    write_dataset(destination, _manifest(), (_evaluation_case(),))
+    original_manifest = (destination / "manifest.json").read_bytes()
+    original_cases = (destination / "cases.jsonl").read_bytes()
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        write_dataset(destination, _manifest(), (_evaluation_case(),))
+
+    assert (destination / "manifest.json").read_bytes() == original_manifest
+    assert (destination / "cases.jsonl").read_bytes() == original_cases
+    assert not tuple(tmp_path.glob(".dataset.*.staging"))
+
+
+def test_write_dataset_cleans_staging_after_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "dataset"
+    call_count = 0
+    real_atomic_write = atomic_write
+
+    def fail_second_write(path: Path, content: bytes) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise OSError("manifest write failed")
+        real_atomic_write(path, content)
+
+    monkeypatch.setattr(
+        "inference_lab.evaluation.serialisation.atomic_write",
+        fail_second_write,
+    )
+
+    with pytest.raises(OSError, match="manifest write failed"):
+        write_dataset(destination, _manifest(), (_evaluation_case(),))
+
+    assert not destination.exists()
+    assert not tuple(tmp_path.glob(".dataset.*.staging"))
+
+
+def test_write_dataset_cleans_staging_after_publication_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "dataset"
+    real_replace = os.replace
+
+    def fail_publication(source: Path, target: Path) -> None:
+        if Path(target) == destination:
+            raise OSError("publication failed")
+        real_replace(source, target)
+
+    monkeypatch.setattr(
+        "inference_lab.evaluation.serialisation.os.replace",
+        fail_publication,
+    )
+
+    with pytest.raises(OSError, match="publication failed"):
+        write_dataset(destination, _manifest(), (_evaluation_case(),))
+
+    assert not destination.exists()
+    assert not tuple(tmp_path.glob(".dataset.*.staging"))
+
+
+def test_write_dataset_preserves_destination_created_during_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "dataset"
+    real_load_dataset = load_dataset
+
+    def create_competing_destination(manifest_path: Path) -> LoadedDataset:
+        loaded = real_load_dataset(manifest_path)
+        destination.mkdir()
+        (destination / "owner.txt").write_text("external", encoding="utf-8")
+        return loaded
+
+    monkeypatch.setattr(
+        "inference_lab.evaluation.serialisation.load_dataset",
+        create_competing_destination,
+    )
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        write_dataset(destination, _manifest(), (_evaluation_case(),))
+
+    assert (destination / "owner.txt").read_text(encoding="utf-8") == "external"
+    assert not tuple(tmp_path.glob(".dataset.*.staging"))
 
 
 def test_atomic_write_cleans_up_failed_replacement(

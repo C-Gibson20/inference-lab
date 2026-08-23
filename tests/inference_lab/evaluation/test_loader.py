@@ -137,7 +137,11 @@ def test_case_file_must_be_a_safe_relative_path(
     tmp_path: Path, case_file: str, message: str
 ) -> None:
     manifest_path = _write_dataset(
-        tmp_path, manifest_overrides={"case_file": case_file}
+        tmp_path,
+        manifest_overrides={
+            "case_file": case_file,
+            "checksums": {},
+        },
     )
 
     with pytest.raises(ValueError, match=message):
@@ -153,21 +157,23 @@ def test_missing_case_file_is_rejected(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "checksums",
+    ("checksums", "message"),
     [
-        {},
-        {"cases.jsonl": "sha256:not-a-digest"},
-        {"cases.jsonl": "sha256:" + "0" * 64},
+        ({}, "checksum|Checksum"),
+        ({"cases.jsonl": "sha256:not-a-digest"}, "manifest"),
+        ({"cases.jsonl": "sha256:" + "0" * 64}, "checksum|Checksum"),
     ],
 )
 def test_checksum_failures_are_rejected(
-    tmp_path: Path, checksums: dict[str, str]
+    tmp_path: Path,
+    checksums: dict[str, str],
+    message: str,
 ) -> None:
     manifest_path = _write_dataset(
         tmp_path, manifest_overrides={"checksums": checksums}
     )
 
-    with pytest.raises(ValueError, match="checksum|Checksum"):
+    with pytest.raises(ValueError, match=message):
         load_dataset(manifest_path)
 
 
@@ -195,6 +201,63 @@ def test_blank_jsonl_record_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Blank JSONL record"):
         load_dataset(manifest_path)
+
+
+def test_case_file_must_be_valid_utf8(tmp_path: Path) -> None:
+    manifest_path = _write_dataset(tmp_path)
+    case_path = tmp_path / "cases.jsonl"
+    case_path.write_bytes(b"\xff")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["checksums"]["cases.jsonl"] = (
+        "sha256:" + hashlib.sha256(case_path.read_bytes()).hexdigest()
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="valid UTF-8"):
+        load_dataset(manifest_path)
+
+
+def test_checksum_and_parsing_use_one_case_file_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = _write_dataset(tmp_path)
+    case_path = tmp_path / "cases.jsonl"
+    original_read_bytes = Path.read_bytes
+    case_reads = 0
+
+    def mutate_after_read(path: Path) -> bytes:
+        nonlocal case_reads
+        content = original_read_bytes(path)
+        if path == case_path:
+            case_reads += 1
+            path.write_bytes(b"changed after verified read")
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", mutate_after_read)
+
+    loaded = load_dataset(manifest_path)
+
+    assert len(loaded.cases) == 1
+    assert case_reads == 1
+
+
+def test_case_file_read_failures_are_privacy_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path = _write_dataset(tmp_path)
+
+    def fail_read(_path: Path) -> bytes:
+        raise OSError("/sensitive/path/cases.jsonl")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+
+    with pytest.raises(ValueError, match="Unable to read case file") as caught:
+        load_dataset(manifest_path)
+
+    assert "/sensitive/path" not in str(caught.value)
+    assert caught.value.__cause__ is None
 
 
 def test_duplicate_case_ids_are_rejected(tmp_path: Path) -> None:

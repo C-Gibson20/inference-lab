@@ -1,21 +1,37 @@
 """Privacy and local-operation controls for evaluation workflows."""
 
-from pathlib import Path
+import os
 import re
+from pathlib import Path
 
 
-_URI_LOCATION = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+_URI_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def validate_local_path(path: str | Path, *, field_name: str = "path") -> Path:
-    """Return a resolved local path and reject URI-shaped locations.
+    """Return a resolved local path after rejecting remote-shaped inputs.
 
-    Evaluation data and artifacts are deliberately filesystem-only. This
-    validation is a boundary check; it does not create directories or touch
-    the filesystem.
+    The check deliberately recognizes both ``scheme://`` strings and the
+    ``scheme:/`` form produced when a URI has already been coerced to ``Path``.
+    It does not create directories or otherwise touch the filesystem.
     """
 
-    raw_path = str(path)
-    if _URI_LOCATION.match(raw_path):
+    if not isinstance(path, (str, Path)):
+        raise TypeError(f"{field_name} must be a string or Path")
+
+    raw_path = os.fspath(path)
+    if not raw_path or not raw_path.strip():
+        raise ValueError(f"{field_name} must not be empty")
+    if "\x00" in raw_path:
+        raise ValueError(f"{field_name} contains an invalid character")
+
+    is_windows_local = os.name == "nt" and _WINDOWS_DRIVE.match(raw_path)
+    if (
+        (not is_windows_local and _URI_SCHEME.match(raw_path))
+        or raw_path.startswith("//")
+        or raw_path.startswith("\\\\")
+    ):
         raise ValueError(f"{field_name} must be a local filesystem path")
+
     return Path(path).expanduser().resolve(strict=False)
