@@ -1,7 +1,5 @@
 """Immutable, typed identifiers used by the provenance domain."""
 
-from __future__ import annotations
-
 import uuid
 from typing import Self, final
 

@@ -1,7 +1,5 @@
 """Evaluation-case schema."""
 
-from __future__ import annotations
-
 from typing import Final, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator

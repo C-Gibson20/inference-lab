@@ -1,7 +1,5 @@
 """Deterministic dataset splitting and leakage prevention."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import math

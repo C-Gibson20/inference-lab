@@ -1,7 +1,5 @@
 """Deterministic stage timing records and context-manager instrumentation."""
 
-from __future__ import annotations
-
 import asyncio
 import math
 import time

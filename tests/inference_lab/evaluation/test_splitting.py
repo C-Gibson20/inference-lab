@@ -1,7 +1,5 @@
 """Tests for deterministic splitting and leakage prevention."""
 
-from __future__ import annotations
-
 import math
 
 import pytest

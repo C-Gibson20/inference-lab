@@ -1,7 +1,5 @@
 """Emit profiling records through the application structured logger."""
 
-from __future__ import annotations
-
 from typing import Any, Final, Protocol, get_args
 
 from .types import LogLevel
