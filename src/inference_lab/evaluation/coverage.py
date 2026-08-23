@@ -163,84 +163,27 @@ class CoverageReport:
         )
 
 
-def validate_benchmark_coverage(
+def _build_coverage_report(
     cases: tuple[EvaluationCase, ...],
-    *,
-    policy: CoveragePolicy = FINAL_BENCHMARK_POLICY,
 ) -> CoverageReport:
-    """Validate category, answerability, and held-out coverage."""
-    if not cases:
-        raise ValueError("At least one evaluation case is required")
-
+    """Count answerability, split, and question-type coverage."""
     question_type_counts: Counter[QuestionType] = Counter(
         case.question_type for case in cases
     )
-    answerable_cases = sum(not case.abstention.expected for case in cases)
-    abstention_cases = sum(case.abstention.expected for case in cases)
     held_out = tuple(case for case in cases if case.split == "held_out")
-    held_out_answerable_cases = sum(not case.abstention.expected for case in held_out)
-    held_out_abstention_cases = sum(case.abstention.expected for case in held_out)
     held_out_question_type_counts: Counter[QuestionType] = Counter(
         case.question_type for case in held_out
     )
 
-    failures: list[str] = []
-    if len(cases) < policy.minimum_cases:
-        failures.append(f"at least {policy.minimum_cases} cases required")
-    if len(cases) > policy.maximum_cases:
-        failures.append(f"at most {policy.maximum_cases} cases allowed")
-    if answerable_cases < policy.minimum_answerable_cases:
-        failures.append(
-            f"at least {policy.minimum_answerable_cases} answerable cases required"
-        )
-    if abstention_cases < policy.minimum_abstention_cases:
-        failures.append(
-            f"at least {policy.minimum_abstention_cases} abstention cases required"
-        )
-    if len(held_out) < policy.minimum_held_out_cases:
-        failures.append(
-            f"at least {policy.minimum_held_out_cases} held-out cases required"
-        )
-    if held_out_answerable_cases < policy.minimum_held_out_answerable_cases:
-        failures.append(
-            "at least "
-            f"{policy.minimum_held_out_answerable_cases} answerable held-out cases "
-            "required"
-        )
-    if held_out_abstention_cases < policy.minimum_held_out_abstention_cases:
-        failures.append(
-            "at least "
-            f"{policy.minimum_held_out_abstention_cases} abstention held-out cases "
-            "required"
-        )
-
-    for question_type, minimum in policy.minimum_question_types.items():
-        actual = question_type_counts[question_type]
-        if actual < minimum:
-            failures.append(
-                f"at least {minimum} {question_type} cases required; found {actual}"
-            )
-
-    for question_type, minimum in policy.minimum_held_out_question_types.items():
-        actual = held_out_question_type_counts[question_type]
-        if actual < minimum:
-            failures.append(
-                f"at least {minimum} held-out {question_type} cases required; "
-                f"found {actual}"
-            )
-
-    if failures:
-        raise ValueError(
-            "Benchmark coverage requirements failed: " + "; ".join(failures)
-        )
-
     return CoverageReport(
         total_cases=len(cases),
-        answerable_cases=answerable_cases,
-        abstention_cases=abstention_cases,
+        answerable_cases=sum(not case.abstention.expected for case in cases),
+        abstention_cases=sum(case.abstention.expected for case in cases),
         held_out_cases=len(held_out),
-        held_out_answerable_cases=held_out_answerable_cases,
-        held_out_abstention_cases=held_out_abstention_cases,
+        held_out_answerable_cases=sum(
+            not case.abstention.expected for case in held_out
+        ),
+        held_out_abstention_cases=sum(case.abstention.expected for case in held_out),
         question_type_counts={
             question_type: question_type_counts[question_type]
             for question_type in QUESTION_TYPES
@@ -250,6 +193,103 @@ def validate_benchmark_coverage(
             for question_type in QUESTION_TYPES
         },
     )
+
+
+def _count_threshold_failures(
+    report: CoverageReport,
+    policy: CoveragePolicy,
+) -> list[str]:
+    """Return failures for total, answerability, and held-out thresholds."""
+    failures: list[str] = []
+    if report.total_cases < policy.minimum_cases:
+        failures.append(f"at least {policy.minimum_cases} cases required")
+    if report.total_cases > policy.maximum_cases:
+        failures.append(f"at most {policy.maximum_cases} cases allowed")
+    if report.answerable_cases < policy.minimum_answerable_cases:
+        failures.append(
+            f"at least {policy.minimum_answerable_cases} answerable cases required"
+        )
+    if report.abstention_cases < policy.minimum_abstention_cases:
+        failures.append(
+            f"at least {policy.minimum_abstention_cases} abstention cases required"
+        )
+    if report.held_out_cases < policy.minimum_held_out_cases:
+        failures.append(
+            f"at least {policy.minimum_held_out_cases} held-out cases required"
+        )
+    if report.held_out_answerable_cases < policy.minimum_held_out_answerable_cases:
+        failures.append(
+            "at least "
+            f"{policy.minimum_held_out_answerable_cases} answerable held-out cases "
+            "required"
+        )
+    if report.held_out_abstention_cases < policy.minimum_held_out_abstention_cases:
+        failures.append(
+            "at least "
+            f"{policy.minimum_held_out_abstention_cases} abstention held-out cases "
+            "required"
+        )
+    return failures
+
+
+def _question_type_threshold_failures(
+    counts: Mapping[QuestionType, int],
+    minima: Mapping[QuestionType, int],
+    *,
+    held_out: bool,
+) -> list[str]:
+    """Return failures for regular or held-out question-type thresholds."""
+    failures: list[str] = []
+    prefix = "held-out " if held_out else ""
+    for question_type, minimum in minima.items():
+        actual = counts[question_type]
+        if actual < minimum:
+            failures.append(
+                f"at least {minimum} {prefix}{question_type} cases required; "
+                f"found {actual}"
+            )
+    return failures
+
+
+def _coverage_failures(
+    report: CoverageReport,
+    policy: CoveragePolicy,
+) -> list[str]:
+    """Return every unmet coverage requirement in deterministic order."""
+    failures = _count_threshold_failures(report, policy)
+    failures.extend(
+        _question_type_threshold_failures(
+            report.question_type_counts,
+            policy.minimum_question_types,
+            held_out=False,
+        )
+    )
+    failures.extend(
+        _question_type_threshold_failures(
+            report.held_out_question_type_counts,
+            policy.minimum_held_out_question_types,
+            held_out=True,
+        )
+    )
+    return failures
+
+
+def validate_benchmark_coverage(
+    cases: tuple[EvaluationCase, ...],
+    *,
+    policy: CoveragePolicy = FINAL_BENCHMARK_POLICY,
+) -> CoverageReport:
+    """Validate category, answerability, and held-out coverage."""
+    if not cases:
+        raise ValueError("At least one evaluation case is required")
+
+    report = _build_coverage_report(cases)
+    failures = _coverage_failures(report, policy)
+    if failures:
+        raise ValueError(
+            "Benchmark coverage requirements failed: " + "; ".join(failures)
+        )
+    return report
 
 
 def validate_final_benchmark(

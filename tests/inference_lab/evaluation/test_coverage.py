@@ -122,3 +122,29 @@ def test_coverage_requirements_report_failures() -> None:
 
     with pytest.raises(ValueError, match="At least one evaluation case"):
         validate_benchmark_coverage(())
+
+
+def test_coverage_failures_are_complete_and_deterministically_ordered() -> None:
+    policy = CoveragePolicy(
+        minimum_cases=2,
+        maximum_cases=3,
+        minimum_answerable_cases=2,
+        minimum_abstention_cases=1,
+        minimum_held_out_cases=1,
+        minimum_held_out_answerable_cases=1,
+        minimum_held_out_abstention_cases=1,
+        minimum_question_types={"comparison": 1},
+        minimum_held_out_question_types={"lookup": 1},
+    )
+
+    with pytest.raises(ValueError) as caught:
+        validate_benchmark_coverage((coverage_case(1, "lookup"),), policy=policy)
+
+    assert str(caught.value) == (
+        "Benchmark coverage requirements failed: at least 2 cases required; "
+        "at least 2 answerable cases required; at least 1 abstention cases required; "
+        "at least 1 held-out cases required; at least 1 answerable held-out cases "
+        "required; at least 1 abstention held-out cases required; at least 1 "
+        "comparison cases required; found 0; at least 1 held-out lookup cases "
+        "required; found 0"
+    )
