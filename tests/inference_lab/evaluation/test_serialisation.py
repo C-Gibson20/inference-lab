@@ -26,7 +26,6 @@ from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
 from .test_loader import CORPUS_ID, CORPUS_VERSION, _case
 
-
 REPOSITORY_ROOT = Path(__file__).parents[3]
 SCHEMA_GENERATOR = (
     REPOSITORY_ROOT

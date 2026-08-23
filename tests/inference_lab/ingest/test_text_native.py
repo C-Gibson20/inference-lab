@@ -6,6 +6,7 @@ from inference_lab.ingest import (
     ParserInput,
     TextNativeParser,
 )
+
 from .fixtures import (
     FIXTURE_DOCUMENT_ID,
     FIXTURE_DOCUMENT_VERSION_ID,

@@ -30,7 +30,6 @@ class BoundingBox:
 
     def _validate(self) -> None:
         """Validate the bounding box coordinates."""
-
         coordinates = (self.left, self.top, self.right, self.bottom)
         if not all(
             isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -59,7 +58,6 @@ class SourceSpan:
 
     def _validate(self) -> None:
         """Validate the source span coordinates."""
-
         if not isinstance(self.source_span_id, SourceSpanId):
             raise ValueError("invalid_source_span_id")
         if not isinstance(self.document_version_id, DocumentVersionId):

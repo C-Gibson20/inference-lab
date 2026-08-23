@@ -14,14 +14,13 @@ from pydantic import BaseModel
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import _validate_dataset_consistency, load_dataset
+from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.splitting import validate_no_leakage
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
-from inference_lab.evaluation.privacy import validate_local_path
 
 
 def _canonical_payload(model: BaseModel) -> dict[str, Any]:
     """Convert a model to a JSON-compatible canonical payload."""
-
     payload = model.model_dump(mode="json")
 
     if "tags" in payload:
@@ -32,7 +31,6 @@ def _canonical_payload(model: BaseModel) -> dict[str, Any]:
 
 def _json_bytes(payload: dict[str, Any], *, indent: int | None) -> bytes:
     """Encode a payload using deterministic UTF-8 JSON."""
-
     text = json.dumps(
         payload,
         ensure_ascii=False,
@@ -45,7 +43,6 @@ def _json_bytes(payload: dict[str, Any], *, indent: int | None) -> bytes:
 
 def serialise_cases(cases: Iterable[EvaluationCase]) -> bytes:
     """Serialize cases as deterministic JSONL in the supplied order."""
-
     ordered_cases = tuple(cases)
     if not ordered_cases:
         raise ValueError("Evaluation datasets must contain at least one case")
@@ -64,7 +61,6 @@ def serialise_cases(cases: Iterable[EvaluationCase]) -> bytes:
 
 def serialise_manifest(manifest: DatasetManifest) -> bytes:
     """Serialize a manifest as human-reviewable deterministic JSON."""
-
     return _json_bytes(_canonical_payload(manifest), indent=2)
 
 
@@ -92,7 +88,6 @@ def _fsync_tree_directories(root: Path) -> None:
 
 def atomic_write(path: str | Path, content: bytes) -> None:
     """Write bytes atomically within the destination directory."""
-
     path = validate_local_path(path, field_name="path")
     if not isinstance(content, bytes):
         raise TypeError("content must be bytes")
@@ -122,7 +117,6 @@ def atomic_write(path: str | Path, content: bytes) -> None:
 
 def _output_case_path(destination: Path, case_file: str) -> Path:
     """Resolve a case output path below the dataset destination."""
-
     if Path(case_file).is_absolute():
         raise ValueError("case_file must be relative to the dataset destination")
     validate_local_path(case_file, field_name="case_file")
@@ -149,7 +143,6 @@ def write_dataset(
     cases: tuple[EvaluationCase, ...],
 ) -> DatasetManifest:
     """Stage, validate, and atomically publish a new immutable dataset."""
-
     ordered_cases = tuple(cases)
     _validate_dataset_consistency(manifest, ordered_cases)
     validate_no_leakage(ordered_cases)
@@ -205,7 +198,6 @@ def write_dataset(
 
 def evaluation_json_schema() -> dict[str, object]:
     """Return one Draft 2020-12 schema for manifests and cases."""
-
     definitions: dict[str, object] = {}
     for model in (DatasetManifest, EvaluationCase):
         schema = model.model_json_schema(ref_template="#/$defs/{model}")
@@ -235,5 +227,4 @@ def evaluation_json_schema() -> dict[str, object]:
 
 def write_json_schema(path: str | Path) -> None:
     """Write the published evaluation contract schema atomically."""
-
     atomic_write(path, _json_bytes(evaluation_json_schema(), indent=2))

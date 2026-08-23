@@ -12,7 +12,6 @@ import pytest
 from inference_lab.evaluation.loader import load_dataset
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
-
 CORPUS_ID = "00000000-0000-4000-8000-000000000001"
 CORPUS_VERSION = "00000000-0000-4000-8000-000000000002"
 DOCUMENT_ID = "00000000-0000-4000-8000-000000000003"

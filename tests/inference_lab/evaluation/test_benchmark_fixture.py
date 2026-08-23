@@ -4,7 +4,6 @@ from pathlib import Path
 
 from inference_lab.evaluation import load_dataset
 
-
 FIXTURE_MANIFEST = (
     Path(__file__).parents[3] / "benchmarks" / "evaluation" / "manifest.json"
 )

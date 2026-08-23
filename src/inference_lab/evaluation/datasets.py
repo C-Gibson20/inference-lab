@@ -16,15 +16,15 @@ from pydantic import (
     model_validator,
 )
 
+from inference_lab.evaluation.schemas import EvaluationPolicy
 from inference_lab.evaluation.utils import (
+    HELD_OUT_SPLIT,
     CaseId,
     DatasetId,
-    HELD_OUT_SPLIT,
     SchemaVersion,
     SplitName,
     is_sha256_pattern,
 )
-from inference_lab.evaluation.schemas import EvaluationPolicy
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 from inference_lab.provenance import CorpusId, CorpusVersionId
 

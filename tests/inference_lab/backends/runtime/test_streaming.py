@@ -11,7 +11,6 @@ from inference_lab.backends.runtime import (
     validate_generation_stream,
 )
 
-
 BACKEND_SECRET = "PRIVATE BACKEND FAILURE DETAIL"
 
 

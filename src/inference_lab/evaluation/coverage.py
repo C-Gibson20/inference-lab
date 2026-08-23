@@ -13,7 +13,6 @@ from inference_lab.evaluation.cases import (
 )
 from inference_lab.evaluation.splitting import validate_no_leakage
 
-
 DEFAULT_MINIMUM_QUESTION_TYPES: Mapping[QuestionType, int] = MappingProxyType(
     {
         "lookup": 6,
@@ -32,7 +31,6 @@ DEFAULT_MINIMUM_HELD_OUT_QUESTION_TYPES: Mapping[QuestionType, int] = MappingPro
 
 def _validate_count(name: str, value: int, *, positive: bool = False) -> None:
     """Validate one strict integer coverage threshold."""
-
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer")
     minimum = 1 if positive else 0
@@ -46,7 +44,6 @@ def _validate_question_type_minima(
     minima: Mapping[QuestionType, int],
 ) -> Mapping[QuestionType, int]:
     """Validate and defensively freeze question-type minima."""
-
     if not isinstance(minima, Mapping):
         raise TypeError(f"{name} must be a mapping")
 
@@ -79,7 +76,6 @@ class CoveragePolicy:
 
     def __post_init__(self) -> None:
         """Reject invalid or internally impossible threshold combinations."""
-
         _validate_count("minimum_cases", self.minimum_cases, positive=True)
         _validate_count("maximum_cases", self.maximum_cases, positive=True)
         for name in (
@@ -155,7 +151,6 @@ class CoverageReport:
 
     def __post_init__(self) -> None:
         """Defensively freeze the report's nested count mappings."""
-
         object.__setattr__(
             self,
             "question_type_counts",

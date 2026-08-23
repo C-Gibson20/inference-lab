@@ -10,8 +10,8 @@ from inference_lab.evaluation.schemas import (
     AbstentionExpectation,
     AnswerClaim,
     DateExpectation,
-    EvidenceReference,
     EvaluationPolicy,
+    EvidenceReference,
     ExpectedAnswer,
     NumericExpectation,
 )

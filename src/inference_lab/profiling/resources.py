@@ -11,7 +11,6 @@ from .types import LogLevel
 from .utils import utc_now
 from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
 
-
 ResourceCategory = Literal[
     "model_weights",
     "kv_cache",

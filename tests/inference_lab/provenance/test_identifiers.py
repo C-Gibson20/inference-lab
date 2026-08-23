@@ -15,7 +15,6 @@ from inference_lab.provenance import (
 )
 from inference_lab.provenance import identifiers as identifiers_module
 
-
 KNOWN_UUID = uuid.UUID("12345678-1234-4abc-8def-123456789abc")
 
 IDENTIFIER_TYPES = (

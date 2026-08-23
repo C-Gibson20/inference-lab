@@ -6,17 +6,17 @@ from typing import Literal, Protocol
 
 import structlog
 
-from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.errors import ParserDecodeError
-from inference_lab.provenance import DocumentId, DocumentVersionId
-from inference_lab.settings import Settings
 from inference_lab.ingest.outcomes import ParseOutcome
+from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.utils import normalise_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,
     generate_source_span_id,
 )
+from inference_lab.provenance import DocumentId, DocumentVersionId
+from inference_lab.settings import Settings
 
 logger = structlog.get_logger(__name__)
 
@@ -42,7 +42,6 @@ class ParserInputError(ValueError):
 
 def _is_text_encoding(encoding: str) -> bool:
     """Return whether the named codec decodes bytes into text."""
-
     try:
         codec = codecs.lookup(encoding)
         decoded, _ = codec.decode(b"", "strict")
@@ -97,7 +96,6 @@ class ParserInput:
 
 def decode_source(source: ParserInput) -> str:
     """Decode source bytes strictly into Unicode code-point text."""
-
     try:
         return source.content.decode(source.encoding, errors="strict")
     except UnicodeDecodeError:
@@ -107,7 +105,6 @@ def decode_source(source: ParserInput) -> str:
 
 def prepare_text(source: ParserInput) -> NormalisedText:
     """Decode and normalise one parser input deterministically."""
-
     source_text = decode_source(source)
     return NormalisedText(source_text=source_text)
 

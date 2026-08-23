@@ -6,14 +6,13 @@ from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from inference_lab.evaluation.utils import CaseId, SchemaVersion, SplitName
 from inference_lab.evaluation.schemas import (
     AbstentionExpectation,
     EvidenceReference,
     ExpectedAnswer,
 )
+from inference_lab.evaluation.utils import CaseId, SchemaVersion, SplitName
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
-
 
 QuestionType = Literal[
     "lookup",

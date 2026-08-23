@@ -13,6 +13,7 @@ from inference_lab.ingest import (
     TextNativeParser,
     serialise_parsed_document,
 )
+
 from .fixtures import (
     FIXTURE_DOCUMENT_ID,
     FIXTURE_DOCUMENT_VERSION_ID,

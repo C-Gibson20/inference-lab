@@ -14,7 +14,6 @@ from .types import LogLevel
 from .utils import utc_now
 from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
 
-
 Clock = Callable[[], int]
 ObservationTimeFactory = Callable[[], datetime]
 RecordEmitter = Callable[["StageTiming"], None]

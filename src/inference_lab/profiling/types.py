@@ -2,7 +2,6 @@
 
 from typing import Literal
 
-
 LogLevel = Literal[
     "debug",
     "info",

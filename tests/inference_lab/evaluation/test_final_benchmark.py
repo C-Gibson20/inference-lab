@@ -16,7 +16,6 @@ from inference_lab.evaluation import (
 from .test_coverage import _benchmark_cases
 from .test_loader import CORPUS_ID, CORPUS_VERSION
 
-
 REPOSITORY_ROOT = Path(__file__).parents[3]
 FIXTURE_MANIFEST = REPOSITORY_ROOT / "benchmarks" / "evaluation" / "manifest.json"
 VALIDATOR = (

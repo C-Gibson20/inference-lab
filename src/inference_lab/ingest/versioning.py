@@ -28,7 +28,6 @@ class ParserVersion:
 
     def _validate(self) -> None:
         """Require unambiguous canonical parser-version components."""
-
         if not isinstance(
             self.implementation, str
         ) or not _IMPLEMENTATION_PATTERN.fullmatch(self.implementation):
@@ -69,7 +68,6 @@ def generate_source_span_id(
     end_offset: int,
 ) -> SourceSpanId:
     """Create a stable source-span ID for one document-version representation."""
-
     if not isinstance(document_version_id, DocumentVersionId):
         raise ValueError("invalid_document_version_id")
     if not isinstance(parser_version, ParserVersion):

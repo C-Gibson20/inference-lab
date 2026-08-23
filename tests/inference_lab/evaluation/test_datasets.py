@@ -5,7 +5,6 @@ from pydantic import ValidationError
 
 from inference_lab.evaluation.datasets import DatasetManifest
 
-
 BASE: dict[str, object] = {
     "dataset_id": "baseline-v1",
     "dataset_version": "1",

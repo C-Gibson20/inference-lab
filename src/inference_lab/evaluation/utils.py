@@ -11,7 +11,6 @@ from inference_lab.evaluation.versioning import (
     validate_schema_version,
 )
 
-
 CaseId = DatasetId = Annotated[
     str,
     Field(

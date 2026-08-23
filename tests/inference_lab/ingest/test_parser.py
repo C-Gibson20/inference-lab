@@ -6,12 +6,12 @@ import pytest
 
 from inference_lab.ingest import (
     NormalisedText,
+    ParsedDocument,
     Parser,
     ParserDecodeError,
     ParserInput,
     ParserInputError,
     normalise_text,
-    ParsedDocument,
     prepare_text,
 )
 from inference_lab.provenance import (

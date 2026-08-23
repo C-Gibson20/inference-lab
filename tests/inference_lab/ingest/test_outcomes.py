@@ -2,16 +2,16 @@
 
 import pytest
 
-from inference_lab.ingest.outcomes import ParseOutcome
-from inference_lab.ingest.errors import ParserFailure
 from inference_lab.ingest import (
     CURRENT_PARSER_VERSION,
-    generate_source_span_id,
-    SourceSpan,
-    StructuralBlock,
     NormalisedText,
     ParsedDocument,
+    SourceSpan,
+    StructuralBlock,
+    generate_source_span_id,
 )
+from inference_lab.ingest.errors import ParserFailure
+from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.provenance import (
     DocumentId,
     DocumentVersionId,

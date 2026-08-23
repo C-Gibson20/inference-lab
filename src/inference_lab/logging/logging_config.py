@@ -55,7 +55,6 @@ def _reject_sensitive_fields(
     event_dict: dict[str, Any],
 ) -> dict[str, Any]:
     """Fail closed when structured logs contain evaluation content fields."""
-
     sensitive_fields = {key for key in event_dict if _is_sensitive_name(key)}
     event = event_dict.get("event")
     if isinstance(event, str) and _is_sensitive_name(event):

@@ -2,7 +2,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).parents[2]
 PRE_COMMIT = REPO_ROOT / ".githooks" / "pre-commit"
 COMMIT_MSG = REPO_ROOT / ".githooks" / "commit-msg"

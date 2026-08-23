@@ -79,7 +79,6 @@ class ParserFailure:
 
     def _validate(self) -> None:
         """Validate failure identity and location metadata."""
-
         if not isinstance(self.category, str) or self.category not in _FAILURE_POLICIES:
             raise ValueError("invalid_parser_failure_category")
         if not isinstance(self.severity, str) or self.severity not in {

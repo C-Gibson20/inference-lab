@@ -24,7 +24,6 @@ FIXTURE_DOCUMENT_VERSION_ID = DocumentVersionId.from_str(
 
 def fixture_bytes(name: str) -> bytes:
     """Read one named fixture, decoding ``.bin`` fixtures from ASCII hex."""
-
     candidate = (FIXTURE_ROOT / name).resolve()
     root = FIXTURE_ROOT.resolve()
 

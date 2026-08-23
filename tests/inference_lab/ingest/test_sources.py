@@ -3,20 +3,20 @@
 import pytest
 
 from inference_lab.ingest import (
-    BoundingBox,
     CURRENT_PARSER_VERSION,
-    generate_source_span_id,
-    normalise_text,
+    BoundingBox,
+    NormalisedText,
+    ParsedDocument,
     SourceSpan,
     StructuralBlock,
     StructuralBlockKind,
-    ParsedDocument,
-    NormalisedText,
+    generate_source_span_id,
+    normalise_text,
 )
 from inference_lab.provenance import (
+    DocumentId,
     DocumentVersionId,
     SourceSpanId,
-    DocumentId,
 )
 
 

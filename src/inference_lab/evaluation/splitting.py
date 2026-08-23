@@ -104,14 +104,12 @@ def token_set(value: str) -> frozenset[str]:
 
 def jaccard_similarity(left: frozenset[str], right: frozenset[str]) -> float:
     """Return the Jaccard similarity between two token sets."""
-
     union = left | right
     return 1.0 if not union else len(left & right) / len(union)
 
 
 def answer_fingerprint(case: EvaluationCase) -> str:
     """Build a stable fingerprint from typed expected-answer data."""
-
     payload = case.expected_answer.model_dump(mode="json")
     payload.pop("comparison_evidence_ids", None)
     for field_name in ("claims", "numeric_values", "date_values"):
@@ -146,7 +144,6 @@ class _UnionFind:
 
     def find(self, index: int) -> int:
         """Return the root for an index with path compression."""
-
         parent = self._parents[index]
         if parent != index:
             self._parents[index] = self.find(parent)
@@ -154,7 +151,6 @@ class _UnionFind:
 
     def union(self, left: int, right: int) -> None:
         """Join two indexes deterministically."""
-
         left_root = self.find(left)
         right_root = self.find(right)
         if left_root == right_root:
@@ -172,7 +168,6 @@ def build_leakage_groups(
     near_duplicate_threshold: float = 0.9,
 ) -> tuple[LeakageGroup, ...]:
     """Build transitive leakage groups from cases and stable annotations."""
-
     ordered_cases = tuple(cases)
     if not ordered_cases:
         raise ValueError("At least one case is required")
@@ -234,7 +229,6 @@ def validate_no_leakage(
     near_duplicate_threshold: float = 0.9,
 ) -> None:
     """Reject leakage groups that cross persisted split assignments."""
-
     groups = build_leakage_groups(
         cases,
         near_duplicate_threshold=near_duplicate_threshold,
@@ -252,7 +246,6 @@ def generate_splits(
     policy: SplitPolicy,
 ) -> tuple[EvaluationCase, ...]:
     """Assign leakage groups to deterministic train, development, and held-out splits."""
-
     ordered_cases = tuple(cases)
     groups = build_leakage_groups(
         ordered_cases,

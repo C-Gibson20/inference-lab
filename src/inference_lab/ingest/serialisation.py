@@ -9,7 +9,6 @@ from inference_lab.ingest.sources import SourceSpan, StructuralBlock
 
 def _source_span_payload(span: SourceSpan) -> dict[str, Any]:
     """Convert a SourceSpan to a canonical JSON-compatible mapping."""
-
     bounding_box = span.bounding_box
     return {
         "source_span_id": str(span.source_span_id),
@@ -78,7 +77,6 @@ def parsed_document_payload(document: ParsedDocument) -> dict[str, Any]:
 
 def serialise_parsed_document(document: ParsedDocument) -> bytes:
     """Serialize parser output as canonical UTF-8 JSON with a trailing newline."""
-
     payload = parsed_document_payload(document)
     text = json.dumps(
         payload,

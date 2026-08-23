@@ -34,10 +34,23 @@ target-version = "py313"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "D100", "D101", "D102", "D103"]
+select = [
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D202",
+    "D400",
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "I",
+    "RUF022",
+]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D"]
+"tests/**" = ["D100", "D101", "D102", "D103"]
 
 [tool.pyright]
 include = ["src", "tests", "scripts"]

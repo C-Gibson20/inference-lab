@@ -2,7 +2,6 @@
 
 from typing import Final
 
-
 CURRENT_RECORD_SCHEMA_VERSION: Final[int] = 1
 SUPPORTED_RECORD_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset(
     {CURRENT_RECORD_SCHEMA_VERSION}

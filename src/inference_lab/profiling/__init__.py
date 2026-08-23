@@ -11,12 +11,12 @@ from inference_lab.profiling.versioning import (
 )
 
 __all__ = [
-    "LogLevel",
     "CURRENT_RECORD_SCHEMA_VERSION",
+    "SUPPORTED_RECORD_SCHEMA_VERSIONS",
     "FailureEvent",
+    "LogLevel",
     "ResourceMeasurement",
     "StageTimer",
     "StageTiming",
-    "SUPPORTED_RECORD_SCHEMA_VERSIONS",
     "emit_record",
 ]

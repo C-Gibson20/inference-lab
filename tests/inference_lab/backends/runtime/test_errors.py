@@ -4,8 +4,8 @@ from inference_lab.backends.runtime import (
     BackendClosedError,
     BackendError,
     BackendNotReadyError,
-    BackendResourceError,
     BackendRequestError,
+    BackendResourceError,
 )
 
 

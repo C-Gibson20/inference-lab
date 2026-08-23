@@ -1,7 +1,7 @@
 """Tests for evaluation local-only filesystem boundaries."""
 
-from pathlib import Path
 import traceback
+from pathlib import Path
 
 import pytest
 

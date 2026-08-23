@@ -1,7 +1,7 @@
 """Utility functions for profiling."""
 
-from datetime import datetime, UTC
 import re
+from datetime import UTC, datetime
 
 
 def utc_now() -> datetime:

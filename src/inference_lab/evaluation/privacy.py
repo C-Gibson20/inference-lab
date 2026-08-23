@@ -4,7 +4,6 @@ import os
 import re
 from pathlib import Path
 
-
 _URI_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 
@@ -16,7 +15,6 @@ def validate_local_path(path: str | Path, *, field_name: str = "path") -> Path:
     ``scheme:/`` form produced when a URI has already been coerced to ``Path``.
     It does not create directories or otherwise touch the filesystem.
     """
-
     if not isinstance(path, (str, Path)):
         raise TypeError(f"{field_name} must be a string or Path")
 

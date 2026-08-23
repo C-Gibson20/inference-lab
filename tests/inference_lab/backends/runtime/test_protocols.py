@@ -12,9 +12,9 @@ from inference_lab.backends.runtime import (
     GenerationRequest,
     GeneratorBackend,
     LifecycleBackend,
+    RerankerBackend,
     RerankRequest,
     RerankResult,
-    RerankerBackend,
 )
 
 

@@ -1,15 +1,15 @@
 """Load and validate evaluation datasets."""
 
-from dataclasses import dataclass
-from pathlib import Path
 import hashlib
-from io import StringIO
 import json
+from dataclasses import dataclass
+from io import StringIO
+from pathlib import Path
 
 from pydantic import ValidationError
 
-from .datasets import DatasetManifest
 from .cases import EvaluationCase
+from .datasets import DatasetManifest
 from .privacy import validate_local_path
 from .versioning import (
     validate_case_payload_version,
@@ -19,15 +19,14 @@ from .versioning import (
 
 @dataclass(frozen=True, slots=True)
 class LoadedDataset:
-    """A validated evaluation manifest and ordered cases"""
+    """A validated evaluation manifest and ordered cases."""
 
     manifest: DatasetManifest
     cases: tuple[EvaluationCase, ...]
 
 
 def _resolve_case_file(manifest_path: Path, case_file: str) -> Path:
-    """Resolve a manifest-owned case file without allowing traversal"""
-
+    """Resolve a manifest-owned case file without allowing traversal."""
     if Path(case_file).is_absolute():
         raise ValueError("Case file must be relative to the manifest")
     validate_local_path(case_file, field_name="case_file")
@@ -48,7 +47,6 @@ def _resolve_case_file(manifest_path: Path, case_file: str) -> Path:
 
 def _verify_checksum(case_bytes: bytes, expected: str | None) -> None:
     """Verify a case-file checksum when one is declared."""
-
     if expected is None:
         raise ValueError("Missing checksum for case file")
 
@@ -61,7 +59,6 @@ def _verify_checksum(case_bytes: bytes, expected: str | None) -> None:
 
 def _load_cases(case_bytes: bytes) -> tuple[EvaluationCase, ...]:
     """Load ordered evaluation cases from a JSONL file."""
-
     cases: list[EvaluationCase] = []
     try:
         case_text = case_bytes.decode("utf-8")
@@ -91,7 +88,6 @@ def _validate_dataset_consistency(
     manifest: DatasetManifest, cases: tuple[EvaluationCase, ...]
 ) -> None:
     """Validate relationships between the manifest and loaded cases."""
-
     if len(cases) != manifest.case_count:
         raise ValueError("Manifest case_count does not match the number of JSONL cases")
 
@@ -132,7 +128,6 @@ def _validate_dataset_consistency(
 
 def load_dataset(manifest_path: str | Path) -> LoadedDataset:
     """Load and validate one evaluation dataset."""
-
     manifest_path = validate_local_path(manifest_path, field_name="manifest_path")
 
     if not manifest_path.is_file():

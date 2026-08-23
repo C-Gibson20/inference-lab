@@ -2,11 +2,11 @@
 
 from inference_lab.ingest import (
     CURRENT_PARSER_VERSION,
-    generate_source_span_id,
     NormalisedText,
     ParsedDocument,
     SourceSpan,
     StructuralBlock,
+    generate_source_span_id,
     parsed_document_payload,
     serialise_parsed_document,
 )

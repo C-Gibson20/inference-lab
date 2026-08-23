@@ -7,10 +7,10 @@ import structlog
 from inference_lab.ingest.errors import ParserDecodeError, ParserFailure
 from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.ingest.parser import (
-    ParsedDocument,
-    ParserInputError,
-    ParserInput,
     NormalisedText,
+    ParsedDocument,
+    ParserInput,
+    ParserInputError,
     prepare_text,
 )
 from inference_lab.ingest.sources import SourceSpan, StructuralBlock
@@ -30,7 +30,6 @@ _LEADING_BLANK_LINES = re.compile(rf"(?:[ \t]*{_LINE_ENDING})+")
 
 def _paragraph_ranges(source_text: str) -> tuple[tuple[int, int], ...]:
     """Return ordered non-empty paragraph ranges in decoded source text."""
-
     ranges: list[tuple[int, int]] = []
     cursor = 0
     leading_blank_lines = _LEADING_BLANK_LINES.match(source_text)
@@ -53,7 +52,6 @@ def _paragraph_blocks(
     source_text: str,
 ) -> tuple[StructuralBlock, ...]:
     """Create ordered paragraph blocks with deterministic source spans."""
-
     blocks: list[StructuralBlock] = []
 
     for ordinal, (start_offset, end_offset) in enumerate(
@@ -139,7 +137,6 @@ class TextNativeParser:
         settings: Settings,
     ) -> ParseOutcome:
         """Parse one text-native document into a validated outcome."""
-
         document_id = (
             str(source.document_id) if isinstance(source, ParserInput) else None
         )

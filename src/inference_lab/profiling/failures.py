@@ -11,7 +11,6 @@ from .types import LogLevel
 from .utils import is_snake_case, utc_now
 from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
 
-
 FailureEventName = Literal["unit_failed", "unit_degraded"]
 FailureCategory = Literal[
     "input",
