@@ -27,6 +27,10 @@ Every concrete profiling record contains `record_schema_version`. Producers use
 `SUPPORTED_RECORD_SCHEMA_VERSIONS`. A newer positive integer is not assumed to
 be compatible merely because it is syntactically valid.
 
+Every concrete record supplies its logging level. The structured-log emission
+adapter rejects records with a missing or unsupported level; it does not infer
+severity from other fields.
+
 Profiling records use `observed_at` for the UTC time at which the stage event,
 resource value, or failure was observed. This field survives serialization and
 structured-log emission unchanged. The logging pipeline separately generates

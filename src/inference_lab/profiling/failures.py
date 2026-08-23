@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from .records import LogLevel
+from .types import LogLevel
 from .utils import is_snake_case, utc_now
 from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
 

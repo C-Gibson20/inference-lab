@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from .records import LogLevel
+from .types import LogLevel
 from .utils import utc_now
 from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
 
@@ -91,8 +91,8 @@ class ResourceMeasurement:
 
     A record may contain a value for an unreliable measurement, allowing
     consumers to retain the observation without treating it as authoritative.
-    An unavailable measurement has no value and can still retain its expected
-    unit when that is known.
+    An unavailable measurement has no value. Every category has a canonical
+    unit, including when a measurement is unavailable.
     """
 
     category: ResourceCategory

@@ -8,7 +8,6 @@ import pytest
 import structlog
 
 from inference_lab.logging.logging_config import configure_logging
-from inference_lab.profiling.emission import ProfilingRecordLike
 from inference_lab.profiling import (
     FailureEvent,
     ResourceMeasurement,
@@ -49,7 +48,9 @@ def fixed_timestamp() -> datetime:
         ),
     ],
 )
-def test_emits_each_record_as_structured_json(record: ProfilingRecordLike) -> None:
+def test_emits_each_record_as_structured_json(
+    record: StageTiming | ResourceMeasurement | FailureEvent,
+) -> None:
     stream = StringIO()
     configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
 
@@ -124,7 +125,7 @@ def test_failure_output_contains_no_raw_payload_fields() -> None:
     assert "secret" not in payload
 
 
-def test_infers_warning_for_unavailable_measurement() -> None:
+def test_emits_warning_for_unavailable_measurement() -> None:
     stream = StringIO()
     configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
     emit_record(
@@ -141,7 +142,7 @@ def test_infers_warning_for_unavailable_measurement() -> None:
     assert payload["level"] == "warning"
 
 
-def test_infers_error_for_failed_timing_record() -> None:
+def test_emits_error_for_failed_timing_record() -> None:
     stream = StringIO()
     configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
     emit_record(
@@ -168,3 +169,39 @@ def test_rejects_record_without_event() -> None:
 
     with pytest.raises(ValueError, match="non-empty event"):
         emit_record(object(), InvalidRecord())
+
+
+def test_rejects_record_without_explicit_log_level() -> None:
+    class InvalidRecord:
+        def to_dict(self) -> dict[str, object]:
+            return {"event": "custom_event", "module": "profiling"}
+
+    with pytest.raises(ValueError, match="explicit log level"):
+        emit_record(object(), InvalidRecord())
+
+
+@pytest.mark.parametrize("level", ["notice", 10, True])
+def test_rejects_record_with_invalid_log_level(level: object) -> None:
+    class InvalidRecord:
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "event": "custom_event",
+                "level": level,
+                "module": "profiling",
+            }
+
+    with pytest.raises(ValueError, match="valid log level"):
+        emit_record(object(), InvalidRecord())
+
+
+def test_rejects_logger_without_required_severity_method() -> None:
+    class ValidRecord:
+        def to_dict(self) -> dict[str, object]:
+            return {
+                "event": "custom_event",
+                "level": "info",
+                "module": "profiling",
+            }
+
+    with pytest.raises(TypeError, match="required info method"):
+        emit_record(object(), ValidRecord())

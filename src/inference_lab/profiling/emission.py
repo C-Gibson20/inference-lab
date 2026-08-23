@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, Protocol
 
 
@@ -23,16 +22,6 @@ _REQUIRED_FIELDS = (
 )
 
 
-def _default_level(fields: Mapping[str, object]) -> str:
-    """Infer severity for record types without an explicit log level."""
-    status = fields.get("status")
-    if status in {"failed"}:
-        return "error"
-    if status in {"cancelled", "degraded", "unavailable", "unreliable"}:
-        return "warning"
-    return "info"
-
-
 def emit_record(logger: Any, record: ProfilingRecordLike) -> None:
     """Emit one profiling record through a structlog-compatible logger.
 
@@ -47,8 +36,7 @@ def emit_record(logger: Any, record: ProfilingRecordLike) -> None:
 
     level = fields.get("level")
     if level is None:
-        level = _default_level(fields)
-        fields["level"] = level
+        raise ValueError("profiling records must provide an explicit log level")
     if not isinstance(level, str) or level not in _LOG_LEVELS:
         raise ValueError("profiling records must provide a valid log level")
 
@@ -57,5 +45,5 @@ def emit_record(logger: Any, record: ProfilingRecordLike) -> None:
 
     log_method = getattr(logger, level, None)
     if not callable(log_method):
-        raise TypeError(f"logger does not provide a {level} method")
+        raise TypeError(f"logger does not provide the required {level} method")
     log_method(event, **fields)
