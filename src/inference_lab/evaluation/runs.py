@@ -12,7 +12,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.loader import LoadedDataset
 from inference_lab.evaluation.utils import DatasetId, SplitName, is_sha256_pattern
-from inference_lab.provenance.identifiers import CorpusId, CorpusVersionId
+from inference_lab.provenance import CorpusId, CorpusVersionId
 
 
 EvaluationPurpose = Literal["development", "final", "reporting"]

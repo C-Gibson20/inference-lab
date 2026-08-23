@@ -13,7 +13,7 @@ from inference_lab.evaluation.utils import (
 )
 from inference_lab.evaluation.schemas import EvaluationPolicy
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
-from inference_lab.provenance.identifiers import CorpusId, CorpusVersionId
+from inference_lab.provenance import CorpusId, CorpusVersionId
 
 
 class DatasetManifest(BaseModel):

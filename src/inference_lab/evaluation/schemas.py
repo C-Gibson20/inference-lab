@@ -8,7 +8,7 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from inference_lab.provenance.identifiers import (
+from inference_lab.provenance import (
     CorpusVersionId,
     DocumentId,
     DocumentVersionId,

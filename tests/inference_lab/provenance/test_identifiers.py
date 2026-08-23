@@ -5,8 +5,7 @@ import uuid
 
 import pytest
 
-from inference_lab.provenance import identifiers as identifiers_module
-from inference_lab.provenance.identifiers import (
+from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
     DocumentId,
@@ -14,6 +13,7 @@ from inference_lab.provenance.identifiers import (
     RecordId,
     SourceSpanId,
 )
+from inference_lab.provenance import identifiers as identifiers_module
 
 
 KNOWN_UUID = uuid.UUID("12345678-1234-4abc-8def-123456789abc")
