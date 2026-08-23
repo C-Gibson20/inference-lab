@@ -47,11 +47,11 @@ def _require_non_blank(value: str | None, *, field_name: str) -> str | None:
 
 
 def _validate_unique_strings(values: tuple[str, ...], *, field_name: str) -> None:
-    """Reject blank or normalized-duplicate strings."""
-    normalized = tuple(normalise_for_duplicate_detection(value) for value in values)
-    if any(not value for value in normalized):
+    """Reject blank or normalised-duplicate strings."""
+    normalised = tuple(normalise_for_duplicate_detection(value) for value in values)
+    if any(not value for value in normalised):
         raise ValueError(f"{field_name} must not contain blank values")
-    if len(normalized) != len(set(normalized)):
+    if len(normalised) != len(set(normalised)):
         raise ValueError(f"{field_name} must contain unique values")
 
 
@@ -201,7 +201,7 @@ class AnswerClaim(BaseModel):
     evidence_ids: tuple[EvidenceId, ...] = Field(min_length=1)
     required: StrictBool = True
     acceptable_values: tuple[str, ...] = ()
-    normalized_values: tuple[str, ...] = ()
+    normalised_values: tuple[str, ...] = ()
     description: str | None = None
 
     @model_validator(mode="after")
@@ -213,13 +213,13 @@ class AnswerClaim(BaseModel):
             field_name="acceptable_values",
         )
         _validate_unique_strings(
-            self.normalized_values,
-            field_name="normalized_values",
+            self.normalised_values,
+            field_name="normalised_values",
         )
         _require_non_blank(self.description, field_name="description")
-        if not (self.acceptable_values or self.normalized_values or self.description):
+        if not (self.acceptable_values or self.normalised_values or self.description):
             raise ValueError(
-                "Claims require accepted values, normalized values, or a description"
+                "Claims require accepted values, normalised values, or a description"
             )
         return self
 
@@ -405,7 +405,7 @@ class EvaluationPolicy(BaseModel):
 
 
 class AbstentionExpectation(BaseModel):
-    """Expected abstention behavior."""
+    """Expected abstention behaviour."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

@@ -150,7 +150,7 @@ def test_invalid_document_version_id_is_rejected() -> None:
     assert error.value.category == "invalid_document_version_id"
 
 
-def test_prepare_text_normalizes_newlines_and_unicode() -> None:
+def test_prepare_text_normalises_newlines_and_unicode() -> None:
     source = ParserInput(
         document_id=DocumentId.generate(),
         document_version_id=DocumentVersionId.generate(),
@@ -165,7 +165,7 @@ def test_prepare_text_normalizes_newlines_and_unicode() -> None:
     assert prepared.text == "A\nB\né"
 
 
-def test_normalization_preserves_whitespace() -> None:
+def test_normalisation_preserves_whitespace() -> None:
     assert normalise_source_text("  A \n\n B\t") == "  A \n\n B\t"
 
 

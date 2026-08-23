@@ -16,7 +16,7 @@ from inference_lab.backends.runtime.types import (
 
 @runtime_checkable
 class LifecycleBackend(Protocol):
-    """Backend with explicit loading, readiness, and shutdown behavior."""
+    """Backend with explicit loading, readiness, and shutdown behaviour."""
 
     @property
     def metadata(self) -> BackendMetadata:

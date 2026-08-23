@@ -11,7 +11,7 @@ _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 def validate_local_path(path: str | Path, *, field_name: str = "path") -> Path:
     """Return a resolved local path after rejecting remote-shaped inputs.
 
-    The check deliberately recognizes both ``scheme://`` strings and the
+    The check deliberately recognises both ``scheme://`` strings and the
     ``scheme:/`` form produced when a URI has already been coerced to ``Path``.
     It does not create directories or otherwise touch the filesystem.
     """

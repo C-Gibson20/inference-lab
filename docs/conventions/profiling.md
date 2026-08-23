@@ -32,7 +32,7 @@ adapter rejects records with a missing or unsupported level; it does not infer
 severity from other fields.
 
 Profiling records use `observed_at` for the UTC time at which the stage event,
-resource value, or failure was observed. This field survives serialization and
+resource value, or failure was observed. This field survives serialisation and
 structured-log emission unchanged. The logging pipeline separately generates
 the required `timestamp` field, which records when the log event was emitted.
 Benchmark collectors must use `observed_at` for measurement ordering and may use
@@ -41,12 +41,12 @@ Benchmark collectors must use `observed_at` for measurement ordering and may use
 ## Canonical resource measurements
 
 Resource units are determined by category and are not caller-configurable.
-Samplers must normalize values before constructing `ResourceMeasurement`:
+Samplers must normalise values before constructing `ResourceMeasurement`:
 
 | Categories | Canonical unit | Valid range |
 | --- | --- | --- |
 | Model weights, KV cache, activations, embedding/reranker memory, index memory, framework overhead, pinned host memory, storage cache | `bytes` | Greater than or equal to zero |
-| GPU and CPU utilization | `percent` | `0` through `100`, inclusive |
+| GPU and CPU utilisation | `percent` | `0` through `100`, inclusive |
 | Storage throughput | `bytes_per_second` | Greater than or equal to zero |
 | Power | `watts` | Greater than or equal to zero |
 | Thermal | `celsius` | Greater than or equal to `-273.15` |
@@ -76,19 +76,19 @@ The top-level `benchmarks/` directory owns experiment-specific material:
 
 - experiment definitions and parameter matrices;
 - benchmark fixtures and evaluation setup;
-- collected measurements and result artifacts;
+- collected measurements and result artefacts;
 - comparison reports and performance conclusions.
 
 Benchmark code consumes profiling records and decides how to aggregate,
 compare, and report them. Operational profiling output remains on the
 structured logging stream unless a benchmark explicitly collects it as an
-experiment artifact.
+experiment artefact.
 
 ## Ownership boundary
 
 | Concern | Owner | Not owned by |
 | --- | --- | --- |
-| Stage timing and record serialization | `profiling/` | `benchmarks/` |
+| Stage timing and record serialisation | `profiling/` | `benchmarks/` |
 | Resource and failure record schemas | `profiling/` | `benchmarks/` |
 | GPU/CPU/power/thermal samplers | `profiling/` sampler integrations | profiling record schemas |
 | Cold/warm, residency, swapping, batching, and concurrency matrices | `benchmarks/` | reusable profiling records |
@@ -104,5 +104,5 @@ must not duplicate the timing, resource, or failure schemas already provided by
 
 The profiling record layer is complete when a deterministic caller can emit
 timing, resource, and failure records through the structured logging stream,
-while a benchmark can independently collect and analyze those records without
+while a benchmark can independently collect and analyse those records without
 requiring profiling code to know the experiment design.

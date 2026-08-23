@@ -48,7 +48,7 @@ previous published backup.
    records.
 10. Atomically activate the validated staged restore.
 11. Restart or reconnect serving components.
-12. Verify restart-to-serve behavior and run post-activation checks.
+12. Verify restart-to-serve behaviour and run post-activation checks.
 
 The active installation must remain unchanged if any validation, activation, or
 post-activation check fails.
@@ -92,10 +92,10 @@ local recovery.
 The initial implementation uses immutable, generation-based full portable
 backups. A portable backup contains a logical metadata-store export, canonical
 chunks and provenance, index configuration and generation metadata, a manifest,
-schema information, and checksums. Serialized indexes are included only when
+schema information, and checksums. Serialised indexes are included only when
 their format is documented and portable; otherwise they are rebuilt from the
 canonical records during restore. Compatible recovery snapshots are an
-optimization and do not replace this baseline contract.
+optimisation and do not replace this baseline contract.
 
 Backup settings belong under `[storage]` and follow the normal precedence order
 (explicit `Settings(...)` values, environment variables, then `config.toml`):

@@ -18,7 +18,7 @@ from inference_lab.evaluation.schemas import (
 from .fixtures import EVIDENCE_IDS  # noqa: TID252
 
 
-def test_source_span_evidence_is_serializable() -> None:
+def test_source_span_evidence_is_serialisable() -> None:
     evidence = EvidenceReference(**EVIDENCE_IDS)
 
     assert evidence.model_dump() == EVIDENCE_IDS | {

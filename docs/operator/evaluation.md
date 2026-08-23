@@ -42,7 +42,7 @@ small for final acceptance.
 ## Write a dataset
 
 Construct validated `EvaluationCase` and `DatasetManifest` values, then use
-`write_dataset(...)`. The writer serializes cases deterministically and places
+`write_dataset(...)`. The writer serialises cases deterministically and places
 the calculated case-file checksum in the returned manifest.
 
 The destination must be a new local directory that does not already exist. The

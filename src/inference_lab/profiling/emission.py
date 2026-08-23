@@ -6,7 +6,7 @@ from inference_lab.profiling.types import LogLevel
 
 
 class ProfilingRecordLike(Protocol):
-    """The serialization contract required by the profiling emitter."""
+    """The serialisation contract required by the profiling emitter."""
 
     def to_dict(self) -> dict[str, object]:
         """Return structured fields for one profiling record."""

@@ -338,14 +338,14 @@ def test_fake_rejects_configured_vector_count_mismatched_with_request() -> None:
         backend.embed(EmbeddingRequest(input_texts=("one", "two")))
 
 
-def test_fake_applies_embedding_dimension_and_normalization_options() -> None:
+def test_fake_applies_embedding_dimension_and_normalisation_options() -> None:
     backend = FakeBackend()
     backend.load()
 
     result = backend.embed(
         EmbeddingRequest(
             input_texts=("one", "two"),
-            options=EmbeddingOptions(dimensions=2, normalize=True),
+            options=EmbeddingOptions(dimensions=2, normalise=True),
         )
     )
 
@@ -354,14 +354,14 @@ def test_fake_applies_embedding_dimension_and_normalization_options() -> None:
     assert result.model_metadata.embedding_dimensions == 2
 
 
-def test_fake_normalization_preserves_zero_vector() -> None:
+def test_fake_normalisation_preserves_zero_vector() -> None:
     backend = FakeBackend(FakeBackendConfig(embedding_vectors=((0.0, 0.0, 0.0),)))
     backend.load()
 
     result = backend.embed(
         EmbeddingRequest(
             input_texts=("one",),
-            options=EmbeddingOptions(normalize=True),
+            options=EmbeddingOptions(normalise=True),
         )
     )
 

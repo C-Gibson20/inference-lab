@@ -88,21 +88,21 @@ lifecycle.
 Injected synchronous and asynchronous sleepers make delay assertions
 deterministic without requiring wall-clock waits.
 
-### Embedding behavior
+### Embedding behaviour
 
 Without configured vectors, the fake derives deterministic vectors from input
 order. Configured vectors must match the request batch size. A requested
 dimension may reduce the available vector dimension but may not exceed it.
-Normalization uses the L2 norm; an all-zero vector remains all zero. Result
+Normalisation uses the L2 norm; an all-zero vector remains all zero. Result
 metadata reports the dimension actually returned.
 
-### Reranking behavior
+### Reranking behaviour
 
 Configured candidate scores override deterministic position-based defaults.
 Results are sorted by descending score with candidate ID as the stable tie
 breaker, truncated by `top_k`, and assigned contiguous ranks from one.
 
-### Generation behavior
+### Generation behaviour
 
 Configured chunks define the deterministic response. The fake uses whitespace
 token counting for both usage and `maximum_output_tokens`. Token limits and the

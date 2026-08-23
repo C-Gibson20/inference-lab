@@ -72,7 +72,7 @@ def _default_metadata() -> BackendMetadata:
 
 @dataclass(frozen=True, slots=True)
 class FakeBackendConfig:
-    """Deterministic behavior controls for :class:`FakeBackend`."""
+    """Deterministic behaviour controls for :class:`FakeBackend`."""
 
     metadata: BackendMetadata = field(default_factory=_default_metadata)
     initial_delay_seconds: float = 0.0
@@ -220,7 +220,7 @@ class FakeBackend:
     """Deterministic backend implementing embedding, reranking, and generation."""
 
     def __init__(self, config: FakeBackendConfig | None = None) -> None:
-        """Create an unloaded fake backend with the supplied behavior."""
+        """Create an unloaded fake backend with the supplied behaviour."""
         if config is not None and not isinstance(config, FakeBackendConfig):
             raise TypeError("config must be FakeBackendConfig or None")
         self._config = FakeBackendConfig() if config is None else config
@@ -398,7 +398,7 @@ class FakeBackend:
         self,
         request: EmbeddingRequest,
     ) -> tuple[tuple[tuple[float, ...], ...], int]:
-        """Apply requested dimension and normalization controls."""
+        """Apply requested dimension and normalisation controls."""
         configured_vectors = self._config.embedding_vectors
         available_dimensions = (
             len(configured_vectors[0])
@@ -430,8 +430,8 @@ class FakeBackend:
                 for index in range(len(request.input_texts))
             )
 
-        if request.options.normalize:
-            vectors = tuple(self._normalize_vector(vector) for vector in vectors)
+        if request.options.normalise:
+            vectors = tuple(self._normalise_vector(vector) for vector in vectors)
         return vectors, output_dimensions
 
     def _generation_plan(self, request: GenerationRequest) -> _GenerationPlan:
@@ -483,8 +483,8 @@ class FakeBackend:
         )
 
     @staticmethod
-    def _normalize_vector(vector: tuple[float, ...]) -> tuple[float, ...]:
-        """L2-normalize a vector, retaining an all-zero vector unchanged."""
+    def _normalise_vector(vector: tuple[float, ...]) -> tuple[float, ...]:
+        """L2-normalise a vector, retaining an all-zero vector unchanged."""
         largest_magnitude = max(abs(value) for value in vector)
         if largest_magnitude == 0:
             return tuple(0.0 for _ in vector)

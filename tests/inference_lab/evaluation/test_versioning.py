@@ -34,6 +34,7 @@ def test_current_payload_versions_are_accepted_unchanged() -> None:
         {},
         {"schema_version": "9.0.0"},
         {"schema_version": "1.0.0"},
+        {"schema_version": "2.0.0"},
         {"schema_version": [CURRENT_SCHEMA_VERSION]},
     ],
 )

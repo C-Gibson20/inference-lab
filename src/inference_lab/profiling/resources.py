@@ -1,4 +1,4 @@
-"""Normalized resource-measurement records for profiling."""
+"""Normalised resource-measurement records for profiling."""
 
 import math
 from dataclasses import dataclass, field
@@ -22,8 +22,8 @@ ResourceCategory = Literal[
     "framework_overhead",
     "pinned_host_memory",
     "storage_cache",
-    "gpu_utilization",
-    "cpu_utilization",
+    "gpu_utilisation",
+    "cpu_utilisation",
     "storage_throughput",
     "power",
     "thermal",
@@ -68,8 +68,8 @@ _RESOURCE_UNITS: dict[ResourceCategory, ResourceUnit] = {
     "framework_overhead": "bytes",
     "pinned_host_memory": "bytes",
     "storage_cache": "bytes",
-    "gpu_utilization": "percent",
-    "cpu_utilization": "percent",
+    "gpu_utilisation": "percent",
+    "cpu_utilisation": "percent",
     "storage_throughput": "bytes_per_second",
     "power": "watts",
     "thermal": "celsius",
@@ -126,9 +126,9 @@ def _validate_value_range(
     """Validate the physical range implied by the resource category."""
     if value is None:
         return
-    if category in {"gpu_utilization", "cpu_utilization"}:
+    if category in {"gpu_utilisation", "cpu_utilisation"}:
         if not 0 <= value <= 100:
-            raise ValueError("utilization percentage must be between 0 and 100")
+            raise ValueError("utilisation percentage must be between 0 and 100")
     elif category == "thermal":
         if value < -273.15:
             raise ValueError("thermal measurement cannot be below absolute zero")
@@ -161,7 +161,7 @@ def _validate_sampling(
 
 @dataclass(frozen=True, slots=True)
 class ResourceMeasurement:
-    """One normalized measurement for one runtime resource category.
+    """One normalised measurement for one runtime resource category.
 
     A record may contain a value for an unreliable measurement, allowing
     consumers to retain the observation without treating it as authoritative.

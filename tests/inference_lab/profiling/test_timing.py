@@ -177,7 +177,7 @@ def test_negative_counter_is_rejected(field: str) -> None:
             timer.set_counts(**{field: -1})
 
 
-def test_timing_record_serializes_nullable_fields() -> None:
+def test_timing_record_serialises_nullable_fields() -> None:
     record = StageTiming(
         event="stage_completed",
         module="profiling",
@@ -194,7 +194,7 @@ def test_timing_record_serializes_nullable_fields() -> None:
     assert payload["items_processed"] is None
     assert payload["records_emitted"] is None
     assert payload["observed_at"] == "2026-08-21T12:00:00+00:00"
-    assert payload["record_schema_version"] == 1
+    assert payload["record_schema_version"] == 2
 
 
 @pytest.mark.parametrize(

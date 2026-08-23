@@ -1,4 +1,4 @@
-"""Tests for normalized resource-measurement records."""
+"""Tests for normalised resource-measurement records."""
 
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -12,9 +12,9 @@ def fixed_timestamp() -> datetime:
     return datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 
 
-def test_measured_resource_serializes_all_fields() -> None:
+def test_measured_resource_serialises_all_fields() -> None:
     record = ResourceMeasurement(
-        category="gpu_utilization",
+        category="gpu_utilisation",
         value=72.5,
         measurement_kind="sampled",
         observed_at=fixed_timestamp(),
@@ -27,7 +27,7 @@ def test_measured_resource_serializes_all_fields() -> None:
 
     assert record.to_dict() == {
         "event": "resource_measured",
-        "category": "gpu_utilization",
+        "category": "gpu_utilisation",
         "unit": "percent",
         "value": 72.5,
         "status": "measured",
@@ -42,7 +42,7 @@ def test_measured_resource_serializes_all_fields() -> None:
         "request_id": None,
         "document_id": None,
         "corpus_version": None,
-        "record_schema_version": 1,
+        "record_schema_version": 2,
     }
 
 
@@ -118,8 +118,8 @@ def test_resource_discriminants_and_context_are_validated(
         ("framework_overhead", "bytes"),
         ("pinned_host_memory", "bytes"),
         ("storage_cache", "bytes"),
-        ("gpu_utilization", "percent"),
-        ("cpu_utilization", "percent"),
+        ("gpu_utilisation", "percent"),
+        ("cpu_utilisation", "percent"),
         ("storage_throughput", "bytes_per_second"),
         ("power", "watts"),
         ("thermal", "celsius"),
@@ -144,8 +144,8 @@ def test_resource_category_determines_canonical_unit(
         ("kv_cache", -1, "non-negative"),
         ("storage_throughput", -1, "non-negative"),
         ("power", -1, "non-negative"),
-        ("gpu_utilization", -0.1, "between 0 and 100"),
-        ("cpu_utilization", 100.1, "between 0 and 100"),
+        ("gpu_utilisation", -0.1, "between 0 and 100"),
+        ("cpu_utilisation", 100.1, "between 0 and 100"),
         ("thermal", -273.16, "absolute zero"),
     ],
 )
@@ -190,7 +190,7 @@ def test_non_finite_or_boolean_value_is_rejected(value: float) -> None:
 def test_sampled_measurement_requires_positive_duration() -> None:
     with pytest.raises(ValueError, match="positive sample duration"):
         ResourceMeasurement(
-            category="cpu_utilization",
+            category="cpu_utilisation",
             value=50,
             measurement_kind="sampled",
         )
@@ -205,7 +205,7 @@ def test_sampled_measurement_rejects_invalid_duration(
 ) -> None:
     with pytest.raises(ValueError, match="positive sample duration"):
         ResourceMeasurement(
-            category="cpu_utilization",
+            category="cpu_utilisation",
             value=50,
             measurement_kind="sampled",
             sample_duration_ms=sample_duration_ms,  # type: ignore[arg-type]

@@ -48,8 +48,8 @@ class DatasetManifest(BaseModel):
     updated_at: AwareDatetime
 
     @field_serializer("splits", "provenance", "checksums")
-    def serialize_mappings(self, value: Mapping[str, object]) -> dict[str, object]:
-        """Serialize immutable mappings as ordinary JSON objects."""
+    def serialise_mappings(self, value: Mapping[str, object]) -> dict[str, object]:
+        """Serialise immutable mappings as ordinary JSON objects."""
         return dict(value)
 
     @field_validator("dataset_version", "description", "case_file")

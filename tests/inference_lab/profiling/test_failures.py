@@ -12,7 +12,7 @@ def fixed_timestamp() -> datetime:
     return datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 
 
-def test_failed_event_serializes_operational_fields() -> None:
+def test_failed_event_serialises_operational_fields() -> None:
     record = FailureEvent(
         failure_category="input",
         failure_code="malformed_document",
@@ -46,7 +46,7 @@ def test_failed_event_serializes_operational_fields() -> None:
         "partial": True,
         "exception_type": "ValueError",
         "observed_at": "2026-08-21T12:00:00+00:00",
-        "record_schema_version": 1,
+        "record_schema_version": 2,
     }
 
 

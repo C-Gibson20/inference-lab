@@ -1,4 +1,4 @@
-"""Tests for final benchmark acceptance behavior."""
+"""Tests for final benchmark acceptance behaviour."""
 
 import subprocess
 import sys

@@ -1,4 +1,4 @@
-"""Deterministic serialization utilities for evaluation contracts."""
+"""Deterministic serialisation utilities for evaluation contracts."""
 
 import hashlib
 import json
@@ -46,7 +46,7 @@ def _json_bytes(payload: JsonObject, *, indent: int | None) -> bytes:
 
 
 def serialise_cases(cases: Iterable[EvaluationCase]) -> bytes:
-    """Serialize cases as deterministic JSONL in the supplied order."""
+    """Serialise cases as deterministic JSONL in the supplied order."""
     ordered_cases = tuple(cases)
     if not ordered_cases:
         raise ValueError("Evaluation datasets must contain at least one case")
@@ -64,7 +64,7 @@ def serialise_cases(cases: Iterable[EvaluationCase]) -> bytes:
 
 
 def serialise_manifest(manifest: DatasetManifest) -> bytes:
-    """Serialize a manifest as human-reviewable deterministic JSON."""
+    """Serialise a manifest as human-reviewable deterministic JSON."""
     return _json_bytes(_canonical_payload(manifest), indent=2)
 
 

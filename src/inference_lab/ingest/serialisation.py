@@ -46,7 +46,7 @@ def parsed_document_payload(document: ParsedDocument) -> JsonObject:
         "parser_version": {
             "implementation": document.parser_version.implementation,
             "contract_version": document.parser_version.contract_version,
-            "normalization_version": document.parser_version.normalisation_version,
+            "normalisation_version": document.parser_version.normalisation_version,
         },
         "text": {
             "text": document.text.text,
@@ -76,7 +76,7 @@ def parsed_document_payload(document: ParsedDocument) -> JsonObject:
 
 
 def serialise_parsed_document(document: ParsedDocument) -> bytes:
-    """Serialize parser output as canonical UTF-8 JSON with a trailing newline."""
+    """Serialise parser output as canonical UTF-8 JSON with a trailing newline."""
     payload = parsed_document_payload(document)
     text = json.dumps(
         payload,

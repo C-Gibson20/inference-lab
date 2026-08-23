@@ -3,7 +3,7 @@
 The evaluation dataset layer defines the immutable, versioned input contract
 used by evaluation workflows. It owns evaluation cases, expected-answer
 annotations, evidence references, abstention expectations, dataset manifests,
-explicit split membership, deterministic serialization, and validated local
+explicit split membership, deterministic serialisation, and validated local
 loading. It does not execute an evaluation or decide whether a system answer
 is correct.
 
@@ -11,7 +11,7 @@ is correct.
 
 Evaluation inputs and outputs are filesystem paths on the local host. URI-shaped
 locations, including HTTP, cloud-storage, and other remote schemes, are
-rejected. Dataset loading and dataset serialization validate this boundary
+rejected. Dataset loading and dataset serialisation validate this boundary
 before reading or writing files.
 
 The boundary rejects URI schemes before and after `Path` coercion, UNC-style
@@ -20,12 +20,12 @@ included in errors intended for operational logs.
 
 Evaluation may read the selected local dataset and corpus references. It must
 not send questions, evidence, prompts, answers, model traffic, or evaluation
-artifacts to a remote service.
+artefacts to a remote service.
 
 ## Versioned dataset contract
 
 Every case and manifest declares a supported evaluation schema version. The
-current format is `2.0.0`; the incompatible pre-release `1.0.0` format is not
+current format is `3.0.0`; the incompatible `1.0.0` and `2.0.0` formats are not
 accepted or migrated.
 Unknown, missing, and unsupported schema versions are rejected before model
 validation. A dataset manifest identifies one immutable dataset version and
@@ -116,12 +116,12 @@ must not be used for tuning or model selection. The final corpus-backed
 question set contains 30–50 real questions spanning the question types in the
 project specification. Its held-out subset contains every question type and
 includes both answerable and expected-abstention cases, so final evaluation
-cannot silently omit either a capability category or abstention behavior. The
+cannot silently omit either a capability category or abstention behaviour. The
 committed synthetic dataset is only a contract fixture.
 
-## Serialization and privacy
+## Serialisation and privacy
 
-Cases are serialized as deterministic UTF-8 JSONL. Manifests are serialized as
+Cases are serialised as deterministic UTF-8 JSONL. Manifests are serialised as
 deterministic, human-reviewable JSON. Dataset writing calculates the case-file
 checksum rather than trusting a caller-supplied digest. A published manifest's
 checksum inventory contains exactly its case file.
@@ -137,7 +137,7 @@ competing destination untouched.
 `evaluation_json_schema()` publishes one standards-compliant JSON Schema using
 Draft 2020-12. Its `oneOf` branches validate either a complete manifest or one
 case record, all references resolve through the top-level `$defs`, and each
-branch constrains `schema_version` to the current version. The schema artifact
+branch constrains `schema_version` to the current version. The schema artefact
 is descriptive validation metadata; the Python loader remains authoritative
 for cross-record and filesystem invariants that JSON Schema cannot express.
 

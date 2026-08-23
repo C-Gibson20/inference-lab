@@ -1,4 +1,4 @@
-"""Tests for deterministic evaluation serialization."""
+"""Tests for deterministic evaluation serialisation."""
 
 import hashlib
 import json
@@ -58,30 +58,30 @@ def _manifest(case_ids: tuple[str, ...] = ("case-001",)) -> DatasetManifest:
     )
 
 
-def test_case_serialization_is_deterministic_and_preserves_order() -> None:
+def test_case_serialisation_is_deterministic_and_preserves_order() -> None:
     first = _evaluation_case("case-001")
     second = _evaluation_case("case-002")
 
-    serialized = serialise_cases((first, second))
+    serialised = serialise_cases((first, second))
 
-    assert serialized == serialise_cases((first, second))
-    assert serialized.endswith(b"\n")
-    assert serialized.splitlines()[0].find(b'"case_id":"case-001"') >= 0
-    assert b'["alpha","zeta"]' in serialized
+    assert serialised == serialise_cases((first, second))
+    assert serialised.endswith(b"\n")
+    assert serialised.splitlines()[0].find(b'"case_id":"case-001"') >= 0
+    assert b'["alpha","zeta"]' in serialised
 
     restored = tuple(
         EvaluationCase.model_validate(json.loads(line))
-        for line in serialized.splitlines()
+        for line in serialised.splitlines()
     )
     assert restored == (first, second)
 
 
-def test_empty_case_serialization_is_rejected() -> None:
+def test_empty_case_serialisation_is_rejected() -> None:
     with pytest.raises(ValueError, match="at least one case"):
         serialise_cases(())
 
 
-def test_manifest_serialization_round_trips() -> None:
+def test_manifest_serialisation_round_trips() -> None:
     manifest = _manifest()
 
     restored = DatasetManifest.model_validate(json.loads(serialise_manifest(manifest)))

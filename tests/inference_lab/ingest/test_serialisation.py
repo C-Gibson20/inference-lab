@@ -8,13 +8,13 @@ from inference_lab.ingest import (
 from .fixtures import fixture_parsed_document  # noqa: TID252
 
 
-def test_parsed_document_serialization_is_deterministic() -> None:
+def test_parsed_document_serialisation_is_deterministic() -> None:
     document = fixture_parsed_document()
 
     assert serialise_parsed_document(document) == serialise_parsed_document(document)
 
 
-def test_serialization_preserves_absent_and_empty_structure() -> None:
+def test_serialisation_preserves_absent_and_empty_structure() -> None:
     payload = parsed_document_payload(fixture_parsed_document(include_paragraph=False))
 
     assert payload["pages"] is None

@@ -391,10 +391,10 @@ def test_generation_message_is_structured() -> None:
             id="embedding-options-dimensions",
         ),
         pytest.param(
-            lambda: EmbeddingOptions(normalize=1),  # type: ignore[arg-type]
+            lambda: EmbeddingOptions(normalise=1),  # type: ignore[arg-type]
             TypeError,
-            "normalize must be a boolean",
-            id="embedding-options-normalize",
+            "normalise must be a boolean",
+            id="embedding-options-normalise",
         ),
         pytest.param(
             lambda: EmbeddingRequest(input_texts=()),

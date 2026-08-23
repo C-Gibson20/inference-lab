@@ -20,7 +20,7 @@ class BackendOperation(StrEnum):
 
 
 class BackendCapability(StrEnum):
-    """Optional behavior supported by a backend."""
+    """Optional behaviour supported by a backend."""
 
     BATCHING = "batching"
     STREAMING = "streaming"
@@ -107,7 +107,7 @@ class EmbeddingOptions:
     """Optional controls for embedding generation."""
 
     dimensions: int | None = None
-    normalize: bool = False
+    normalise: bool = False
 
     def __post_init__(self) -> None:
         self._validate()
@@ -118,8 +118,8 @@ class EmbeddingOptions:
             validate_integer(self.dimensions, "dimensions")
             if self.dimensions <= 0:
                 raise ValueError("dimensions must be positive")
-        if not isinstance(self.normalize, bool):
-            raise TypeError("normalize must be a boolean")
+        if not isinstance(self.normalise, bool):
+            raise TypeError("normalise must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)

@@ -17,7 +17,7 @@ def test_current_schema_version_is_supported() -> None:
     )
 
 
-@pytest.mark.parametrize("version", [0, -1, 2, 999, True, 1.5, "1"])
+@pytest.mark.parametrize("version", [0, -1, 1, 999, True, 1.5, "1"])
 def test_unsupported_schema_version_is_rejected(version: object) -> None:
     with pytest.raises(ValueError, match="record_schema_version"):
         validate_record_schema_version(version)

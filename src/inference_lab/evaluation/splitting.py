@@ -91,12 +91,12 @@ def assignment_key(seed: str, group_key: str) -> str:
 
 
 def question_key(question: str) -> str:
-    """Return a stable key for a normalized question."""
+    """Return a stable key for a normalised question."""
     return stable_digest(normalise_for_duplicate_detection(question))
 
 
 def token_set(value: str) -> frozenset[str]:
-    """Return normalized tokens for duplicate detection."""
+    """Return normalised tokens for duplicate detection."""
     return frozenset(normalise_for_duplicate_detection(value).split())
 
 
@@ -210,7 +210,7 @@ def _union_near_duplicate_questions(
     union_find: _UnionFind,
     near_duplicate_threshold: float,
 ) -> None:
-    """Join cases whose normalized question tokens meet the similarity threshold."""
+    """Join cases whose normalised question tokens meet the similarity threshold."""
     tokens = [token_set(case.question) for case in cases]
     for left in range(len(cases)):
         for right in range(left + 1, len(cases)):

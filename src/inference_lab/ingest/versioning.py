@@ -44,17 +44,17 @@ class ParserVersion:
 
     @property
     def value(self) -> str:
-        """Return the canonical serialized parser-version identifier."""
+        """Return the canonical serialised parser-version identifier."""
         return (
             f"{self.implementation}/"
             f"contract-{self.contract_version}/"
-            f"normalization-{self.normalisation_version}"
+            f"normalisation-{self.normalisation_version}"
         )
 
 
 CURRENT_PARSER_VERSION = ParserVersion(
     implementation="text-native",
-    contract_version="1.0.0",
+    contract_version="2.0.0",
     normalisation_version="1.0.0",
 )
 

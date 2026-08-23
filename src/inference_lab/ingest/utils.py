@@ -9,6 +9,6 @@ def is_strict_integer(value: object) -> bool:
 
 
 def normalise_source_text(source_text: str) -> str:
-    """Normalize decoded source text without changing its whitespace semantics."""
+    """Normalise decoded source text without changing its whitespace semantics."""
     newline_normalised = source_text.replace("\r\n", "\n").replace("\r", "\n")
     return unicodedata.normalize("NFC", newline_normalised)

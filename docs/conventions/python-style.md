@@ -14,7 +14,7 @@ installed package.
 
 Within one domain package, import a symbol from the module that defines it. Do
 not route internal dependencies through the package's `__init__.py`, because
-doing so can hide dependency direction and create initialization cycles. Across
+doing so can hide dependency direction and create initialisation cycles. Across
 domain boundaries, prefer the owning package's public API when it exports the
 required symbol; otherwise import the defining module explicitly.
 
@@ -29,3 +29,19 @@ Ruff owns ordering within those groups. Wildcard imports are prohibited.
 Use `TYPE_CHECKING` imports or postponed annotation evaluation only when they
 resolve a genuine runtime cycle or optional typing dependency. Do not add them
 pre-emptively.
+
+## Language
+
+Project-owned prose, Python identifiers, error messages, configuration names,
+and serialised field or enum values use British English spelling. This includes
+forms such as `normalise`, `serialise`, `behaviour`, and `utilisation`.
+
+Names owned by Python, a third-party library, or a published external standard
+retain their exact spelling at the integration boundary. Examples include
+`unicodedata.normalize`, Pydantic's `field_serializer`, and Structlog's `colors`
+keyword. Keep those spellings local to the boundary rather than propagating
+them into project-owned names.
+
+A spelling correction to a persisted or public project contract is an
+incompatible change and requires the owning schema or contract version to
+advance. Do not add aliases solely to preserve a superseded first implementation.

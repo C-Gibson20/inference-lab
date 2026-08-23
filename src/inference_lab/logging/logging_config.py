@@ -82,11 +82,11 @@ def _add_record_fields(
 def _configure_structlog(
     format_name: str,
     *,
-    colors: bool,
+    colours: bool,
 ) -> structlog.stdlib.ProcessorFormatter:
     """Configure structlog and return the formatter for stdlib handlers."""
     renderer = (
-        structlog.dev.ConsoleRenderer(colors=colors)
+        structlog.dev.ConsoleRenderer(colors=colours)
         if format_name == "console"
         else structlog.processors.JSONRenderer()
     )
@@ -163,7 +163,7 @@ def configure_logging(
 
     formatter = _configure_structlog(
         format_name,
-        colors=format_name == "console" and output_stream.isatty(),
+        colours=format_name == "console" and output_stream.isatty(),
     )
     handler = _configure_stdlib(formatter, config, stream=output_stream)
     _configure_root_logger(handler, config.level)

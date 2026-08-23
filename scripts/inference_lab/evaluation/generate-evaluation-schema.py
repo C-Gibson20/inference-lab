@@ -1,4 +1,4 @@
-"""Generate the published evaluation JSON schema artifact."""
+"""Generate the published evaluation JSON schema artefact."""
 
 import argparse
 from pathlib import Path

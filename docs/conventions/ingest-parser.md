@@ -43,12 +43,12 @@ their corresponding block kind; a block of one of those kinds requires its
 typed collection to be available.
 
 `NormalisedText.source_text` is the strictly decoded source coordinate space.
-`NormalisedText.text` is produced by `normalise_source_text`: it is NFC-normalized
+`NormalisedText.text` is produced by `normalise_source_text`: it is NFC-normalised
 text with CRLF and CR converted to LF. Whitespace is otherwise preserved. Empty
 input is a successful empty document; an unavailable structure is `None`, while
 a present empty collection is `()`.
 
-Paragraph boundaries are derived from `source_text` before normalization. LF,
+Paragraph boundaries are derived from `source_text` before normalisation. LF,
 CRLF, and CR are line endings. One or more lines containing only spaces or
 tabs (including no characters) separate paragraphs; separator characters are
 excluded from both adjacent source spans. Leading blank lines and trailing
@@ -59,10 +59,10 @@ content. Indentation and other whitespace on content lines are preserved.
 ### Source spans and provenance
 
 Every emitted block has a `SourceSpan` linked to the input `DocumentVersionId`. Offsets are half-open Unicode code-point offsets into
-`source_text`: `[start_offset, end_offset)`. They are not byte offsets and are not offsets into normalized text.
+`source_text`: `[start_offset, end_offset)`. They are not byte offsets and are not offsets into normalised text.
 
-Canonical document text must equal the defined normalization of
-`source_text`. Each block's text must likewise equal the normalized source
+Canonical document text must equal the defined normalisation of
+`source_text`. Each block's text must likewise equal the normalised source
 slice selected by its span. A completed document rejects arbitrary or stale
 block text, collection aliases, and source-span identifiers.
 
@@ -71,10 +71,10 @@ UUIDs derived from the document version, parser version, block ordinal, block
 kind, and source range. A parser-version change creates a distinct span
 identity even when the other inputs are unchanged. Repeating a parse with the
 same input, settings, and parser version must produce byte-identical canonical
-serialization.
+serialisation.
 
 Parser implementations use lowercase hyphenated slugs. Contract and
-normalization versions use canonical Semantic Versioning, including optional
+normalisation versions use canonical Semantic Versioning, including optional
 prerelease and build metadata. These restrictions keep the combined parser
 version unambiguous and safe to use in deterministic identity derivation.
 
@@ -110,9 +110,9 @@ uv run pytest tests/inference_lab/ingest/test_text_native_acceptance.py
 The gate uses fixed document identities and checked-in source/golden fixtures
 to verify:
 
-- exact, repeatable canonical serialization and versioned source-span IDs;
+- exact, repeatable canonical serialisation and versioned source-span IDs;
 - ordered paragraph text and source-coordinate provenance;
-- normalization and successful empty-document handling;
+- normalisation and successful empty-document handling;
 - fatal, document-free outcomes for malformed and oversized source;
 - size-limit validation before decoding;
 - payload-free failure records and structured logs using a marker present in

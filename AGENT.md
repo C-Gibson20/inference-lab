@@ -19,7 +19,7 @@ module dirs) unless the user explicitly requests it in that session.
 ## Architecture
 
 - `src/inference_lab/ingest/`: identify, deduplicate, parse/OCR, preserve spans,
-  chunk, summarize, and extract.
+  chunk, summarise, and extract.
 - `src/inference_lab/provenance/`: stable document/version identity and lineage.
 - `src/inference_lab/storage/`: persistent metadata and indexes.
 - `src/inference_lab/retrieval/`: lexical, dense, metadata, summary, and
@@ -53,7 +53,7 @@ core product boundary.
 
 Avoid changing `docs/spec.md` to justify an implementation. Update it only when
 the product decision itself changes. Avoid committing generated caches, model
-artifacts, confidential documents, or benchmark outputs containing sensitive
+artefacts, confidential documents, or benchmark outputs containing sensitive
 data.
 
 ## Validation
@@ -70,4 +70,4 @@ uv run pytest
 For changes affecting retrieval or answering, also update or run the relevant
 evaluation cases and check citation correctness, faithfulness, latency, and
 memory—not only Recall@10. For changes affecting ingest or runtime, report
-incremental behavior, throughput, memory, and failure modes when measurable.
+incremental behaviour, throughput, memory, and failure modes when measurable.

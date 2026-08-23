@@ -35,7 +35,7 @@ def fixed_timestamp() -> datetime:
             status="completed",
         ),
         ResourceMeasurement(
-            category="gpu_utilization",
+            category="gpu_utilisation",
             value=75.0,
             observed_at=fixed_timestamp(),
         ),
@@ -66,7 +66,7 @@ def test_emits_each_record_as_structured_json(
     assert "document_id" in payload
     assert "corpus_version" in payload
     assert payload["level"] in {"info", "warning", "error", "critical"}
-    assert payload["record_schema_version"] == 1
+    assert payload["record_schema_version"] == 2
 
 
 def test_emitted_record_preserves_context_and_nullable_fields() -> None:
