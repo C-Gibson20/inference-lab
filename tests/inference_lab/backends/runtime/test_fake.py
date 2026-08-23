@@ -19,9 +19,11 @@ from inference_lab.backends.runtime.types import (
     BackendCapability,
     BackendMetadata,
     BackendOperation,
+    EmbeddingOptions,
     EmbeddingRequest,
     GenerationEventType,
     GenerationMessage,
+    GenerationOptions,
     GenerationRequest,
     RerankCandidate,
     RerankRequest,
@@ -298,9 +300,69 @@ def test_fake_returns_valid_configured_embedding_vectors() -> None:
     backend = FakeBackend(FakeBackendConfig(embedding_vectors=((0.1, 0.2, 0.3),)))
     backend.load()
 
-    result = backend.embed(EmbeddingRequest(input_texts=("one",)))
+    result = backend.embed(
+        EmbeddingRequest(
+            input_texts=("one",),
+            options=EmbeddingOptions(dimensions=2),
+        )
+    )
 
-    assert result.vectors == ((0.1, 0.2, 0.3),)
+    assert result.vectors == ((0.1, 0.2),)
+    assert result.model_metadata.embedding_dimensions == 2
+
+
+def test_fake_rejects_configured_vector_count_mismatched_with_request() -> None:
+    backend = FakeBackend(FakeBackendConfig(embedding_vectors=((0.1, 0.2, 0.3),)))
+    backend.load()
+
+    with pytest.raises(BackendRequestError, match="vector count"):
+        backend.embed(EmbeddingRequest(input_texts=("one", "two")))
+
+
+def test_fake_applies_embedding_dimension_and_normalization_options() -> None:
+    backend = FakeBackend()
+    backend.load()
+
+    result = backend.embed(
+        EmbeddingRequest(
+            input_texts=("one", "two"),
+            options=EmbeddingOptions(dimensions=2, normalize=True),
+        )
+    )
+
+    assert result.vectors[0] == pytest.approx((0.0, 1.0))
+    assert result.vectors[1] == pytest.approx((1 / (5**0.5), 2 / (5**0.5)))
+    assert result.model_metadata.embedding_dimensions == 2
+
+
+def test_fake_normalization_preserves_zero_vector() -> None:
+    backend = FakeBackend(FakeBackendConfig(embedding_vectors=((0.0, 0.0, 0.0),)))
+    backend.load()
+
+    result = backend.embed(
+        EmbeddingRequest(
+            input_texts=("one",),
+            options=EmbeddingOptions(normalize=True),
+        )
+    )
+
+    assert result.vectors == ((0.0, 0.0, 0.0),)
+
+
+def test_fake_rejects_unsupported_embedding_dimensions_before_delay() -> None:
+    delays: list[float] = []
+    backend = FakeBackend(FakeBackendConfig(sync_sleeper=delays.append))
+    backend.load()
+
+    with pytest.raises(BackendRequestError, match="exceed backend dimensions"):
+        backend.embed(
+            EmbeddingRequest(
+                input_texts=("one",),
+                options=EmbeddingOptions(dimensions=4),
+            )
+        )
+
+    assert delays == []
 
 
 def test_fake_reranker_applies_configured_scores_and_top_k() -> None:
@@ -349,6 +411,97 @@ def test_fake_generator_streams_chunks_and_completion() -> None:
     ]
     assert "".join(event.text_delta or "" for event in result) == "hello world"
     assert result[-1].usage is not None
+
+
+def test_fake_generator_applies_output_token_limit() -> None:
+    backend = FakeBackend(
+        FakeBackendConfig(generation_chunks=("one ", "two ", "three"))
+    )
+    backend.load()
+
+    async def collect() -> list:
+        return [
+            event
+            async for event in backend.generate(
+                GenerationRequest(
+                    messages=(GenerationMessage(role="user", content="Hi"),),
+                    options=GenerationOptions(maximum_output_tokens=2),
+                )
+            )
+        ]
+
+    result = asyncio.run(collect())
+
+    assert "".join(event.text_delta or "" for event in result) == "one two"
+    assert result[-1].finish_reason == "length"
+    assert result[-1].usage is not None
+    assert result[-1].usage.output_tokens == 2
+
+
+def test_fake_generator_does_not_report_length_when_output_fits_limit() -> None:
+    backend = FakeBackend(FakeBackendConfig(generation_chunks=("one", " two")))
+    backend.load()
+
+    async def collect() -> list:
+        return [
+            event
+            async for event in backend.generate(
+                GenerationRequest(
+                    messages=(GenerationMessage(role="user", content="Hi"),),
+                    options=GenerationOptions(maximum_output_tokens=3),
+                )
+            )
+        ]
+
+    result = asyncio.run(collect())
+
+    assert "".join(event.text_delta or "" for event in result) == "one two"
+    assert result[-1].finish_reason == "stop"
+
+
+def test_fake_generator_applies_stop_sequence_across_chunk_boundaries() -> None:
+    backend = FakeBackend(FakeBackendConfig(generation_chunks=("alpha EN", "D omega")))
+    backend.load()
+
+    async def collect() -> list:
+        return [
+            event
+            async for event in backend.generate(
+                GenerationRequest(
+                    messages=(GenerationMessage(role="user", content="Hi"),),
+                    options=GenerationOptions(stop_sequences=("END",)),
+                )
+            )
+        ]
+
+    result = asyncio.run(collect())
+
+    assert "".join(event.text_delta or "" for event in result) == "alpha "
+    assert result[-1].finish_reason == "stop"
+    assert result[-1].sequence_number == 1
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        GenerationOptions(temperature=0.0),
+        GenerationOptions(top_p=1.0),
+        GenerationOptions(seed=0),
+    ],
+)
+def test_fake_generator_explicitly_rejects_sampling_controls(
+    options: GenerationOptions,
+) -> None:
+    backend = FakeBackend()
+    backend.load()
+
+    with pytest.raises(BackendRequestError, match="sampling controls"):
+        backend.generate(
+            GenerationRequest(
+                messages=(GenerationMessage(role="user", content="Hi"),),
+                options=options,
+            )
+        )
 
 
 def test_fake_generator_preserves_partial_output_before_failure() -> None:

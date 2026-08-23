@@ -2,9 +2,10 @@
 
 import asyncio
 import math
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 import structlog
@@ -213,6 +214,15 @@ class FakeBackendConfig:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class _GenerationPlan:
+    """Deterministic output selected for one generation request."""
+
+    chunks: tuple[str, ...]
+    output_text: str
+    finish_reason: str
+
+
 class FakeBackend:
     """Deterministic backend implementing embedding, reranking, and generation."""
 
@@ -266,6 +276,7 @@ class FakeBackend:
         """Return deterministic vectors in the request's input order."""
         self._ensure_available()
         self._ensure_operation_supported(BackendOperation.EMBED)
+        vectors, output_dimensions = self._embedding_vectors(request)
         self._log_operation_started(BackendOperation.EMBED)
         self._maybe_fail(BackendOperation.EMBED)
         self._config.sync_sleeper(self._config.initial_delay_seconds)
@@ -273,7 +284,6 @@ class FakeBackend:
             self._config.per_item_delay_seconds * len(request.input_texts)
         )
 
-        vectors = self._embedding_vectors(len(request.input_texts))
         _LOGGER.debug(
             "backend_operation_completed",
             pipeline_stage="runtime",
@@ -282,7 +292,10 @@ class FakeBackend:
         )
         return EmbeddingResult(
             vectors=vectors,
-            model_metadata=self.metadata,
+            model_metadata=replace(
+                self.metadata,
+                embedding_dimensions=output_dimensions,
+            ),
             usage=EmbeddingUsage(
                 input_tokens=sum(
                     self._token_count(text) for text in request.input_texts
@@ -336,18 +349,21 @@ class FakeBackend:
         """Return a validated asynchronous stream of deterministic text chunks."""
         self._ensure_available()
         self._ensure_operation_supported(BackendOperation.GENERATE)
+        plan = self._generation_plan(request)
         self._log_operation_started(BackendOperation.GENERATE)
-        return validate_generation_stream(self._generate_events(request))
+        return validate_generation_stream(self._generate_events(request, plan))
 
     async def _generate_events(
-        self, request: GenerationRequest
+        self,
+        request: GenerationRequest,
+        plan: _GenerationPlan,
     ) -> AsyncIterator[GenerationEvent]:
         """Produce raw generation events for the public validated stream."""
         self._maybe_fail(BackendOperation.GENERATE)
         await self._config.async_sleeper(self._config.initial_delay_seconds)
         emitted_chunks = 0
 
-        for sequence_number, chunk in enumerate(self._config.generation_chunks):
+        for sequence_number, chunk in enumerate(plan.chunks):
             self._ensure_available()
             if (
                 self._config.fail_after_generation_chunks is not None
@@ -372,34 +388,139 @@ class FakeBackend:
         yield GenerationEvent(
             event_type=GenerationEventType.COMPLETED,
             sequence_number=emitted_chunks,
-            finish_reason="stop",
+            finish_reason=plan.finish_reason,
             usage=GenerationUsage(
                 input_tokens=sum(
                     self._token_count(message.content) for message in request.messages
                 ),
-                output_tokens=self._token_count(
-                    "".join(self._config.generation_chunks)
-                ),
+                output_tokens=self._token_count(plan.output_text),
                 total_tokens=sum(
                     self._token_count(message.content) for message in request.messages
                 )
-                + self._token_count("".join(self._config.generation_chunks)),
+                + self._token_count(plan.output_text),
             ),
         )
 
-    def _embedding_vectors(self, count: int) -> tuple[tuple[float, ...], ...]:
-        """Return configured or deterministic vectors for a batch."""
-        if self._config.embedding_vectors is not None:
-            if len(self._config.embedding_vectors) != count:
+    def _embedding_vectors(
+        self,
+        request: EmbeddingRequest,
+    ) -> tuple[tuple[tuple[float, ...], ...], int]:
+        """Apply requested dimension and normalization controls."""
+        configured_vectors = self._config.embedding_vectors
+        available_dimensions = (
+            len(configured_vectors[0])
+            if configured_vectors is not None
+            else self.metadata.embedding_dimensions
+        )
+        requested_dimensions = request.options.dimensions
+        if (
+            requested_dimensions is not None
+            and available_dimensions is not None
+            and requested_dimensions > available_dimensions
+        ):
+            raise BackendRequestError(
+                "requested embedding dimensions exceed backend dimensions"
+            )
+        output_dimensions = requested_dimensions or available_dimensions or 3
+
+        if configured_vectors is not None:
+            if len(configured_vectors) != len(request.input_texts):
                 raise BackendRequestError(
                     "configured embedding vector count does not match request"
                 )
-            return self._config.embedding_vectors
-        dimensions = self.metadata.embedding_dimensions or 3
-        return tuple(
-            tuple(float(index + dimension) for dimension in range(dimensions))
-            for index in range(count)
+            vectors = tuple(vector[:output_dimensions] for vector in configured_vectors)
+        else:
+            vectors = tuple(
+                tuple(
+                    float(index + dimension) for dimension in range(output_dimensions)
+                )
+                for index in range(len(request.input_texts))
+            )
+
+        if request.options.normalize:
+            vectors = tuple(self._normalize_vector(vector) for vector in vectors)
+        return vectors, output_dimensions
+
+    def _generation_plan(self, request: GenerationRequest) -> _GenerationPlan:
+        """Apply deterministic output controls or reject sampling controls."""
+        unsupported_sampling = tuple(
+            field_name
+            for field_name, value in (
+                ("temperature", request.options.temperature),
+                ("top_p", request.options.top_p),
+                ("seed", request.options.seed),
+            )
+            if value is not None
         )
+        if unsupported_sampling:
+            names = ", ".join(unsupported_sampling)
+            raise BackendRequestError(
+                f"fake backend does not support sampling controls: {names}"
+            )
+
+        output_text = "".join(self._config.generation_chunks)
+        stop_cutoffs = tuple(
+            position
+            for sequence in request.options.stop_sequences
+            if (position := output_text.find(sequence)) >= 0
+        )
+        stop_cutoff = min(stop_cutoffs) if stop_cutoffs else None
+        token_cutoff = self._token_limit_cutoff(
+            output_text,
+            request.options.maximum_output_tokens,
+        )
+
+        if token_cutoff is not None and (
+            stop_cutoff is None or token_cutoff < stop_cutoff
+        ):
+            cutoff = token_cutoff
+            finish_reason = "length"
+        elif stop_cutoff is not None:
+            cutoff = stop_cutoff
+            finish_reason = "stop"
+        else:
+            cutoff = len(output_text)
+            finish_reason = "stop"
+
+        chunks = self._truncate_chunks(self._config.generation_chunks, cutoff)
+        return _GenerationPlan(
+            chunks=chunks,
+            output_text=output_text[:cutoff],
+            finish_reason=finish_reason,
+        )
+
+    @staticmethod
+    def _normalize_vector(vector: tuple[float, ...]) -> tuple[float, ...]:
+        """L2-normalize a vector, retaining an all-zero vector unchanged."""
+        largest_magnitude = max(abs(value) for value in vector)
+        if largest_magnitude == 0:
+            return tuple(0.0 for _ in vector)
+        scaled = tuple(float(value / largest_magnitude) for value in vector)
+        scaled_norm = math.sqrt(math.fsum(value * value for value in scaled))
+        return tuple(value / scaled_norm for value in scaled)
+
+    @staticmethod
+    def _token_limit_cutoff(text: str, maximum_tokens: int | None) -> int | None:
+        """Return the character cutoff required by the fake whitespace tokenizer."""
+        if maximum_tokens is None:
+            return None
+        tokens = tuple(re.finditer(r"\S+", text))
+        if len(tokens) <= maximum_tokens:
+            return None
+        return tokens[maximum_tokens - 1].end()
+
+    @staticmethod
+    def _truncate_chunks(chunks: tuple[str, ...], cutoff: int) -> tuple[str, ...]:
+        """Preserve configured chunk boundaries up to a character cutoff."""
+        remaining = cutoff
+        selected: list[str] = []
+        for chunk in chunks:
+            if remaining == 0:
+                break
+            selected_length = min(len(chunk), remaining)
+            selected.append(chunk[:selected_length])
+            remaining -= selected_length
+        return tuple(selected)
 
     def _ensure_available(self) -> None:
         """Raise the lifecycle error appropriate to the current state."""
