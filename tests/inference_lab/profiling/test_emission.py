@@ -65,6 +65,7 @@ def test_emits_each_record_as_structured_json(record: ProfilingRecordLike) -> No
     assert "document_id" in payload
     assert "corpus_version" in payload
     assert payload["level"] in {"info", "warning", "error", "critical"}
+    assert payload["record_schema_version"] == 1
 
 
 def test_emitted_record_preserves_context_and_nullable_fields() -> None:

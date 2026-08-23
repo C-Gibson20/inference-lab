@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Literal, Self
 
 from .records import LogLevel
-from .resources import utc_now
+from .utils import utc_now, validate_record_schema_version
 
 
 Clock = Callable[[], int]
@@ -66,6 +66,7 @@ class StageTiming:
     document_id: str | None = None
     corpus_version: str | None = None
     parent_stage_id: str | None = None
+    record_schema_version: int = 1
 
     def __post_init__(self) -> None:
         self._validate()
@@ -97,6 +98,7 @@ class StageTiming:
             raise ValueError("timestamp must be timezone-aware UTC")
         if self.timestamp.utcoffset() != timedelta(0):
             raise ValueError("timestamp must be in UTC")
+        validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:
         """Return the timing record as structured logging fields."""
@@ -116,6 +118,7 @@ class StageTiming:
             "document_id": self.document_id,
             "corpus_version": self.corpus_version,
             "parent_stage_id": self.parent_stage_id,
+            "record_schema_version": self.record_schema_version,
         }
 
     @property

@@ -85,13 +85,13 @@ def test_non_utc_timestamp_is_rejected() -> None:
         )
 
 
-@pytest.mark.parametrize("version", [0, -1])
+@pytest.mark.parametrize("version", [0, -1, True, 1.5])
 def test_non_positive_schema_version_is_rejected(version: int) -> None:
-    with pytest.raises(ValueError, match="schema_version"):
+    with pytest.raises(ValueError, match="positive integer"):
         ProfilingRecord(
             event="stage_completed",
             module="profiling",
-            record_schema_version=version,
+            record_schema_version=version,  # type: ignore[arg-type]
         )
 
 

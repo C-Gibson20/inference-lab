@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from .records import LogLevel
-from .utils import utc_now
+from .utils import utc_now, validate_record_schema_version
 
 
 ResourceCategory = Literal[
@@ -74,6 +74,7 @@ class ResourceMeasurement:
     request_id: str | None = None
     document_id: str | None = None
     corpus_version: str | None = None
+    record_schema_version: int = 1
 
     def __post_init__(self) -> None:
         self._validate()
@@ -125,6 +126,7 @@ class ResourceMeasurement:
             raise ValueError("timestamp must be timezone-aware UTC")
         if self.timestamp.utcoffset() != timedelta(0):
             raise ValueError("timestamp must be in UTC")
+        validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:
         """Return the measurement as structured logging fields."""
@@ -145,6 +147,7 @@ class ResourceMeasurement:
             "request_id": self.request_id,
             "document_id": self.document_id,
             "corpus_version": self.corpus_version,
+            "record_schema_version": self.record_schema_version,
         }
 
     @property

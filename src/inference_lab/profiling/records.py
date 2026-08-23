@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from .utils import utc_now, is_snake_case
+from .utils import is_snake_case, utc_now, validate_record_schema_version
 
 
 _LOG_LEVELS = {"debug", "info", "warning", "error", "critical"}
@@ -59,8 +59,7 @@ class ProfilingRecord:
         if self.timestamp.utcoffset() != timedelta(0):
             raise ValueError("timestamp must be in UTC")
 
-        if self.record_schema_version < 1:
-            raise ValueError("record_schema_version must be positive")
+        validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:
         """Return the record as a structured-logging field dictionary."""

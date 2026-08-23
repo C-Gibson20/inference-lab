@@ -46,6 +46,7 @@ def test_failed_event_serializes_operational_fields() -> None:
         "partial": True,
         "exception_type": "ValueError",
         "timestamp": "2026-08-21T12:00:00+00:00",
+        "record_schema_version": 1,
     }
 
 
@@ -141,4 +142,13 @@ def test_naive_and_non_utc_timestamps_are_rejected() -> None:
             failure_category="internal",
             failure_code="unexpected_error",
             timestamp=non_utc,
+        )
+
+
+def test_failure_event_rejects_invalid_schema_version() -> None:
+    with pytest.raises(ValueError, match="record_schema_version"):
+        FailureEvent(
+            failure_category="internal",
+            failure_code="unexpected_error",
+            record_schema_version=0,
         )

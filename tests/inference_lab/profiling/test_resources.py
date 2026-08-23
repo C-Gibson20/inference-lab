@@ -43,6 +43,7 @@ def test_measured_resource_serializes_all_fields() -> None:
         "request_id": None,
         "document_id": None,
         "corpus_version": None,
+        "record_schema_version": 1,
     }
 
 
@@ -169,4 +170,14 @@ def test_naive_and_non_utc_timestamps_are_rejected() -> None:
             unit="watt",
             value=100,
             timestamp=non_utc,
+        )
+
+
+def test_resource_measurement_rejects_invalid_schema_version() -> None:
+    with pytest.raises(ValueError, match="record_schema_version"):
+        ResourceMeasurement(
+            category="power",
+            unit="watt",
+            value=100,
+            record_schema_version=0,
         )

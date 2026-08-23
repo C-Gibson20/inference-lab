@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from .utils import utc_now, is_snake_case
+from .utils import is_snake_case, utc_now, validate_record_schema_version
 from .records import LogLevel
 
 
@@ -64,6 +64,7 @@ class FailureEvent:
     partial: bool = False
     exception_type: str | None = None
     timestamp: datetime = field(default_factory=utc_now)
+    record_schema_version: int = 1
 
     def __post_init__(self) -> None:
         """Validate failure identity, severity, status, and privacy fields."""
@@ -117,6 +118,7 @@ class FailureEvent:
             raise ValueError("timestamp must be timezone-aware UTC")
         if self.timestamp.utcoffset() != timedelta(0):
             raise ValueError("timestamp must be in UTC")
+        validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:
         """Return the failure event as structured logging fields."""
@@ -138,4 +140,5 @@ class FailureEvent:
             "partial": self.partial,
             "exception_type": self.exception_type,
             "timestamp": self.timestamp.isoformat(),
+            "record_schema_version": self.record_schema_version,
         }

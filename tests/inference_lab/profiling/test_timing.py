@@ -160,6 +160,7 @@ def test_timing_record_serializes_nullable_fields() -> None:
     assert payload["items_processed"] is None
     assert payload["records_emitted"] is None
     assert payload["timestamp"] == "2026-08-21T12:00:00+00:00"
+    assert payload["record_schema_version"] == 1
 
 
 @pytest.mark.parametrize(
@@ -175,4 +176,17 @@ def test_timing_record_rejects_invalid_duration(duration_ms: object) -> None:
             stage_id="parse-1",
             duration_ms=duration_ms,  # type: ignore[arg-type]
             status="completed",
+        )
+
+
+def test_timing_record_rejects_invalid_schema_version() -> None:
+    with pytest.raises(ValueError, match="record_schema_version"):
+        StageTiming(
+            event="stage_completed",
+            module="profiling",
+            pipeline_stage="parse",
+            stage_id="parse-1",
+            duration_ms=1.0,
+            status="completed",
+            record_schema_version=0,
         )
