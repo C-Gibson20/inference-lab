@@ -1,6 +1,6 @@
 import pytest
 
-from inference_lab.backends.runtime.errors import (
+from inference_lab.backends.runtime import (
     BackendClosedError,
     BackendError,
     BackendNotReadyError,

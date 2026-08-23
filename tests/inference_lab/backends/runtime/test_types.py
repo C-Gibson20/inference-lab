@@ -2,7 +2,7 @@ from collections.abc import Callable
 
 import pytest
 
-from inference_lab.backends.runtime.types import (
+from inference_lab.backends.runtime import (
     BackendCapability,
     BackendMetadata,
     BackendOperation,

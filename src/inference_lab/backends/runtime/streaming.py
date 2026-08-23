@@ -22,6 +22,10 @@ async def validate_generation_stream(
 
     try:
         async for event in events:
+            if not isinstance(event, GenerationEvent):
+                raise BackendProtocolError(
+                    "generation stream must contain GenerationEvent values"
+                )
             if completion is not None:
                 raise BackendProtocolError(
                     "generation stream cannot contain events after completion"
@@ -37,8 +41,8 @@ async def validate_generation_stream(
                 yield event
     except BackendError:
         raise
-    except Exception as error:
-        raise BackendExecutionError() from error
+    except Exception:
+        raise BackendExecutionError() from None
 
     if completion is None:
         raise BackendProtocolError("generation stream ended without completion")

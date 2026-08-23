@@ -4,23 +4,20 @@ from io import StringIO
 
 import pytest
 
-from inference_lab.backends.runtime.errors import (
+from inference_lab.backends.runtime import (
+    BackendCapability,
+    BackendClosedError,
     BackendExecutionError,
+    BackendMetadata,
     BackendNotReadyError,
+    BackendOperation,
     BackendRequestError,
     BackendResourceError,
-)
-from inference_lab.backends.runtime.fake import (
+    EmbeddingOptions,
+    EmbeddingRequest,
     FakeBackend,
     FakeBackendConfig,
     FakeFailureMode,
-)
-from inference_lab.backends.runtime.types import (
-    BackendCapability,
-    BackendMetadata,
-    BackendOperation,
-    EmbeddingOptions,
-    EmbeddingRequest,
     GenerationEventType,
     GenerationMessage,
     GenerationOptions,
@@ -53,6 +50,28 @@ def test_fake_requires_load_before_inference() -> None:
 
     with pytest.raises(BackendNotReadyError):
         backend.embed(EmbeddingRequest(input_texts=("one",)))
+
+
+def test_fake_lifecycle_is_idempotent_and_close_is_permanent() -> None:
+    backend = FakeBackend()
+
+    assert backend.is_ready is False
+    assert backend.is_closed is False
+
+    backend.load()
+    backend.load()
+    assert backend.is_ready is True
+    assert backend.is_closed is False
+
+    backend.close()
+    backend.close()
+    assert backend.is_ready is False
+    assert backend.is_closed is True
+
+    with pytest.raises(BackendClosedError):
+        backend.embed(EmbeddingRequest(input_texts=("one",)))
+    with pytest.raises(BackendClosedError):
+        backend.load()
 
 
 @pytest.mark.parametrize("operation", tuple(BackendOperation))
@@ -540,6 +559,43 @@ def test_fake_can_inject_resource_failure() -> None:
 
     with pytest.raises(BackendResourceError):
         backend.embed(EmbeddingRequest(input_texts=("one",)))
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "error_type", "retryable"),
+    [
+        (FakeFailureMode.REQUEST, BackendRequestError, False),
+        (FakeFailureMode.EXECUTION, BackendExecutionError, False),
+        (FakeFailureMode.RESOURCE, BackendResourceError, True),
+    ],
+)
+def test_fake_logs_failed_operations_at_error_level(
+    failure_mode: FakeFailureMode,
+    error_type: type[Exception],
+    retryable: bool,
+) -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+    secret = "PRIVATE REQUEST CONTENT"
+    backend = FakeBackend(
+        FakeBackendConfig(
+            failure_mode=failure_mode,
+            fail_operation=BackendOperation.EMBED,
+        )
+    )
+    backend.load()
+
+    with pytest.raises(error_type):
+        backend.embed(EmbeddingRequest(input_texts=(secret,)))
+
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    failure_record = next(
+        record for record in records if record["event"] == "backend_operation_failed"
+    )
+    assert failure_record["level"] == "error"
+    assert failure_record["error_type"] == failure_mode.value
+    assert failure_record["retryable"] is retryable
+    assert secret not in stream.getvalue()
 
 
 def test_fake_exposes_configured_delays_to_injected_sleepers() -> None:

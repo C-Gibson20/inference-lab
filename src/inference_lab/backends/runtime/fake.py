@@ -555,7 +555,7 @@ class FakeBackend:
             if self._config.failure_mode is FakeFailureMode.RESOURCE
             else "execution"
         )
-        _LOGGER.warning(
+        _LOGGER.error(
             "backend_operation_failed",
             pipeline_stage="runtime",
             operation=operation.value,
