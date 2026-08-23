@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from .utils import is_snake_case, utc_now, validate_record_schema_version
 from .records import LogLevel
+from .utils import is_snake_case, utc_now
+from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
 
 
 FailureEventName = Literal["unit_failed", "unit_degraded"]
@@ -36,6 +38,9 @@ _FAILURE_CATEGORIES = frozenset(
 )
 _FAILURE_STATUSES = frozenset({"failed", "cancelled", "degraded"})
 _FAILURE_LEVELS = frozenset({"warning", "error"})
+_QUALIFIED_EXCEPTION_TYPE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*$"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +68,8 @@ class FailureEvent:
     retry_count: int = 0
     partial: bool = False
     exception_type: str | None = None
-    timestamp: datetime = field(default_factory=utc_now)
-    record_schema_version: int = 1
+    observed_at: datetime = field(default_factory=utc_now)
+    record_schema_version: int = CURRENT_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         """Validate failure identity, severity, status, and privacy fields."""
@@ -110,14 +115,14 @@ class FailureEvent:
         if isinstance(self.partial, bool) is False:
             raise ValueError("partial must be a boolean")
         if self.exception_type is not None:
-            if not self.exception_type or any(
-                character in self.exception_type for character in "\r\n"
-            ):
-                raise ValueError("exception_type must be a single non-empty line")
-        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
-            raise ValueError("timestamp must be timezone-aware UTC")
-        if self.timestamp.utcoffset() != timedelta(0):
-            raise ValueError("timestamp must be in UTC")
+            if not _QUALIFIED_EXCEPTION_TYPE.fullmatch(self.exception_type):
+                raise ValueError(
+                    "exception_type must be a qualified exception class name"
+                )
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware UTC")
+        if self.observed_at.utcoffset() != timedelta(0):
+            raise ValueError("observed_at must be in UTC")
         validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:
@@ -139,6 +144,6 @@ class FailureEvent:
             "retry_count": self.retry_count,
             "partial": self.partial,
             "exception_type": self.exception_type,
-            "timestamp": self.timestamp.isoformat(),
+            "observed_at": self.observed_at.isoformat(),
             "record_schema_version": self.record_schema_version,
         }

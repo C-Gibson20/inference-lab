@@ -11,11 +11,12 @@ from datetime import datetime, timedelta
 from typing import Literal, Self
 
 from .records import LogLevel
-from .utils import utc_now, validate_record_schema_version
+from .utils import utc_now
+from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
 
 
 Clock = Callable[[], int]
-TimestampFactory = Callable[[], datetime]
+ObservationTimeFactory = Callable[[], datetime]
 RecordEmitter = Callable[["StageTiming"], None]
 Event = Literal["stage_started", "stage_completed"]
 Status = Literal["started", "completed", "failed", "cancelled"]
@@ -56,7 +57,7 @@ class StageTiming:
     module: str
     pipeline_stage: str
     stage_id: str
-    timestamp: datetime = field(default_factory=utc_now)
+    observed_at: datetime = field(default_factory=utc_now)
     duration_ms: float | None = None
     items_processed: int | None = None
     records_emitted: int | None = None
@@ -66,7 +67,7 @@ class StageTiming:
     document_id: str | None = None
     corpus_version: str | None = None
     parent_stage_id: str | None = None
-    record_schema_version: int = 1
+    record_schema_version: int = CURRENT_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         self._validate()
@@ -94,10 +95,10 @@ class StageTiming:
         _validate_non_negative_duration(self.duration_ms, "duration_ms")
         _validate_non_negative_integer(self.items_processed, "items_processed")
         _validate_non_negative_integer(self.records_emitted, "records_emitted")
-        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
-            raise ValueError("timestamp must be timezone-aware UTC")
-        if self.timestamp.utcoffset() != timedelta(0):
-            raise ValueError("timestamp must be in UTC")
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware UTC")
+        if self.observed_at.utcoffset() != timedelta(0):
+            raise ValueError("observed_at must be in UTC")
         validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:
@@ -108,7 +109,7 @@ class StageTiming:
             "level": self.level,
             "pipeline_stage": self.pipeline_stage,
             "stage_id": self.stage_id,
-            "timestamp": self.timestamp.isoformat(),
+            "observed_at": self.observed_at.isoformat(),
             "duration_ms": self.duration_ms,
             "items_processed": self.items_processed,
             "records_emitted": self.records_emitted,
@@ -147,7 +148,7 @@ class StageTimer:
         stage_id: str,
         emit: RecordEmitter,
         clock: Clock = time.monotonic_ns,
-        timestamp_factory: TimestampFactory = utc_now,
+        observed_at_factory: ObservationTimeFactory = utc_now,
         run_id: str | None = None,
         request_id: str | None = None,
         document_id: str | None = None,
@@ -159,15 +160,15 @@ class StageTimer:
             raise TypeError("emit must be callable")
         if not callable(clock):
             raise TypeError("clock must be callable")
-        if not callable(timestamp_factory):
-            raise TypeError("timestamp_factory must be callable")
+        if not callable(observed_at_factory):
+            raise TypeError("observed_at_factory must be callable")
 
         self._module = module
         self._pipeline_stage = pipeline_stage
         self._stage_id = stage_id
         self._emit = emit
         self._clock = clock
-        self._timestamp_factory = timestamp_factory
+        self._observed_at_factory = observed_at_factory
         self._run_id = run_id
         self._request_id = request_id
         self._document_id = document_id
@@ -211,7 +212,12 @@ class StageTimer:
             status = "failed"
 
         self._finished = True
-        self._emit(self._build_record("stage_completed", status, duration_ms))
+        try:
+            completion = self._build_record("stage_completed", status, duration_ms)
+            self._emit(completion)
+        except BaseException:
+            if exc_type is None:
+                raise
         return False
 
     def set_counts(
@@ -240,7 +246,7 @@ class StageTimer:
             module=self._module,
             pipeline_stage=self._pipeline_stage,
             stage_id=self._stage_id,
-            timestamp=self._timestamp_factory(),
+            observed_at=self._observed_at_factory(),
             duration_ms=duration_ms,
             items_processed=(
                 self._items_processed if event == "stage_completed" else None

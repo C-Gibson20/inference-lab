@@ -15,7 +15,7 @@ class ProfilingRecordLike(Protocol):
 
 _LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
 _REQUIRED_FIELDS = (
-    "timestamp",
+    "observed_at",
     "module",
     "pipeline_stage",
     "document_id",

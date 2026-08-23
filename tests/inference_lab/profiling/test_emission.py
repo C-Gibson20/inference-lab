@@ -31,22 +31,21 @@ def fixed_timestamp() -> datetime:
             module="ingest",
             pipeline_stage="parse",
             stage_id="parse-1",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
             duration_ms=2.5,
             status="completed",
         ),
         ResourceMeasurement(
             category="gpu_utilization",
-            unit="percent",
             value=75.0,
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
         ),
         FailureEvent(
             failure_category="input",
             failure_code="malformed_document",
             module="ingest",
             pipeline_stage="parse",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
         ),
     ],
 )
@@ -60,6 +59,7 @@ def test_emits_each_record_as_structured_json(record: ProfilingRecordLike) -> No
     assert isinstance(payload["event"], str)
     assert isinstance(payload["timestamp"], str)
     assert payload["timestamp"].endswith("Z")
+    assert payload["observed_at"] == "2026-08-21T12:00:00+00:00"
     assert payload["module"] is not None
     assert "pipeline_stage" in payload
     assert "document_id" in payload
@@ -76,9 +76,8 @@ def test_emitted_record_preserves_context_and_nullable_fields() -> None:
         structlog.get_logger("profiling"),
         ResourceMeasurement(
             category="kv_cache",
-            unit="GiB",
             value=4.0,
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
             module="runtime",
             pipeline_stage="generate",
             stage_id="generate-1",
@@ -110,7 +109,7 @@ def test_failure_output_contains_no_raw_payload_fields() -> None:
             failure_category="internal",
             failure_code="backend_failed",
             exception_type="RuntimeError",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
         ),
     )
 
@@ -132,10 +131,9 @@ def test_infers_warning_for_unavailable_measurement() -> None:
         structlog.get_logger("profiling"),
         ResourceMeasurement(
             category="power",
-            unit="watt",
             value=None,
             status="unavailable",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
         ),
     )
 
@@ -153,7 +151,7 @@ def test_infers_error_for_failed_timing_record() -> None:
             module="ingest",
             pipeline_stage="parse",
             stage_id="parse-1",
-            timestamp=fixed_timestamp(),
+            observed_at=fixed_timestamp(),
             duration_ms=2.5,
             status="failed",
         ),

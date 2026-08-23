@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from .utils import is_snake_case, utc_now, validate_record_schema_version
+from .utils import is_snake_case, utc_now
+from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
 
 
 _LOG_LEVELS = {"debug", "info", "warning", "error", "critical"}
@@ -33,8 +34,8 @@ class ProfilingRecord:
     request_id: str | None = None
     stage_id: str | None = None
     parent_stage_id: str | None = None
-    timestamp: datetime = field(default_factory=utc_now)
-    record_schema_version: int = 1
+    observed_at: datetime = field(default_factory=utc_now)
+    record_schema_version: int = CURRENT_RECORD_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         self._validate()
@@ -53,11 +54,11 @@ class ProfilingRecord:
         if self.level not in _LOG_LEVELS:
             raise ValueError(f"unsupported log level: {self.level!r}")
 
-        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
-            raise ValueError("timestamp must be timezone-aware UTC")
+        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
+            raise ValueError("observed_at must be timezone-aware UTC")
 
-        if self.timestamp.utcoffset() != timedelta(0):
-            raise ValueError("timestamp must be in UTC")
+        if self.observed_at.utcoffset() != timedelta(0):
+            raise ValueError("observed_at must be in UTC")
 
         validate_record_schema_version(self.record_schema_version)
 
@@ -74,6 +75,6 @@ class ProfilingRecord:
             "request_id": self.request_id,
             "stage_id": self.stage_id,
             "parent_stage_id": self.parent_stage_id,
-            "timestamp": self.timestamp.isoformat(),
+            "observed_at": self.observed_at.isoformat(),
             "record_schema_version": self.record_schema_version,
         }

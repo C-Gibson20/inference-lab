@@ -15,7 +15,7 @@ def test_valid_record_serializes_all_fields() -> None:
         module="profiling",
         pipeline_stage="parse",
         run_id="run-1",
-        timestamp=timestamp,
+        observed_at=timestamp,
     )
 
     assert record.to_dict() == {
@@ -29,7 +29,7 @@ def test_valid_record_serializes_all_fields() -> None:
         "request_id": None,
         "stage_id": None,
         "parent_stage_id": None,
-        "timestamp": "2026-08-21T12:00:00+00:00",
+        "observed_at": "2026-08-21T12:00:00+00:00",
         "record_schema_version": 1,
     }
 
@@ -58,16 +58,16 @@ def test_invalid_level_is_rejected() -> None:
         )
 
 
-def test_naive_timestamp_is_rejected() -> None:
-    with pytest.raises(ValueError, match="timezone-aware UTC"):
+def test_naive_observation_time_is_rejected() -> None:
+    with pytest.raises(ValueError, match="observed_at must be timezone-aware UTC"):
         ProfilingRecord(
             event="stage_completed",
             module="profiling",
-            timestamp=datetime(2026, 8, 21, 12, 0),
+            observed_at=datetime(2026, 8, 21, 12, 0),
         )
 
 
-def test_non_utc_timestamp_is_rejected() -> None:
+def test_non_utc_observation_time_is_rejected() -> None:
     timestamp = datetime(
         2026,
         8,
@@ -77,17 +77,17 @@ def test_non_utc_timestamp_is_rejected() -> None:
         tzinfo=timezone(timedelta(hours=1)),
     )
 
-    with pytest.raises(ValueError, match="timestamp must be in UTC"):
+    with pytest.raises(ValueError, match="observed_at must be in UTC"):
         ProfilingRecord(
             event="stage_completed",
             module="profiling",
-            timestamp=timestamp,
+            observed_at=timestamp,
         )
 
 
-@pytest.mark.parametrize("version", [0, -1, True, 1.5])
-def test_non_positive_schema_version_is_rejected(version: int) -> None:
-    with pytest.raises(ValueError, match="positive integer"):
+@pytest.mark.parametrize("version", [0, -1, 2, 999, True, 1.5])
+def test_unsupported_schema_version_is_rejected(version: object) -> None:
+    with pytest.raises(ValueError, match="record_schema_version"):
         ProfilingRecord(
             event="stage_completed",
             module="profiling",
