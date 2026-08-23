@@ -55,6 +55,24 @@ def test_stream_requires_completion() -> None:
         asyncio.run(collect(validate_generation_stream(events(delta(0, "hello")))))
 
 
+@pytest.mark.parametrize("trailing_event", [delta(2, "late"), completed(2)])
+def test_stream_rejects_events_after_completion(
+    trailing_event: GenerationEvent,
+) -> None:
+    async def consume() -> list[GenerationEvent]:
+        forwarded = []
+        with pytest.raises(BackendProtocolError, match="after completion"):
+            async for event in validate_generation_stream(
+                events(delta(0, "hello"), completed(1), trailing_event)
+            ):
+                forwarded.append(event)
+        return forwarded
+
+    forwarded = asyncio.run(consume())
+
+    assert [event.event_type for event in forwarded] == [GenerationEventType.DELTA]
+
+
 async def failing_events():
     yield delta(0, "partial")
     raise RuntimeError("backend implementation detail")
