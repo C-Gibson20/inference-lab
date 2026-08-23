@@ -1,6 +1,7 @@
 """Tests for reusable evaluation schemas."""
 
 from datetime import date, datetime
+from typing import TypedDict
 
 import pytest
 from pydantic import ValidationError
@@ -16,7 +17,17 @@ from inference_lab.evaluation.schemas import (
 )
 
 
-IDS = {
+class EvidenceIds(TypedDict):
+    """Typed keyword fixture for evidence-reference identifiers."""
+
+    evidence_id: str
+    corpus_version: str
+    document_id: str
+    document_version_id: str
+    source_span_id: str
+
+
+IDS: EvidenceIds = {
     "evidence_id": "evidence-primary",
     "corpus_version": "00000000-0000-4000-8000-000000000002",
     "document_id": "00000000-0000-4000-8000-000000000003",
@@ -72,7 +83,7 @@ def test_provenance_ids_must_be_canonical_uuids() -> None:
     invalid = dict(IDS, document_id="document-1")
 
     with pytest.raises(ValidationError, match="valid UUID"):
-        EvidenceReference(**invalid)
+        EvidenceReference.model_validate(invalid)
 
 
 def test_authoritative_document_evidence_is_rejected() -> None:
@@ -125,10 +136,12 @@ def test_expectations_require_meaningful_unique_values_and_evidence() -> None:
         )
 
     with pytest.raises(ValidationError, match="YYYY-MM-DD"):
-        DateExpectation(
-            key="publication_date",
-            evidence_ids=("evidence-primary",),
-            value="2024-03-15T00:00:00Z",
+        DateExpectation.model_validate(
+            {
+                "key": "publication_date",
+                "evidence_ids": ("evidence-primary",),
+                "value": "2024-03-15T00:00:00Z",
+            }
         )
 
 
@@ -148,10 +161,12 @@ def test_numeric_expectations_reject_booleans_and_non_finite_values() -> None:
         )
 
     with pytest.raises(ValidationError):
-        NumericExpectation(
-            key="activity",
-            evidence_ids=("evidence-primary",),
-            value="42",
+        NumericExpectation.model_validate(
+            {
+                "key": "activity",
+                "evidence_ids": ("evidence-primary",),
+                "value": "42",
+            }
         )
 
     with pytest.raises(ValidationError, match="unique numbers"):
@@ -181,7 +196,7 @@ def test_numeric_expectations_reject_booleans_and_non_finite_values() -> None:
 
 def test_evaluation_policy_rejects_boolean_coercion() -> None:
     with pytest.raises(ValidationError, match="must be booleans"):
-        EvaluationPolicy(held_out_tuning_allowed=0)
+        EvaluationPolicy.model_validate({"held_out_tuning_allowed": 0})
 
 
 def test_expected_answer_rejects_duplicate_keys_and_invalid_comparisons() -> None:

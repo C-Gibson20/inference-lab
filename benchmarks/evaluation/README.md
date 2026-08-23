@@ -10,10 +10,13 @@ the coverage policy enforced by `validate_final_benchmark()`.
 Validate a final benchmark with:
 
 ```sh
-PYTHONPATH=src uv run python \
-  scripts/validate-evaluation-benchmark.py \
+uv run python \
+  scripts/inference_lab/evaluation/validate-evaluation-benchmark.py \
   benchmarks/evaluation/manifest.json
 ```
 
-The command is expected to reject the current contract fixture until the real
-question set is curated and its immutable corpus evidence is available.
+Exit status `0` means the dataset passed loading, coverage, held-out
+composition, and leakage checks. Any other status means it must not be used as
+the final benchmark. The command deliberately exits with status `1` for the
+current contract fixture until the real question set is curated and its
+immutable corpus evidence is available.

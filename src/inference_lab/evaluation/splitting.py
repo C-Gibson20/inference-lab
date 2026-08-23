@@ -258,23 +258,23 @@ def generate_splits(
         ordered_cases,
         near_duplicate_threshold=policy.near_duplicate_threshold,
     )
-    targets = {
+    targets: dict[SplitName, float] = {
         split: fraction * len(ordered_cases)
         for split, fraction in policy.fractions.items()
     }
-    counts = dict.fromkeys(_SPLIT_ORDER, 0)
+    counts: dict[SplitName, int] = dict.fromkeys(_SPLIT_ORDER, 0)
     assignments: dict[str, SplitName] = {}
 
     ranked_groups = sorted(
         groups,
         key=lambda group: assignment_key(policy.seed, group.group_key),
     )
-    eligible_splits = tuple(
+    eligible_splits: tuple[SplitName, ...] = tuple(
         split for split in _SPLIT_ORDER if policy.fractions[split] > 0.0
     )
 
     for group in ranked_groups:
-        split = min(
+        split: SplitName = min(
             eligible_splits,
             key=lambda candidate: (
                 counts[candidate] - targets[candidate],

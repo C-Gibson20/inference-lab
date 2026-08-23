@@ -284,7 +284,7 @@ class ExpectedAnswer(BaseModel):
             raise ValueError("comparison_order requires comparison evidence")
 
         expected_members = set(self.comparison_order)
-        seen_orders = {self.comparison_order}
+        seen_orders: set[tuple[str, ...]] = {self.comparison_order}
         for order in self.acceptable_comparison_orders:
             _validate_unique_strings(order, field_name="acceptable_comparison_orders")
             if set(order) != expected_members or len(order) != len(

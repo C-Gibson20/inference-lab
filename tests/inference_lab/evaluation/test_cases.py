@@ -1,5 +1,7 @@
 """Tests for evaluation-case semantics."""
 
+from typing import Literal
+
 import pytest
 from pydantic import ValidationError
 
@@ -9,8 +11,10 @@ from .test_schemas import IDS
 
 
 def _evidence(
-    *, role: str = "authoritative", evidence_id: str = "evidence-primary"
-) -> tuple[dict[str, str], ...]:
+    *,
+    role: Literal["authoritative", "context"] = "authoritative",
+    evidence_id: str = "evidence-primary",
+) -> tuple[dict[str, object], ...]:
     return (dict(IDS, evidence_id=evidence_id, role=role),)
 
 

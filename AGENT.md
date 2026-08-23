@@ -60,6 +60,7 @@ From the repository root, run:
 ```sh
 uv run ruff check .
 uv run ruff format --check .
+uv run pyright
 uv run pytest
 ```
 

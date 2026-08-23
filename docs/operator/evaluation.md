@@ -23,6 +23,22 @@ Do not read case files around the loader or trust a caller-provided checksum.
 Before using a dataset, confirm that the local corpus matches its `corpus_id`
 and `corpus_version`.
 
+Loading confirms that a dataset is structurally valid. Before designating one
+as the final benchmark, also run the final acceptance gate from the repository
+root:
+
+```sh
+uv run python \
+  scripts/inference_lab/evaluation/validate-evaluation-benchmark.py \
+  /local/path/to/evaluation/manifest.json
+```
+
+Exit status `0` confirms the 30–50 case limit, global question-type and
+answerability coverage, representative held-out composition, and cross-split
+leakage checks. A non-zero status rejects the dataset. The committed synthetic
+fixture is expected to exit with status `1` because it is intentionally too
+small for final acceptance.
+
 ## Write a dataset
 
 Construct validated `EvaluationCase` and `DatasetManifest` values, then use
@@ -50,7 +66,7 @@ an existing manifest.
 Generate the Draft 2020-12 JSON Schema used by external dataset tooling with:
 
 ```sh
-PYTHONPATH=src uv run python \
+uv run python \
   scripts/inference_lab/evaluation/generate-evaluation-schema.py \
   /local/path/evaluation-schema.json
 ```

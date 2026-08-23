@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,6 +25,16 @@ from inference_lab.evaluation.serialisation import (
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
 from .test_loader import CORPUS_ID, CORPUS_VERSION, _case
+
+
+REPOSITORY_ROOT = Path(__file__).parents[3]
+SCHEMA_GENERATOR = (
+    REPOSITORY_ROOT
+    / "scripts"
+    / "inference_lab"
+    / "evaluation"
+    / "generate-evaluation-schema.py"
+)
 
 
 def _evaluation_case(case_id: str = "case-001") -> EvaluationCase:
@@ -282,4 +294,23 @@ def test_schema_can_be_written_as_json(tmp_path: Path) -> None:
         reference.startswith("#/$defs/")
         and reference.removeprefix("#/$defs/") in definitions
         for reference in references
+    )
+
+
+def test_documented_schema_generator_writes_public_schema(tmp_path: Path) -> None:
+    destination = tmp_path / "evaluation-schema.json"
+
+    result = subprocess.run(
+        [sys.executable, str(SCHEMA_GENERATOR), str(destination)],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert json.loads(destination.read_text(encoding="utf-8")) == (
+        evaluation_json_schema()
     )

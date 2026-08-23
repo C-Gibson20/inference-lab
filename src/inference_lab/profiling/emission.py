@@ -10,6 +10,7 @@ class ProfilingRecordLike(Protocol):
 
     def to_dict(self) -> dict[str, object]:
         """Return structured fields for one profiling record."""
+        ...
 
 
 _LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})

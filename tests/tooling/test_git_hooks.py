@@ -41,6 +41,7 @@ def test_pre_commit_runs_lint_and_format_checks(tmp_path: Path) -> None:
     assert calls.read_text().splitlines() == [
         "run ruff check .",
         "run ruff format --check .",
+        "run pyright",
     ]
 
 
