@@ -162,14 +162,12 @@ class _UnionFind:
             self._parents[left_root] = right_root
 
 
-def build_leakage_groups(
-    cases: Iterable[EvaluationCase],
-    *,
-    near_duplicate_threshold: float = 0.9,
-) -> tuple[LeakageGroup, ...]:
-    """Build transitive leakage groups from cases and stable annotations."""
-    ordered_cases = tuple(cases)
-    if not ordered_cases:
+def _validate_leakage_group_inputs(
+    cases: tuple[EvaluationCase, ...],
+    near_duplicate_threshold: float,
+) -> None:
+    """Validate leakage-group inputs before building indexes."""
+    if not cases:
         raise ValueError("At least one case is required")
     if (
         isinstance(near_duplicate_threshold, bool)
@@ -181,35 +179,57 @@ def build_leakage_groups(
             "near_duplicate_threshold must be finite and between 0.0 and 1.0"
         )
 
-    case_ids = [case.case_id for case in ordered_cases]
+    case_ids = [case.case_id for case in cases]
     if len(case_ids) != len(set(case_ids)):
         raise ValueError("Evaluation case IDs must be unique")
 
-    union_find = _UnionFind(len(ordered_cases))
-    key_owner: dict[str, int] = {}
-    tokens = [token_set(case.question) for case in ordered_cases]
 
-    for index, case in enumerate(ordered_cases):
-        keys = {
-            f"question:{question_key(case.question)}",
-            *evidence_group_keys(case),
-        }
-        if case.expected_answer.has_expectations or case.expected_answer.summary:
-            keys.add(f"answer:{answer_fingerprint(case)}")
-        for key in keys:
+def _grouping_keys(case: EvaluationCase) -> set[str]:
+    """Return exact-match grouping keys for one evaluation case."""
+    keys = {
+        f"question:{question_key(case.question)}",
+        *evidence_group_keys(case),
+    }
+    if case.expected_answer.has_expectations or case.expected_answer.summary:
+        keys.add(f"answer:{answer_fingerprint(case)}")
+    return keys
+
+
+def _union_exact_matches(
+    cases: tuple[EvaluationCase, ...],
+    union_find: _UnionFind,
+) -> None:
+    """Join cases sharing an exact question, evidence, or answer key."""
+    key_owner: dict[str, int] = {}
+    for index, case in enumerate(cases):
+        for key in _grouping_keys(case):
             owner = key_owner.setdefault(key, index)
             union_find.union(index, owner)
 
-    for left in range(len(ordered_cases)):
-        for right in range(left + 1, len(ordered_cases)):
+
+def _union_near_duplicate_questions(
+    cases: tuple[EvaluationCase, ...],
+    union_find: _UnionFind,
+    near_duplicate_threshold: float,
+) -> None:
+    """Join cases whose normalized question tokens meet the similarity threshold."""
+    tokens = [token_set(case.question) for case in cases]
+    for left in range(len(cases)):
+        for right in range(left + 1, len(cases)):
             if (
                 jaccard_similarity(tokens[left], tokens[right])
                 >= near_duplicate_threshold
             ):
                 union_find.union(left, right)
 
+
+def _materialise_leakage_groups(
+    cases: tuple[EvaluationCase, ...],
+    union_find: _UnionFind,
+) -> tuple[LeakageGroup, ...]:
+    """Build deterministically ordered leakage groups from union-find roots."""
     grouped: dict[int, list[EvaluationCase]] = {}
-    for index, case in enumerate(ordered_cases):
+    for index, case in enumerate(cases):
         grouped.setdefault(union_find.find(index), []).append(case)
 
     groups = []
@@ -219,8 +239,25 @@ def build_leakage_groups(
             "group\x00" + "\x00".join(case.case_id for case in sorted_cases)
         )
         groups.append(LeakageGroup(group_key=group_key, cases=sorted_cases))
-
     return tuple(sorted(groups, key=lambda group: group.group_key))
+
+
+def build_leakage_groups(
+    cases: Iterable[EvaluationCase],
+    *,
+    near_duplicate_threshold: float = 0.9,
+) -> tuple[LeakageGroup, ...]:
+    """Build transitive leakage groups from cases and stable annotations."""
+    ordered_cases = tuple(cases)
+    _validate_leakage_group_inputs(ordered_cases, near_duplicate_threshold)
+    union_find = _UnionFind(len(ordered_cases))
+    _union_exact_matches(ordered_cases, union_find)
+    _union_near_duplicate_questions(
+        ordered_cases,
+        union_find,
+        near_duplicate_threshold,
+    )
+    return _materialise_leakage_groups(ordered_cases, union_find)
 
 
 def validate_no_leakage(

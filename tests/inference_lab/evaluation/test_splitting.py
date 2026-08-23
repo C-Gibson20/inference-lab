@@ -79,6 +79,48 @@ def test_stable_digest_and_jaccard_are_deterministic() -> None:
     assert jaccard_similarity(frozenset({"a", "b"}), frozenset({"b", "c"})) == 1 / 3
 
 
+@pytest.mark.parametrize(
+    "threshold",
+    [True, math.nan, -0.1, 1.1],
+)
+def test_leakage_group_threshold_is_validated(threshold: object) -> None:
+    case = _evaluation_case("case-001", "What was measured?")
+
+    with pytest.raises(ValueError, match="near_duplicate_threshold"):
+        build_leakage_groups(
+            (case,),
+            near_duplicate_threshold=threshold,  # type: ignore[arg-type]
+        )
+
+
+def test_leakage_group_cases_must_be_present_and_unique() -> None:
+    case = _evaluation_case("case-001", "What was measured?")
+
+    with pytest.raises(ValueError, match="case IDs must be unique"):
+        build_leakage_groups((case, case))
+
+    with pytest.raises(ValueError, match="At least one case"):
+        build_leakage_groups(())
+
+
+def test_leakage_group_output_is_independent_of_input_order() -> None:
+    cases = (
+        _evaluation_case("case-001", "alpha", document_id=DOCUMENT_ID),
+        _evaluation_case(
+            "case-002",
+            "beta",
+            document_id="00000000-0000-4000-8000-000000000006",
+        ),
+        _evaluation_case(
+            "case-003",
+            "gamma",
+            document_id="00000000-0000-4000-8000-000000000007",
+        ),
+    )
+
+    assert build_leakage_groups(cases) == build_leakage_groups(reversed(cases))
+
+
 def test_shared_document_cases_form_one_leakage_group() -> None:
     cases = (
         _evaluation_case("case-001", "What was measured?"),
