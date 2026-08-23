@@ -108,13 +108,14 @@ def test_case_rejects_missing_or_invalid_evidence_links() -> None:
         EvaluationCase.model_validate(context_link)
 
 
-def test_absent_evidence_abstention_has_no_expected_answer() -> None:
+@pytest.mark.parametrize("reason", ["evidence_absent", "deliberately_unanswerable"])
+def test_absent_evidence_abstention_has_no_expected_answer(reason: str) -> None:
     payload = _case_payload()
     payload.update(
         {
             "expected_answer": {},
             "evidence": _evidence(role="context"),
-            "abstention": {"expected": True, "reason": "evidence_absent"},
+            "abstention": {"expected": True, "reason": reason},
         }
     )
 
