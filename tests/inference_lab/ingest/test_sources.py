@@ -11,7 +11,7 @@ from inference_lab.ingest import (
     StructuralBlock,
     StructuralBlockKind,
     generate_source_span_id,
-    normalise_text,
+    normalise_source_text,
 )
 from inference_lab.provenance import (
     DocumentId,
@@ -47,7 +47,9 @@ def _block(
         end_offset=end_offset,
     )
     block_text = (
-        normalise_text(source_text[start_offset:end_offset]) if text is None else text
+        normalise_source_text(source_text[start_offset:end_offset])
+        if text is None
+        else text
     )
     return StructuralBlock(kind=kind, text=block_text, source_span=span)
 
@@ -62,7 +64,7 @@ def _parsed_document(
     paragraphs: tuple[StructuralBlock, ...] | None = None,
 ) -> ParsedDocument:
     """Build a parsed document for canonical-output validation tests."""
-    normalised_text = normalise_text(source_text)
+    normalised_text = normalise_source_text(source_text)
     return ParsedDocument(
         document_id=DocumentId.generate(),
         document_version_id=document_version_id,

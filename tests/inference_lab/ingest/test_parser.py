@@ -11,7 +11,7 @@ from inference_lab.ingest import (
     ParserDecodeError,
     ParserInput,
     ParserInputError,
-    normalise_text,
+    normalise_source_text,
     prepare_text,
 )
 from inference_lab.provenance import (
@@ -166,7 +166,7 @@ def test_prepare_text_normalizes_newlines_and_unicode() -> None:
 
 
 def test_normalization_preserves_whitespace() -> None:
-    assert normalise_text("  A \n\n B\t") == "  A \n\n B\t"
+    assert normalise_source_text("  A \n\n B\t") == "  A \n\n B\t"
 
 
 def test_malformed_source_bytes_are_rejected() -> None:

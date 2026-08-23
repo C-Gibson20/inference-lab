@@ -11,7 +11,7 @@ from typing import Iterable
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.utils import (
     SplitName,
-    normalise_text,
+    normalise_for_duplicate_detection,
 )
 from inference_lab.evaluation.versioning import (
     CURRENT_SPLIT_ALGORITHM_VERSION,
@@ -94,12 +94,12 @@ def assignment_key(seed: str, group_key: str) -> str:
 
 def question_key(question: str) -> str:
     """Return a stable key for a normalized question."""
-    return stable_digest(normalise_text(question))
+    return stable_digest(normalise_for_duplicate_detection(question))
 
 
 def token_set(value: str) -> frozenset[str]:
     """Return normalized tokens for duplicate detection."""
-    return frozenset(normalise_text(value).split())
+    return frozenset(normalise_for_duplicate_detection(value).split())
 
 
 def jaccard_similarity(left: frozenset[str], right: frozenset[str]) -> float:

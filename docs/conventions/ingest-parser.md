@@ -42,7 +42,11 @@ are ordered by non-decreasing source start offset. `pages`, `sections`, and
 their corresponding block kind; a block of one of those kinds requires its
 typed collection to be available.
 
-`NormalisedText.source_text` is the strictly decoded source coordinate space. `NormalisedText.text` is NFC-normalized text with CRLF and CR converted to LF. Whitespace is otherwise preserved. Empty input is a successful empty document; an unavailable structure is `None`, while a present empty collection is `()`.
+`NormalisedText.source_text` is the strictly decoded source coordinate space.
+`NormalisedText.text` is produced by `normalise_source_text`: it is NFC-normalized
+text with CRLF and CR converted to LF. Whitespace is otherwise preserved. Empty
+input is a successful empty document; an unavailable structure is `None`, while
+a present empty collection is `()`.
 
 Paragraph boundaries are derived from `source_text` before normalization. LF,
 CRLF, and CR are line endings. One or more lines containing only spaces or

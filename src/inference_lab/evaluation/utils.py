@@ -59,7 +59,7 @@ def is_sha256_pattern(s: str) -> bool:
     return bool(_SHA256_PATTERN.fullmatch(s))
 
 
-def normalise_text(value: str) -> str:
-    """Normalize text for duplicate detection only."""
+def normalise_for_duplicate_detection(value: str) -> str:
+    """Normalize text only for deterministic duplicate detection."""
     normalized = unicodedata.normalize("NFKC", value).casefold()
     return _WHITESPACE.sub(" ", normalized).strip()

@@ -66,6 +66,11 @@ values are finite and do not accept booleans or numeric strings. Dates use
 `YYYY-MM-DD` without datetime coercion. Comparisons contain at least two unique
 values, and every acceptable ordering contains exactly the same values.
 
+Duplicate detection uses `normalise_for_duplicate_detection`, an intentionally
+lossy comparison policy that applies NFKC, case folding, whitespace collapse,
+and stripping. It is not a canonical document-text transformation and must not
+be used for source text or provenance offsets.
+
 Every evidence reference has a case-local `evidence_id`. Claims, numeric and
 date expectations, and comparison expectations identify their supporting
 evidence through these IDs. References must resolve within the same case and

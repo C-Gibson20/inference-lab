@@ -14,7 +14,7 @@ from inference_lab.ingest.parser import (
     prepare_text,
 )
 from inference_lab.ingest.sources import SourceSpan, StructuralBlock
-from inference_lab.ingest.utils import normalise_text
+from inference_lab.ingest.utils import normalise_source_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     generate_source_span_id,
@@ -73,7 +73,7 @@ def _paragraph_blocks(
         )
         block = StructuralBlock(
             kind="paragraph",
-            text=normalise_text(source_text[start_offset:end_offset]),
+            text=normalise_source_text(source_text[start_offset:end_offset]),
             source_span=span,
         )
         blocks.append(block)

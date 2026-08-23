@@ -18,7 +18,11 @@ from pydantic import (
     model_validator,
 )
 
-from inference_lab.evaluation.utils import EvidenceId, ExpectationKey, normalise_text
+from inference_lab.evaluation.utils import (
+    EvidenceId,
+    ExpectationKey,
+    normalise_for_duplicate_detection,
+)
 from inference_lab.provenance import (
     CorpusVersionId,
     DocumentId,
@@ -42,7 +46,7 @@ def _require_non_blank(value: str | None, *, field_name: str) -> str | None:
 
 def _validate_unique_strings(values: tuple[str, ...], *, field_name: str) -> None:
     """Reject blank or normalized-duplicate strings."""
-    normalized = tuple(normalise_text(value) for value in values)
+    normalized = tuple(normalise_for_duplicate_detection(value) for value in values)
     if any(not value for value in normalized):
         raise ValueError(f"{field_name} must not contain blank values")
     if len(normalized) != len(set(normalized)):

@@ -9,7 +9,7 @@ import structlog
 from inference_lab.ingest.errors import ParserDecodeError
 from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.ingest.sources import StructuralBlock
-from inference_lab.ingest.utils import normalise_text
+from inference_lab.ingest.utils import normalise_source_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,
@@ -62,7 +62,7 @@ class NormalisedText:
     def __post_init__(self) -> None:
         if not isinstance(self.source_text, str):
             raise ValueError("source_text_must_be_string")
-        object.__setattr__(self, "text", normalise_text(self.source_text))
+        object.__setattr__(self, "text", normalise_source_text(self.source_text))
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,7 +197,7 @@ class ParsedDocument:
         if span.end_offset > source_length:
             raise ValueError("source_span_exceeds_source_text")
         source_text = self.text.source_text[span.start_offset : span.end_offset]
-        if block.text != normalise_text(source_text):
+        if block.text != normalise_source_text(source_text):
             raise ValueError("block_text_source_span_mismatch")
         expected_span_id = generate_source_span_id(
             self.document_version_id,

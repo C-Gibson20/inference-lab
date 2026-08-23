@@ -16,7 +16,6 @@ from inference_lab.ingest.parser import (
     ParserInput,
     ParserInputError,
     decode_source,
-    normalise_text,
     prepare_text,
 )
 from inference_lab.ingest.serialisation import (
@@ -30,6 +29,7 @@ from inference_lab.ingest.sources import (
     StructuralBlockKind,
 )
 from inference_lab.ingest.text_native import TextNativeParser
+from inference_lab.ingest.utils import normalise_source_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,
@@ -59,7 +59,7 @@ __all__ = [
     "TextNativeParser",
     "decode_source",
     "generate_source_span_id",
-    "normalise_text",
+    "normalise_source_text",
     "parsed_document_payload",
     "prepare_text",
     "serialise_parsed_document",
