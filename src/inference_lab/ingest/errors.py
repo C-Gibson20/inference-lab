@@ -1,7 +1,7 @@
 """Error classes for handling parsing and decoding failures."""
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal, get_args
 
 ParserFailureCategory = Literal[
     "invalid_input",
@@ -48,9 +48,21 @@ _FAILURE_POLICIES: dict[
     "invalid_output": ("fatal", "output"),
 }
 
-_FAILURE_UNIT_KINDS: frozenset[str] = frozenset(
-    {"page", "section", "paragraph", "table", "figure_caption", "other"}
+_FAILURE_CATEGORIES: Final[frozenset[ParserFailureCategory]] = frozenset(
+    get_args(ParserFailureCategory)
 )
+_FAILURE_SEVERITIES: Final[frozenset[ParserFailureSeverity]] = frozenset(
+    get_args(ParserFailureSeverity)
+)
+_FAILURE_STAGES: Final[frozenset[ParserFailureStage]] = frozenset(
+    get_args(ParserFailureStage)
+)
+_FAILURE_UNIT_KINDS: Final[frozenset[ParserFailureUnitKind]] = frozenset(
+    get_args(ParserFailureUnitKind)
+)
+
+if _FAILURE_POLICIES.keys() != _FAILURE_CATEGORIES:
+    raise RuntimeError("parser failure policies must cover every failure category")
 
 
 class ParserDecodeError(UnicodeError):
@@ -79,19 +91,17 @@ class ParserFailure:
 
     def _validate(self) -> None:
         """Validate failure identity and location metadata."""
-        if not isinstance(self.category, str) or self.category not in _FAILURE_POLICIES:
+        if (
+            not isinstance(self.category, str)
+            or self.category not in _FAILURE_CATEGORIES
+        ):
             raise ValueError("invalid_parser_failure_category")
-        if not isinstance(self.severity, str) or self.severity not in {
-            "fatal",
-            "recoverable",
-        }:
+        if (
+            not isinstance(self.severity, str)
+            or self.severity not in _FAILURE_SEVERITIES
+        ):
             raise ValueError("invalid_parser_failure_severity")
-        if not isinstance(self.stage, str) or self.stage not in {
-            "input",
-            "decode",
-            "structure",
-            "output",
-        }:
+        if not isinstance(self.stage, str) or self.stage not in _FAILURE_STAGES:
             raise ValueError("invalid_parser_failure_stage")
 
         expected_severity, expected_stage = _FAILURE_POLICIES[self.category]

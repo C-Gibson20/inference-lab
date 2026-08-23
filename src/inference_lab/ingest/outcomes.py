@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal, get_args
 
 from inference_lab.ingest.errors import ParserFailure
 
@@ -16,9 +16,7 @@ ParseStatus = Literal[
     "failed",
 ]
 
-_PARSE_STATUSES: frozenset[str] = frozenset(
-    {"succeeded", "completed_with_recoverable_failures", "failed"}
-)
+_PARSE_STATUSES: Final[frozenset[ParseStatus]] = frozenset(get_args(ParseStatus))
 
 
 @dataclass(frozen=True, slots=True)

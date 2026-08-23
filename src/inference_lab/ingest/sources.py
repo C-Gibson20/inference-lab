@@ -2,7 +2,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal, get_args
 
 from inference_lab.ingest.utils import is_strict_integer
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
@@ -15,6 +15,10 @@ StructuralBlockKind = Literal[
     "figure_caption",
     "other",
 ]
+
+_STRUCTURAL_BLOCK_KINDS: Final[frozenset[StructuralBlockKind]] = frozenset(
+    get_args(StructuralBlockKind)
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,14 +99,7 @@ class StructuralBlock:
 
     def _validate(self) -> None:
         """Reject invalid structural block values at the contract boundary."""
-        if self.kind not in {
-            "page",
-            "section",
-            "paragraph",
-            "table",
-            "figure_caption",
-            "other",
-        }:
+        if self.kind not in _STRUCTURAL_BLOCK_KINDS:
             raise ValueError("unsupported_structural_block_kind")
         if not isinstance(self.text, str):
             raise ValueError("structural_block_text_must_be_string")
