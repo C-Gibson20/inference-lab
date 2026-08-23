@@ -1,6 +1,6 @@
 """Evaluation dataset and split-algorithm version policy."""
 
-from typing import Any, Final
+from typing import Final, cast
 
 CURRENT_SCHEMA_VERSION: Final[str] = "2.0.0"
 SUPPORTED_SCHEMA_VERSIONS: Final[frozenset[str]] = frozenset({CURRENT_SCHEMA_VERSION})
@@ -33,12 +33,12 @@ def validate_split_algorithm_version(value: object) -> str:
     return value
 
 
-def validate_case_payload_version(payload: object) -> dict[str, Any]:
+def validate_case_payload_version(payload: object) -> dict[str, object]:
     """Require a case payload using the current schema version."""
     return _validate_payload_version(payload, "case")
 
 
-def validate_manifest_payload_version(payload: object) -> dict[str, Any]:
+def validate_manifest_payload_version(payload: object) -> dict[str, object]:
     """Require a manifest payload using the current schema version."""
     return _validate_payload_version(payload, "manifest")
 
@@ -46,10 +46,10 @@ def validate_manifest_payload_version(payload: object) -> dict[str, Any]:
 def _validate_payload_version(
     payload: object,
     payload_kind: str,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Validate one JSON-object payload without implying migration support."""
     if not isinstance(payload, dict):
         raise ValueError(f"Evaluation {payload_kind} payload must be a JSON object")
 
     validate_schema_version(payload.get("schema_version"))
-    return payload
+    return cast(dict[str, object], payload)

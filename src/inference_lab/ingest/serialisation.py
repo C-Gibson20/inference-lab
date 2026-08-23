@@ -1,13 +1,13 @@
 """Canonical serialisation for parser output."""
 
 import json
-from typing import Any
 
 from inference_lab.ingest.parser import ParsedDocument
 from inference_lab.ingest.sources import SourceSpan, StructuralBlock
+from inference_lab.json_types import JsonObject
 
 
-def _source_span_payload(span: SourceSpan) -> dict[str, Any]:
+def _source_span_payload(span: SourceSpan) -> JsonObject:
     """Convert a SourceSpan to a canonical JSON-compatible mapping."""
     bounding_box = span.bounding_box
     return {
@@ -29,7 +29,7 @@ def _source_span_payload(span: SourceSpan) -> dict[str, Any]:
     }
 
 
-def _block_payload(block: StructuralBlock) -> dict[str, Any]:
+def _block_payload(block: StructuralBlock) -> JsonObject:
     """Convert one structural block to a canonical mapping."""
     return {
         "kind": block.kind,
@@ -38,7 +38,7 @@ def _block_payload(block: StructuralBlock) -> dict[str, Any]:
     }
 
 
-def parsed_document_payload(document: ParsedDocument) -> dict[str, Any]:
+def parsed_document_payload(document: ParsedDocument) -> JsonObject:
     """Return the canonical semantic payload for parser output."""
     return {
         "document_id": str(document.document_id),

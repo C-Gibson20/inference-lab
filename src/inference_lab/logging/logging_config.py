@@ -2,9 +2,10 @@
 
 import logging
 import sys
-from typing import Any, TextIO
+from typing import TextIO
 
 import structlog
+from structlog.typing import EventDict, WrappedLogger
 
 from inference_lab.settings import LoggingConfig
 
@@ -50,10 +51,10 @@ def _is_sensitive_name(name: str) -> bool:
 
 
 def _reject_sensitive_fields(
-    _logger: Any,
+    _logger: WrappedLogger,
     _method_name: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
+    event_dict: EventDict,
+) -> EventDict:
     """Fail closed when structured logs contain evaluation content fields."""
     sensitive_fields = {key for key in event_dict if _is_sensitive_name(key)}
     event = event_dict.get("event")
@@ -66,10 +67,10 @@ def _reject_sensitive_fields(
 
 
 def _add_record_fields(
-    _logger: Any,
+    _logger: WrappedLogger,
     _method_name: str,
-    event_dict: dict[str, Any],
-) -> dict[str, Any]:
+    event_dict: EventDict,
+) -> EventDict:
     """Add the stable fields required by the logging conventions."""
     logger_name = event_dict.pop("logger", None)
     event_dict.setdefault("module", logger_name)

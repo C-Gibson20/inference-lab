@@ -1,6 +1,6 @@
 """Emit profiling records through the application structured logger."""
 
-from typing import Any, Final, Protocol, get_args
+from typing import Final, Protocol, get_args
 
 from .types import LogLevel
 
@@ -10,6 +10,30 @@ class ProfilingRecordLike(Protocol):
 
     def to_dict(self) -> dict[str, object]:
         """Return structured fields for one profiling record."""
+        ...
+
+
+class ProfilingLogger(Protocol):
+    """The structured severity methods required by the profiling emitter."""
+
+    def debug(self, event: str, **fields: object) -> object:
+        """Emit a debug record."""
+        ...
+
+    def info(self, event: str, **fields: object) -> object:
+        """Emit an informational record."""
+        ...
+
+    def warning(self, event: str, **fields: object) -> object:
+        """Emit a warning record."""
+        ...
+
+    def error(self, event: str, **fields: object) -> object:
+        """Emit an error record."""
+        ...
+
+    def critical(self, event: str, **fields: object) -> object:
+        """Emit a critical record."""
         ...
 
 
@@ -23,7 +47,7 @@ _REQUIRED_FIELDS = (
 )
 
 
-def emit_record(logger: Any, record: ProfilingRecordLike) -> None:
+def emit_record(logger: ProfilingLogger, record: ProfilingRecordLike) -> None:
     """Emit one profiling record through a structlog-compatible logger.
 
     The adapter preserves the record's structured fields, supplies the

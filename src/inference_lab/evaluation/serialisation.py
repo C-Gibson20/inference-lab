@@ -7,7 +7,7 @@ import shutil
 from collections.abc import Iterable
 from pathlib import Path
 from tempfile import NamedTemporaryFile, mkdtemp
-from typing import Any
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -17,19 +17,23 @@ from inference_lab.evaluation.loader import _validate_dataset_consistency, load_
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.splitting import validate_no_leakage
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
+from inference_lab.json_types import JsonObject, JsonValue
 
 
-def _canonical_payload(model: BaseModel) -> dict[str, Any]:
+def _canonical_payload(model: BaseModel) -> JsonObject:
     """Convert a model to a JSON-compatible canonical payload."""
-    payload = model.model_dump(mode="json")
+    payload = cast(JsonObject, model.model_dump(mode="json"))
 
-    if "tags" in payload:
-        payload["tags"] = sorted(payload["tags"])
+    tags = payload.get("tags")
+    if tags is not None:
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise RuntimeError("Canonical evaluation tags must be a string array")
+        payload["tags"] = cast(JsonValue, sorted(cast(list[str], tags)))
 
     return payload
 
 
-def _json_bytes(payload: dict[str, Any], *, indent: int | None) -> bytes:
+def _json_bytes(payload: JsonObject, *, indent: int | None) -> bytes:
     """Encode a payload using deterministic UTF-8 JSON."""
     text = json.dumps(
         payload,
@@ -196,12 +200,17 @@ def write_dataset(
         raise
 
 
-def evaluation_json_schema() -> dict[str, object]:
+def evaluation_json_schema() -> JsonObject:
     """Return one Draft 2020-12 schema for manifests and cases."""
-    definitions: dict[str, object] = {}
+    definitions: JsonObject = {}
     for model in (DatasetManifest, EvaluationCase):
-        schema = model.model_json_schema(ref_template="#/$defs/{model}")
+        schema = cast(
+            JsonObject,
+            model.model_json_schema(ref_template="#/$defs/{model}"),
+        )
         model_definitions = schema.pop("$defs", {})
+        if not isinstance(model_definitions, dict):
+            raise RuntimeError("JSON Schema definitions must be an object")
         for name, definition in model_definitions.items():
             existing = definitions.get(name)
             if existing is not None and existing != definition:

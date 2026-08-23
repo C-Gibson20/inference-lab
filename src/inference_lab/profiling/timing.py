@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import TracebackType
 from typing import Final, Literal, Self, get_args
 
 from ._validation import validate_utc_datetime
@@ -189,7 +190,7 @@ class StageTimer:
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
-        traceback: object | None,
+        traceback: TracebackType | None,
     ) -> bool:
         """Emit completion timing and propagate any stage exception."""
         del exc_value, traceback

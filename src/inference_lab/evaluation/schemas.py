@@ -3,7 +3,7 @@
 import math
 import re
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -29,8 +29,12 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 
+type _CanonicalIdentifier = (
+    CorpusVersionId | DocumentId | DocumentVersionId | RecordId | SourceSpanId
+)
 
-def _canonical_id(value: str, identifier_type: type) -> str:
+
+def _canonical_id(value: str, identifier_type: type[_CanonicalIdentifier]) -> str:
     """Validate an ID using a provenance identifier type."""
     return identifier_type.from_str(value).as_str()
 
@@ -57,7 +61,7 @@ def _validate_unique_ids(values: tuple[str, ...], *, field_name: str) -> None:
         raise ValueError(f"{field_name} must contain unique evidence IDs")
 
 
-def _reject_boolean_numbers(value: Any) -> Any:
+def _reject_boolean_numbers(value: object) -> object:
     """Reject booleans before Pydantic can coerce them to numbers."""
     values = value if isinstance(value, (list, tuple)) else (value,)
     if any(isinstance(item, bool) for item in values if item is not None):
@@ -232,7 +236,7 @@ class DateExpectation(BaseModel):
 
     @field_validator("value", mode="before")
     @classmethod
-    def validate_date_value(cls, value: Any) -> Any:
+    def validate_date_value(cls, value: object) -> object:
         """Accept dates and ISO date strings without datetime coercion."""
         if isinstance(value, datetime):
             raise ValueError("Date expectations cannot contain datetimes")
@@ -268,7 +272,7 @@ class NumericExpectation(BaseModel):
         mode="before",
     )
     @classmethod
-    def reject_boolean_numbers(cls, value: Any) -> Any:
+    def reject_boolean_numbers(cls, value: object) -> object:
         """Reject booleans rather than coercing them to zero or one."""
         return _reject_boolean_numbers(value)
 
@@ -393,7 +397,7 @@ class EvaluationPolicy(BaseModel):
         mode="before",
     )
     @classmethod
-    def reject_boolean_coercion(cls, value: Any) -> Any:
+    def reject_boolean_coercion(cls, value: object) -> object:
         """Require actual booleans for held-out governance fields."""
         if not isinstance(value, bool):
             raise ValueError("Evaluation policy values must be booleans")

@@ -168,7 +168,7 @@ def test_rejects_record_without_event() -> None:
             return {"module": "profiling"}
 
     with pytest.raises(ValueError, match="non-empty event"):
-        emit_record(object(), InvalidRecord())
+        emit_record(object(), InvalidRecord())  # type: ignore[arg-type]
 
 
 def test_rejects_record_without_explicit_log_level() -> None:
@@ -177,7 +177,7 @@ def test_rejects_record_without_explicit_log_level() -> None:
             return {"event": "custom_event", "module": "profiling"}
 
     with pytest.raises(ValueError, match="explicit log level"):
-        emit_record(object(), InvalidRecord())
+        emit_record(object(), InvalidRecord())  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("level", ["notice", 10, True])
@@ -191,7 +191,7 @@ def test_rejects_record_with_invalid_log_level(level: object) -> None:
             }
 
     with pytest.raises(ValueError, match="valid log level"):
-        emit_record(object(), InvalidRecord())
+        emit_record(object(), InvalidRecord())  # type: ignore[arg-type]
 
 
 def test_rejects_logger_without_required_severity_method() -> None:
@@ -204,4 +204,4 @@ def test_rejects_logger_without_required_severity_method() -> None:
             }
 
     with pytest.raises(TypeError, match="required info method"):
-        emit_record(object(), ValidRecord())
+        emit_record(object(), ValidRecord())  # type: ignore[arg-type]
