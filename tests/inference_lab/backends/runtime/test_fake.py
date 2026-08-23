@@ -15,9 +15,8 @@ from inference_lab.backends.runtime.fake import (
     FakeBackendConfig,
     FakeFailureMode,
 )
-from inference_lab.logging.logging_config import configure_logging
-from inference_lab.settings import LoggingConfig
 from inference_lab.backends.runtime.types import (
+    BackendCapability,
     BackendMetadata,
     BackendOperation,
     EmbeddingRequest,
@@ -27,6 +26,8 @@ from inference_lab.backends.runtime.types import (
     RerankCandidate,
     RerankRequest,
 )
+from inference_lab.logging.logging_config import configure_logging
+from inference_lab.settings import LoggingConfig
 
 
 def test_fake_requires_load_before_inference() -> None:
@@ -50,8 +51,14 @@ def test_fake_rejects_operations_not_advertised_by_metadata(
                 model_name="fake-model",
                 model_revision="test",
                 supported_operations=supported_operations,
-                capabilities=(),
-                embedding_dimensions=3,
+                capabilities=(
+                    (BackendCapability.STREAMING,)
+                    if BackendOperation.GENERATE in supported_operations
+                    else ()
+                ),
+                embedding_dimensions=(
+                    3 if BackendOperation.EMBED in supported_operations else None
+                ),
             )
         )
     )
