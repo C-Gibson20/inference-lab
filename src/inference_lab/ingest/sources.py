@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
+from inference_lab.ingest.utils import is_strict_integer
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
 
 StructuralBlockKind = Literal[
@@ -62,16 +63,16 @@ class SourceSpan:
             raise ValueError("invalid_source_span_id")
         if not isinstance(self.document_version_id, DocumentVersionId):
             raise ValueError("invalid_document_version_id")
-        if not self._is_integer(self.start_offset):
+        if not is_strict_integer(self.start_offset):
             raise ValueError("source_span_offsets_must_be_integers")
-        if not self._is_integer(self.end_offset):
+        if not is_strict_integer(self.end_offset):
             raise ValueError("source_span_offsets_must_be_integers")
         if self.start_offset < 0:
             raise ValueError("source_span_start_must_be_non_negative")
         if self.end_offset < self.start_offset:
             raise ValueError("source_span_end_must_not_precede_start")
         if self.page_number is not None:
-            if not self._is_integer(self.page_number):
+            if not is_strict_integer(self.page_number):
                 raise ValueError("page_number_must_be_integer")
             if self.page_number < 1:
                 raise ValueError("page_number_must_be_positive")
@@ -79,11 +80,6 @@ class SourceSpan:
             self.bounding_box, BoundingBox
         ):
             raise ValueError("invalid_bounding_box")
-
-    @staticmethod
-    def _is_integer(value: object) -> bool:
-        """Return whether a runtime value is an integer but not a boolean."""
-        return isinstance(value, int) and not isinstance(value, bool)
 
 
 @dataclass(frozen=True, slots=True)

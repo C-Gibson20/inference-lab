@@ -4,6 +4,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
+from inference_lab.ingest.utils import is_strict_integer
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
 
 _IMPLEMENTATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
@@ -72,13 +73,13 @@ def generate_source_span_id(
         raise ValueError("invalid_document_version_id")
     if not isinstance(parser_version, ParserVersion):
         raise ValueError("invalid_parser_version")
-    if not _is_integer(ordinal):
+    if not is_strict_integer(ordinal):
         raise ValueError("source_span_ordinal_must_be_integer")
     if not isinstance(kind, str):
         raise ValueError("source_span_kind_must_be_string")
     if not kind.strip():
         raise ValueError("source_span_kind_must_not_be_empty")
-    if not _is_integer(start_offset) or not _is_integer(end_offset):
+    if not is_strict_integer(start_offset) or not is_strict_integer(end_offset):
         raise ValueError("source_span_offsets_must_be_integers")
     if ordinal < 0:
         raise ValueError("source_span_ordinal_must_be_non_negative")
@@ -96,8 +97,3 @@ def generate_source_span_id(
     namespace = uuid.UUID(document_version_id.as_str())
     generated = uuid.uuid5(namespace, name)
     return SourceSpanId.from_str(str(generated))
-
-
-def _is_integer(value: object) -> bool:
-    """Return whether a runtime value is an integer but not a boolean."""
-    return isinstance(value, int) and not isinstance(value, bool)
