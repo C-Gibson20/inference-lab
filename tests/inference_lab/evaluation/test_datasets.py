@@ -67,3 +67,35 @@ def test_manifest_rejects_blank_fields_and_incomplete_split_inventory() -> None:
     wrong_count = dict(BASE, case_count=3)
     with pytest.raises(ValidationError, match="case_count"):
         DatasetManifest(**wrong_count)
+
+
+def test_manifest_nested_mappings_are_defensive_and_immutable() -> None:
+    splits = {
+        "development": ["case-001"],
+        "held_out": ["case-002"],
+    }
+    provenance = {"source": "curated"}
+    checksums = {"cases.jsonl": "sha256:" + "a" * 64}
+    manifest = DatasetManifest(
+        **dict(
+            BASE,
+            splits=splits,
+            provenance=provenance,
+            checksums=checksums,
+        )
+    )
+
+    splits["held_out"].append("case-003")
+    provenance["source"] = "changed"
+    checksums["cases.jsonl"] = "sha256:" + "b" * 64
+
+    assert manifest.splits["held_out"] == ("case-002",)
+    assert manifest.provenance["source"] == "curated"
+    assert manifest.checksums["cases.jsonl"] == "sha256:" + "a" * 64
+
+    with pytest.raises(TypeError):
+        manifest.splits["held_out"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        manifest.provenance["source"] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        manifest.checksums["cases.jsonl"] = "changed"  # type: ignore[index]

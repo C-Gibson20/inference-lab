@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
+
 from pydantic import (
     AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
     StrictInt,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -37,12 +41,17 @@ class DatasetManifest(BaseModel):
     corpus_version: str
     case_file: str = Field(min_length=1)
     case_count: StrictInt = Field(ge=1)
-    splits: dict[SplitName, tuple[CaseId, ...]]
-    provenance: dict[str, str] = Field(default_factory=dict)
-    checksums: dict[str, str] = Field(default_factory=dict)
+    splits: Mapping[SplitName, tuple[CaseId, ...]]
+    provenance: Mapping[str, str] = Field(default_factory=dict)
+    checksums: Mapping[str, str] = Field(default_factory=dict)
     evaluation_policy: EvaluationPolicy = Field(default_factory=EvaluationPolicy)
     created_at: AwareDatetime
     updated_at: AwareDatetime
+
+    @field_serializer("splits", "provenance", "checksums")
+    def serialize_mappings(self, value: Mapping[str, object]) -> dict[str, object]:
+        """Serialize immutable mappings as ordinary JSON objects."""
+        return dict(value)
 
     @field_validator("dataset_version", "description", "case_file")
     @classmethod
@@ -68,5 +77,17 @@ class DatasetManifest(BaseModel):
             raise ValueError("case_count must match total split IDs")
         if self.updated_at < self.created_at:
             raise ValueError("updated_at cannot be earlier than created_at")
+
+        object.__setattr__(self, "splits", MappingProxyType(dict(self.splits)))
+        object.__setattr__(
+            self,
+            "provenance",
+            MappingProxyType(dict(self.provenance)),
+        )
+        object.__setattr__(
+            self,
+            "checksums",
+            MappingProxyType(dict(self.checksums)),
+        )
 
         return self

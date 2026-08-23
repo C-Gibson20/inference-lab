@@ -6,7 +6,10 @@ from typing import Annotated, Final, Literal
 
 from pydantic import AfterValidator, Field
 
-from inference_lab.evaluation.versioning import validate_schema_version
+from inference_lab.evaluation.versioning import (
+    CURRENT_SCHEMA_VERSION,
+    validate_schema_version,
+)
 
 
 CaseId = DatasetId = Annotated[
@@ -41,7 +44,10 @@ HELD_OUT_SPLIT: Final[SplitName] = "held_out"
 
 SchemaVersion = Annotated[
     str,
-    Field(validate_default=True),
+    Field(
+        validate_default=True,
+        json_schema_extra={"const": CURRENT_SCHEMA_VERSION},
+    ),
     AfterValidator(validate_schema_version),
 ]
 

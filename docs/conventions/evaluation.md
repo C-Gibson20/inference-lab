@@ -36,6 +36,10 @@ The manifest records:
 - held-out governance policy; and
 - creation, update, and provenance metadata.
 
+Manifest split, provenance, and checksum mappings are defensively copied and
+exposed as immutable mappings. Mutating the dictionaries used to construct a
+manifest cannot alter the validated dataset identity or held-out membership.
+
 The loader verifies the case-file checksum, unique case IDs, case count, split
 membership, per-case split values, and evidence corpus versions. A case file
 must remain inside its dataset directory.
@@ -107,6 +111,13 @@ fixture.
 Cases are serialized as deterministic UTF-8 JSONL. Manifests are serialized as
 deterministic, human-reviewable JSON. Dataset writing calculates the case-file
 checksum rather than trusting a caller-supplied digest.
+
+`evaluation_json_schema()` publishes one standards-compliant JSON Schema using
+Draft 2020-12. Its `oneOf` branches validate either a complete manifest or one
+case record, all references resolve through the top-level `$defs`, and each
+branch constrains `schema_version` to the current version. The schema artifact
+is descriptive validation metadata; the Python loader remains authoritative
+for cross-record and filesystem invariants that JSON Schema cannot express.
 
 Questions, expected answers, evidence, prompts, responses, completions, model
 outputs, document text, credentials, and sensitive paths must not appear in

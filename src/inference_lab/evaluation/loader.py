@@ -11,7 +11,10 @@ from .datasets import DatasetManifest
 from .cases import EvaluationCase
 from .utils import is_sha256_pattern
 from .privacy import validate_local_path
-from .versioning import migrate_case_payload, migrate_manifest_payload
+from .versioning import (
+    validate_case_payload_version,
+    validate_manifest_payload_version,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +86,9 @@ def _load_cases(case_path: Path) -> tuple[EvaluationCase, ...]:
                 ) from error
 
             try:
-                case = EvaluationCase.model_validate(migrate_case_payload(payload))
+                case = EvaluationCase.model_validate(
+                    validate_case_payload_version(payload)
+                )
             except (ValidationError, ValueError) as error:
                 raise ValueError(
                     f"Invalid evaluation case at {case_path.name}:{line_number}"
@@ -152,7 +157,7 @@ def load_dataset(manifest_path: Path) -> LoadedDataset:
 
     try:
         manifest = DatasetManifest.model_validate(
-            migrate_manifest_payload(manifest_payload)
+            validate_manifest_payload_version(manifest_payload)
         )
     except (ValidationError, ValueError) as error:
         raise ValueError(f"Invalid dataset manifest: {manifest_path}") from error

@@ -33,6 +33,24 @@ The destination and case file must be local. The case file is relative to the
 dataset directory and cannot escape it. Preserve the returned manifest as the
 authoritative version; do not edit split membership or checksums manually.
 
+The manifest exposes split membership, provenance metadata, and checksums as
+immutable mappings. Create a new validated dataset version instead of mutating
+an existing manifest.
+
+## Publish the schema
+
+Generate the Draft 2020-12 JSON Schema used by external dataset tooling with:
+
+```sh
+PYTHONPATH=src uv run python \
+  scripts/inference_lab/evaluation/generate-evaluation-schema.py \
+  /local/path/evaluation-schema.json
+```
+
+The schema accepts either a manifest object or one case object. Use the Python
+loader as the final validation boundary because it additionally verifies
+checksums, file containment, split consistency, and cross-record references.
+
 ## Held-out data
 
 Development data may be used during implementation. Held-out membership is

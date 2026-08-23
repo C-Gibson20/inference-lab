@@ -26,7 +26,9 @@ from .test_loader import CORPUS_ID, CORPUS_VERSION, _case
 
 def _evaluation_case(case_id: str = "case-001") -> EvaluationCase:
     case = EvaluationCase.model_validate(_case(case_id))
-    return case.model_copy(update={"tags": frozenset({"zeta", "alpha"})})
+    return EvaluationCase.model_validate(
+        case.model_dump(mode="python") | {"tags": frozenset({"zeta", "alpha"})}
+    )
 
 
 def _manifest(case_ids: tuple[str, ...] = ("case-001",)) -> DatasetManifest:
@@ -85,12 +87,16 @@ def test_write_dataset_calculates_checksum_and_can_be_loaded(
     expected_checksum = "sha256:" + hashlib.sha256(case_bytes).hexdigest()
 
     assert final_manifest.checksums == {"cases.jsonl": expected_checksum}
+    with pytest.raises(TypeError):
+        final_manifest.checksums["cases.jsonl"] = "changed"  # type: ignore[index]
     loaded = load_dataset(tmp_path / "manifest.json")
     assert loaded.cases == cases
 
 
 def test_write_dataset_rejects_case_path_escape(tmp_path: Path) -> None:
-    manifest = _manifest().model_copy(update={"case_file": "../cases.jsonl"})
+    manifest = DatasetManifest.model_validate(
+        _manifest().model_dump(mode="python") | {"case_file": "../cases.jsonl"}
+    )
 
     with pytest.raises(ValueError, match="inside"):
         write_dataset(tmp_path, manifest, (_evaluation_case(),))
@@ -122,4 +128,37 @@ def test_schema_can_be_written_as_json(tmp_path: Path) -> None:
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload == evaluation_json_schema()
-    assert payload["schema_version"] == CURRENT_SCHEMA_VERSION
+    assert payload["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert payload["$id"].endswith(CURRENT_SCHEMA_VERSION)
+    assert payload["oneOf"] == [
+        {"$ref": "#/$defs/DatasetManifest"},
+        {"$ref": "#/$defs/EvaluationCase"},
+    ]
+
+    definitions = payload["$defs"]
+    for model_name in ("DatasetManifest", "EvaluationCase"):
+        model_schema = definitions[model_name]
+        assert model_schema["properties"]["schema_version"]["const"] == (
+            CURRENT_SCHEMA_VERSION
+        )
+
+    references: list[str] = []
+
+    def collect_references(value: object) -> None:
+        if isinstance(value, dict):
+            reference = value.get("$ref")
+            if isinstance(reference, str):
+                references.append(reference)
+            for nested in value.values():
+                collect_references(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect_references(nested)
+
+    collect_references(payload)
+    assert references
+    assert all(
+        reference.startswith("#/$defs/")
+        and reference.removeprefix("#/$defs/") in definitions
+        for reference in references
+    )

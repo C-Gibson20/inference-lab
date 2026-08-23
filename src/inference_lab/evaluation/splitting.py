@@ -14,12 +14,12 @@ from inference_lab.evaluation.utils import (
     normalise_text,
 )
 from inference_lab.evaluation.versioning import (
-    CURRENT_ALGORITHM_VERSION,
-    CURRENT_EVALUATION_VERSION,
-    validate_algorithm_version,
+    CURRENT_SPLIT_ALGORITHM_VERSION,
+    validate_split_algorithm_version,
 )
 
 _SPLIT_ORDER: tuple[SplitName, ...] = ("train", "development", "held_out")
+_DEFAULT_SPLIT_SEED = "inference-lab-default-split"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,8 +29,8 @@ class SplitPolicy:
     train_fraction: float
     development_fraction: float
     held_out_fraction: float
-    algorithm_version: str = CURRENT_ALGORITHM_VERSION
-    seed: str = CURRENT_EVALUATION_VERSION
+    algorithm_version: str = CURRENT_SPLIT_ALGORITHM_VERSION
+    seed: str = _DEFAULT_SPLIT_SEED
     near_duplicate_threshold: float = 0.9
 
     def __post_init__(self) -> None:
@@ -62,7 +62,7 @@ class SplitPolicy:
                 "near_duplicate_threshold must be finite and between 0.0 and 1.0"
             )
 
-        validate_algorithm_version(self.algorithm_version)
+        validate_split_algorithm_version(self.algorithm_version)
 
     @property
     def fractions(self) -> dict[SplitName, float]:
@@ -285,7 +285,9 @@ def generate_splits(
         counts[split] += len(group.cases)
 
     assigned_cases = tuple(
-        case.model_copy(update={"split": assignments[case.case_id]})
+        EvaluationCase.model_validate(
+            case.model_dump(mode="python") | {"split": assignments[case.case_id]}
+        )
         for case in ordered_cases
     )
     validate_no_leakage(

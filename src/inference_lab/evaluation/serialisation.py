@@ -133,7 +133,9 @@ def write_dataset(
 
     checksums = dict(manifest.checksums)
     checksums[manifest.case_file] = checksum
-    final_manifest = manifest.model_copy(update={"checksums": checksums})
+    manifest_payload = manifest.model_dump(mode="python")
+    manifest_payload["checksums"] = checksums
+    final_manifest = DatasetManifest.model_validate(manifest_payload)
 
     atomic_write(case_path, case_bytes)
     atomic_write(destination / "manifest.json", serialise_manifest(final_manifest))
@@ -141,12 +143,32 @@ def write_dataset(
 
 
 def evaluation_json_schema() -> dict[str, object]:
-    """Return the published evaluation contract schema."""
+    """Return one Draft 2020-12 schema for manifests and cases."""
+
+    definitions: dict[str, object] = {}
+    for model in (DatasetManifest, EvaluationCase):
+        schema = model.model_json_schema(ref_template="#/$defs/{model}")
+        model_definitions = schema.pop("$defs", {})
+        for name, definition in model_definitions.items():
+            existing = definitions.get(name)
+            if existing is not None and existing != definition:
+                raise RuntimeError(f"Conflicting JSON Schema definition: {name}")
+            definitions[name] = definition
+        definitions[model.__name__] = schema
 
     return {
-        "schema_version": CURRENT_SCHEMA_VERSION,
-        "manifest": DatasetManifest.model_json_schema(),
-        "case": EvaluationCase.model_json_schema(),
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": f"urn:inference-lab:evaluation-schema:{CURRENT_SCHEMA_VERSION}",
+        "title": "Inference Lab evaluation dataset contract",
+        "description": (
+            "A versioned evaluation dataset manifest or evaluation case record."
+        ),
+        "type": "object",
+        "oneOf": [
+            {"$ref": "#/$defs/DatasetManifest"},
+            {"$ref": "#/$defs/EvaluationCase"},
+        ],
+        "$defs": definitions,
     }
 
 
