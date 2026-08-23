@@ -1,6 +1,7 @@
 """Deterministic fake runtime backend for contract and integration tests."""
 
 import asyncio
+import math
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -47,6 +48,14 @@ SyncSleeper = Callable[[float], None]
 AsyncSleeper = Callable[[float], Awaitable[None]]
 
 
+def _validate_finite_number(value: object, field_name: str) -> None:
+    """Require a finite number while excluding booleans."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{field_name} must be a number")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{field_name} must be finite")
+
+
 def _default_metadata() -> BackendMetadata:
     return BackendMetadata(
         backend_name="fake",
@@ -88,25 +97,120 @@ class FakeBackendConfig:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate fake timing and failure controls."""
-        if (
-            min(
-                self.initial_delay_seconds,
-                self.per_item_delay_seconds,
-                self.per_chunk_delay_seconds,
-            )
-            < 0
+        """Validate all fake data, timing, and failure controls."""
+        if not isinstance(self.metadata, BackendMetadata):
+            raise TypeError("metadata must be BackendMetadata")
+        for field_name, delay in (
+            ("initial_delay_seconds", self.initial_delay_seconds),
+            ("per_item_delay_seconds", self.per_item_delay_seconds),
+            ("per_chunk_delay_seconds", self.per_chunk_delay_seconds),
         ):
-            raise ValueError("fake delays must not be negative")
+            _validate_finite_number(delay, field_name)
+            if delay < 0:
+                raise ValueError(f"{field_name} must not be negative")
+
+        if not isinstance(self.generation_chunks, tuple):
+            raise TypeError("generation_chunks must be a tuple")
+        if any(not isinstance(chunk, str) for chunk in self.generation_chunks):
+            raise TypeError("generation_chunks must contain strings")
         if any(not chunk for chunk in self.generation_chunks):
             raise ValueError("generation_chunks must not contain empty strings")
-        if (
-            self.fail_after_generation_chunks is not None
-            and self.fail_after_generation_chunks < 0
+
+        self._validate_embedding_vectors()
+        self._validate_rerank_scores()
+        self._validate_failure_controls()
+
+        if not callable(self.sync_sleeper):
+            raise TypeError("sync_sleeper must be callable")
+        if not callable(self.async_sleeper):
+            raise TypeError("async_sleeper must be callable")
+
+    def _validate_embedding_vectors(self) -> None:
+        """Validate configured embedding values and dimensions."""
+        if self.embedding_vectors is None:
+            return
+        if not isinstance(self.embedding_vectors, tuple):
+            raise TypeError("embedding_vectors must be a tuple or None")
+        if BackendOperation.EMBED not in self.metadata.supported_operations:
+            raise ValueError("embedding_vectors requires the embed operation")
+        if not self.embedding_vectors:
+            raise ValueError("embedding_vectors must not be empty")
+        if any(not isinstance(vector, tuple) for vector in self.embedding_vectors):
+            raise TypeError("embedding_vectors must contain tuples")
+
+        dimensions = len(self.embedding_vectors[0])
+        if dimensions == 0:
+            raise ValueError("embedding_vectors must not contain empty vectors")
+        if any(len(vector) != dimensions for vector in self.embedding_vectors):
+            raise ValueError("embedding_vectors must have one consistent dimension")
+        for vector in self.embedding_vectors:
+            for value in vector:
+                _validate_finite_number(value, "embedding vector values")
+
+        declared_dimensions = self.metadata.embedding_dimensions
+        if declared_dimensions is not None and declared_dimensions != dimensions:
+            raise ValueError("embedding vector dimension must match backend metadata")
+
+    def _validate_rerank_scores(self) -> None:
+        """Validate configured candidate score overrides."""
+        if not isinstance(self.rerank_scores, tuple):
+            raise TypeError("rerank_scores must be a tuple")
+        if self.rerank_scores and (
+            BackendOperation.RERANK not in self.metadata.supported_operations
         ):
+            raise ValueError("rerank_scores requires the rerank operation")
+        if any(not isinstance(item, tuple) for item in self.rerank_scores):
+            raise TypeError("rerank_scores must contain tuples")
+        if any(len(item) != 2 for item in self.rerank_scores):
+            raise ValueError("rerank_scores entries must contain an ID and score")
+
+        candidate_ids: list[str] = []
+        for candidate_id, score in self.rerank_scores:
+            if not isinstance(candidate_id, str):
+                raise TypeError("rerank score candidate IDs must be strings")
+            if not candidate_id:
+                raise ValueError("rerank score candidate IDs must not be empty")
+            _validate_finite_number(score, "rerank score values")
+            candidate_ids.append(candidate_id)
+        if len(set(candidate_ids)) != len(candidate_ids):
+            raise ValueError("rerank score candidate IDs must be unique")
+
+    def _validate_failure_controls(self) -> None:
+        """Validate failure injection as one coherent configuration."""
+        if self.failure_mode is not None and not isinstance(
+            self.failure_mode, FakeFailureMode
+        ):
+            raise TypeError("failure_mode must be FakeFailureMode or None")
+        if self.fail_operation is not None and not isinstance(
+            self.fail_operation, BackendOperation
+        ):
+            raise TypeError("fail_operation must be BackendOperation or None")
+        if (self.failure_mode is None) != (self.fail_operation is None):
+            raise ValueError(
+                "failure_mode and fail_operation must be configured together"
+            )
+        if (
+            self.fail_operation is not None
+            and self.fail_operation not in self.metadata.supported_operations
+        ):
+            raise ValueError("fail_operation must be advertised by backend metadata")
+
+        if self.fail_after_generation_chunks is None:
+            return
+        if isinstance(self.fail_after_generation_chunks, bool) or not isinstance(
+            self.fail_after_generation_chunks, int
+        ):
+            raise TypeError("fail_after_generation_chunks must be an integer or None")
+        if self.fail_after_generation_chunks < 0:
             raise ValueError("fail_after_generation_chunks must not be negative")
-        if self.failure_mode is None and self.fail_operation is not None:
-            raise ValueError("failure_mode is required when fail_operation is set")
+        if self.fail_operation is not BackendOperation.GENERATE:
+            raise ValueError(
+                "fail_after_generation_chunks requires a generate failure operation"
+            )
+        if self.fail_after_generation_chunks >= len(self.generation_chunks):
+            raise ValueError(
+                "fail_after_generation_chunks must identify an emitted chunk boundary"
+            )
 
 
 class FakeBackend:
@@ -114,7 +218,9 @@ class FakeBackend:
 
     def __init__(self, config: FakeBackendConfig | None = None) -> None:
         """Create an unloaded fake backend with the supplied behavior."""
-        self._config = config or FakeBackendConfig()
+        if config is not None and not isinstance(config, FakeBackendConfig):
+            raise TypeError("config must be FakeBackendConfig or None")
+        self._config = FakeBackendConfig() if config is None else config
         self._is_ready = False
         self._is_closed = False
 

@@ -30,6 +30,22 @@ from inference_lab.logging.logging_config import configure_logging
 from inference_lab.settings import LoggingConfig
 
 
+def metadata_for(*operations: BackendOperation) -> BackendMetadata:
+    """Build internally consistent metadata for selected fake operations."""
+    return BackendMetadata(
+        backend_name="fake",
+        model_name="fake-model",
+        model_revision="test",
+        supported_operations=operations,
+        capabilities=(
+            (BackendCapability.STREAMING,)
+            if BackendOperation.GENERATE in operations
+            else ()
+        ),
+        embedding_dimensions=3 if BackendOperation.EMBED in operations else None,
+    )
+
+
 def test_fake_requires_load_before_inference() -> None:
     backend = FakeBackend()
 
@@ -46,20 +62,7 @@ def test_fake_rejects_operations_not_advertised_by_metadata(
     )
     backend = FakeBackend(
         FakeBackendConfig(
-            metadata=BackendMetadata(
-                backend_name="fake",
-                model_name="fake-model",
-                model_revision="test",
-                supported_operations=supported_operations,
-                capabilities=(
-                    (BackendCapability.STREAMING,)
-                    if BackendOperation.GENERATE in supported_operations
-                    else ()
-                ),
-                embedding_dimensions=(
-                    3 if BackendOperation.EMBED in supported_operations else None
-                ),
-            )
+            metadata=metadata_for(*supported_operations),
         )
     )
     backend.load()
@@ -82,6 +85,204 @@ def test_fake_rejects_operations_not_advertised_by_metadata(
             )
 
 
+@pytest.mark.parametrize(
+    ("field_name", "value", "error_type", "message"),
+    [
+        ("initial_delay_seconds", -0.1, ValueError, "must not be negative"),
+        ("per_item_delay_seconds", -0.1, ValueError, "must not be negative"),
+        ("per_chunk_delay_seconds", -0.1, ValueError, "must not be negative"),
+        ("initial_delay_seconds", float("nan"), ValueError, "must be finite"),
+        ("initial_delay_seconds", float("inf"), ValueError, "must be finite"),
+        ("initial_delay_seconds", True, TypeError, "must be a number"),
+        ("initial_delay_seconds", "0.1", TypeError, "must be a number"),
+    ],
+)
+def test_fake_config_rejects_invalid_delays(
+    field_name: str,
+    value: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(error_type, match=message):
+        FakeBackendConfig(**{field_name: value})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("chunks", "error_type", "message"),
+    [
+        (["chunk"], TypeError, "must be a tuple"),
+        ((1,), TypeError, "must contain strings"),
+        (("",), ValueError, "empty strings"),
+    ],
+)
+def test_fake_config_rejects_invalid_generation_chunks(
+    chunks: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(error_type, match=message):
+        FakeBackendConfig(generation_chunks=chunks)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("vectors", "error_type", "message"),
+    [
+        ([], TypeError, "must be a tuple"),
+        ((), ValueError, "must not be empty"),
+        (([1.0, 2.0, 3.0],), TypeError, "must contain tuples"),
+        (((),), ValueError, "empty vectors"),
+        (((1.0,), (1.0, 2.0)), ValueError, "consistent dimension"),
+        (((float("nan"),),), ValueError, "must be finite"),
+        (((True,),), TypeError, "must be a number"),
+        (((1.0, 2.0),), ValueError, "match backend metadata"),
+    ],
+)
+def test_fake_config_rejects_invalid_embedding_vectors(
+    vectors: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(error_type, match=message):
+        FakeBackendConfig(embedding_vectors=vectors)  # type: ignore[arg-type]
+
+
+def test_fake_config_requires_embed_operation_for_configured_vectors() -> None:
+    with pytest.raises(ValueError, match="requires the embed operation"):
+        FakeBackendConfig(
+            metadata=metadata_for(BackendOperation.RERANK),
+            embedding_vectors=((1.0, 2.0, 3.0),),
+        )
+
+
+@pytest.mark.parametrize(
+    ("scores", "error_type", "message"),
+    [
+        ([("a", 0.1)], TypeError, "must be a tuple"),
+        ((["a", 0.1],), TypeError, "must contain tuples"),
+        ((("a",),), ValueError, "an ID and score"),
+        (((1, 0.1),), TypeError, "candidate IDs must be strings"),
+        ((("", 0.1),), ValueError, "candidate IDs must not be empty"),
+        ((("a", float("inf")),), ValueError, "must be finite"),
+        ((("a", True),), TypeError, "must be a number"),
+        ((("a", 0.1), ("a", 0.2)), ValueError, "must be unique"),
+    ],
+)
+def test_fake_config_rejects_invalid_rerank_scores(
+    scores: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(error_type, match=message):
+        FakeBackendConfig(rerank_scores=scores)  # type: ignore[arg-type]
+
+
+def test_fake_config_requires_rerank_operation_for_configured_scores() -> None:
+    with pytest.raises(ValueError, match="requires the rerank operation"):
+        FakeBackendConfig(
+            metadata=metadata_for(BackendOperation.EMBED),
+            rerank_scores=(("a", 0.1),),
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_type", "message"),
+    [
+        (
+            {"metadata": object()},
+            TypeError,
+            "metadata must be BackendMetadata",
+        ),
+        (
+            {"failure_mode": FakeFailureMode.EXECUTION},
+            ValueError,
+            "configured together",
+        ),
+        (
+            {"fail_operation": BackendOperation.EMBED},
+            ValueError,
+            "configured together",
+        ),
+        (
+            {
+                "failure_mode": "execution",
+                "fail_operation": BackendOperation.EMBED,
+            },
+            TypeError,
+            "failure_mode must be FakeFailureMode",
+        ),
+        (
+            {
+                "failure_mode": FakeFailureMode.EXECUTION,
+                "fail_operation": "embed",
+            },
+            TypeError,
+            "fail_operation must be BackendOperation",
+        ),
+        (
+            {"fail_after_generation_chunks": True},
+            TypeError,
+            "must be an integer",
+        ),
+        (
+            {"fail_after_generation_chunks": 1.5},
+            TypeError,
+            "must be an integer",
+        ),
+        (
+            {"fail_after_generation_chunks": -1},
+            ValueError,
+            "must not be negative",
+        ),
+        (
+            {"fail_after_generation_chunks": 0},
+            ValueError,
+            "requires a generate failure operation",
+        ),
+        (
+            {
+                "failure_mode": FakeFailureMode.EXECUTION,
+                "fail_operation": BackendOperation.EMBED,
+                "fail_after_generation_chunks": 0,
+            },
+            ValueError,
+            "requires a generate failure operation",
+        ),
+        (
+            {
+                "failure_mode": FakeFailureMode.EXECUTION,
+                "fail_operation": BackendOperation.GENERATE,
+                "fail_after_generation_chunks": 2,
+            },
+            ValueError,
+            "emitted chunk boundary",
+        ),
+        ({"sync_sleeper": object()}, TypeError, "sync_sleeper must be callable"),
+        ({"async_sleeper": object()}, TypeError, "async_sleeper must be callable"),
+    ],
+)
+def test_fake_config_rejects_incoherent_controls(
+    kwargs: dict[str, object],
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    with pytest.raises(error_type, match=message):
+        FakeBackendConfig(**kwargs)  # type: ignore[arg-type]
+
+
+def test_fake_config_failure_operation_must_be_advertised() -> None:
+    with pytest.raises(ValueError, match="advertised by backend metadata"):
+        FakeBackendConfig(
+            metadata=metadata_for(BackendOperation.RERANK),
+            failure_mode=FakeFailureMode.EXECUTION,
+            fail_operation=BackendOperation.EMBED,
+        )
+
+
+def test_fake_backend_rejects_invalid_config_object() -> None:
+    with pytest.raises(TypeError, match="FakeBackendConfig or None"):
+        FakeBackend(config=0)  # type: ignore[arg-type]
+
+
 def test_fake_embedding_is_deterministic_and_ordered() -> None:
     backend = FakeBackend()
     backend.load()
@@ -91,6 +292,15 @@ def test_fake_embedding_is_deterministic_and_ordered() -> None:
     assert result.vectors == ((0.0, 1.0, 2.0), (1.0, 2.0, 3.0))
     assert result.usage is not None
     assert result.usage.input_tokens == 2
+
+
+def test_fake_returns_valid_configured_embedding_vectors() -> None:
+    backend = FakeBackend(FakeBackendConfig(embedding_vectors=((0.1, 0.2, 0.3),)))
+    backend.load()
+
+    result = backend.embed(EmbeddingRequest(input_texts=("one",)))
+
+    assert result.vectors == ((0.1, 0.2, 0.3),)
 
 
 def test_fake_reranker_applies_configured_scores_and_top_k() -> None:
