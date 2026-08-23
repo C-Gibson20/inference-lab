@@ -12,8 +12,8 @@ deployment.
   environment overrides.
 - [Running queries](querying.md): current query status and the operator
   workflow as serving capabilities land.
-- [Evaluation operations](evaluation.md): run identity, local-only evaluation,
-  privacy-safe records, and failure handling.
+- [Evaluation dataset operations](evaluation.md): local validation,
+  deterministic writing, held-out governance, and privacy boundaries.
 - [Backup and restore](backup-restore.md): recover persistent corpus state.
 
 Normative configuration, logging, and backup policy is defined in

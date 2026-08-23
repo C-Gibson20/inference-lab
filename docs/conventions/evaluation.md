@@ -1,87 +1,97 @@
-# Evaluation conventions
+# Evaluation dataset conventions
 
-Evaluation is a local, reproducible operation over an immutable dataset and
-corpus version. Evaluation code must use validated dataset manifests, explicit
-split membership, and the run-identity contract defined by
-`inference_lab.evaluation.runs`.
+EVAL-01 defines the immutable, versioned input contract used by later
+evaluation work. It owns evaluation cases, expected-answer annotations,
+evidence references, abstention expectations, dataset manifests, explicit
+split membership, deterministic serialization, and validated local loading.
+It does not execute an evaluation or decide whether a system answer is
+correct.
 
 ## Local-only boundary
 
 Evaluation inputs and outputs are filesystem paths on the local host. URI-shaped
 locations, including HTTP, cloud-storage, and other remote schemes, are
-rejected. Dataset loading and dataset serialization must validate this boundary
+rejected. Dataset loading and dataset serialization validate this boundary
 before reading or writing files.
 
 Evaluation may read the selected local dataset and corpus references. It must
 not send questions, evidence, prompts, answers, model traffic, or evaluation
 artifacts to a remote service.
 
-## Run identity
+## Versioned dataset contract
 
-Every evaluation run has an immutable `EvaluationRun` record. The run ID is a
-content-derived `run-<64 lowercase hex digits>` value over the semantic inputs:
+Every case and manifest declares a supported evaluation schema version.
+Unknown, missing, and unsupported schema versions are rejected before model
+validation. A dataset manifest identifies one immutable dataset version and
+one immutable corpus version.
 
-- dataset, schema, and corpus identity and versions;
-- selected split and evaluation purpose;
-- system version and configuration digest;
-- algorithm versions; and
-- canonical dataset-manifest and case-file digests.
+The manifest records:
 
-`created_at` is operational metadata and does not affect the run ID. Run
-records contain identifiers and control-plane metadata only; they must not
-contain questions, expected answers, evidence text, prompts, or model outputs.
+- dataset and corpus identity;
+- the relative case-file location and its SHA-256 checksum;
+- the expected case count;
+- explicit, disjoint split membership;
+- held-out governance policy; and
+- creation, update, and provenance metadata.
 
-Configuration digests use canonical, finite JSON and the format
-`sha256:<64 lowercase hex digits>`. Raw configuration values must not be logged
-or included in a run record.
+The loader verifies the case-file checksum, unique case IDs, case count, split
+membership, per-case split values, and evidence corpus versions. A case file
+must remain inside its dataset directory.
 
-## Split governance
+## Evaluation cases
 
-- Development runs may be used for tuning and model selection.
-- Final runs must use `held_out`.
-- Held-out runs must not be used for tuning or model selection.
-- Reporting runs must preserve the split and purpose recorded in the run.
-- The dataset manifest is authoritative for split membership and held-out
-  policy.
+Each case records a stable case ID, question and question type, optional
+conversation context, expected-answer characteristics, evidence references,
+an explicit abstention expectation, and its persisted split.
 
-The run boundary validates the selected cases and rejects mismatches between
-manifest membership and case data before a run is created.
+Expected-answer data is an annotation format. It may describe accepted claims,
+numeric values and tolerances, dates, or comparison ordering. EVAL-01 does not
+define a generated-answer parser, semantic judge, matching algorithm, quality
+metric, or pass/fail threshold.
 
-## Structured evaluation records
+Evidence references use PROV-01 identifiers and retain the corpus version,
+document identity, and the source-span or structured-record identity required
+by their evidence kind. Answerable cases require authoritative evidence.
+Abstention cases state why abstention is expected and whether a partial answer
+may be acceptable.
 
-Each evaluated case may emit one immutable `EvaluationRecord` with a stable
-`eval-<64 lowercase hex digits>` ID derived from `run_id` and `case_id`.
-Records contain only:
+Follow-up cases retain their preceding conversational context. Context is part
+of the private dataset payload and must not be copied into operational logs.
 
-- `run_id` and `case_id`;
-- `status`: `passed`, `failed`, or `skipped`;
-- optional duration and machine-readable warning or error codes;
-- UTC timestamp; and
-- record schema version.
+## Held-out governance and leakage
 
-Failure records require an error code. A failed unit must not be represented as
-a successful result, and its exception text must not be copied into structured
-fields.
+Split membership is explicit in both the manifest and each case. The manifest
+is authoritative, and every case belongs to exactly one split.
 
-## Logging and privacy
+Deterministic split generation keeps exact questions, near-duplicate questions,
+shared expected answers, and shared evidence in one leakage group. A persisted
+dataset is rejected when a leakage group crosses splits.
 
-Use structured logs with stable snake-case event names. Evaluation logging
-follows the level policy below:
+Development cases may support iteration. Held-out membership is immutable and
+must not be used for tuning or model selection. The final corpus-backed
+question set contains 30–50 real questions spanning the question types in the
+project specification; the committed synthetic dataset is only a contract
+fixture.
 
-| Level | Evaluation use |
-| --- | --- |
-| `INFO` | Run lifecycle, aggregate summaries, and successful unit records |
-| `WARNING` | Rejected or incomplete input that does not terminate the process |
-| `ERROR` | A failed evaluation unit or run-level evaluation failure |
-| `CRITICAL` | A process-wide condition that makes continued evaluation unsafe |
+## Serialization and privacy
 
-Logs must not contain questions, answers, passages, prompts, responses,
-completions, model outputs, document text, credentials, or sensitive paths.
-The logging processor rejects known content-bearing field names rather than
-silently emitting them. Operational metrics such as token counts may be
-recorded when they do not contain content.
+Cases are serialized as deterministic UTF-8 JSONL. Manifests are serialized as
+deterministic, human-reviewable JSON. Dataset writing calculates the case-file
+checksum rather than trusting a caller-supplied digest.
 
-Invalid inputs must produce a warning with a machine-readable issue code when
-the operation can continue. Failed evaluation units must produce an error with
-the stable run and case IDs plus a machine-readable error code. Neither event
-may include the invalid payload or model output.
+Questions, expected answers, evidence, prompts, responses, completions, model
+outputs, document text, credentials, and sensitive paths must not appear in
+operational logs. Dataset validation errors should identify the failed field or
+record without copying its content into a log record.
+
+## EVAL-01 scope boundary
+
+EVAL-01 does not define retrieval metrics or reproducible run execution
+(`EVAL-03`), a held-out retrieval report or Recall@10 gate (`EVAL-04`), answer
+matching, citation and faithfulness metrics, or abstention accuracy (`EVAL-05`),
+OCR evaluation (`EVAL-06`), extraction and aggregation metrics (`EVAL-07`), or
+systems and session acceptance (`EVAL-09` and `EVAL-10`).
+
+Those later issues consume the EVAL-01 dataset contract. They may introduce
+versioned result records and algorithm identities without making scoring
+policy part of the dataset format.

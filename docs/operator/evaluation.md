@@ -1,98 +1,57 @@
-# Evaluation operations
+# Evaluation dataset operations
 
-Evaluation is currently exposed as a Python library workflow. A command-line
-or service-level evaluation entry point will be documented when the serving
-evaluation workflow is implemented.
+EVAL-01 exposes a Python library for creating and validating local evaluation
+datasets. Evaluation execution, result records, and quality reports are added
+by their later build-order issues.
 
-## Before running evaluation
+## Validate a dataset
 
-1. Confirm that the dataset manifest and case file are on the local filesystem.
-2. Load the dataset through `load_dataset(...)`; do not read case files around
-   the loader.
-3. Confirm the intended split and purpose. Final evaluation uses `held_out`.
-4. Confirm that the local corpus version in the manifest matches the evidence
-   references used by the cases.
-5. Prepare a finite JSON configuration and hash it with
-   `configuration_digest(...)`.
-
-The loader verifies manifest structure, case-file checksums, case count, split
-membership, and corpus-version consistency. URI-shaped paths are rejected.
-
-## Create a run
-
-Use the run factory so policy checks and dataset digests are applied at one
-boundary:
+Always load a dataset through the public loader. It validates the manifest,
+case-file checksum, case count, split membership, evidence corpus version, and
+local-only path boundary.
 
 ```python
-from datetime import datetime, timezone
 from pathlib import Path
 
-from inference_lab.evaluation import (
-    EvaluationRunRequest,
-    configuration_digest,
-    create_evaluation_run,
-    load_dataset,
-)
+from inference_lab.evaluation import load_dataset
 
 dataset = load_dataset(Path("benchmarks/evaluation/manifest.json"))
-request = EvaluationRunRequest(split="held_out", purpose="final")
-run = create_evaluation_run(
-    dataset,
-    request,
-    system_version="system-1",
-    configuration_digest=configuration_digest({"temperature": 0}),
-    algorithm_versions={"matching": "1.0.0"},
-    created_at=datetime.now(timezone.utc),
-)
+print(dataset.manifest.dataset_id, len(dataset.cases))
 ```
 
-Store or pass the resulting `run_id` as the correlation identifier for the
-evaluation. Do not construct a run ID from a timestamp or include case content
-in the run metadata.
+Do not read case files around the loader or trust a caller-provided checksum.
+Before using a dataset, confirm that the local corpus matches its `corpus_id`
+and `corpus_version`.
 
-## Record units and failures
+## Write a dataset
 
-Use `EvaluationRecorder` for per-case results. Record machine-readable codes,
-not exception messages or payloads:
+Construct validated `EvaluationCase` and `DatasetManifest` values, then use
+`write_dataset(...)`. The writer serializes cases deterministically and places
+the calculated case-file checksum in the returned manifest.
 
-```python
-recorder.record(
-    run_id=run.run_id,
-    case_id="case-001",
-    status="failed",
-    error_code="backend_unavailable",
-    timestamp=datetime.now(timezone.utc),
-)
-```
+The destination and case file must be local. The case file is relative to the
+dataset directory and cannot escape it. Preserve the returned manifest as the
+authoritative version; do not edit split membership or checksums manually.
 
-For an invalid input that prevents a unit or run from starting, emit a warning
-with `invalid_input(...)` and an issue code. Continue only when the caller can
-identify the affected scope and the result remains trustworthy. Otherwise fail
-the run and retain the last valid run or report.
+## Held-out data
 
-## Inspecting logs
+Development data may be used during implementation. Held-out membership is
+immutable and must not be used for tuning or model selection. Do not expose
+held-out questions or expected answers in logs, reports intended for routine
+development, or debugging output.
 
-Use JSON logging for scripts and tooling:
+The committed `benchmarks/evaluation` data is a synthetic contract fixture,
+not the final corpus-backed question set.
 
-```toml
-[logging]
-format = "json"
-level = "INFO"
-```
-
-Evaluation logs should expose event, level, timestamp, `run_id`, `case_id`,
-status, duration, and issue codes as applicable. They must never expose the
-question, expected answer, evidence passage, prompt, response, or model
-output. The structured logging boundary rejects known sensitive field names;
-fix the caller rather than bypassing that protection.
-
-## Failure handling
+## Failure handling and privacy
 
 - Treat an invalid manifest, checksum, split, corpus reference, or local path
-  as an invalid input.
-- Treat a backend exception or failed matching operation as a failed evaluation
-  unit unless the workflow explicitly defines a safe skip.
-- Do not convert failed units into passes or silently drop them.
-- Preserve the run identity and machine-readable failure code for diagnosis.
-- Do not retry a final run after changing its dataset, configuration, system,
-  or algorithm inputs; create a new run instead.
+  as a rejected input.
+- Do not continue with a partially validated dataset.
+- Do not copy invalid payloads into exceptions intended for logs.
+- Never log questions, expected answers, evidence, prompts, responses, model
+  output, credentials, or sensitive paths.
+
+Run identities, evaluation-unit records, metrics, and reporting workflows are
+intentionally deferred until the corresponding evaluation issues define their
+inputs and reproducibility requirements.
