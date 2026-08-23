@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Final, Iterable, get_args
 
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.utils import (
@@ -18,7 +18,7 @@ from inference_lab.evaluation.versioning import (
     validate_split_algorithm_version,
 )
 
-_SPLIT_ORDER: tuple[SplitName, ...] = ("train", "development", "held_out")
+_SPLIT_ORDER: Final[tuple[SplitName, ...]] = get_args(SplitName)
 _DEFAULT_SPLIT_SEED = "inference-lab-default-split"
 
 

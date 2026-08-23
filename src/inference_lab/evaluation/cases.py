@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Final, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -23,14 +23,7 @@ QuestionType = Literal[
     "difficult_terminology",
 ]
 
-QUESTION_TYPES: Final[tuple[QuestionType, ...]] = (
-    "lookup",
-    "comparison",
-    "thematic",
-    "aggregation",
-    "follow_up",
-    "difficult_terminology",
-)
+QUESTION_TYPES: Final[tuple[QuestionType, ...]] = get_args(QuestionType)
 
 
 class EvaluationCase(BaseModel):
