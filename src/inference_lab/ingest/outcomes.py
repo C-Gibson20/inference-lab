@@ -19,6 +19,43 @@ ParseStatus = Literal[
 _PARSE_STATUSES: Final[frozenset[ParseStatus]] = frozenset(get_args(ParseStatus))
 
 
+def _validate_success(
+    document: ParsedDocument | None,
+    failures: tuple[ParserFailure, ...],
+) -> None:
+    """Validate the invariants of a fully successful parse."""
+    if document is None:
+        raise ValueError("successful_parse_requires_document")
+    if failures:
+        raise ValueError("successful_parse_must_not_have_failures")
+
+
+def _validate_recoverable_completion(
+    document: ParsedDocument | None,
+    failures: tuple[ParserFailure, ...],
+) -> None:
+    """Validate a parse completed with recoverable failures."""
+    if document is None:
+        raise ValueError("partial_parse_requires_document")
+    if not failures:
+        raise ValueError("partial_parse_requires_failures")
+    if any(failure.severity == "fatal" for failure in failures):
+        raise ValueError("partial_parse_must_not_have_fatal_failures")
+
+
+def _validate_failure(
+    document: ParsedDocument | None,
+    failures: tuple[ParserFailure, ...],
+) -> None:
+    """Validate the invariants of a failed parse."""
+    if document is not None:
+        raise ValueError("failed_parse_must_not_have_document")
+    if not failures:
+        raise ValueError("failed_parse_requires_failures")
+    if not any(failure.severity == "fatal" for failure in failures):
+        raise ValueError("failed_parse_requires_fatal_failure")
+
+
 @dataclass(frozen=True, slots=True)
 class ParseOutcome:
     """Represent complete, partial, or failed parser work."""
@@ -44,23 +81,8 @@ class ParseOutcome:
             raise ValueError("invalid_parser_failure")
 
         if self.status == "succeeded":
-            if self.document is None:
-                raise ValueError("successful_parse_requires_document")
-            if self.failures:
-                raise ValueError("successful_parse_must_not_have_failures")
-
+            _validate_success(self.document, self.failures)
         elif self.status == "completed_with_recoverable_failures":
-            if self.document is None:
-                raise ValueError("partial_parse_requires_document")
-            if not self.failures:
-                raise ValueError("partial_parse_requires_failures")
-            if any(failure.severity == "fatal" for failure in self.failures):
-                raise ValueError("partial_parse_must_not_have_fatal_failures")
-
-        elif self.status == "failed":
-            if self.document is not None:
-                raise ValueError("failed_parse_must_not_have_document")
-            if not self.failures:
-                raise ValueError("failed_parse_requires_failures")
-            if not any(failure.severity == "fatal" for failure in self.failures):
-                raise ValueError("failed_parse_requires_fatal_failure")
+            _validate_recoverable_completion(self.document, self.failures)
+        else:
+            _validate_failure(self.document, self.failures)
