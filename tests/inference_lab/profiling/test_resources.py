@@ -119,6 +119,23 @@ def test_sampled_measurement_requires_positive_duration() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "sample_duration_ms",
+    [float("nan"), float("inf"), float("-inf"), True, "1000"],
+)
+def test_sampled_measurement_rejects_invalid_duration(
+    sample_duration_ms: object,
+) -> None:
+    with pytest.raises(ValueError, match="positive sample duration"):
+        ResourceMeasurement(
+            category="cpu_utilization",
+            unit="percent",
+            value=50,
+            measurement_kind="sampled",
+            sample_duration_ms=sample_duration_ms,  # type: ignore[arg-type]
+        )
+
+
 def test_point_in_time_measurement_cannot_have_sample_duration() -> None:
     with pytest.raises(ValueError, match="must not have a sample duration"):
         ResourceMeasurement(

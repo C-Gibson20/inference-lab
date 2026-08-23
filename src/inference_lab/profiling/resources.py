@@ -111,14 +111,16 @@ class ResourceMeasurement:
                 "point-in-time measurements must not have a sample duration"
             )
         if self.measurement_kind != "point_in_time":
-            if self.sample_duration_ms is None or self.sample_duration_ms <= 0:
+            if (
+                isinstance(self.sample_duration_ms, bool)
+                or not isinstance(self.sample_duration_ms, (int, float))
+                or not math.isfinite(self.sample_duration_ms)
+                or self.sample_duration_ms <= 0
+            ):
                 raise ValueError(
-                    "sampled and interval measurements require a positive sample duration"
+                    "sampled and interval measurements require a positive sample "
+                    "duration expressed as a finite number"
                 )
-        if self.sample_duration_ms is not None and not math.isfinite(
-            self.sample_duration_ms
-        ):
-            raise ValueError("sample_duration_ms must be finite")
         if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
             raise ValueError("timestamp must be timezone-aware UTC")
         if self.timestamp.utcoffset() != timedelta(0):

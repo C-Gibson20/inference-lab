@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -29,6 +30,22 @@ def _validate_non_negative_integer(value: int | None, field_name: str) -> None:
         return
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field_name} must be a non-negative integer")
+
+
+def _validate_non_negative_duration(
+    value: int | float | None,
+    field_name: str,
+) -> None:
+    """Validate an optional finite, non-negative duration."""
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise ValueError(f"{field_name} must be a finite non-negative number")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,8 +90,7 @@ class StageTiming:
             raise ValueError("stage_started records must not have a duration")
         if self.event == "stage_completed" and self.duration_ms is None:
             raise ValueError("stage_completed records must have a duration")
-        if self.duration_ms is not None and self.duration_ms < 0:
-            raise ValueError("duration_ms must be non-negative")
+        _validate_non_negative_duration(self.duration_ms, "duration_ms")
         _validate_non_negative_integer(self.items_processed, "items_processed")
         _validate_non_negative_integer(self.records_emitted, "records_emitted")
         if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
