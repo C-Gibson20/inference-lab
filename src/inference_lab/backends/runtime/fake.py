@@ -10,6 +10,7 @@ from enum import StrEnum
 
 import structlog
 
+from ._validation import validate_finite_number
 from .errors import (
     BackendClosedError,
     BackendExecutionError,
@@ -47,14 +48,6 @@ class FakeFailureMode(StrEnum):
 
 SyncSleeper = Callable[[float], None]
 AsyncSleeper = Callable[[float], Awaitable[None]]
-
-
-def _validate_finite_number(value: object, field_name: str) -> None:
-    """Require a finite number while excluding booleans."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"{field_name} must be a number")
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError(f"{field_name} must be finite")
 
 
 def _default_metadata() -> BackendMetadata:
@@ -106,7 +99,7 @@ class FakeBackendConfig:
             ("per_item_delay_seconds", self.per_item_delay_seconds),
             ("per_chunk_delay_seconds", self.per_chunk_delay_seconds),
         ):
-            _validate_finite_number(delay, field_name)
+            validate_finite_number(delay, field_name)
             if delay < 0:
                 raise ValueError(f"{field_name} must not be negative")
 
@@ -146,7 +139,7 @@ class FakeBackendConfig:
             raise ValueError("embedding_vectors must have one consistent dimension")
         for vector in self.embedding_vectors:
             for value in vector:
-                _validate_finite_number(value, "embedding vector values")
+                validate_finite_number(value, "embedding vector values")
 
         declared_dimensions = self.metadata.embedding_dimensions
         if declared_dimensions is not None and declared_dimensions != dimensions:
@@ -171,7 +164,7 @@ class FakeBackendConfig:
                 raise TypeError("rerank score candidate IDs must be strings")
             if not candidate_id:
                 raise ValueError("rerank score candidate IDs must not be empty")
-            _validate_finite_number(score, "rerank score values")
+            validate_finite_number(score, "rerank score values")
             candidate_ids.append(candidate_id)
         if len(set(candidate_ids)) != len(candidate_ids):
             raise ValueError("rerank score candidate IDs must be unique")
