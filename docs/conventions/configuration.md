@@ -25,6 +25,7 @@ The current sections are:
 | `[runtime]` | VRAM budget and maximum context size |
 | `[storage]` | Persistent index and metadata database paths |
 | `[logging]` | Log level and output format |
+| `[ingest]` | Controls safety limits for batch ingestion |
 
 Run the application from the directory containing `config.toml`.
 
