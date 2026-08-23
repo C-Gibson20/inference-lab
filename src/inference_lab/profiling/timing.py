@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Literal, Self
+from typing import Final, Literal, Self, get_args
 
 from .types import LogLevel
 from .utils import utc_now
@@ -20,8 +20,8 @@ RecordEmitter = Callable[["StageTiming"], None]
 Event = Literal["stage_started", "stage_completed"]
 Status = Literal["started", "completed", "failed", "cancelled"]
 
-_EVENTS = frozenset({"stage_started", "stage_completed"})
-_STATUSES = frozenset({"started", "completed", "failed", "cancelled"})
+_EVENTS: Final[frozenset[Event]] = frozenset(get_args(Event))
+_STATUSES: Final[frozenset[Status]] = frozenset(get_args(Status))
 
 
 def _validate_non_negative_integer(value: int | None, field_name: str) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Final, Literal, get_args
 
 from .types import LogLevel
 from .utils import is_snake_case, utc_now
@@ -23,19 +23,13 @@ FailureCategory = Literal[
 ]
 FailureStatus = Literal["failed", "cancelled", "degraded"]
 
-_FAILURE_EVENTS = frozenset({"unit_failed", "unit_degraded"})
-_FAILURE_CATEGORIES = frozenset(
-    {
-        "input",
-        "dependency",
-        "timeout",
-        "resource_limit",
-        "cancelled",
-        "internal",
-        "measurement_unavailable",
-    }
+_FAILURE_EVENTS: Final[frozenset[FailureEventName]] = frozenset(
+    get_args(FailureEventName)
 )
-_FAILURE_STATUSES = frozenset({"failed", "cancelled", "degraded"})
+_FAILURE_CATEGORIES: Final[frozenset[FailureCategory]] = frozenset(
+    get_args(FailureCategory)
+)
+_FAILURE_STATUSES: Final[frozenset[FailureStatus]] = frozenset(get_args(FailureStatus))
 _FAILURE_LEVELS = frozenset({"warning", "error"})
 _QUALIFIED_EXCEPTION_TYPE = re.compile(
     r"^(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*$"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Final, Literal, get_args
 
 from .types import LogLevel
 from .utils import utc_now
@@ -36,25 +36,15 @@ ResourceUnit = Literal[
     "celsius",
 ]
 
-_RESOURCE_CATEGORIES = frozenset(
-    {
-        "model_weights",
-        "kv_cache",
-        "activations",
-        "embedding_reranker_memory",
-        "index_memory",
-        "framework_overhead",
-        "pinned_host_memory",
-        "storage_cache",
-        "gpu_utilization",
-        "cpu_utilization",
-        "storage_throughput",
-        "power",
-        "thermal",
-    }
+_RESOURCE_CATEGORIES: Final[frozenset[ResourceCategory]] = frozenset(
+    get_args(ResourceCategory)
 )
-_MEASUREMENT_STATUSES = frozenset({"measured", "unavailable", "unreliable"})
-_MEASUREMENT_KINDS = frozenset({"point_in_time", "sampled", "interval"})
+_MEASUREMENT_STATUSES: Final[frozenset[MeasurementStatus]] = frozenset(
+    get_args(MeasurementStatus)
+)
+_MEASUREMENT_KINDS: Final[frozenset[MeasurementKind]] = frozenset(
+    get_args(MeasurementKind)
+)
 _MEMORY_CATEGORIES = frozenset(
     {
         "model_weights",
@@ -82,6 +72,9 @@ _RESOURCE_UNITS: dict[ResourceCategory, ResourceUnit] = {
     "power": "watts",
     "thermal": "celsius",
 }
+
+if _RESOURCE_UNITS.keys() != _RESOURCE_CATEGORIES:
+    raise RuntimeError("resource units must cover every resource category")
 
 
 @dataclass(frozen=True, slots=True)

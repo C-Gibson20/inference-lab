@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Final, Protocol, get_args
+
+from .types import LogLevel
 
 
 class ProfilingRecordLike(Protocol):
@@ -13,7 +15,7 @@ class ProfilingRecordLike(Protocol):
         ...
 
 
-_LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
+_LOG_LEVELS: Final[frozenset[LogLevel]] = frozenset(get_args(LogLevel))
 _REQUIRED_FIELDS = (
     "observed_at",
     "module",
