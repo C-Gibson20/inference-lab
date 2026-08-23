@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Final, Literal, get_args
 
+from ._validation import validate_utc_datetime
 from .types import LogLevel
 from .utils import is_snake_case, utc_now
 from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
@@ -115,14 +116,6 @@ def _validate_exception_type(exception_type: str | None) -> None:
         raise ValueError("exception_type must be a qualified exception class name")
 
 
-def _validate_observed_at(observed_at: datetime) -> None:
-    """Require a timezone-aware UTC observation timestamp."""
-    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
-        raise ValueError("observed_at must be timezone-aware UTC")
-    if observed_at.utcoffset() != timedelta(0):
-        raise ValueError("observed_at must be in UTC")
-
-
 @dataclass(frozen=True, slots=True)
 class FailureEvent:
     """A privacy-safe record describing a failed or degraded unit of work.
@@ -173,7 +166,7 @@ class FailureEvent:
             partial=self.partial,
         )
         _validate_exception_type(self.exception_type)
-        _validate_observed_at(self.observed_at)
+        validate_utc_datetime(self.observed_at, "observed_at")
         validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:

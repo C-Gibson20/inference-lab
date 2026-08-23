@@ -7,9 +7,10 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Final, Literal, Self, get_args
 
+from ._validation import validate_utc_datetime
 from .types import LogLevel
 from .utils import utc_now
 from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
@@ -94,10 +95,7 @@ class StageTiming:
         _validate_non_negative_duration(self.duration_ms, "duration_ms")
         _validate_non_negative_integer(self.items_processed, "items_processed")
         _validate_non_negative_integer(self.records_emitted, "records_emitted")
-        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
-            raise ValueError("observed_at must be timezone-aware UTC")
-        if self.observed_at.utcoffset() != timedelta(0):
-            raise ValueError("observed_at must be in UTC")
+        validate_utc_datetime(self.observed_at, "observed_at")
         validate_record_schema_version(self.record_schema_version)
 
     def to_dict(self) -> dict[str, object]:

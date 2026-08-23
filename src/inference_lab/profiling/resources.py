@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Final, Literal, get_args
 
+from ._validation import validate_utc_datetime
 from .types import LogLevel
 from .utils import utc_now
 from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
@@ -77,6 +78,86 @@ if _RESOURCE_UNITS.keys() != _RESOURCE_CATEGORIES:
     raise RuntimeError("resource units must cover every resource category")
 
 
+def _validate_identity_and_status(
+    *,
+    category: ResourceCategory,
+    module: str,
+    pipeline_stage: str | None,
+    stage_id: str | None,
+    status: MeasurementStatus,
+    measurement_kind: MeasurementKind,
+) -> None:
+    """Validate resource discriminants and operational context fields."""
+    if category not in _RESOURCE_CATEGORIES:
+        raise ValueError("category must be a supported resource category")
+    if not module:
+        raise ValueError("module must not be empty")
+    if pipeline_stage == "":
+        raise ValueError("pipeline_stage must not be empty")
+    if stage_id == "":
+        raise ValueError("stage_id must not be empty")
+    if status not in _MEASUREMENT_STATUSES:
+        raise ValueError("status must be a valid measurement status")
+    if measurement_kind not in _MEASUREMENT_KINDS:
+        raise ValueError("measurement_kind must be valid")
+
+
+def _validate_measurement_value(
+    value: int | float | None,
+    status: MeasurementStatus,
+) -> None:
+    """Validate numeric shape and presence rules for a measurement status."""
+    if value is not None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("value must be a finite number or None")
+        if not math.isfinite(float(value)):
+            raise ValueError("value must be a finite number or None")
+    if status == "measured" and value is None:
+        raise ValueError("measured resources must have a value")
+    if status == "unavailable" and value is not None:
+        raise ValueError("unavailable resources must not have a value")
+
+
+def _validate_value_range(
+    category: ResourceCategory,
+    value: int | float | None,
+) -> None:
+    """Validate the physical range implied by the resource category."""
+    if value is None:
+        return
+    if category in {"gpu_utilization", "cpu_utilization"}:
+        if not 0 <= value <= 100:
+            raise ValueError("utilization percentage must be between 0 and 100")
+    elif category == "thermal":
+        if value < -273.15:
+            raise ValueError("thermal measurement cannot be below absolute zero")
+    elif category in _MEMORY_CATEGORIES or category in {
+        "storage_throughput",
+        "power",
+    }:
+        if value < 0:
+            raise ValueError(f"{category} measurement must be non-negative")
+
+
+def _validate_sampling(
+    measurement_kind: MeasurementKind,
+    sample_duration_ms: float | None,
+) -> None:
+    """Validate the sample duration required by the measurement kind."""
+    if measurement_kind == "point_in_time" and sample_duration_ms is not None:
+        raise ValueError("point-in-time measurements must not have a sample duration")
+    if measurement_kind != "point_in_time" and (
+        isinstance(sample_duration_ms, bool)
+        or not isinstance(sample_duration_ms, (int, float))
+        or not math.isfinite(sample_duration_ms)
+        or sample_duration_ms <= 0
+    ):
+        raise ValueError(
+            "sampled and interval measurements require a positive sample "
+            "duration expressed as a finite number"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceMeasurement:
     """One normalized measurement for one runtime resource category.
@@ -107,68 +188,19 @@ class ResourceMeasurement:
 
     def _validate(self) -> None:
         """Validate resource category, value, status, and timing invariants."""
-        if self.category not in _RESOURCE_CATEGORIES:
-            raise ValueError("category must be a supported resource category")
-        if not self.module:
-            raise ValueError("module must not be empty")
-        if self.pipeline_stage == "":
-            raise ValueError("pipeline_stage must not be empty")
-        if self.stage_id == "":
-            raise ValueError("stage_id must not be empty")
-        if self.status not in _MEASUREMENT_STATUSES:
-            raise ValueError("status must be a valid measurement status")
-        if self.measurement_kind not in _MEASUREMENT_KINDS:
-            raise ValueError("measurement_kind must be valid")
-        if self.value is not None:
-            if isinstance(self.value, bool) or not isinstance(self.value, (int, float)):
-                raise ValueError("value must be a finite number or None")
-            if not math.isfinite(float(self.value)):
-                raise ValueError("value must be a finite number or None")
-        if self.status == "measured" and self.value is None:
-            raise ValueError("measured resources must have a value")
-        if self.status == "unavailable" and self.value is not None:
-            raise ValueError("unavailable resources must not have a value")
-        self._validate_value_range()
-        if (
-            self.measurement_kind == "point_in_time"
-            and self.sample_duration_ms is not None
-        ):
-            raise ValueError(
-                "point-in-time measurements must not have a sample duration"
-            )
-        if self.measurement_kind != "point_in_time":
-            if (
-                isinstance(self.sample_duration_ms, bool)
-                or not isinstance(self.sample_duration_ms, (int, float))
-                or not math.isfinite(self.sample_duration_ms)
-                or self.sample_duration_ms <= 0
-            ):
-                raise ValueError(
-                    "sampled and interval measurements require a positive sample "
-                    "duration expressed as a finite number"
-                )
-        if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
-            raise ValueError("observed_at must be timezone-aware UTC")
-        if self.observed_at.utcoffset() != timedelta(0):
-            raise ValueError("observed_at must be in UTC")
+        _validate_identity_and_status(
+            category=self.category,
+            module=self.module,
+            pipeline_stage=self.pipeline_stage,
+            stage_id=self.stage_id,
+            status=self.status,
+            measurement_kind=self.measurement_kind,
+        )
+        _validate_measurement_value(self.value, self.status)
+        _validate_value_range(self.category, self.value)
+        _validate_sampling(self.measurement_kind, self.sample_duration_ms)
+        validate_utc_datetime(self.observed_at, "observed_at")
         validate_record_schema_version(self.record_schema_version)
-
-    def _validate_value_range(self) -> None:
-        """Validate the physical range implied by the resource category."""
-        if self.value is None:
-            return
-        if self.category in {"gpu_utilization", "cpu_utilization"}:
-            if not 0 <= self.value <= 100:
-                raise ValueError("utilization percentage must be between 0 and 100")
-        elif self.category == "thermal":
-            if self.value < -273.15:
-                raise ValueError("thermal measurement cannot be below absolute zero")
-        elif self.category in _MEMORY_CATEGORIES or self.category in {
-            "storage_throughput",
-            "power",
-        }:
-            if self.value < 0:
-                raise ValueError(f"{self.category} measurement must be non-negative")
 
     def to_dict(self) -> dict[str, object]:
         """Return the measurement as structured logging fields."""

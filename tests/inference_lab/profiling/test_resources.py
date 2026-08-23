@@ -84,6 +84,30 @@ def test_unknown_category_is_rejected(category: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"status": "unknown"}, "valid measurement status"),
+        ({"measurement_kind": "unknown"}, "measurement_kind must be valid"),
+        ({"module": ""}, "module must not be empty"),
+        ({"pipeline_stage": ""}, "pipeline_stage must not be empty"),
+        ({"stage_id": ""}, "stage_id must not be empty"),
+    ],
+)
+def test_resource_discriminants_and_context_are_validated(
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    values: dict[str, object] = {
+        "category": "power",
+        "value": 1,
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match=message):
+        ResourceMeasurement(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
     ("category", "unit"),
     [
         ("model_weights", "bytes"),
