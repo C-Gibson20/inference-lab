@@ -1,5 +1,7 @@
 """Tests for parser contract."""
 
+import traceback
+
 import pytest
 
 from inference_lab.ingest import (
@@ -99,6 +101,27 @@ def test_invalid_encoding_is_rejected() -> None:
         )
 
     assert error.value.category == "invalid_encoding"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    ["base64_codec", "hex_codec", "rot_13", "uu_codec", "zlib_codec"],
+)
+def test_non_text_codec_is_rejected(encoding: str) -> None:
+    with pytest.raises(ParserInputError) as error:
+        ParserInput(
+            document_id=DocumentId.generate(),
+            document_version_id=DocumentVersionId.generate(),
+            content=b"private source",
+            media_type="text/plain",
+            encoding=encoding,
+        )
+
+    assert error.value.category == "invalid_encoding"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
 
 
 def test_invalid_document_id_is_rejected() -> None:
@@ -150,7 +173,7 @@ def test_malformed_source_bytes_are_rejected() -> None:
     source = ParserInput(
         document_id=DocumentId.generate(),
         document_version_id=DocumentVersionId.generate(),
-        content=b"\xff",
+        content=b"private source \xff",
         media_type="text/plain",
         encoding="utf-8",
     )
@@ -160,6 +183,9 @@ def test_malformed_source_bytes_are_rejected() -> None:
 
     assert error.value.category == "decode_failed"
     assert error.value.encoding == "utf-8"
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    assert "private source" not in "".join(traceback.format_exception(error.value))
 
 
 def test_prepare_text_is_deterministic() -> None:

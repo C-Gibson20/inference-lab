@@ -36,6 +36,19 @@ class ParserInputError(ValueError):
         self.category = category
 
 
+def _is_text_encoding(encoding: str) -> bool:
+    """Return whether the named codec decodes bytes into text."""
+
+    try:
+        codec = codecs.lookup(encoding)
+        decoded, _ = codec.decode(b"", "strict")
+    except Exception:
+        # Codec implementations are registry extensions. Treat any decoder
+        # incompatibility as invalid input rather than leaking it past this boundary.
+        return False
+    return isinstance(decoded, str)
+
+
 @dataclass(frozen=True, slots=True)
 class NormalisedText:
     """Pair canonical text with the decoded source coordinate space."""
@@ -69,10 +82,8 @@ class ParserInput:
             raise ParserInputError("unsupported_media_type")
         if not isinstance(self.encoding, str) or not self.encoding.strip():
             raise ParserInputError("missing_encoding")
-        try:
-            codecs.lookup(self.encoding)
-        except LookupError as error:
-            raise ParserInputError("invalid_encoding") from error
+        if not _is_text_encoding(self.encoding):
+            raise ParserInputError("invalid_encoding")
 
 
 def decode_source(source: ParserInput) -> str:
@@ -80,8 +91,9 @@ def decode_source(source: ParserInput) -> str:
 
     try:
         return source.content.decode(source.encoding, errors="strict")
-    except UnicodeDecodeError as error:
-        raise ParserDecodeError(source.encoding) from error
+    except UnicodeDecodeError:
+        pass
+    raise ParserDecodeError(source.encoding)
 
 
 def prepare_text(source: ParserInput) -> NormalisedText:
