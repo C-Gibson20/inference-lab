@@ -61,8 +61,19 @@ def test_evidence_kinds_require_exact_identifier_shapes() -> None:
         EvidenceReference(**EVIDENCE_IDS, kind="document", role="context")
 
 
-def test_provenance_ids_must_be_canonical_uuids() -> None:
-    invalid = dict(EVIDENCE_IDS, document_id="document-1")
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "corpus_version",
+        "document_id",
+        "document_version_id",
+        "source_span_id",
+        "record_id",
+    ],
+)
+def test_provenance_ids_must_be_canonical_uuids(field_name: str) -> None:
+    invalid = dict(EVIDENCE_IDS)
+    invalid[field_name] = "not-a-canonical-id"
 
     with pytest.raises(ValidationError, match="valid UUID"):
         EvidenceReference.model_validate(invalid)

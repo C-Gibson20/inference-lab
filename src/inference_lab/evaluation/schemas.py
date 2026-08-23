@@ -67,6 +67,70 @@ def _reject_boolean_numbers(value: Any) -> Any:
     return value
 
 
+def _validate_provenance_ids(
+    *,
+    corpus_version: str,
+    document_id: str,
+    document_version_id: str | None,
+    source_span_id: str | None,
+    record_id: str | None,
+) -> None:
+    """Validate required and present optional provenance identifiers."""
+    _canonical_id(corpus_version, CorpusVersionId)
+    _canonical_id(document_id, DocumentId)
+    if document_version_id is not None:
+        _canonical_id(document_version_id, DocumentVersionId)
+    if source_span_id is not None:
+        _canonical_id(source_span_id, SourceSpanId)
+    if record_id is not None:
+        _canonical_id(record_id, RecordId)
+
+
+def _validate_source_span_evidence_shape(
+    *,
+    document_version_id: str | None,
+    source_span_id: str | None,
+    record_id: str | None,
+) -> None:
+    """Require the exact identifier shape for source-span evidence."""
+    if document_version_id is None or source_span_id is None:
+        raise ValueError(
+            "source_span evidence requires document_version_id and source_span_id"
+        )
+    if record_id is not None:
+        raise ValueError("source_span evidence cannot contain record_id")
+
+
+def _validate_record_evidence_shape(
+    *,
+    source_span_id: str | None,
+    record_id: str | None,
+) -> None:
+    """Require the exact identifier shape for record evidence."""
+    if record_id is None:
+        raise ValueError("record evidence requires record_id")
+    if source_span_id is not None:
+        raise ValueError("record evidence cannot contain source_span_id")
+
+
+def _validate_document_evidence_shape(
+    *,
+    role: str,
+    document_version_id: str | None,
+    source_span_id: str | None,
+    record_id: str | None,
+) -> None:
+    """Require the exact role and identifier shape for document evidence."""
+    if role == "authoritative":
+        raise ValueError("document-level evidence cannot be authoritative")
+    if any(
+        value is not None for value in (document_version_id, source_span_id, record_id)
+    ):
+        raise ValueError(
+            "document evidence cannot contain version, span, or record IDs"
+        )
+
+
 class EvidenceReference(BaseModel):
     """One case-local reference to expected source evidence."""
 
@@ -84,43 +148,32 @@ class EvidenceReference(BaseModel):
     @model_validator(mode="after")
     def validate_ids_and_shape(self) -> "EvidenceReference":
         """Validate provenance identifiers and exact evidence granularity."""
-        _canonical_id(self.corpus_version, CorpusVersionId)
-        _canonical_id(self.document_id, DocumentId)
-
-        if self.document_version_id is not None:
-            _canonical_id(self.document_version_id, DocumentVersionId)
-        if self.source_span_id is not None:
-            _canonical_id(self.source_span_id, SourceSpanId)
-        if self.record_id is not None:
-            _canonical_id(self.record_id, RecordId)
+        _validate_provenance_ids(
+            corpus_version=self.corpus_version,
+            document_id=self.document_id,
+            document_version_id=self.document_version_id,
+            source_span_id=self.source_span_id,
+            record_id=self.record_id,
+        )
 
         if self.kind == "source_span":
-            if self.document_version_id is None or self.source_span_id is None:
-                raise ValueError(
-                    "source_span evidence requires document_version_id "
-                    "and source_span_id"
-                )
-            if self.record_id is not None:
-                raise ValueError("source_span evidence cannot contain record_id")
+            _validate_source_span_evidence_shape(
+                document_version_id=self.document_version_id,
+                source_span_id=self.source_span_id,
+                record_id=self.record_id,
+            )
         elif self.kind == "record":
-            if self.record_id is None:
-                raise ValueError("record evidence requires record_id")
-            if self.source_span_id is not None:
-                raise ValueError("record evidence cannot contain source_span_id")
+            _validate_record_evidence_shape(
+                source_span_id=self.source_span_id,
+                record_id=self.record_id,
+            )
         else:
-            if self.role == "authoritative":
-                raise ValueError("document-level evidence cannot be authoritative")
-            if any(
-                value is not None
-                for value in (
-                    self.document_version_id,
-                    self.source_span_id,
-                    self.record_id,
-                )
-            ):
-                raise ValueError(
-                    "document evidence cannot contain version, span, or record IDs"
-                )
+            _validate_document_evidence_shape(
+                role=self.role,
+                document_version_id=self.document_version_id,
+                source_span_id=self.source_span_id,
+                record_id=self.record_id,
+            )
 
         return self
 
