@@ -28,8 +28,8 @@ replaced with a hardcoded parser limit.
 
 - `succeeded` contains one complete `ParsedDocument` and no failures;
 - `failed` contains no document and at least one fatal `ParserFailure`;
-- `partial` is part of the shared outcome contract but is not emitted by the
-  current text-native baseline.
+- `completed_with_recoverable_failures` is part of the shared outcome contract
+  but is not emitted by the current text-native baseline.
 
 `ParsedDocument` includes the input identifiers, parser version, canonical
 text, ordered structural blocks, paragraph aliases, and character count. It
@@ -94,3 +94,28 @@ no failures; a recoverable outcome has one document and only recoverable
 failures; a failed outcome has no document and at least one fatal failure.
 
 Parser lifecycle and failure events use privacy-safe structured logging through `structlog`. Log fields may include stable document identity, parser version, failure category, source byte count, output character count, and emitted record count where applicable.
+
+## Text-native parser acceptance gate
+
+Run the focused acceptance suite with:
+
+```sh
+uv run pytest tests/inference_lab/ingest/test_text_native_acceptance.py
+```
+
+The gate uses fixed document identities and checked-in source/golden fixtures
+to verify:
+
+- exact, repeatable canonical serialization and versioned source-span IDs;
+- ordered paragraph text and source-coordinate provenance;
+- normalization and successful empty-document handling;
+- fatal, document-free outcomes for malformed and oversized source;
+- size-limit validation before decoding;
+- payload-free failure records and structured logs using a marker present in
+  the actual malformed input; and
+- the text-native scope boundary: no model, OCR, or network imports.
+
+The complete repository gate remains the lint, format, type-check, and test
+sequence in `AGENT.md`. The baseline does not accept paths, discover files,
+assign document identity, persist output, chunk text, invoke OCR, or load
+model backends; those responsibilities remain with later build-order work.
