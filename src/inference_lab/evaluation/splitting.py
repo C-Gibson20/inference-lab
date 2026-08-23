@@ -36,7 +36,12 @@ class SplitPolicy:
     def __post_init__(self) -> None:
         """Validate policy values and version compatibility."""
         for name, fraction in self.fractions.items():
-            if not math.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+            if (
+                isinstance(fraction, bool)
+                or not isinstance(fraction, (int, float))
+                or not math.isfinite(fraction)
+                or not 0.0 <= fraction <= 1.0
+            ):
                 raise ValueError(f"{name} must be finite and between 0.0 and 1.0")
 
         if not math.isclose(
@@ -47,8 +52,11 @@ class SplitPolicy:
         if not self.seed:
             raise ValueError("seed must not be empty")
 
-        if not math.isfinite(self.near_duplicate_threshold) or not (
-            0.0 <= self.near_duplicate_threshold <= 1.0
+        if (
+            isinstance(self.near_duplicate_threshold, bool)
+            or not isinstance(self.near_duplicate_threshold, (int, float))
+            or not math.isfinite(self.near_duplicate_threshold)
+            or not 0.0 <= self.near_duplicate_threshold <= 1.0
         ):
             raise ValueError(
                 "near_duplicate_threshold must be finite and between 0.0 and 1.0"
@@ -105,6 +113,10 @@ def answer_fingerprint(case: EvaluationCase) -> str:
     """Build a stable fingerprint from typed expected-answer data."""
 
     payload = case.expected_answer.model_dump(mode="json")
+    payload.pop("comparison_evidence_ids", None)
+    for field_name in ("claims", "numeric_values", "date_values"):
+        for expectation in payload[field_name]:
+            expectation.pop("evidence_ids", None)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return stable_digest(encoded)
 
@@ -164,8 +176,11 @@ def build_leakage_groups(
     ordered_cases = tuple(cases)
     if not ordered_cases:
         raise ValueError("At least one case is required")
-    if not math.isfinite(near_duplicate_threshold) or not (
-        0.0 <= near_duplicate_threshold <= 1.0
+    if (
+        isinstance(near_duplicate_threshold, bool)
+        or not isinstance(near_duplicate_threshold, (int, float))
+        or not math.isfinite(near_duplicate_threshold)
+        or not 0.0 <= near_duplicate_threshold <= 1.0
     ):
         raise ValueError(
             "near_duplicate_threshold must be finite and between 0.0 and 1.0"
@@ -182,9 +197,10 @@ def build_leakage_groups(
     for index, case in enumerate(ordered_cases):
         keys = {
             f"question:{question_key(case.question)}",
-            f"answer:{answer_fingerprint(case)}",
             *evidence_group_keys(case),
         }
+        if case.expected_answer.has_expectations or case.expected_answer.summary:
+            keys.add(f"answer:{answer_fingerprint(case)}")
         for key in keys:
             owner = key_owner.setdefault(key, index)
             union_find.union(index, owner)

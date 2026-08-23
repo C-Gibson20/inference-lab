@@ -2,7 +2,7 @@
 
 from typing import Any, Final
 
-CURRENT_SCHEMA_VERSION: Final[str] = "1.0.0"
+CURRENT_SCHEMA_VERSION: Final[str] = "2.0.0"
 SUPPORTED_SCHEMA_VERSIONS: Final[frozenset[str]] = frozenset({CURRENT_SCHEMA_VERSION})
 
 CURRENT_ALGORITHM_VERSION: Final[str] = "1.0.0"

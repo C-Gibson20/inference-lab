@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from inference_lab.evaluation.loader import load_dataset
+from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
 
 CORPUS_ID = "00000000-0000-4000-8000-000000000001"
@@ -21,13 +22,22 @@ SOURCE_SPAN_ID = "00000000-0000-4000-8000-000000000005"
 
 def _case(case_id: str = "case-001", split: str = "development") -> dict[str, Any]:
     return {
-        "schema_version": "1.0.0",
+        "schema_version": CURRENT_SCHEMA_VERSION,
         "case_id": case_id,
         "question": "What assay was used?",
         "question_type": "lookup",
-        "expected_answer": {"claims": ({"key": "assay"},)},
+        "expected_answer": {
+            "claims": (
+                {
+                    "key": "assay",
+                    "description": "The assay used by the study",
+                    "evidence_ids": ("evidence-primary",),
+                },
+            )
+        },
         "evidence": [
             {
+                "evidence_id": "evidence-primary",
                 "kind": "source_span",
                 "role": "authoritative",
                 "corpus_version": CORPUS_VERSION,
@@ -58,7 +68,7 @@ def _write_dataset(
     case_path.write_text(contents, encoding="utf-8", newline="")
 
     manifest: dict[str, Any] = {
-        "schema_version": "1.0.0",
+        "schema_version": CURRENT_SCHEMA_VERSION,
         "dataset_id": "baseline-v1",
         "dataset_version": "1",
         "description": "Evaluation fixture",

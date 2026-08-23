@@ -23,6 +23,7 @@ def _coverage_case(
     }
     if abstention:
         payload["evidence"][0]["role"] = "context"
+        payload["expected_answer"] = {}
     return EvaluationCase.model_validate(payload)
 
 

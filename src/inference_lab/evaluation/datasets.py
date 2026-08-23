@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from inference_lab.evaluation.utils import (
     CaseId,
@@ -28,13 +36,21 @@ class DatasetManifest(BaseModel):
     corpus_id: str
     corpus_version: str
     case_file: str = Field(min_length=1)
-    case_count: int = Field(ge=1)
+    case_count: StrictInt = Field(ge=1)
     splits: dict[SplitName, tuple[CaseId, ...]]
     provenance: dict[str, str] = Field(default_factory=dict)
     checksums: dict[str, str] = Field(default_factory=dict)
     evaluation_policy: EvaluationPolicy = Field(default_factory=EvaluationPolicy)
     created_at: AwareDatetime
     updated_at: AwareDatetime
+
+    @field_validator("dataset_version", "description", "case_file")
+    @classmethod
+    def validate_text_fields(cls, value: str) -> str:
+        """Reject manifest strings without meaningful content."""
+        if not value.strip():
+            raise ValueError("Manifest text fields must not be blank")
+        return value
 
     @model_validator(mode="after")
     def validate_splits(self) -> "DatasetManifest":
@@ -50,5 +66,7 @@ class DatasetManifest(BaseModel):
             raise ValueError("Each case ID must belong to exactly one split")
         if len(split_ids) != self.case_count:
             raise ValueError("case_count must match total split IDs")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at cannot be earlier than created_at")
 
         return self

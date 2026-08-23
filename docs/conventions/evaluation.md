@@ -20,7 +20,9 @@ artifacts to a remote service.
 
 ## Versioned dataset contract
 
-Every case and manifest declares a supported evaluation schema version.
+Every case and manifest declares a supported evaluation schema version. The
+current format is `2.0.0`; the incompatible pre-release `1.0.0` format is not
+accepted or migrated.
 Unknown, missing, and unsupported schema versions are rejected before model
 validation. A dataset manifest identifies one immutable dataset version and
 one immutable corpus version.
@@ -49,11 +51,38 @@ numeric values and tolerances, dates, or comparison ordering. EVAL-01 does not
 define a generated-answer parser, semantic judge, matching algorithm, quality
 metric, or pass/fail threshold.
 
+Expectation keys are unique across claim, numeric, and date values. Numeric
+values are finite and do not accept booleans or numeric strings. Dates use
+`YYYY-MM-DD` without datetime coercion. Comparisons contain at least two unique
+values, and every acceptable ordering contains exactly the same values.
+
+Every evidence reference has a case-local `evidence_id`. Claims, numeric and
+date expectations, and comparison expectations identify their supporting
+evidence through these IDs. References must resolve within the same case and
+must point to authoritative evidence. This makes claim-level citation and
+completeness evaluation possible without making EVAL-01 responsible for the
+later scoring algorithm.
+
 Evidence references use PROV-01 identifiers and retain the corpus version,
-document identity, and the source-span or structured-record identity required
-by their evidence kind. Answerable cases require authoritative evidence.
-Abstention cases state why abstention is expected and whether a partial answer
-may be acceptable.
+document identity, and exactly the source-span or structured-record identity
+required by their evidence kind. Document-level references are contextual and
+cannot be authoritative. Duplicate case-local IDs and duplicate provenance
+locations are rejected.
+
+Answerable cases require at least one evidence-linked expected characteristic,
+and every authoritative reference must support one of those characteristics.
+An expected-abstention case uses reason-specific evidence rules:
+
+- `evidence_absent` and `deliberately_unanswerable` have no authoritative
+  evidence or expected answer;
+- `evidence_insufficient` retains the available evidence and may annotate a
+  supported partial answer; and
+- `evidence_ambiguous` retains authoritative evidence that establishes the
+  ambiguity.
+
+`partial_answer_allowed` applies only to expected abstention and requires an
+evidence-linked expected characteristic. Non-abstention cases use
+`not_applicable`; expected-abstention cases must state a substantive reason.
 
 Follow-up cases retain their preceding conversational context. Context is part
 of the private dataset payload and must not be copied into operational logs.

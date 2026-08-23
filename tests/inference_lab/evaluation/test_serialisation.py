@@ -19,6 +19,7 @@ from inference_lab.evaluation.serialisation import (
     write_dataset,
     write_json_schema,
 )
+from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
 from .test_loader import CORPUS_ID, CORPUS_VERSION, _case
 
@@ -121,4 +122,4 @@ def test_schema_can_be_written_as_json(tmp_path: Path) -> None:
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload == evaluation_json_schema()
-    assert payload["schema_version"] == "1.0.0"
+    assert payload["schema_version"] == CURRENT_SCHEMA_VERSION

@@ -32,6 +32,9 @@ def test_missing_or_unsupported_schema_versions_are_rejected(migrate) -> None:
     with pytest.raises(ValueError, match="Unsupported evaluation schema version"):
         migrate({"schema_version": "9.0.0"})
 
+    with pytest.raises(ValueError, match="Unsupported evaluation schema version"):
+        migrate({"schema_version": "1.0.0"})
+
 
 @pytest.mark.parametrize("migrate", [migrate_case_payload, migrate_manifest_payload])
 def test_non_object_payloads_are_rejected(migrate) -> None:
