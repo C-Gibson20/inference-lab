@@ -5,10 +5,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final, Literal, get_args
 
-from ._validation import validate_utc_datetime
-from .types import LogLevel
-from .utils import is_snake_case, utc_now
-from .versioning import CURRENT_RECORD_SCHEMA_VERSION, validate_record_schema_version
+from inference_lab.profiling._validation import validate_utc_datetime
+from inference_lab.profiling.types import LogLevel
+from inference_lab.profiling.utils import is_snake_case, utc_now
+from inference_lab.profiling.versioning import (
+    CURRENT_RECORD_SCHEMA_VERSION,
+    validate_record_schema_version,
+)
 
 FailureEventName = Literal["unit_failed", "unit_degraded"]
 FailureCategory = Literal[

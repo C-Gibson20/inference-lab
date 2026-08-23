@@ -14,7 +14,7 @@ from inference_lab.evaluation.splitting import (
     validate_no_leakage,
 )
 
-from .fixtures import (
+from .fixtures import (  # noqa: TID252
     CORPUS_VERSION,
     DOCUMENT_ID,
     case_payload,

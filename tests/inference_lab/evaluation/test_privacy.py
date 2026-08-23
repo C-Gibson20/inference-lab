@@ -9,7 +9,7 @@ from inference_lab.evaluation.loader import load_dataset
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.serialisation import atomic_write, write_json_schema
 
-from .fixtures import case_payload, write_dataset_fixture
+from .fixtures import case_payload, write_dataset_fixture  # noqa: TID252
 
 
 @pytest.mark.parametrize(

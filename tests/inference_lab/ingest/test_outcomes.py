@@ -5,7 +5,7 @@ import pytest
 from inference_lab.ingest.errors import ParserFailure
 from inference_lab.ingest.outcomes import ParseOutcome
 
-from .fixtures import fixture_parsed_document
+from .fixtures import fixture_parsed_document  # noqa: TID252
 
 
 def _recoverable_failure() -> ParserFailure:

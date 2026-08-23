@@ -2,8 +2,12 @@
 
 from collections.abc import AsyncIterable, AsyncIterator
 
-from .errors import BackendError, BackendExecutionError, BackendProtocolError
-from .types import GenerationEvent, GenerationEventType
+from inference_lab.backends.runtime.errors import (
+    BackendError,
+    BackendExecutionError,
+    BackendProtocolError,
+)
+from inference_lab.backends.runtime.types import GenerationEvent, GenerationEventType
 
 
 async def validate_generation_stream(

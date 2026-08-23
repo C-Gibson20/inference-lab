@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
-from .types import (
+from inference_lab.backends.runtime.types import (
     BackendMetadata,
     EmbeddingRequest,
     EmbeddingResult,

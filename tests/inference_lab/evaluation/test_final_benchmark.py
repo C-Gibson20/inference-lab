@@ -13,7 +13,7 @@ from inference_lab.evaluation import (
     write_dataset,
 )
 
-from .fixtures import CORPUS_ID, CORPUS_VERSION, benchmark_cases
+from .fixtures import CORPUS_ID, CORPUS_VERSION, benchmark_cases  # noqa: TID252
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 FIXTURE_MANIFEST = REPOSITORY_ROOT / "benchmarks" / "evaluation" / "manifest.json"

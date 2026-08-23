@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from inference_lab.evaluation.cases import EvaluationCase
 
-from .fixtures import EVIDENCE_IDS
+from .fixtures import EVIDENCE_IDS  # noqa: TID252
 
 
 def _evidence(

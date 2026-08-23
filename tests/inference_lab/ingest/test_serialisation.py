@@ -5,7 +5,7 @@ from inference_lab.ingest import (
     serialise_parsed_document,
 )
 
-from .fixtures import fixture_parsed_document
+from .fixtures import fixture_parsed_document  # noqa: TID252
 
 
 def test_parsed_document_serialization_is_deterministic() -> None:

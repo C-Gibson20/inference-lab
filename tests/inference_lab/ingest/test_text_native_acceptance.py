@@ -14,7 +14,7 @@ from inference_lab.ingest import (
     serialise_parsed_document,
 )
 
-from .fixtures import (
+from .fixtures import (  # noqa: TID252
     FIXTURE_DOCUMENT_ID,
     FIXTURE_DOCUMENT_VERSION_ID,
     FIXTURE_ROOT,

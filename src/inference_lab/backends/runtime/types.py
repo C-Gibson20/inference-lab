@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Literal, get_args
 
-from ._validation import (
+from inference_lab.backends.runtime._validation import (
     validate_finite_number,
     validate_integer,
     validate_non_empty_string,

@@ -22,7 +22,7 @@ from inference_lab.evaluation.serialisation import (
 )
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
-from .fixtures import CORPUS_ID, CORPUS_VERSION, case_payload
+from .fixtures import CORPUS_ID, CORPUS_VERSION, case_payload  # noqa: TID252
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 SCHEMA_GENERATOR = (

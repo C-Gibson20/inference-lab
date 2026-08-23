@@ -48,10 +48,14 @@ select = [
     "F",
     "I",
     "RUF022",
+    "TID252",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D100", "D101", "D102", "D103"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
 
 [tool.pyright]
 include = ["src", "tests", "scripts"]

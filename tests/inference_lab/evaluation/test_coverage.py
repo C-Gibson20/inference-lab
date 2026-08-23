@@ -12,7 +12,7 @@ from inference_lab.evaluation.coverage import (
     validate_final_benchmark,
 )
 
-from .fixtures import benchmark_cases, coverage_case
+from .fixtures import benchmark_cases, coverage_case  # noqa: TID252
 
 
 def test_coverage_report_counts_complete_and_held_out_composition() -> None:

@@ -10,16 +10,16 @@ from enum import StrEnum
 
 import structlog
 
-from ._validation import validate_finite_number
-from .errors import (
+from inference_lab.backends.runtime._validation import validate_finite_number
+from inference_lab.backends.runtime.errors import (
     BackendClosedError,
     BackendExecutionError,
     BackendNotReadyError,
     BackendRequestError,
     BackendResourceError,
 )
-from .streaming import validate_generation_stream
-from .types import (
+from inference_lab.backends.runtime.streaming import validate_generation_stream
+from inference_lab.backends.runtime.types import (
     BackendCapability,
     BackendMetadata,
     BackendOperation,

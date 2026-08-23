@@ -15,7 +15,7 @@ from inference_lab.evaluation.schemas import (
     NumericExpectation,
 )
 
-from .fixtures import EVIDENCE_IDS
+from .fixtures import EVIDENCE_IDS  # noqa: TID252
 
 
 def test_source_span_evidence_is_serializable() -> None:

@@ -8,7 +8,7 @@ import pytest
 
 from inference_lab.evaluation.loader import load_dataset
 
-from .fixtures import case_payload, write_dataset_fixture
+from .fixtures import case_payload, write_dataset_fixture  # noqa: TID252
 
 
 def test_load_dataset_returns_ordered_validated_dataset(tmp_path: Path) -> None:

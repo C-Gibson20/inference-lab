@@ -2,7 +2,7 @@
 
 from typing import Final, Protocol, get_args
 
-from .types import LogLevel
+from inference_lab.profiling.types import LogLevel
 
 
 class ProfilingRecordLike(Protocol):

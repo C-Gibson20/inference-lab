@@ -8,10 +8,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from .cases import EvaluationCase
-from .datasets import DatasetManifest
-from .privacy import validate_local_path
-from .versioning import (
+from inference_lab.evaluation.cases import EvaluationCase
+from inference_lab.evaluation.datasets import DatasetManifest
+from inference_lab.evaluation.privacy import validate_local_path
+from inference_lab.evaluation.versioning import (
     validate_case_payload_version,
     validate_manifest_payload_version,
 )
