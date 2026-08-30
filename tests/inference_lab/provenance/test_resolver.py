@@ -1,9 +1,11 @@
 """Tests for deterministic document identity resolution."""
 
 from dataclasses import dataclass
+from unittest.mock import Mock
 
 import pytest
 
+import inference_lab.provenance.resolver as resolver_module
 from inference_lab.provenance import (
     ContentHash,
     DocumentId,
@@ -64,7 +66,11 @@ def _version(
 def test_no_candidates_creates_new_document_and_version() -> None:
     allocator = FixedAllocator()
 
-    outcome = resolve_identity(IdentityResolutionRequest(HASH_A), allocator=allocator)
+    outcome = resolve_identity(
+        IdentityResolutionRequest(HASH_A),
+        allocator=allocator,
+        pipeline_stage="ingest",
+    )
 
     assert outcome.kind is ResolutionKind.NEW_DOCUMENT
     assert outcome.reason is ResolutionReason.NO_MATCH
@@ -82,6 +88,7 @@ def test_exactly_one_hash_match_is_unchanged_without_allocation() -> None:
     outcome = resolve_identity(
         IdentityResolutionRequest(HASH_A, candidates=(candidate,)),
         allocator=allocator,
+        pipeline_stage="ingest",
     )
 
     assert outcome.kind is ResolutionKind.UNCHANGED
@@ -101,6 +108,7 @@ def test_changed_hash_with_one_identifier_match_creates_new_version() -> None:
     outcome = resolve_identity(
         IdentityResolutionRequest(HASH_B, (identifier,), (candidate,)),
         allocator=allocator,
+        pipeline_stage="ingest",
     )
 
     assert outcome.kind is ResolutionKind.NEW_VERSION
@@ -118,6 +126,7 @@ def test_multiple_hash_matches_create_independently_citable_duplicates() -> None
     outcome = resolve_identity(
         IdentityResolutionRequest(HASH_A, candidates=(first, second)),
         allocator=allocator,
+        pipeline_stage="ingest",
     )
 
     assert outcome.kind is ResolutionKind.DUPLICATE
@@ -139,6 +148,7 @@ def test_multiple_identifier_documents_are_ambiguous() -> None:
     outcome = resolve_identity(
         IdentityResolutionRequest(HASH_C, (identifier,), candidates),
         allocator=FixedAllocator(),
+        pipeline_stage="ingest",
     )
 
     assert outcome.kind is ResolutionKind.AMBIGUOUS
@@ -154,6 +164,7 @@ def test_conflicting_identifier_for_hash_match_fails_closed() -> None:
             (_version(FIRST_VERSION_ID, identifiers=(candidate_identifier,)),),
         ),
         allocator=FixedAllocator(),
+        pipeline_stage="ingest",
     )
 
     assert outcome.kind is ResolutionKind.CONFLICT
@@ -163,7 +174,11 @@ def test_conflicting_identifier_for_hash_match_fails_closed() -> None:
 
 def test_allocator_type_errors_are_reported() -> None:
     with pytest.raises(TypeError, match="new_document_id"):
-        resolve_identity(IdentityResolutionRequest(HASH_A), allocator=object())  # type: ignore[arg-type]
+        resolve_identity(
+            IdentityResolutionRequest(HASH_A),
+            allocator=object(),  # type: ignore[arg-type]
+            pipeline_stage="ingest",
+        )
 
 
 def test_allocator_collisions_fail_closed() -> None:
@@ -174,4 +189,75 @@ def test_allocator_collisions_fail_closed() -> None:
         resolve_identity(
             IdentityResolutionRequest(HASH_B, candidates=(candidate,)),
             allocator=allocator,
+            pipeline_stage="ingest",
         )
+
+
+def test_completed_resolution_emits_privacy_safe_structured_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = Mock()
+    monkeypatch.setattr(resolver_module, "logger", logger)
+    candidate = _version(FIRST_VERSION_ID)
+
+    resolve_identity(
+        IdentityResolutionRequest(HASH_A, candidates=(candidate,)),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    logger.info.assert_called_once_with(
+        "identity_resolution_completed",
+        pipeline_stage="ingest",
+        document_id=DOCUMENT_ID.as_str(),
+        resolution_kind="unchanged",
+        resolution_reason="exact_hash_match",
+        matched_candidate_count=1,
+        duplicate_relationship_count=0,
+        candidate_count=1,
+    )
+    logger.error.assert_not_called()
+
+
+@pytest.mark.parametrize("pipeline_stage", ["", "   ", 42])
+def test_invalid_pipeline_stage_is_rejected_without_logging(
+    pipeline_stage: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = Mock()
+    monkeypatch.setattr(resolver_module, "logger", logger)
+
+    expected_error = TypeError if not isinstance(pipeline_stage, str) else ValueError
+    with pytest.raises(expected_error, match="pipeline_stage"):
+        resolve_identity(
+            IdentityResolutionRequest(HASH_A),
+            allocator=FixedAllocator(),
+            pipeline_stage=pipeline_stage,  # type: ignore[arg-type]
+        )
+
+    logger.info.assert_not_called()
+    logger.error.assert_not_called()
+
+
+def test_resolution_failure_emits_error_without_sensitive_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = Mock()
+    monkeypatch.setattr(resolver_module, "logger", logger)
+    allocator = FixedAllocator(document_id=DOCUMENT_ID)
+    candidate = _version(FIRST_VERSION_ID, content_hash=HASH_A)
+
+    with pytest.raises(InvalidResolutionError, match="existing DocumentId"):
+        resolve_identity(
+            IdentityResolutionRequest(HASH_B, candidates=(candidate,)),
+            allocator=allocator,
+            pipeline_stage="ingest",
+        )
+
+    logger.error.assert_called_once_with(
+        "identity_resolution_failed",
+        pipeline_stage="ingest",
+        failure_type="InvalidResolutionError",
+        candidate_count=1,
+    )
+    logger.info.assert_not_called()
