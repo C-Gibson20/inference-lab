@@ -12,16 +12,22 @@ from inference_lab.provenance.identifiers import (
 from inference_lab.provenance.records import (
     DocumentIdentity,
     DocumentVersion,
-    ExternalIdentifier,
 )
 from inference_lab.provenance.relationships import (
     DocumentFamilyMembership,
     DuplicateRelationship,
     InvalidRelationshipError,
 )
+from inference_lab.provenance.resolution import (
+    IdentityResolutionOutcome,
+    IdentityResolutionRequest,
+    InvalidResolutionError,
+    ResolutionReason,
+)
 from inference_lab.provenance.values import (
     ContentHash,
     DuplicateClass,
+    ExternalIdentifier,
     HashAlgorithm,
     ResolutionKind,
 )
@@ -40,8 +46,12 @@ __all__ = [
     "DuplicateRelationship",
     "ExternalIdentifier",
     "HashAlgorithm",
+    "IdentityResolutionOutcome",
+    "IdentityResolutionRequest",
     "InvalidRelationshipError",
+    "InvalidResolutionError",
     "RecordId",
     "ResolutionKind",
+    "ResolutionReason",
     "SourceSpanId",
 ]
