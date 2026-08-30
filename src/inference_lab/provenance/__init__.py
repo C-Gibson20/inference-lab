@@ -14,6 +14,11 @@ from inference_lab.provenance.records import (
     DocumentVersion,
     ExternalIdentifier,
 )
+from inference_lab.provenance.relationships import (
+    DocumentFamilyMembership,
+    DuplicateRelationship,
+    InvalidRelationshipError,
+)
 from inference_lab.provenance.values import (
     ContentHash,
     DuplicateClass,
@@ -26,13 +31,16 @@ __all__ = [
     "CorpusId",
     "CorpusVersionId",
     "DocumentFamilyId",
+    "DocumentFamilyMembership",
     "DocumentId",
     "DocumentIdentity",
     "DocumentVersion",
     "DocumentVersionId",
     "DuplicateClass",
+    "DuplicateRelationship",
     "ExternalIdentifier",
     "HashAlgorithm",
+    "InvalidRelationshipError",
     "RecordId",
     "ResolutionKind",
     "SourceSpanId",
