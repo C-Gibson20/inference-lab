@@ -6,6 +6,7 @@ from typing import Self, final
 __all__ = [
     "CorpusId",
     "CorpusVersionId",
+    "DocumentFamilyId",
     "DocumentId",
     "DocumentVersionId",
     "RecordId",
@@ -120,5 +121,12 @@ class CorpusVersionId(_Identifier):
 @final
 class SourceSpanId(_Identifier):
     """Identify one source location within a document version representation."""
+
+    __slots__ = ()
+
+
+@final
+class DocumentFamilyId(_Identifier):
+    """Identify one publication or patent family independently of its members."""
 
     __slots__ = ()

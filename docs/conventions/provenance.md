@@ -13,6 +13,7 @@ The system uses a distinct opaque identifier type for each identity domain:
 | --- | --- | --- | --- |
 | `document_id` | `DocumentId` | One logical document across source versions | Stable across file moves, renames, and unchanged re-ingest |
 | `document_version_id` | `DocumentVersionId` | One immutable source version | Changes when the source artefact changes |
+| `document_family_id` | `DocumentFamilyId` | One publication or patent family independently of its member documents | Stable for the family membership represented by the record |
 | `record_id` | `RecordId` | One canonical or derived record | Stable for the lifetime of that record |
 | `corpus_id` | `CorpusId` | One persistent corpus | Stable across corpus snapshots |
 | `corpus_version` | `CorpusVersionId` | One immutable corpus snapshot | Changes when a new corpus state is committed |
@@ -61,6 +62,10 @@ indexes participating in a corpus snapshot must identify the same
 `RecordId` and `SourceSpanId` identify records; they do not contain or replace
 record lineage or resolvable source-location fields. Those records retain their
 identifiers when moved between in-memory and persistent representations.
+
+`DocumentFamilyId` identifies a family grouping, not a document. Family
+membership does not merge member documents or their immutable source versions;
+each member remains independently citable.
 
 ## Privacy and logging
 
