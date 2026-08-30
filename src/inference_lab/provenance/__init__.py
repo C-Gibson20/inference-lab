@@ -9,6 +9,11 @@ from inference_lab.provenance.identifiers import (
     RecordId,
     SourceSpanId,
 )
+from inference_lab.provenance.records import (
+    DocumentIdentity,
+    DocumentVersion,
+    ExternalIdentifier,
+)
 from inference_lab.provenance.values import (
     ContentHash,
     DuplicateClass,
@@ -22,8 +27,11 @@ __all__ = [
     "CorpusVersionId",
     "DocumentFamilyId",
     "DocumentId",
+    "DocumentIdentity",
+    "DocumentVersion",
     "DocumentVersionId",
     "DuplicateClass",
+    "ExternalIdentifier",
     "HashAlgorithm",
     "RecordId",
     "ResolutionKind",
