@@ -8,6 +8,7 @@ import pytest
 from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
+    DocumentFamilyId,
     DocumentId,
     DocumentVersionId,
     RecordId,
@@ -24,6 +25,7 @@ type Identifier = (
     | DocumentVersionId
     | RecordId
     | SourceSpanId
+    | DocumentFamilyId
 )
 type IdentifierType = type[Identifier]
 
@@ -34,6 +36,7 @@ IDENTIFIER_TYPES: tuple[IdentifierType, ...] = (
     CorpusId,
     CorpusVersionId,
     SourceSpanId,
+    DocumentFamilyId,
 )
 
 
@@ -116,3 +119,10 @@ def test_identifier_equality_and_hash_use_domain_and_value() -> None:
     assert first == second
     assert hash(first) == hash(second)
     assert len({first, second}) == 1
+
+
+def test_document_family_id_can_be_created_and_compared() -> None:
+    family_id = DocumentFamilyId.generate()
+
+    assert isinstance(family_id, DocumentFamilyId)
+    assert family_id != DocumentId.from_str(family_id.as_str())
