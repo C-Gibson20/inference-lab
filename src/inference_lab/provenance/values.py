@@ -5,8 +5,34 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
+_IDENTIFIER_NAMESPACE: Final = re.compile(r"^[a-z][a-z0-9_-]*$")
 _SHA256_HEX_LENGTH: Final = 64
 _HEX_DIGEST: Final = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalIdentifier:
+    """A stable identifier supplied by a publication or patent source."""
+
+    namespace: str
+    value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.namespace, str):
+            raise TypeError("namespace must be a string.")
+
+        if not isinstance(self.value, str):
+            raise TypeError("value must be a string.")
+
+        if _IDENTIFIER_NAMESPACE.fullmatch(self.namespace) is None:
+            raise ValueError("namespace must be a lowercase identifier namespace.")
+
+        if not self.value.strip():
+            raise ValueError("value must not be empty or whitespace.")
+
+    def as_tuple(self) -> tuple[str, str]:
+        """Return the identifier as a namespace/value tuple."""
+        return self.namespace, self.value
 
 
 class HashAlgorithm(StrEnum):
