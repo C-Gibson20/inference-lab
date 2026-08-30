@@ -81,6 +81,46 @@ def test_no_candidates_creates_new_document_and_version() -> None:
     assert allocator.version_calls == 1
 
 
+@pytest.mark.parametrize("source_change", ["move", "rename"])
+def test_source_location_changes_do_not_change_identity_resolution(
+    source_change: str,
+) -> None:
+    """Path-level changes are outside the resolver's provenance evidence."""
+    candidate = _version(FIRST_VERSION_ID)
+
+    first_outcome = resolve_identity(
+        IdentityResolutionRequest(HASH_A, candidates=(candidate,)),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+    second_outcome = resolve_identity(
+        IdentityResolutionRequest(HASH_A, candidates=(candidate,)),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert source_change in {"move", "rename"}
+    assert second_outcome == first_outcome
+    assert second_outcome.kind is ResolutionKind.UNCHANGED
+
+
+def test_repeated_new_document_resolution_is_deterministic_with_fixed_allocator() -> (
+    None
+):
+    first_outcome = resolve_identity(
+        IdentityResolutionRequest(HASH_C),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+    second_outcome = resolve_identity(
+        IdentityResolutionRequest(HASH_C),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert second_outcome == first_outcome
+
+
 def test_exactly_one_hash_match_is_unchanged_without_allocation() -> None:
     candidate = _version(FIRST_VERSION_ID)
     allocator = FixedAllocator()
@@ -181,11 +221,54 @@ def test_allocator_type_errors_are_reported() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("allocator", "request_obj", "message"),
+    [
+        (
+            FixedAllocator(document_id=object()),  # type: ignore[arg-type]
+            IdentityResolutionRequest(HASH_B),
+            "new_document_id",
+        ),
+        (
+            FixedAllocator(version_id=object()),  # type: ignore[arg-type]
+            IdentityResolutionRequest(
+                HASH_B,
+                candidates=(_version(FIRST_VERSION_ID, content_hash=HASH_A),),
+            ),
+            "new_document_version_id",
+        ),
+    ],
+)
+def test_allocator_return_types_are_validated(
+    allocator: FixedAllocator,
+    request_obj: IdentityResolutionRequest,
+    message: str,
+) -> None:
+    with pytest.raises(TypeError, match=message):
+        resolve_identity(
+            request_obj,
+            allocator=allocator,
+            pipeline_stage="ingest",
+        )
+
+
 def test_allocator_collisions_fail_closed() -> None:
     allocator = FixedAllocator(document_id=DOCUMENT_ID)
     candidate = _version(FIRST_VERSION_ID, content_hash=HASH_A)
 
     with pytest.raises(InvalidResolutionError, match="existing DocumentId"):
+        resolve_identity(
+            IdentityResolutionRequest(HASH_B, candidates=(candidate,)),
+            allocator=allocator,
+            pipeline_stage="ingest",
+        )
+
+
+def test_allocator_version_collision_fails_closed() -> None:
+    allocator = FixedAllocator(version_id=FIRST_VERSION_ID)
+    candidate = _version(FIRST_VERSION_ID, content_hash=HASH_A)
+
+    with pytest.raises(InvalidResolutionError, match="existing DocumentVersionId"):
         resolve_identity(
             IdentityResolutionRequest(HASH_B, candidates=(candidate,)),
             allocator=allocator,
@@ -217,6 +300,117 @@ def test_completed_resolution_emits_privacy_safe_structured_event(
         candidate_count=1,
     )
     logger.error.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("request_obj", "expected_kind", "expected_reason", "expected_document_id"),
+    [
+        (
+            IdentityResolutionRequest(HASH_A, candidates=(_version(FIRST_VERSION_ID),)),
+            "unchanged",
+            "exact_hash_match",
+            DOCUMENT_ID.as_str(),
+        ),
+        (
+            IdentityResolutionRequest(HASH_B),
+            "new_document",
+            "no_match",
+            ALLOCATED_DOCUMENT_ID.as_str(),
+        ),
+        (
+            IdentityResolutionRequest(
+                HASH_A,
+                candidates=(
+                    _version(FIRST_VERSION_ID, DOCUMENT_ID),
+                    _version(SECOND_VERSION_ID, OTHER_DOCUMENT_ID),
+                ),
+            ),
+            "duplicate",
+            "duplicate_hash_match",
+            ALLOCATED_DOCUMENT_ID.as_str(),
+        ),
+        (
+            IdentityResolutionRequest(
+                HASH_C,
+                (ExternalIdentifier("doi", "10.1000/example"),),
+                (
+                    _version(
+                        FIRST_VERSION_ID,
+                        identifiers=(ExternalIdentifier("doi", "10.1000/example"),),
+                    ),
+                ),
+            ),
+            "new_version",
+            "external_identifier_match",
+            DOCUMENT_ID.as_str(),
+        ),
+        (
+            IdentityResolutionRequest(
+                HASH_C,
+                (ExternalIdentifier("doi", "10.1000/example"),),
+                (
+                    _version(
+                        FIRST_VERSION_ID,
+                        DOCUMENT_ID,
+                        HASH_A,
+                        (ExternalIdentifier("doi", "10.1000/example"),),
+                    ),
+                    _version(
+                        SECOND_VERSION_ID,
+                        OTHER_DOCUMENT_ID,
+                        HASH_B,
+                        (ExternalIdentifier("doi", "10.1000/example"),),
+                    ),
+                ),
+            ),
+            "ambiguous",
+            "multiple_candidates",
+            None,
+        ),
+        (
+            IdentityResolutionRequest(
+                HASH_A,
+                (ExternalIdentifier("doi", "10.1000/new"),),
+                (
+                    _version(
+                        FIRST_VERSION_ID,
+                        identifiers=(ExternalIdentifier("doi", "10.1000/old"),),
+                    ),
+                ),
+            ),
+            "conflict",
+            "conflicting_evidence",
+            None,
+        ),
+    ],
+)
+def test_each_resolution_outcome_emits_completion_event(
+    request_obj: IdentityResolutionRequest,
+    expected_kind: str,
+    expected_reason: str,
+    expected_document_id: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = Mock()
+    monkeypatch.setattr(resolver_module, "logger", logger)
+
+    resolve_identity(
+        request_obj,
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert logger.info.call_count == 1
+    fields = logger.info.call_args.kwargs
+    assert logger.info.call_args.args == ("identity_resolution_completed",)
+    assert fields["pipeline_stage"] == "ingest"
+    assert fields["resolution_kind"] == expected_kind
+    assert fields["resolution_reason"] == expected_reason
+    assert fields["document_id"] == expected_document_id
+    assert not any(
+        sensitive in fields
+        for sensitive in ("content_hash", "external_identifiers", "path", "source")
+    )
 
 
 @pytest.mark.parametrize("pipeline_stage", ["", "   ", 42])
