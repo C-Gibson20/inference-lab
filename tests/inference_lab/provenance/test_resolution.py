@@ -89,10 +89,10 @@ def test_duplicate_outcome_requires_matching_relationship() -> None:
         _identity(OTHER_DOCUMENT_ID),
         _version(SECOND_VERSION_ID, OTHER_DOCUMENT_ID),
         (FIRST_VERSION_ID,),
-        relationship,
+        (relationship,),
     )
 
-    assert outcome.duplicate_relationship == relationship
+    assert outcome.duplicate_relationships == (relationship,)
 
 
 def test_ambiguous_outcome_cannot_assign_identity() -> None:

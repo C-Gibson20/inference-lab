@@ -24,6 +24,11 @@ from inference_lab.provenance.resolution import (
     InvalidResolutionError,
     ResolutionReason,
 )
+from inference_lab.provenance.resolver import (
+    IdentityIdAllocator,
+    UuidIdentityIdAllocator,
+    resolve_identity,
+)
 from inference_lab.provenance.values import (
     ContentHash,
     DuplicateClass,
@@ -46,6 +51,7 @@ __all__ = [
     "DuplicateRelationship",
     "ExternalIdentifier",
     "HashAlgorithm",
+    "IdentityIdAllocator",
     "IdentityResolutionOutcome",
     "IdentityResolutionRequest",
     "InvalidRelationshipError",
@@ -54,4 +60,6 @@ __all__ = [
     "ResolutionKind",
     "ResolutionReason",
     "SourceSpanId",
+    "UuidIdentityIdAllocator",
+    "resolve_identity",
 ]

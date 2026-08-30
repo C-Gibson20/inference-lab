@@ -108,7 +108,7 @@ class IdentityResolutionOutcome:
     document: DocumentIdentity | None = None
     version: DocumentVersion | None = None
     matched_version_ids: tuple[DocumentVersionId, ...] = ()
-    duplicate_relationship: DuplicateRelationship | None = None
+    duplicate_relationships: tuple[DuplicateRelationship, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, ResolutionKind):
@@ -122,11 +122,14 @@ class IdentityResolutionOutcome:
         if self.version is not None and not isinstance(self.version, DocumentVersion):
             raise TypeError("version must be a DocumentVersion or None.")
         _validate_matched_versions(self.matched_version_ids)
-        if self.duplicate_relationship is not None and not isinstance(
-            self.duplicate_relationship, DuplicateRelationship
+        if not isinstance(self.duplicate_relationships, tuple):
+            raise TypeError("duplicate_relationships must be a tuple.")
+        if any(
+            not isinstance(relationship, DuplicateRelationship)
+            for relationship in self.duplicate_relationships
         ):
             raise TypeError(
-                "duplicate_relationship must be a DuplicateRelationship or None."
+                "duplicate_relationships must contain only DuplicateRelationship values."
             )
         self._validate_semantics()
 
@@ -165,25 +168,31 @@ class IdentityResolutionOutcome:
         elif self.kind is ResolutionKind.DUPLICATE:
             _, version = self._require_assigned()
             self._require_reason(ResolutionReason.DUPLICATE_HASH_MATCH)
-            relationship = self.duplicate_relationship
-            if not self.matched_version_ids or relationship is None:
+            relationships = self.duplicate_relationships
+            if not self.matched_version_ids or not relationships:
                 raise InvalidResolutionError(
-                    "duplicate resolution requires a candidate and relationship."
+                    "duplicate resolution requires candidates and relationships."
                 )
-            endpoints = (
-                relationship.first_version_id,
-                relationship.second_version_id,
+            relationship_keys = tuple(
+                relationship.key() for relationship in relationships
             )
-            if version.document_version_id not in endpoints:
-                raise InvalidResolutionError(
-                    "duplicate relationship must include the resolved version."
+            if len(relationship_keys) != len(set(relationship_keys)):
+                raise InvalidResolutionError("duplicate relationships must be unique.")
+            for relationship in relationships:
+                endpoints = (
+                    relationship.first_version_id,
+                    relationship.second_version_id,
                 )
-            if not any(
-                version_id in endpoints for version_id in self.matched_version_ids
-            ):
-                raise InvalidResolutionError(
-                    "duplicate relationship must include a matched version."
-                )
+                if version.document_version_id not in endpoints:
+                    raise InvalidResolutionError(
+                        "duplicate relationships must include the resolved version."
+                    )
+                if not any(
+                    version_id in endpoints for version_id in self.matched_version_ids
+                ):
+                    raise InvalidResolutionError(
+                        "duplicate relationships must include matched versions."
+                    )
         elif self.kind is ResolutionKind.AMBIGUOUS:
             self._require_unassigned()
             self._require_reason(ResolutionReason.MULTIPLE_CANDIDATES)
@@ -218,14 +227,13 @@ class IdentityResolutionOutcome:
             )
 
     def _require_no_relationship(self) -> None:
-        if self.duplicate_relationship is not None:
+        if self.duplicate_relationships:
             raise InvalidResolutionError(
-                f"{self.kind.value} resolution cannot include a duplicate relationship."
+                f"{self.kind.value} resolution cannot include duplicate relationships."
             )
 
     def as_dict(self) -> dict[str, object]:
         """Return deterministic, JSON-compatible outcome data."""
-        relationship = self.duplicate_relationship
         return {
             "kind": self.kind.value,
             "reason": self.reason.value,
@@ -242,13 +250,12 @@ class IdentityResolutionOutcome:
             "matched_version_ids": [
                 version_id.as_str() for version_id in self.matched_version_ids
             ],
-            "duplicate_relationship": (
+            "duplicate_relationships": [
                 {
                     "first_version_id": relationship.first_version_id.as_str(),
                     "second_version_id": relationship.second_version_id.as_str(),
                     "duplicate_class": relationship.duplicate_class.value,
                 }
-                if relationship is not None
-                else None
-            ),
+                for relationship in self.duplicate_relationships
+            ],
         }
