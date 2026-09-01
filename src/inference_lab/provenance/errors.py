@@ -9,5 +9,9 @@ class InvalidLineageMetadataError(InvalidLineageError):
     """Raised when producing-operation metadata violates lineage invariants."""
 
 
+class InvalidLineageReferenceError(InvalidLineageError):
+    """Raised when a lineage input or edge violates local invariants."""
+
+
 class UnsupportedLineageSchemaVersionError(InvalidLineageError):
     """Raised when lineage data names a schema this build cannot interpret."""
