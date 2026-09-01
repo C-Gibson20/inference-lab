@@ -1,8 +1,7 @@
 """Immutable input references and directed edges for derived-record lineage."""
 
-import re
 from dataclasses import dataclass
-from typing import Final, Self, TypeAlias, TypeVar
+from typing import Self, TypeAlias, TypeVar
 
 from inference_lab.provenance.errors import InvalidLineageReferenceError
 from inference_lab.provenance.identifiers import (
@@ -10,8 +9,7 @@ from inference_lab.provenance.identifiers import (
     RecordId,
     SourceSpanId,
 )
-
-_ROLE_PATTERN: Final = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+from inference_lab.provenance.utils import is_lowercase_slug
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +25,7 @@ class InputRole:
         """Validate the input role value against the slug pattern."""
         if not isinstance(self.value, str):
             raise TypeError("input_role must be a string.")
-        if _ROLE_PATTERN.fullmatch(self.value) is None:
+        if not is_lowercase_slug(self.value):
             raise InvalidLineageReferenceError("input_role must be a lowercase slug.")
 
     @classmethod

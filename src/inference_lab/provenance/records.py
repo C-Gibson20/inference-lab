@@ -6,8 +6,11 @@ from inference_lab.provenance.identifiers import (
     DocumentId,
     DocumentVersionId,
 )
-from inference_lab.provenance.utils import validate_external_identifiers
-from inference_lab.provenance.values import ContentHash, ExternalIdentifier
+from inference_lab.provenance.values import (
+    ContentHash,
+    ExternalIdentifier,
+    validate_external_identifiers,
+)
 
 
 @dataclass(frozen=True, slots=True)
