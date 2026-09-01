@@ -1,5 +1,7 @@
 """Immutable metadata and version semantics for derived records."""
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from typing import Final, Self
@@ -98,6 +100,91 @@ class DerivationFingerprint:
         return f"{self.algorithm.value}:{self.digest}"
 
 
+def build_derivation_fingerprint(
+    *,
+    record_kind: DerivedRecordKind,
+    lineage_schema_version: str,
+    inputs: LineageInputs,
+    operation: ProducingOperation,
+    output_digest: OutputDigest,
+) -> DerivationFingerprint:
+    """Build the deterministic fingerprint for one semantic derivation."""
+    if not isinstance(record_kind, DerivedRecordKind):
+        raise TypeError("record_kind must be a DerivedRecordKind.")
+    validate_lineage_schema_version(lineage_schema_version)
+    if not isinstance(inputs, LineageInputs):
+        raise TypeError("inputs must be LineageInputs.")
+    if not isinstance(operation, ProducingOperation):
+        raise TypeError("operation must be a ProducingOperation.")
+    if not isinstance(output_digest, OutputDigest):
+        raise TypeError("output_digest must be an OutputDigest.")
+
+    payload = {
+        "inputs": {
+            "parent_records": [
+                {
+                    "input_ordinal": parent.input_ordinal,
+                    "input_role": (
+                        parent.input_role.as_str()
+                        if parent.input_role is not None
+                        else None
+                    ),
+                    "record_id": parent.record_id.as_str(),
+                }
+                for parent in inputs.parent_records
+            ],
+            "source_anchors": [
+                {
+                    "document_version_id": anchor.document_version_id.as_str(),
+                    "input_ordinal": anchor.input_ordinal,
+                    "input_role": (
+                        anchor.input_role.as_str()
+                        if anchor.input_role is not None
+                        else None
+                    ),
+                    "source_span_id": anchor.source_span_id.as_str(),
+                }
+                for anchor in inputs.source_anchors
+            ],
+        },
+        "lineage_schema_version": lineage_schema_version,
+        "operation": {
+            "components": [
+                {
+                    "artefact_identity": component.artefact_identity,
+                    "artefact_revision": component.artefact_revision,
+                    "contract_version": component.contract_version,
+                    "implementation": component.implementation,
+                    "role": component.role.as_str(),
+                }
+                for component in operation.components
+            ],
+            "configuration_identity": {
+                "algorithm": operation.configuration_identity.algorithm.value,
+                "digest": operation.configuration_identity.digest,
+            },
+            "contract_version": operation.contract_version,
+            "implementation": operation.implementation,
+            "kind": operation.kind.as_str(),
+        },
+        "output_digest": {
+            "algorithm": output_digest.algorithm.value,
+            "digest": output_digest.digest,
+        },
+        "record_kind": record_kind.as_str(),
+    }
+    canonical_bytes = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return DerivationFingerprint(
+        algorithm=DigestAlgorithm.SHA256,
+        digest=hashlib.sha256(canonical_bytes).hexdigest(),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DerivedRecordMetadata:
     """Describe one immutable derived-record version and its direct lineage."""
@@ -129,6 +216,17 @@ class DerivedRecordMetadata:
             raise TypeError("output_digest must be an OutputDigest.")
         if not isinstance(self.derivation_fingerprint, DerivationFingerprint):
             raise TypeError("derivation_fingerprint must be a DerivationFingerprint.")
+        expected_fingerprint = build_derivation_fingerprint(
+            record_kind=self.record_kind,
+            lineage_schema_version=self.lineage_schema_version,
+            inputs=self.inputs,
+            operation=self.operation,
+            output_digest=self.output_digest,
+        )
+        if self.derivation_fingerprint != expected_fingerprint:
+            raise InvalidDerivedRecordError(
+                "derivation_fingerprint does not match derived-record metadata."
+            )
         self._validate_supersession()
 
     def _validate_supersession(self) -> None:

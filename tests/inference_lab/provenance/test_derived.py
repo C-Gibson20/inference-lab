@@ -9,6 +9,7 @@ from inference_lab.provenance.derived import (
     DerivedRecordKind,
     DerivedRecordMetadata,
     OutputDigest,
+    build_derivation_fingerprint,
 )
 from inference_lab.provenance.errors import (
     InvalidDerivedRecordError,
@@ -69,20 +70,33 @@ def _metadata(
     record_id: RecordId = _RECORD_A,
     record_kind: DerivedRecordKind | None = None,
     inputs: LineageInputs | None = None,
+    operation: ProducingOperation | None = None,
     output_digest: OutputDigest | None = None,
     fingerprint: DerivationFingerprint | None = None,
     supersedes_record_id: RecordId | None = None,
 ) -> DerivedRecordMetadata:
+    selected_kind = record_kind or DerivedRecordKind("chunk")
+    selected_inputs = inputs or _source_inputs()
+    selected_operation = operation or _operation()
+    selected_output_digest = output_digest or OutputDigest(
+        DigestAlgorithm.SHA256,
+        _OUTPUT_DIGEST,
+    )
+    selected_fingerprint = fingerprint or build_derivation_fingerprint(
+        record_kind=selected_kind,
+        lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
+        inputs=selected_inputs,
+        operation=selected_operation,
+        output_digest=selected_output_digest,
+    )
     return DerivedRecordMetadata(
         record_id=record_id,
-        record_kind=record_kind or DerivedRecordKind("chunk"),
+        record_kind=selected_kind,
         lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
-        inputs=inputs or _source_inputs(),
-        operation=_operation(),
-        output_digest=output_digest
-        or OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
-        derivation_fingerprint=fingerprint
-        or DerivationFingerprint(DigestAlgorithm.SHA256, _FINGERPRINT),
+        inputs=selected_inputs,
+        operation=selected_operation,
+        output_digest=selected_output_digest,
+        derivation_fingerprint=selected_fingerprint,
         supersedes_record_id=supersedes_record_id,
     )
 
@@ -96,7 +110,13 @@ def test_derived_record_metadata_composes_complete_direct_lineage() -> None:
     assert metadata.inputs == _source_inputs()
     assert metadata.operation == _operation()
     assert metadata.output_digest.as_str() == f"sha256:{_OUTPUT_DIGEST}"
-    assert metadata.derivation_fingerprint.as_str() == f"sha256:{_FINGERPRINT}"
+    assert metadata.derivation_fingerprint == build_derivation_fingerprint(
+        record_kind=metadata.record_kind,
+        lineage_schema_version=metadata.lineage_schema_version,
+        inputs=metadata.inputs,
+        operation=metadata.operation,
+        output_digest=metadata.output_digest,
+    )
     assert metadata.supersedes_record_id is None
 
 
@@ -118,7 +138,6 @@ def test_replacement_has_new_identity_and_explicit_supersession() -> None:
     replacement = _metadata(
         record_id=_RECORD_B,
         output_digest=OutputDigest(DigestAlgorithm.SHA256, "d" * 64),
-        fingerprint=DerivationFingerprint(DigestAlgorithm.SHA256, "e" * 64),
         supersedes_record_id=original.record_id,
     )
 
@@ -197,6 +216,13 @@ def test_metadata_rejects_unsupported_lineage_schema_version() -> None:
 
 
 def test_metadata_enforces_typed_contract_fields() -> None:
+    fingerprint = build_derivation_fingerprint(
+        record_kind=DerivedRecordKind("chunk"),
+        lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
+        inputs=_source_inputs(),
+        operation=_operation(),
+        output_digest=OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
+    )
     valid = {
         "record_id": _RECORD_A,
         "record_kind": DerivedRecordKind("chunk"),
@@ -204,10 +230,7 @@ def test_metadata_enforces_typed_contract_fields() -> None:
         "inputs": _source_inputs(),
         "operation": _operation(),
         "output_digest": OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
-        "derivation_fingerprint": DerivationFingerprint(
-            DigestAlgorithm.SHA256,
-            _FINGERPRINT,
-        ),
+        "derivation_fingerprint": fingerprint,
     }
 
     invalid_fields = {
@@ -232,7 +255,24 @@ def test_metadata_rejects_invalid_supersession_values() -> None:
         _metadata(supersedes_record_id=_RECORD_A)
 
 
+def test_metadata_rejects_mismatched_derivation_fingerprint() -> None:
+    with pytest.raises(InvalidDerivedRecordError, match="does not match"):
+        _metadata(
+            fingerprint=DerivationFingerprint(
+                DigestAlgorithm.SHA256,
+                _FINGERPRINT,
+            )
+        )
+
+
 def test_metadata_has_no_unvalidated_payload_or_observation_fields() -> None:
+    fingerprint = build_derivation_fingerprint(
+        record_kind=DerivedRecordKind("chunk"),
+        lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
+        inputs=_source_inputs(),
+        operation=_operation(),
+        output_digest=OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
+    )
     with pytest.raises(TypeError):
         DerivedRecordMetadata(
             record_id=_RECORD_A,
@@ -241,10 +281,7 @@ def test_metadata_has_no_unvalidated_payload_or_observation_fields() -> None:
             inputs=_source_inputs(),
             operation=_operation(),
             output_digest=OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
-            derivation_fingerprint=DerivationFingerprint(
-                DigestAlgorithm.SHA256,
-                _FINGERPRINT,
-            ),
+            derivation_fingerprint=fingerprint,
             payload="private chunk text",  # type: ignore[call-arg]
         )
 
