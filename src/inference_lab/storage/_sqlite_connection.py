@@ -29,18 +29,21 @@ def translate_sqlite_error(
     error: sqlite3.Error,
     *,
     default: type[StorageError],
+    constraint: type[StorageError] = StorageConflictError,
 ) -> StorageError:
     """Translate a database failure without retaining its message or payload."""
     if not isinstance(error, sqlite3.Error):
         raise TypeError("error must be a sqlite3.Error.")
     if not isinstance(default, type) or not issubclass(default, StorageError):
         raise TypeError("default must be a StorageError type.")
+    if not isinstance(constraint, type) or not issubclass(constraint, StorageError):
+        raise TypeError("constraint must be a StorageError type.")
 
     primary_code = _primary_sqlite_error_code(error)
     if primary_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
         return StorageConcurrencyError()
     if primary_code == sqlite3.SQLITE_CONSTRAINT:
-        return StorageConflictError()
+        return constraint()
     if primary_code in {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}:
         return CorruptStorageError()
     return default()

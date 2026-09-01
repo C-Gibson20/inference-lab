@@ -228,6 +228,8 @@ def validate_migration_registry(
     """Validate an ordered, gap-free migration registry."""
     if not isinstance(migrations, tuple):
         raise TypeError("migrations must be a tuple.")
+    if not migrations:
+        raise ValueError("migrations must not be empty.")
 
     expected_revision = 1
     migration_ids: set[str] = set()

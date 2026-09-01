@@ -276,3 +276,8 @@ def test_registry_rejects_revision_gaps() -> None:
 
     with pytest.raises(ValueError, match="contiguous"):
         validate_migration_registry((MIGRATIONS[0], second))
+
+
+def test_registry_must_contain_an_initial_migration() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        validate_migration_registry(())
