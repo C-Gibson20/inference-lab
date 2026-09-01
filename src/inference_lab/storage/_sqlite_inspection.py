@@ -125,21 +125,11 @@ def _validate_migration_history(
         previous_applied_at = applied_at
 
 
-def validate_database_schema(
+def _inspect_database_schema(
     connection: sqlite3.Connection,
     *,
-    migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
+    migrations: tuple[MigrationDefinition, ...],
 ) -> SchemaInspection:
-    """Validate current schema identity and history without changing the file."""
-    if not isinstance(connection, sqlite3.Connection):
-        raise TypeError("connection must be a sqlite3.Connection.")
-    try:
-        validate_migration_registry(migrations)
-    except (TypeError, ValueError):
-        raise StorageMigrationError() from None
-    if connection.in_transaction:
-        raise StorageTransactionError()
-
     latest_revision = migrations[-1].revision
     try:
         application_id = _read_pragma_integer(connection, "application_id")
@@ -163,8 +153,6 @@ def validate_database_schema(
             migrations=migrations,
         )
 
-        if current_revision < latest_revision:
-            raise MigrationRequiredError()
         return SchemaInspection(
             current_revision=current_revision,
             latest_supported_revision=latest_revision,
@@ -178,6 +166,35 @@ def validate_database_schema(
             default=IncompatibleSchemaError,
             constraint=IncompatibleSchemaError,
         ) from None
+
+
+def inspect_database_schema(
+    connection: sqlite3.Connection,
+    *,
+    migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
+) -> SchemaInspection:
+    """Inspect a compatible current or older schema without changing the file."""
+    if not isinstance(connection, sqlite3.Connection):
+        raise TypeError("connection must be a sqlite3.Connection.")
+    try:
+        validate_migration_registry(migrations)
+    except (TypeError, ValueError):
+        raise StorageMigrationError() from None
+    if connection.in_transaction:
+        raise StorageTransactionError()
+    return _inspect_database_schema(connection, migrations=migrations)
+
+
+def validate_database_schema(
+    connection: sqlite3.Connection,
+    *,
+    migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
+) -> SchemaInspection:
+    """Validate that a repository is at the latest supported revision."""
+    inspection = inspect_database_schema(connection, migrations=migrations)
+    if inspection.current_revision < inspection.latest_supported_revision:
+        raise MigrationRequiredError()
+    return inspection
 
 
 def _close_preserving_primary(connection: sqlite3.Connection) -> None:
