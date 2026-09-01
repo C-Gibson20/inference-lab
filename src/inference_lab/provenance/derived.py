@@ -2,18 +2,18 @@
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
-from typing import Final, Self
+from typing import Self
 
 from inference_lab.provenance.errors import InvalidDerivedRecordError
 from inference_lab.provenance.identifiers import RecordId
 from inference_lab.provenance.lineage import LineageInputs
 from inference_lab.provenance.operations import DigestAlgorithm, ProducingOperation
+from inference_lab.provenance.utils import (
+    is_lowercase_slug,
+    is_sha256_hex_digest,
+)
 from inference_lab.provenance.versioning import validate_lineage_schema_version
-
-_RECORD_KIND_PATTERN: Final = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
-_SHA256_HEX_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
 
 
 def _validate_digest(
@@ -27,10 +27,7 @@ def _validate_digest(
         raise TypeError(f"{field_name} algorithm must be a DigestAlgorithm.")
     if not isinstance(digest, str):
         raise TypeError(f"{field_name} digest must be a string.")
-    if (
-        algorithm is DigestAlgorithm.SHA256
-        and _SHA256_HEX_PATTERN.fullmatch(digest) is None
-    ):
+    if algorithm is DigestAlgorithm.SHA256 and not is_sha256_hex_digest(digest):
         raise InvalidDerivedRecordError(
             f"{field_name} digest must be 64 lowercase hexadecimal characters."
         )
@@ -49,7 +46,7 @@ class DerivedRecordKind:
         """Validate the record kind value against the slug pattern."""
         if not isinstance(self.value, str):
             raise TypeError("record_kind must be a string.")
-        if _RECORD_KIND_PATTERN.fullmatch(self.value) is None:
+        if not is_lowercase_slug(self.value):
             raise InvalidDerivedRecordError("record_kind must be a lowercase slug.")
 
     @classmethod

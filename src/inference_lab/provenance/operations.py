@@ -6,8 +6,11 @@ from enum import StrEnum
 from typing import Final, Self
 
 from inference_lab.provenance.errors import InvalidLineageMetadataError
+from inference_lab.provenance.utils import (
+    is_lowercase_slug,
+    is_sha256_hex_digest,
+)
 
-_SLUG_PATTERN: Final = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _SEMANTIC_VERSION_PATTERN: Final = re.compile(
     r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
@@ -15,14 +18,13 @@ _SEMANTIC_VERSION_PATTERN: Final = re.compile(
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 )
 _REVISION_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
-_SHA256_HEX_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
 
 
 def _validate_slug(value: object, field_name: str) -> str:
     """Return a canonical project-owned slug after strict validation."""
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
-    if _SLUG_PATTERN.fullmatch(value) is None:
+    if not is_lowercase_slug(value):
         raise InvalidLineageMetadataError(f"{field_name} must be a lowercase slug.")
     return value
 
@@ -98,9 +100,8 @@ class ConfigurationIdentity:
             raise TypeError("configuration algorithm must be a DigestAlgorithm.")
         if not isinstance(self.digest, str):
             raise TypeError("configuration digest must be a string.")
-        if (
-            self.algorithm is DigestAlgorithm.SHA256
-            and _SHA256_HEX_PATTERN.fullmatch(self.digest) is None
+        if self.algorithm is DigestAlgorithm.SHA256 and not is_sha256_hex_digest(
+            self.digest
         ):
             raise InvalidLineageMetadataError(
                 "configuration digest must be 64 lowercase hexadecimal characters."

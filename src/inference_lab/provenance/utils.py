@@ -1,24 +1,17 @@
 """Shared, side-effect-free validation helpers for provenance values."""
 
-from inference_lab.provenance.values import ExternalIdentifier
+import re
+from typing import Final
+
+_LOWERCASE_SLUG_PATTERN: Final = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+_SHA256_HEX_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
 
 
-def validate_external_identifiers(identifiers: object) -> None:
-    """Validate an immutable, unique, canonically ordered identifier tuple."""
-    if not isinstance(identifiers, tuple):
-        raise TypeError("external_identifiers must be a tuple.")
+def is_lowercase_slug(value: str) -> bool:
+    """Return whether a string is a canonical lowercase hyphenated slug."""
+    return _LOWERCASE_SLUG_PATTERN.fullmatch(value) is not None
 
-    if any(
-        not isinstance(identifier, ExternalIdentifier) for identifier in identifiers
-    ):
-        raise TypeError(
-            "external_identifiers must contain only ExternalIdentifier values."
-        )
 
-    keys = tuple(identifier.as_tuple() for identifier in identifiers)
-
-    if len(keys) != len(set(keys)):
-        raise ValueError("external_identifiers must not contain duplicates.")
-
-    if keys != tuple(sorted(keys)):
-        raise ValueError("external_identifiers must be in canonical order.")
+def is_sha256_hex_digest(value: str) -> bool:
+    """Return whether a string is a canonical lowercase SHA-256 digest."""
+    return _SHA256_HEX_PATTERN.fullmatch(value) is not None

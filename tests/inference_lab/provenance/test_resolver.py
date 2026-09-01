@@ -413,7 +413,19 @@ def test_each_resolution_outcome_emits_completion_event(
     )
 
 
-@pytest.mark.parametrize("pipeline_stage", ["", "   ", 42])
+@pytest.mark.parametrize(
+    "pipeline_stage",
+    [
+        "",
+        "   ",
+        "/private/source/path",
+        "prompt contents",
+        "Ingest",
+        "ingest_stage",
+        "ingest\nprivate-marker",
+        42,
+    ],
+)
 def test_invalid_pipeline_stage_is_rejected_without_logging(
     pipeline_stage: object,
     monkeypatch: pytest.MonkeyPatch,
@@ -422,13 +434,15 @@ def test_invalid_pipeline_stage_is_rejected_without_logging(
     monkeypatch.setattr(resolver_module, "logger", logger)
 
     expected_error = TypeError if not isinstance(pipeline_stage, str) else ValueError
-    with pytest.raises(expected_error, match="pipeline_stage"):
+    with pytest.raises(expected_error, match="pipeline_stage") as captured:
         resolve_identity(
             IdentityResolutionRequest(HASH_A),
             allocator=FixedAllocator(),
             pipeline_stage=pipeline_stage,  # type: ignore[arg-type]
         )
 
+    if isinstance(pipeline_stage, str) and pipeline_stage:
+        assert pipeline_stage not in str(captured.value)
     logger.info.assert_not_called()
     logger.error.assert_not_called()
 

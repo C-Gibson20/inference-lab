@@ -21,5 +21,9 @@ class InvalidLineageGraphError(InvalidLineageError):
     """Raised when a complete lineage bundle violates graph invariants."""
 
 
+class InvalidLineageSerialisationError(InvalidLineageError):
+    """Raised when serialised lineage data violates its canonical contract."""
+
+
 class UnsupportedLineageSchemaVersionError(InvalidLineageError):
     """Raised when lineage data names a schema this build cannot interpret."""

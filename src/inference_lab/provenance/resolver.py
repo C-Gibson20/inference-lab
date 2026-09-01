@@ -13,6 +13,7 @@ from inference_lab.provenance.resolution import (
     InvalidResolutionError,
     ResolutionReason,
 )
+from inference_lab.provenance.utils import is_lowercase_slug
 from inference_lab.provenance.values import DuplicateClass, ResolutionKind
 
 logger = structlog.get_logger(__name__)
@@ -169,8 +170,8 @@ def _validate_pipeline_stage(pipeline_stage: str) -> None:
     """Validate the pipeline stage string before resolution."""
     if not isinstance(pipeline_stage, str):
         raise TypeError("pipeline_stage must be a string.")
-    if not pipeline_stage.strip():
-        raise ValueError("pipeline_stage must not be empty.")
+    if not is_lowercase_slug(pipeline_stage):
+        raise ValueError("pipeline_stage must be a lowercase slug.")
 
 
 def _log_resolution_completed(

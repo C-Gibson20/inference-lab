@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
+from inference_lab.provenance.utils import is_sha256_hex_digest
+
 _IDENTIFIER_NAMESPACE: Final = re.compile(r"^[a-z][a-z0-9_-]*$")
-_SHA256_HEX_LENGTH: Final = 64
-_HEX_DIGEST: Final = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +35,27 @@ class ExternalIdentifier:
         return self.namespace, self.value
 
 
+def validate_external_identifiers(identifiers: object) -> None:
+    """Validate an immutable, unique, canonically ordered identifier tuple."""
+    if not isinstance(identifiers, tuple):
+        raise TypeError("external_identifiers must be a tuple.")
+
+    if any(
+        not isinstance(identifier, ExternalIdentifier) for identifier in identifiers
+    ):
+        raise TypeError(
+            "external_identifiers must contain only ExternalIdentifier values."
+        )
+
+    keys = tuple(identifier.as_tuple() for identifier in identifiers)
+
+    if len(keys) != len(set(keys)):
+        raise ValueError("external_identifiers must not contain duplicates.")
+
+    if keys != tuple(sorted(keys)):
+        raise ValueError("external_identifiers must be in canonical order.")
+
+
 class HashAlgorithm(StrEnum):
     """Content-hash algorithms supported by the identity contract."""
 
@@ -55,9 +76,8 @@ class ContentHash:
         if not isinstance(self.digest, str):
             raise TypeError("digest must be a string.")
 
-        if self.algorithm is HashAlgorithm.SHA256 and (
-            len(self.digest) != _SHA256_HEX_LENGTH
-            or _HEX_DIGEST.fullmatch(self.digest) is None
+        if self.algorithm is HashAlgorithm.SHA256 and not is_sha256_hex_digest(
+            self.digest
         ):
             raise ValueError(
                 "SHA-256 digest must be 64 lowercase hexadecimal characters."

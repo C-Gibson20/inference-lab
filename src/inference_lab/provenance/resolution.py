@@ -6,11 +6,11 @@ from enum import StrEnum
 from inference_lab.provenance.identifiers import DocumentVersionId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship
-from inference_lab.provenance.utils import validate_external_identifiers
 from inference_lab.provenance.values import (
     ContentHash,
     ExternalIdentifier,
     ResolutionKind,
+    validate_external_identifiers,
 )
 
 
