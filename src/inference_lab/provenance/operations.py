@@ -77,7 +77,7 @@ class ComponentRole:
 
 
 class DigestAlgorithm(StrEnum):
-    """Algorithms supported for privacy-safe configuration identity."""
+    """Algorithms supported for privacy-safe lineage digests."""
 
     SHA256 = "sha256"
 
