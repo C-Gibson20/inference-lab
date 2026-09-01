@@ -1,14 +1,24 @@
 """Internal SQLite metadata repository lifecycle owner."""
 
+from __future__ import annotations
+
 import sqlite3
 from pathlib import Path
+from types import TracebackType
 from typing import Self
 
 import structlog
 
+from inference_lab.provenance import CorpusId, DocumentId, DocumentIdentity
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     translate_sqlite_error,
+)
+from inference_lab.storage._sqlite_core import (
+    add_corpus,
+    add_document,
+    get_corpus,
+    get_document,
 )
 from inference_lab.storage._sqlite_inspection import (
     SchemaInspection,
@@ -23,6 +33,7 @@ from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefini
 from inference_lab.storage.errors import (
     RepositoryClosedError,
     RepositoryUnavailableError,
+    StorageTransactionError,
 )
 
 _LOGGER = structlog.get_logger(__name__)
@@ -50,6 +61,7 @@ class SQLiteMetadataRepository:
             raise TypeError("migrations must be a tuple.")
         self._connection: sqlite3.Connection | None = connection
         self._migrations = migrations
+        self._transaction_active = False
 
     @classmethod
     def open(
@@ -84,6 +96,19 @@ class SQLiteMetadataRepository:
             migrations=self._migrations,
         )
 
+    def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
+        """Return a persistent corpus identity, or ``None`` when absent."""
+        return get_corpus(self._connection_or_raise(), corpus_id)
+
+    def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
+        """Return a logical document, or ``None`` when absent."""
+        return get_document(self._connection_or_raise(), document_id)
+
+    def transaction(self) -> SQLiteMetadataTransaction:
+        """Return a new write transaction that starts on context entry."""
+        self._connection_or_raise()
+        return SQLiteMetadataTransaction(self)
+
     def _connection_or_raise(self) -> sqlite3.Connection:
         connection = self._connection
         if connection is None:
@@ -95,6 +120,15 @@ class SQLiteMetadataRepository:
         connection = self._connection
         if connection is None:
             return
+        if self._transaction_active:
+            error = StorageTransactionError()
+            _safe_log(
+                "error",
+                "repository_close_failed",
+                error_category=error.category.value,
+                retryable=error.retryable,
+            )
+            raise error
         self._connection = None
 
         try:
@@ -113,3 +147,115 @@ class SQLiteMetadataRepository:
             raise translated from None
 
         _safe_log("info", "repository_close_completed")
+
+
+class SQLiteMetadataTransaction:
+    """One non-nestable SQLite metadata write transaction."""
+
+    def __init__(self, repository: SQLiteMetadataRepository) -> None:
+        self._repository = repository
+        self._active = False
+        self._finished = False
+
+    def __enter__(self) -> Self:
+        """Acquire the write transaction, rejecting nesting and reuse."""
+        if self._active or self._finished or self._repository._transaction_active:
+            raise StorageTransactionError()
+
+        connection = self._repository._connection_or_raise()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.Error as sqlite_error:
+            error = translate_sqlite_error(
+                sqlite_error,
+                default=StorageTransactionError,
+            )
+            _safe_log(
+                "error",
+                "transaction_failed",
+                error_category=error.category.value,
+                retryable=error.retryable,
+            )
+            raise error from None
+
+        self._active = True
+        self._repository._transaction_active = True
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        """Commit success or roll back while preserving a primary failure."""
+        del exception_type, traceback
+        connection = self._connection_or_raise()
+
+        if exception is not None:
+            rolled_back = False
+            try:
+                connection.rollback()
+                rolled_back = True
+            except sqlite3.Error:
+                _safe_log(
+                    "error",
+                    "transaction_failed",
+                    error_category=StorageTransactionError.category.value,
+                    retryable=StorageTransactionError.retryable,
+                )
+            finally:
+                self._finish()
+            if rolled_back:
+                _safe_log("info", "transaction_rolled_back")
+            return False
+
+        try:
+            connection.commit()
+        except sqlite3.Error as sqlite_error:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            error = translate_sqlite_error(
+                sqlite_error,
+                default=StorageTransactionError,
+            )
+            self._finish()
+            _safe_log(
+                "error",
+                "transaction_failed",
+                error_category=error.category.value,
+                retryable=error.retryable,
+            )
+            raise error from None
+
+        self._finish()
+        _safe_log("info", "transaction_completed")
+        return False
+
+    def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
+        """Return a corpus identity within this transaction."""
+        return get_corpus(self._connection_or_raise(), corpus_id)
+
+    def add_corpus(self, corpus_id: CorpusId) -> None:
+        """Create a corpus identity within this transaction."""
+        add_corpus(self._connection_or_raise(), corpus_id)
+
+    def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
+        """Return a logical document within this transaction."""
+        return get_document(self._connection_or_raise(), document_id)
+
+    def add_document(self, document: DocumentIdentity) -> None:
+        """Create a logical document within this transaction."""
+        add_document(self._connection_or_raise(), document)
+
+    def _connection_or_raise(self) -> sqlite3.Connection:
+        if not self._active or self._finished:
+            raise StorageTransactionError()
+        return self._repository._connection_or_raise()
+
+    def _finish(self) -> None:
+        self._active = False
+        self._finished = True
+        self._repository._transaction_active = False
