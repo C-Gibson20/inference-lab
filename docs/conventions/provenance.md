@@ -1,9 +1,11 @@
-# Provenance identifier conventions
+# Provenance conventions
 
 Provenance identifiers provide the stable references that ingestion, storage,
 retrieval, serving, evaluation, backup/restore, and logging use to refer to
-corpus state. This document defines the identifier contract only; source
-locations and record lineage are specified by their later build-order issues.
+corpus state. Derived-record lineage records how immutable source evidence and
+parent records were transformed into chunks, facts, summaries, OCR output, and
+future derived-record kinds. These contracts are storage-neutral and remain
+the same when values move between memory and persistent representations.
 
 ## Identity domains
 
@@ -67,6 +69,114 @@ identifiers when moved between in-memory and persistent representations.
 membership does not merge member documents or their immutable source versions;
 each member remains independently citable.
 
+## Derived-record lineage
+
+Every `DerivedRecordMetadata` value identifies one immutable record version and
+contains its record kind, schema version, direct inputs, producing operation,
+output digest, and derivation fingerprint. A record may also identify the
+record version it supersedes. It does not contain document text, model output,
+prompt content, raw configuration, paths, or other unvalidated payload fields.
+
+Direct inputs are explicit typed references:
+
+- `SourceAnchor` pairs a `source_span_id` with the `document_version_id` that
+  owns that span.
+- `ParentRecordReference` identifies another immutable derived record.
+- `InputRole` and a non-negative input ordinal may describe the semantic role
+  and order of either input without changing its identity.
+
+Input collections are immutable, unique by referenced identity, and returned
+in canonical order. An input role or ordinal cannot disguise a duplicate
+source span or parent record. A derived record must have at least one direct
+source anchor or parent record.
+
+Edges point from evidence towards the record derived from it:
+
+```text
+document_version + source_span ──> chunk
+document_version + source_span ──> fact
+document-summary ──> topic-summary ──> corpus-summary
+```
+
+`LineageEdge.input_reference` is the source or parent and
+`LineageEdge.child_record_id` is the derived child. A complete `LineageBundle`
+contains the known source-span catalogue, records, and the exact edges implied
+by every record's declared inputs. Supplied edges may not omit or add
+relationships.
+
+Complete lineage must be acyclic. Every parent branch must terminate at an
+original `SourceAnchor`; a chain cannot terminate at a parentless derived
+record. Validation also rejects missing source spans, source-span/document-
+version mismatches, missing parent or child records, duplicate records or
+edges, self-links, and direct or indirect cycles.
+
+## Immutable versions and supersession
+
+A `record_id` names one immutable derived-record version. Changing its domain
+payload, inputs, producing operation, component metadata, or configuration
+creates a new record rather than mutating the existing record. When the new
+record replaces an earlier version, `supersedes_record_id` explicitly links the
+new record to its predecessor.
+
+Supersession is separate from derivation: it describes replacement history,
+not an input-to-output relationship. A predecessor must exist in a complete
+bundle, retain the same record kind, have at most one direct replacement, and
+participate in an acyclic supersession chain.
+
+`OutputDigest` identifies the immutable domain-owned payload without placing
+that payload in provenance metadata. `DerivationFingerprint` identifies the
+semantic derivation from the record kind, lineage schema version, direct
+inputs, producing operation, components, configuration identity, and output
+digest. It deliberately excludes `record_id` and supersession history, so two
+record identities produced by the same semantic derivation have the same
+fingerprint.
+
+Any invalidation-relevant change to a source, parent, operation, model, parser,
+prompt, normaliser, grouping component, contract version, artefact revision,
+configuration identity, record kind, or output digest changes the derivation
+fingerprint.
+
+## Producing operations and components
+
+`ProducingOperation` identifies the operation kind, project implementation,
+semantic contract version, configuration identity, and ordered producing
+components. Project-owned kinds, roles, and implementations use canonical
+lowercase slugs. Contract versions use canonical semantic versions.
+
+`ProducingComponent` records a component role, implementation, and contract
+version. Optional artefact identity and revision fields identify external
+models, parsers, prompts, normalisers, or grouping definitions without using
+their contents. Artefact identity and revision are either both present or both
+absent. Components are immutable, unique, and canonically ordered.
+
+Configuration and output identities currently use lowercase hexadecimal
+SHA-256 digests. Store only the digest of invalidation-relevant canonical
+configuration; do not place raw settings, prompts, credentials, model paths, or
+other private configuration in lineage metadata.
+
+## Canonical serialisation
+
+The current lineage schema version is published with the provenance API.
+Readers reject missing, malformed, or unsupported versions before interpreting
+deeper fields. Every record in a bundle must use the bundle's schema version.
+
+Canonical serialisation is deterministic UTF-8 JSON with sorted object keys,
+compact separators, full field names, and one trailing newline. Repeated
+serialisation of the same semantic record or bundle is byte-identical.
+Deserialisation is strict: it rejects invalid UTF-8, malformed JSON, duplicate
+object keys, non-finite values, unknown or missing fields, implicit scalar
+coercion, non-canonical identifiers, and invalid graph structure.
+
+Serialisation and deserialisation operate on bytes at the public boundary.
+JSON-compatible payload builders remain lower-level module helpers rather than
+part of the top-level provenance API.
+
+Wrong runtime types raise `TypeError`. Correctly typed values that violate
+lineage invariants raise a named `InvalidLineageError` subclass, which also
+derives from `ValueError`. Validation errors describe the failed invariant but
+must not echo rejected identifiers, payload values, paths, prompts, or raw
+configuration.
+
 ## Privacy and logging
 
 Opaque provenance IDs may be used for structured operational correlation.
@@ -78,16 +188,27 @@ Logs must continue to follow the logging and backup/restore conventions:
 - do not treat filenames or publication identifiers as substitutes for the
   stable ID fields.
 
+Pure provenance values, fingerprint construction, serialisation, and graph
+validation do not emit operational logs. Persistence and transaction
+boundaries may log lifecycle events using stable event names, opaque IDs,
+bounded enums, canonical lowercase pipeline-stage slugs, and aggregate counts.
+They must not log lineage payloads or rejected free-form values.
+
 ## Scope boundaries
 
-These conventions define identifier value objects only. They do not implement:
+These conventions define identifiers and storage-neutral derived-record
+lineage. They do not implement:
 
 - document discovery or duplicate resolution;
 - persistent metadata repositories;
 - corpus-version transactions;
-- source-location fields or citation resolution;
-- record lineage, version metadata, invalidation, or graph traversal;
+- persisted source-location records or citation resolution;
+- recomputation or invalidation scheduling;
+- graph analytics or general-purpose traversal APIs;
 - parser, OCR, chunking, extraction, or summary generation.
 
-Those behaviours are implemented by the dependency-ordered provenance, storage,
-and ingest issues.
+Provenance describes the output of those operations; it does not execute them.
+Repository storage must preserve canonical values and validate complete bundles
+at its transaction boundary. Recomputers may compare fingerprints and follow
+lineage, but their scheduling and persistence policies belong to later storage
+and ingest issues. PROV-03 adds no deployment setting or feature flag.
