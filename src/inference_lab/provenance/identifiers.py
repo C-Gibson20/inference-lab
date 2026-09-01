@@ -3,16 +3,6 @@
 import uuid
 from typing import Self, final
 
-__all__ = [
-    "CorpusId",
-    "CorpusVersionId",
-    "DocumentFamilyId",
-    "DocumentId",
-    "DocumentVersionId",
-    "RecordId",
-    "SourceSpanId",
-]
-
 
 class _Identifier:
     """Base value object for opaque, UUID-backed identifiers.

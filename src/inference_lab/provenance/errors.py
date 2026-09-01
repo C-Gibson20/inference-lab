@@ -13,5 +13,13 @@ class InvalidLineageReferenceError(InvalidLineageError):
     """Raised when a lineage input or edge violates local invariants."""
 
 
+class InvalidDerivedRecordError(InvalidLineageError):
+    """Raised when derived-record metadata violates local invariants."""
+
+
+class InvalidLineageGraphError(InvalidLineageError):
+    """Raised when a complete lineage bundle violates graph invariants."""
+
+
 class UnsupportedLineageSchemaVersionError(InvalidLineageError):
     """Raised when lineage data names a schema this build cannot interpret."""
