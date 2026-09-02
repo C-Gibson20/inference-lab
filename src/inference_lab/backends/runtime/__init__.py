@@ -16,6 +16,39 @@ from inference_lab.backends.runtime.fake import (
     FakeFailureMode,
 )
 from inference_lab.backends.runtime.local import LocalCausalBackend
+from inference_lab.backends.runtime.memory import (
+    CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION,
+    SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS,
+    BudgetComparison,
+    BudgetState,
+    Completeness,
+    ComponentRole,
+    ContributionKind,
+    MemoryAccountingAdapter,
+    MemoryAdapterIdentity,
+    MemoryBudget,
+    MemoryMeasurement,
+    MemorySnapshot,
+    MemorySpace,
+    MemoryTotal,
+    RollupReconciliation,
+)
+from inference_lab.backends.runtime.memory_fake import FakeMemoryAccountingAdapter
+from inference_lab.backends.runtime.memory_pytorch import (
+    PyTorchMemoryCalibrationAdapter,
+)
+from inference_lab.backends.runtime.memory_records import (
+    MemoryBudgetRecord,
+    MemoryComponentRecord,
+    emit_memory_budget_comparison,
+    emit_memory_measurement,
+)
+from inference_lab.backends.runtime.memory_serialisation import (
+    deserialise_budget_comparison,
+    deserialise_memory_snapshot,
+    serialise_budget_comparison,
+    serialise_memory_snapshot,
+)
 from inference_lab.backends.runtime.protocols import (
     EmbeddingBackend,
     GeneratorBackend,
@@ -45,6 +78,8 @@ from inference_lab.backends.runtime.types import (
 )
 
 __all__ = [
+    "CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION",
+    "SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS",
     "BackendCancelledError",
     "BackendCapability",
     "BackendClosedError",
@@ -56,6 +91,11 @@ __all__ = [
     "BackendProtocolError",
     "BackendRequestError",
     "BackendResourceError",
+    "BudgetComparison",
+    "BudgetState",
+    "Completeness",
+    "ComponentRole",
+    "ContributionKind",
     "EmbeddingBackend",
     "EmbeddingOptions",
     "EmbeddingRequest",
@@ -64,6 +104,7 @@ __all__ = [
     "FakeBackend",
     "FakeBackendConfig",
     "FakeFailureMode",
+    "FakeMemoryAccountingAdapter",
     "GenerationEvent",
     "GenerationEventType",
     "GenerationMessage",
@@ -74,10 +115,27 @@ __all__ = [
     "GeneratorBackend",
     "LifecycleBackend",
     "LocalCausalBackend",
+    "MemoryAccountingAdapter",
+    "MemoryAdapterIdentity",
+    "MemoryBudget",
+    "MemoryBudgetRecord",
+    "MemoryComponentRecord",
+    "MemoryMeasurement",
+    "MemorySnapshot",
+    "MemorySpace",
+    "MemoryTotal",
+    "PyTorchMemoryCalibrationAdapter",
     "RerankCandidate",
     "RerankRequest",
     "RerankResult",
     "RerankerBackend",
+    "RollupReconciliation",
     "ScoredCandidate",
+    "deserialise_budget_comparison",
+    "deserialise_memory_snapshot",
+    "emit_memory_budget_comparison",
+    "emit_memory_measurement",
+    "serialise_budget_comparison",
+    "serialise_memory_snapshot",
     "validate_generation_stream",
 ]

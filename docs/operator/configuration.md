@@ -40,7 +40,7 @@ file or environment take effect after a process restart.
 | `models.embedder_path` | `MODELS__EMBEDDER_PATH` | Required local embedder path. |
 | `models.reranker_path` | `MODELS__RERANKER_PATH` | Required local reranker path. |
 | `models.generator_path` | `MODELS__GENERATOR_PATH` | Required local generator path. |
-| `runtime.vram_budget_gb` | `RUNTIME__VRAM_BUDGET_GB` | Required VRAM budget in GB. |
+| `runtime.vram_budget_gb` | `RUNTIME__VRAM_BUDGET_GB` | Required VRAM budget in decimal GB; accounting converts `1 GB` to `1,000,000,000` bytes. |
 | `runtime.max_context_tokens` | `RUNTIME__MAX_CONTEXT_TOKENS` | Defaults to `8192`. |
 | `storage.index_dir` | `STORAGE__INDEX_DIR` | Required persistent index path. |
 | `storage.metadata_db_path` | `STORAGE__METADATA_DB_PATH` | Required metadata database path. |
@@ -52,6 +52,14 @@ It must not substitute guessed model paths, storage paths, or runtime values.
 Backup-specific settings are defined but not yet available; see the
 [backup and restore runbook](backup-restore.md) for the selected contract and
 current implementation status.
+
+### Memory-budget conversion
+
+`runtime.vram_budget_gb` uses decimal gigabytes because the field is named
+`gb`. The runtime converts the validated value exactly once at the accounting
+boundary: `budget_bytes = vram_budget_gb * 1,000,000,000`. It must not be
+interpreted as GiB or multiplied again by downstream components. A future
+binary unit would require a separately named setting such as `gib`.
 
 Feature flags are not currently part of the configuration contract. They will
 be added as typed, feature-owned settings when the corresponding feature is

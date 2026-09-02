@@ -177,8 +177,38 @@ sensitive paths.
 
 ## Scope boundary
 
-The runtime contract layer does not include a tokenizer or local model, memory
-accounting, real embedding, reranking, or generation integrations, cache
-lifecycle operations, scheduling, residency, or microbatching. Those
-capabilities build on these contracts without changing the fake into a
-production model backend.
+The runtime contract layer does not include a tokenizer or local model, real
+embedding, reranking, or generation integrations, cache lifecycle operations,
+scheduling, residency, or microbatching. Those capabilities build on these
+contracts without changing the fake into a production model backend.
+
+## Component memory accounting
+
+The optional `MemoryAccountingAdapter` capability reports one-shot,
+component-attributed observations through the runtime memory contract. It is
+not part of the lifecycle, embedding, reranking, or generation protocols, so
+backends that do not implement memory reporting remain valid.
+
+Memory measurements use the profiling memory categories and
+`measured`/`unavailable`/`unreliable` statuses. Byte values are canonical
+non-negative integers. Component role and memory category are independent: for
+example, generator weights are `model_weights`, while an explicitly coarse
+embedder total may use `embedding_reranker_memory`.
+
+Exclusive contributions are counted once. Informational roll-ups declare the
+measurement IDs they cover and are excluded from totals. Snapshot validation
+rejects missing coverage, cross-space or cross-device coverage, and cycles.
+Adapters remain responsible for the physical non-overlap invariant: distinct
+exclusive IDs must refer to disjoint allocations.
+
+Memory totals are never combined across accelerator, ordinary host, pinned
+host, and storage-cache spaces. A budget comparison is `within_budget` only
+when all counted contributions are measured and reliable; an incomplete result
+is `indeterminate` unless the reliable measured subtotal already breaches the
+budget.
+
+The PyTorch calibration adapter is deliberately limited to inspectable tensor
+backing storage. It counts each storage allocation once, including tied
+parameters and multiple tensor views. It does not claim exact allocator
+overhead, process RSS deltas, activation lifetime, or device hardware capacity.
+Unsupported or non-inspectable categories are reported as `unavailable`.
