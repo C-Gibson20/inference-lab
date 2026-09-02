@@ -1,8 +1,9 @@
 # Operator documentation
 
-Inference Lab is a locally hosted tool for querying papers and patents. Model
-paths, corpus data, queries, telemetry, and operational logs remain local in
-deployment.
+Inference Lab is a locally hosted tool for querying multiple named corpora of
+papers and patents. Each operation selects one corpus; cross-corpus querying is
+not part of the first build. Model paths, corpus data, queries, telemetry, and
+operational logs remain local in deployment.
 
 ## Start here
 
@@ -25,8 +26,9 @@ to apply that policy.
 The command-line entry point currently starts a skeleton application. The
 first executable ingest-and-search workflow will be documented when it is
 implemented.
-Answer generation, citation verification, sessions, chat, corpus updates, and
-privacy checks will extend these pages as those capabilities become available.
+Answer generation, citation verification, sessions, chat, named-corpus
+creation/selection and updates, and privacy checks will extend these pages as
+those capabilities become available.
 
 When an operator-facing command or setting changes, update the relevant page in
 the same change and verify the examples from a clean local configuration.

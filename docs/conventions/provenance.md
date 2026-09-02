@@ -18,8 +18,8 @@ The system uses a distinct opaque identifier type for each identity domain:
 | `source_observation_id` | `SourceObservationId` | One independently observed input source | Stable across moves and renames; distinct for independently citable duplicate sources |
 | `document_family_id` | `DocumentFamilyId` | One publication or patent family independently of its member documents | Stable for the family membership represented by the record |
 | `record_id` | `RecordId` | One canonical or derived record | Stable for the lifetime of that record |
-| `corpus_id` | `CorpusId` | One persistent corpus | Stable across corpus snapshots |
-| `corpus_version` | `CorpusVersionId` | One immutable corpus snapshot | Changes when a new corpus state is committed |
+| `corpus_id` | `CorpusId` | One named persistent corpus in a deployment | Stable across that corpus's snapshots |
+| `corpus_version` | `CorpusVersionId` | One immutable snapshot of exactly one corpus | Changes when a new state of that corpus is committed |
 | `source_span_id` | `SourceSpanId` | One source-location record | Stable only within its document-version representation |
 
 Identifiers are canonical lowercase, hyphenated UUID strings. They do not
@@ -43,12 +43,47 @@ existing identity. Identity resolution belongs to ingest and storage. Content
 hashes support unchanged-ingest detection and duplicate analysis but do not
 replace primary identifiers.
 
+## Corpus membership and isolation
+
+One metadata deployment may contain multiple named corpora. `DocumentId`,
+`DocumentVersionId`, `SourceObservationId`, `DocumentFamilyId`, and `RecordId`
+values are deployment-global opaque identities; they do not encode a
+`CorpusId`. Document and document-version visibility is instead represented by
+explicit corpus membership. The same immutable document or version may be a
+member of more than one corpus without being copied or mutated.
+
+Each corpus has an operator-visible display name in addition to its stable
+`CorpusId`. The name is mutable descriptive metadata, may be non-unique, and
+must never replace the ID in persisted references or API contracts. Interfaces
+must disambiguate equal names with the opaque ID. Corpus names may be sensitive
+and are not part of the operational logging context.
+
+Existence in the deployment-global catalogue never implies corpus membership.
+Every ingest, retrieval, evaluation, session, and corpus-version operation
+names exactly one `CorpusId`, either directly or through a validated
+`CorpusVersionId` owned by that corpus. Reads and candidate discovery must be
+scoped to that corpus, and derived records are visible only through the corpus
+generation that includes them. Storage must reject a `CorpusVersionId` used
+with a different `CorpusId`.
+
+A source observation belongs to exactly one corpus because it records that
+corpus's independently observed input and continuity. Source-continuity and
+identity-candidate queries use only the target corpus. Reusing a known global
+document or version in another corpus is an explicit membership operation, not
+an implicit consequence of a hash or external-identifier match.
+
+Duplicate and family relationships may refer to deployment-global immutable
+records, but a corpus-scoped read exposes only relationships between records
+visible in the selected corpus generation. These relationships never grant
+membership. Federated or cross-corpus retrieval is outside the first-build
+contract.
+
 `SourceObservationId` supplies source-continuity evidence without making a
 filesystem path an identity. Discovery allocates one for a newly observed
 source and retains it when that source moves or is renamed. A separately
 observed source receives a distinct identifier even when its bytes match an
 existing source. The identity resolver therefore receives same-observation
-continuity candidates separately from global content-hash and external-
+continuity candidates separately from corpus-scoped content-hash and external-
 identifier candidates.
 
 Persistence records source continuity as append-only `SourceObservationState`
@@ -122,9 +157,11 @@ source versions have the same content-hash algorithm and digest. Persistence
 enforces this on relationship writes and rejects stored mismatches during
 upgrade or reopen; downstream retrieval and evaluation may rely on the class.
 
-Corpus versions are immutable consistency boundaries. Metadata and persistent
-indexes participating in a corpus snapshot must identify the same
-`corpus_version`. Backup and restore operations must preserve this boundary.
+Corpus versions are immutable, corpus-owned consistency boundaries. Metadata
+and persistent indexes participating in a corpus snapshot must identify the
+same `corpus_id` and `corpus_version`. Version advancement is independent for
+each corpus. Backup and restore operations must preserve ownership and this
+boundary.
 
 `RecordId` and `SourceSpanId` identify records; they do not contain or replace
 record lineage or resolvable source-location fields. Those records retain their
@@ -247,7 +284,7 @@ configuration.
 Opaque provenance IDs may be used for structured operational correlation.
 Logs must continue to follow the logging and backup/restore conventions:
 
-- use `document_id` and `corpus_version` consistently;
+- use `document_id`, `corpus_id`, and `corpus_version` consistently;
 - do not log document text, source passages, queries, prompts, model outputs,
   credentials, or sensitive paths;
 - do not treat filenames or publication identifiers as substitutes for the

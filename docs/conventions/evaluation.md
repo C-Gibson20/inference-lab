@@ -29,7 +29,7 @@ current format is `3.0.0`; the incompatible `1.0.0` and `2.0.0` formats are not
 accepted or migrated.
 Unknown, missing, and unsupported schema versions are rejected before model
 validation. A dataset manifest identifies one immutable dataset version and
-one immutable corpus version.
+one `CorpusId` and one immutable `CorpusVersionId` owned by that corpus.
 
 The manifest records:
 
@@ -49,6 +49,12 @@ membership, per-case split values, and evidence corpus versions. A case file
 must remain inside its dataset directory. Checksum verification and JSONL
 parsing use the same in-memory byte snapshot so a concurrent file change cannot
 substitute unverified case content.
+
+Every case and evidence reference belongs to the manifest's one selected
+corpus version. Mixed-corpus evidence is invalid. Corpus comparisons use
+separate datasets or separate runs whose outputs may be compared explicitly;
+the first-build evaluator does not issue federated queries or score a
+cross-corpus answer.
 
 ## Evaluation cases
 

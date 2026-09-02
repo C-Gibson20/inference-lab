@@ -55,15 +55,18 @@ Every record contains the following fields. A field remains present with a
 | `module` | Emitting module or logger namespace |
 | `pipeline_stage` | Current ingest, retrieval, serving, runtime, or evaluation stage |
 | `document_id` | Stable document identifier, when applicable |
+| `corpus_id` | Selected corpus identifier, when applicable |
 | `corpus_version` | Corpus version being read or produced, when applicable |
 
-Use `document_id` consistently; never substitute `doc_id`. `run_id` and
-`request_id` may be added for correlation. Profiling may add timing and
-resource fields.
+Use `document_id` and `corpus_id` consistently; never substitute `doc_id` or a
+corpus name. `corpus_id` remains useful before the first version exists or
+while a new version is being staged. `run_id` and `request_id` may be added for
+correlation. Profiling may add timing and resource fields.
 
 Bind context at the boundary where it becomes known so nested stages inherit
-it. Do not place sensitive payloads in context merely to make them available
-to a log message.
+it. Every operation targeting a corpus binds `corpus_id`; operations against a
+published snapshot bind both `corpus_id` and `corpus_version`. Do not place
+sensitive payloads in context merely to make them available to a log message.
 
 ## Log levels
 

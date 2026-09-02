@@ -6,8 +6,9 @@ and candidate content, but it does not log or persist those payloads.
 
 ## Query and filters
 
-`RetrievalQuery` preserves non-blank query text exactly, selects one
-`CorpusVersionId`, optionally carries a typed filter tree, and requires a
+`RetrievalQuery` preserves non-blank query text exactly and selects one
+`CorpusVersionId`, whose owning `CorpusId` is validated by the execution and
+storage boundary. It optionally carries a typed filter tree and requires a
 strictly positive `RetrievalLimit`. Filters support exact values, non-empty
 typed sets, bounded ranges, presence/missing checks, and non-empty all/any/not
 composition. Field names are lowercase project-owned slugs. Filter values are
@@ -38,6 +39,17 @@ Results are scoped to one corpus version:
 A corpus-version mismatch fails closed and emits no hits from the incompatible
 snapshot. Failure values expose only a bounded category, optional channel, and
 retryability; they never carry raw exception messages or payloads.
+
+Every retrieval execution therefore targets exactly one corpus. Each channel
+must validate that its index generation belongs to the query's corpus version
+and must restrict candidates to document and record membership in that
+generation. A shared physical catalogue or index does not relax this filter.
+Fusion and reranking cannot introduce a candidate that was not visible in the
+selected corpus version.
+
+Cross-corpus or federated retrieval is outside this contract and the first
+build. Comparing corpora requires separate queries and results; callers must
+not combine their hits into a result labelled as one corpus version.
 
 ## Serialisation and privacy
 

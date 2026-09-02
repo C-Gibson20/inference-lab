@@ -2,13 +2,16 @@
 
 ## Scope
 
-Backups protect the persistent corpus state required to serve the system after
-restart or recovery.
+Backups protect the persistent state required to serve one or more corpora
+after restart or recovery. The portable baseline is a backup of exactly one
+named corpus. A compatible recovery snapshot may cover the whole deployment,
+but its consistency boundary must remain explicit per corpus.
 
 ### Included components
 
 - Metadata store:
   - Document identities and versions.
+  - Corpus identity and explicit document/version membership.
   - Corpus versions.
   - Chunks, provenance, source locations, and lineage.
   - Schema and migration state.
@@ -18,14 +21,19 @@ restart or recovery.
   - Metadata and filter indexes.
   - Structured-fact and summary indexes when they become persistent.
 - Recovery manifest:
-  - Corpus version.
+  - Corpus identity and version for a portable backup.
+  - The active corpus/version pair for every included corpus in a
+    deployment-wide recovery snapshot.
   - Schema and index format versions.
   - Component inventory.
   - Creation time.
   - Integrity information, such as checksums.
 
-The manifest identifies the metadata store and indexes as one recoverable
-corpus state rather than as independent files.
+The manifest identifies the metadata and indexes for each included corpus as a
+recoverable state rather than as independent files. A per-corpus portable
+backup contains only that corpus's membership and the deployment-global
+immutable records reachable through it; it must not disclose membership or
+private derived state from another corpus.
 
 ### Excluded components
 
@@ -41,14 +49,21 @@ also available through that policy.
 
 ## Consistency boundary
 
-Each backup represents one immutable corpus version. The metadata store is
-authoritative for the corpus version, and every included persistent index must
-identify the same corpus version and index generation.
+A portable backup represents one `CorpusId` at one immutable
+`CorpusVersionId`. The metadata store is authoritative for version ownership,
+and every included persistent index must identify the same corpus, version,
+and index generation.
+
+A deployment-wide recovery snapshot represents a consistent set of active
+`(CorpusId, CorpusVersionId)` pairs. Different corpora need not have matching
+version numbers or commit times. The snapshot must prevent a commit to any
+included corpus while that corpus's component state is captured, and its
+manifest must never collapse the set into a fictitious global corpus version.
 
 ### Backup coordination
 
-- Coordinate backup creation with ingest so no corpus-version commit occurs
-  during snapshot capture.
+- Coordinate backup creation with ingest so no version commit occurs for an
+  included corpus during its snapshot capture.
 - Ensure all indexes for the selected corpus version are committed and durable
   before capture completes.
 - Permit read-only queries to continue during backup creation.
@@ -61,7 +76,8 @@ The system must not present a backup as restorable when it is:
 
 - Incomplete or interrupted.
 - Missing a required component.
-- Composed of mixed corpus versions or index generations.
+- Composed of mixed versions or index generations for the same corpus.
+- Missing corpus ownership or containing a version owned by another corpus.
 - Inconsistent with its manifest.
 - Not validated successfully.
 
@@ -75,7 +91,7 @@ The portable backup is the baseline backup contract. It must be restorable on
 another compatible machine without depending on local absolute paths, storage
 snapshots, GPU availability, or memory-mapped addresses.
 
-It contains:
+It contains, for its selected corpus only:
 
 - A logical export of the metadata store.
 - Canonical chunks, provenance, and other records required to rebuild indexes.
@@ -94,9 +110,11 @@ storage. It may use database-native backups, index-native snapshots, or
 storage-level copy-on-write snapshots, provided that the same corpus-version
 boundary and manifest rules apply.
 
-Recovery snapshots may depend on a particular index format, software version,
-filesystem, or storage platform. They are an optimisation and must not replace
-the portable backup contract.
+Recovery snapshots may cover one corpus or the complete deployment and may
+depend on a particular index format, software version, filesystem, or storage
+platform. A deployment-wide snapshot lists every included corpus and its
+active version. Recovery snapshots are an optimisation and must not replace
+the per-corpus portable backup contract.
 
 ## Compatibility and migration
 
@@ -236,7 +254,8 @@ backup is outside the retention policy; deletion is a separate operation.
 
 ### Creation and publication
 
-- Create a full portable backup at a defined corpus-version boundary.
+- Select one corpus and create a full portable backup at its defined
+  corpus-version boundary.
 - Validate every component and the complete manifest.
 - Publish the backup atomically only after validation succeeds.
 - Optionally create a compatible recovery snapshot for faster local restore.
@@ -264,17 +283,21 @@ to activate.
 ### Restore sequence
 
 1. Select a published backup.
-2. Validate its manifest, checksums, corpus version, schema version, and
-   component compatibility.
+2. Validate its manifest, checksums, corpus ownership and version, schema
+   version, and component compatibility.
 3. Confirm that the required source documents are available through the
    separate source-data policy.
 4. Restore the backup into a new staging location.
 5. Open and validate the metadata store and every included index.
 6. Run smoke checks for metadata queries, index queries, provenance, and source
    spans.
-7. Create a pre-restore backup when replacing an existing installation.
-8. Atomically activate the validated staged restore.
-9. Restart or reconnect serving components and run post-activation checks.
+7. Compare deployment-global record IDs with the destination; accept exact
+   immutable replay and reject any conflicting payload for an existing ID.
+8. Create a pre-restore backup when replacing an existing corpus or
+   installation.
+9. Atomically activate the validated staged restore without changing unrelated
+   corpora.
+10. Restart or reconnect serving components and run post-activation checks.
 
 ### Restore outcomes
 
@@ -306,6 +329,8 @@ metadata store, persistent indexes, and backup interfaces are available.
 | Scenario | Expected result |
 | --- | --- |
 | Valid deterministic fixture backup and restore | Restores successfully with the expected corpus state. |
+| Restore into a deployment containing other corpora | The selected corpus is restored and unrelated corpora are unchanged. |
+| Shared immutable record already exists | Exact replay is reused; conflicting content for the same ID is rejected. |
 | Checksum or manifest mismatch | Backup is rejected and the active state is unchanged. |
 | Interrupted backup or restore | No partial state is published or activated. |
 | Corrupt or incomplete backup | Restore is rejected before active data changes. |
@@ -313,8 +338,8 @@ metadata store, persistent indexes, and backup interfaces are available.
 | Restore into an empty data directory | The restored system serves expected metadata and index results. |
 | Restore over an active installation | A pre-restore backup is created and activation is atomic. |
 | Concurrent reads during backup | Queries remain safe and return a consistent corpus state. |
-| Ingest during backup | The backup captures one corpus version and does not mix generations. |
-| Restart after restore | The corpus serves without reconstructing unchanged data. |
+| Ingest during backup | The backup captures one selected corpus version and does not mix its generations. |
+| Restart after restore | The restored corpus and pre-existing corpora serve without reconstructing unchanged data. |
 | Privacy-safe logging | Logs contain required operational fields without sensitive content. |
 | Disk-space and retention edge cases | Operations fail safely and retain the last known-good backup. |
 
@@ -367,6 +392,7 @@ Every record must include:
 - `module`.
 - `pipeline_stage`.
 - `document_id`, or `null` when not applicable.
+- `corpus_id`, or `null` when not applicable.
 - `corpus_version`, or `null` when not applicable.
 
 Backup operations may also include the backup identity, component name,

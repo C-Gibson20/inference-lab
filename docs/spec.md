@@ -2,13 +2,29 @@
 
 ## Summary
 
-A locally hosted tool for asking questions across a corpus of papers and patents. Documents are processed once at ingest; questions are answered in seconds with verifiable citations. In deployment, no document, query, or telemetry leaves the machine.
+A locally hosted tool for asking questions across named corpora of papers and
+patents. Documents are processed once at ingest; questions are answered in
+seconds with verifiable citations. In deployment, no document, query, or
+telemetry leaves the machine.
 
 The engineering focus is the boundary between batch throughput and interactive serving: efficient ingestion, evidence-grounded retrieval, context management, and hardware-aware scheduling on one GPU.
 
 ## Product decision
 
-This is a persistent corpus tool for thousands of documents. Ingest may run overnight; query-time context should remain small, typically around 8K tokens.
+This is a persistent multi-corpus tool for thousands of documents. One local
+deployment may manage multiple named corpora without requiring a separate
+database or process for each. Ingest may run overnight; query-time context
+should remain small, typically around 8K tokens.
+
+Every ingest, retrieval, evaluation, session, and corpus-version operation
+targets exactly one corpus. Documents and immutable document versions have
+deployment-global identities and may be explicit members of more than one
+corpus, but membership and visibility are corpus-specific. No operation may
+infer visibility from the mere existence of a global document record.
+
+Federated or cross-corpus retrieval, answers, sessions, summaries, and
+aggregations are outside the first build. Comparing corpora uses separate
+single-corpus runs until a later cross-corpus contract is deliberately added.
 
 A session tool for a handful of uploaded files is a separate product. It may be added later using the same indexing infrastructure, but it is not part of the first build.
 
@@ -74,6 +90,10 @@ For every document, retain:
 
 The system must distinguish document identity from document version. Re-ingesting an unchanged document should be a no-op.
 
+Ingest always names its target corpus. Reusing an existing immutable document
+record in another corpus adds explicit membership; it does not copy or mutate
+the record, and it does not make that document visible to any other corpus.
+
 ### Parsing and OCR
 
 The corpus audit must record:
@@ -131,6 +151,13 @@ Entity graphs are out of scope until retrieval, structured extraction, and simpl
 
 ### Retrieval
 
+Each question is resolved against one selected corpus and exactly one immutable
+version of that corpus. The system records the resolved version even when the
+caller selected only the corpus's active state. All retrieval channels,
+filters, fusion, reranking, summaries, and structured queries operate within
+that boundary. Shared physical storage or shared immutable document records
+must not permit results from a different corpus to leak into the evidence set.
+
 For each question, the planner may combine:
 
 - lexical retrieval;
@@ -164,6 +191,11 @@ Support multi-turn conversations with:
 - an evidence ledger containing source IDs, spans, and prior claims;
 - eviction of full retrieved text when it is no longer needed;
 - cache invalidation when the corpus version changes.
+
+A session is pinned to exactly one corpus and its active corpus version.
+Changing corpus is an explicit new-session or reset operation; conversation
+history, evidence ledgers, and caches are never carried implicitly between
+corpora.
 
 The target is sub-second time to first token and stable latency across a ten-turn session. Measure first-token latency, total answer latency, tokens per second, cache hit rate, and context size separately.
 
@@ -214,6 +246,10 @@ Also measure cold and warm retrieval, index build time, restart-to-serve time, i
 ### Question set
 
 Before implementation, create 30–50 real questions with known supporting evidence. Include lookups, comparisons, thematic questions, aggregations, follow-ups, and deliberately difficult terminology.
+
+Each evaluation dataset targets exactly one corpus and corpus version. A
+comparison between corpora is represented by separate evaluation runs, not by
+mixed-corpus cases or evidence.
 
 Each question should record:
 
@@ -290,7 +326,9 @@ Add the scheduler, persistent caches, session handling, batching, model residenc
 
 ### Phase 6 — Interface and hardening
 
-Add chat, inline citations, jump-to-source, dataset upload, failure recovery, corpus updates, restart behaviour, and operational privacy checks.
+Add chat, inline citations, jump-to-source, corpus creation and selection,
+dataset upload, failure recovery, corpus updates, restart behaviour, and
+operational privacy checks.
 
 ## Development model
 
@@ -316,7 +354,8 @@ The project succeeds when:
 4. Structured aggregations match manually verified results.
 5. Incremental ingest avoids recomputing unchanged derived data.
 6. Query latency remains stable across ten-turn sessions.
-7. The corpus can be served after restart without reconstruction.
+7. Every configured corpus can be served after restart without reconstruction,
+   and no query returns evidence outside its selected corpus.
 8. Ingest speedups are documented with stage-level profiles.
 9. Memory, throughput, quality, power, and thermal results are recorded together.
 10. You use the tool every week without thinking about its internals.
