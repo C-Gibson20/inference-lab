@@ -1,5 +1,7 @@
 import asyncio
+import json
 from collections.abc import AsyncGenerator
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -25,6 +27,8 @@ from inference_lab.backends.runtime.local import (
     CacheObservationOutcome,
     LocalMechanicsHarness,
 )
+from inference_lab.logging.logging_config import configure_logging
+from inference_lab.settings import LoggingConfig
 
 FIXTURE_DIR = Path("tests/fixtures/backends/runtime/local_mechanics")
 
@@ -305,6 +309,79 @@ def test_local_backend_cancellation_stops_without_completion() -> None:
         assert follow_up_events[-1].usage is not None
 
     asyncio.run(consume())
+
+
+def test_local_backend_logs_are_structured_and_payload_free() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(
+        messages=(
+            GenerationMessage(
+                "user", "private-prompt-marker /Users/private/prompt.txt"
+            ),
+        ),
+        options=GenerationOptions(maximum_output_tokens=2),
+    )
+
+    async def consume() -> None:
+        async for _event in backend.generate(request):
+            pass
+
+    asyncio.run(consume())
+    LocalMechanicsHarness(backend).observe_prefixes(request, request)
+    backend.close()
+
+    records = [
+        json.loads(line)
+        for line in stream.getvalue().splitlines()
+        if '"module": "inference_lab.backends.runtime.local"' in line
+    ]
+    assert [record["event"] for record in records] == [
+        "backend_load_completed",
+        "backend_generation_started",
+        "backend_cache_observation_completed",
+        "backend_close_completed",
+    ]
+    forbidden_values = (
+        "private-prompt-marker",
+        "/Users/private/prompt.txt",
+        "private-model-output-marker",
+    )
+    for record in records:
+        assert {
+            "timestamp",
+            "level",
+            "event",
+            "module",
+            "pipeline_stage",
+            "document_id",
+            "corpus_version",
+        } <= record.keys()
+        rendered_record = json.dumps(record)
+        assert all(value not in rendered_record for value in forbidden_values)
+
+
+def test_local_backend_load_failure_log_excludes_path_and_exception_details(
+    tmp_path: Path,
+) -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
+    private_path = tmp_path / "private-model-path-marker"
+    backend = LocalCausalBackend(private_path)
+
+    with pytest.raises(BackendExecutionError):
+        backend.load()
+
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert len(records) == 1
+    record = records[0]
+    assert record["event"] == "backend_load_failed"
+    assert record["failure_category"] == "load"
+    assert str(private_path) not in json.dumps(record)
+    assert "artefact directory is unavailable" not in json.dumps(record)
+    assert "traceback" not in record
 
 
 def test_mechanics_harness_proves_exact_repeated_prefix_equivalence() -> None:
