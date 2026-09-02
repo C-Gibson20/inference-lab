@@ -1,6 +1,13 @@
 """Channel-neutral, provenance-preserving retrieval value contracts."""
 
 from inference_lab.retrieval.errors import InvalidRetrievalContractError
+from inference_lab.retrieval.evidence import (
+    CandidateKind,
+    ChannelScore,
+    EvidenceHit,
+    EvidenceSource,
+    RetrievalCandidate,
+)
 from inference_lab.retrieval.filters import (
     AllFilter,
     AnyFilter,
@@ -19,6 +26,10 @@ from inference_lab.retrieval.values import RetrievalChannel, RetrievalLimit
 __all__ = [
     "AllFilter",
     "AnyFilter",
+    "CandidateKind",
+    "ChannelScore",
+    "EvidenceHit",
+    "EvidenceSource",
     "ExactFilter",
     "ExistsFilter",
     "FilterExpression",
@@ -28,6 +39,7 @@ __all__ = [
     "NotFilter",
     "OneOfFilter",
     "RangeFilter",
+    "RetrievalCandidate",
     "RetrievalChannel",
     "RetrievalLimit",
     "RetrievalQuery",
