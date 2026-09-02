@@ -15,6 +15,7 @@ from inference_lab.backends.runtime.fake import (
     FakeBackendConfig,
     FakeFailureMode,
 )
+from inference_lab.backends.runtime.local import LocalCausalBackend
 from inference_lab.backends.runtime.protocols import (
     EmbeddingBackend,
     GeneratorBackend,
@@ -72,6 +73,7 @@ __all__ = [
     "GenerationUsage",
     "GeneratorBackend",
     "LifecycleBackend",
+    "LocalCausalBackend",
     "RerankCandidate",
     "RerankRequest",
     "RerankResult",
