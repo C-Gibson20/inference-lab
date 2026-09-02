@@ -11,6 +11,7 @@ from inference_lab.backends.runtime import (
     BackendOperation,
     BackendRequestError,
     GenerationMessage,
+    GenerationOptions,
     GenerationRequest,
     GeneratorBackend,
     LifecycleBackend,
@@ -32,7 +33,7 @@ def test_local_backend_exposes_generation_only_metadata() -> None:
         BackendCapability.TOKEN_USAGE,
     )
     assert backend.metadata.embedding_dimensions is None
-    assert "local_mechanics" not in backend.metadata.model_revision
+    assert "prompt-v1" in backend.metadata.model_revision
 
 
 @pytest.mark.parametrize(
@@ -64,6 +65,7 @@ def test_local_backend_load_is_idempotent_and_releases_resources_on_close() -> N
     backend = LocalCausalBackend(FIXTURE_DIR)
 
     backend.load()
+    assert backend.effective_context_limit_tokens == 64
     model = backend._model
     tokeniser = backend._tokeniser
     backend.load()
@@ -106,6 +108,79 @@ def test_local_backend_fails_closed_when_artefacts_are_unavailable(
     assert not backend.is_ready
     assert backend._model is None
     assert backend._tokeniser is None
+
+
+def test_local_backend_renders_and_counts_the_complete_prompt() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(messages=(GenerationMessage("user", "hello world"),))
+
+    prepared = backend._prepare_generation(request)
+
+    assert prepared.rendered_prompt == "[BOS][USER] hello world[ASSISTANT]"
+    assert prepared.input_ids == (1, 5, 40, 44, 6)
+    assert prepared.input_tokens == 5
+    assert prepared.available_output_tokens == 59
+
+
+def test_local_backend_preserves_role_boundaries_and_unicode_deterministically() -> (
+    None
+):
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(
+        messages=(
+            GenerationMessage("system", "a"),
+            GenerationMessage("user", "  hello\tworld  "),
+            GenerationMessage("assistant", "café"),
+        )
+    )
+
+    first = backend._prepare_generation(request)
+    second = backend._prepare_generation(request)
+
+    assert first == second
+    assert first.rendered_prompt == (
+        "[BOS][SYSTEM] a[USER]   hello\tworld  [ASSISTANT] café[ASSISTANT]"
+    )
+    assert first.input_tokens == len(first.input_ids)
+
+
+@pytest.mark.parametrize("option", ["temperature", "top_p", "seed"])
+def test_local_backend_rejects_sampling_options(option: str) -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    kwargs: dict[str, object] = {option: 1}
+    request = GenerationRequest(
+        messages=(GenerationMessage("user", "hello"),),
+        options=GenerationOptions(**kwargs),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(BackendRequestError):
+        backend.generate(request)
+
+
+def test_local_backend_caps_output_by_context_and_request_limit() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR, context_limit_tokens=8)
+    backend.load()
+    request = GenerationRequest(
+        messages=(GenerationMessage("user", "hello world"),),
+        options=GenerationOptions(maximum_output_tokens=2),
+    )
+
+    prepared = backend._prepare_generation(request)
+
+    assert prepared.input_tokens == 5
+    assert prepared.available_output_tokens == 2
+
+
+def test_local_backend_rejects_prompt_with_no_context_for_output() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR, context_limit_tokens=5)
+    backend.load()
+    request = GenerationRequest(messages=(GenerationMessage("user", "hello world"),))
+
+    with pytest.raises(BackendRequestError):
+        backend._prepare_generation(request)
 
 
 def test_generation_remains_an_explicit_boundary_until_streaming_sub_pr() -> None:
