@@ -1,0 +1,161 @@
+from datetime import UTC, datetime
+from pathlib import Path
+
+from inference_lab.provenance import (
+    ContentHash,
+    DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
+    DocumentVersionId,
+    ExternalIdentifier,
+    HashAlgorithm,
+    IdentityResolutionRequest,
+)
+from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
+
+_APPLIED_AT = datetime(2026, 9, 2, 9, 0, tzinfo=UTC)
+_SHARED_HASH = ContentHash(HashAlgorithm.SHA256, "a" * 64)
+_OTHER_HASH = ContentHash(HashAlgorithm.SHA256, "b" * 64)
+_FIRST_DOCUMENT_ID = DocumentId("11111111-1111-4111-8111-111111111111")
+_SECOND_DOCUMENT_ID = DocumentId("22222222-2222-4222-8222-222222222222")
+_THIRD_DOCUMENT_ID = DocumentId("33333333-3333-4333-8333-333333333333")
+
+_FIRST = DocumentVersion(
+    DocumentVersionId("99999999-9999-4999-8999-999999999999"),
+    _FIRST_DOCUMENT_ID,
+    _SHARED_HASH,
+    (
+        ExternalIdentifier("doi", "10.1000/shared"),
+        ExternalIdentifier("pmid", "first-only"),
+    ),
+)
+_SECOND = DocumentVersion(
+    DocumentVersionId("11111111-1111-4111-8111-111111111111"),
+    _SECOND_DOCUMENT_ID,
+    _SHARED_HASH,
+    (ExternalIdentifier("doi", "10.1000/shared"),),
+)
+_THIRD = DocumentVersion(
+    DocumentVersionId("55555555-5555-4555-8555-555555555555"),
+    _THIRD_DOCUMENT_ID,
+    _OTHER_HASH,
+    (
+        ExternalIdentifier("arxiv", "third-only"),
+        ExternalIdentifier("doi", "10.1000/other"),
+    ),
+)
+
+
+def _fixed_applied_at() -> datetime:
+    return _APPLIED_AT
+
+
+def _populated_repository(path: Path) -> SQLiteMetadataRepository:
+    repository = SQLiteMetadataRepository.open(
+        path,
+        apply_migrations=True,
+        applied_at_factory=_fixed_applied_at,
+    )
+    with repository.transaction() as transaction:
+        for version in (_THIRD, _SECOND, _FIRST):
+            transaction.add_document(DocumentIdentity(version.document_id))
+            transaction.add_document_version(version)
+    return repository
+
+
+def test_content_hash_lookup_returns_canonical_resolution_candidates(
+    tmp_path: Path,
+) -> None:
+    repository = _populated_repository(tmp_path / "metadata.sqlite3")
+    try:
+        candidates = repository.find_document_versions_by_content_hash(_SHARED_HASH)
+
+        assert candidates == (_FIRST, _SECOND)
+        assert (
+            IdentityResolutionRequest(
+                _SHARED_HASH,
+                candidates=candidates,
+            ).candidates
+            == candidates
+        )
+        assert repository.find_document_versions_by_content_hash(_OTHER_HASH) == (
+            _THIRD,
+        )
+        assert (
+            repository.find_document_versions_by_content_hash(
+                ContentHash(HashAlgorithm.SHA256, "f" * 64)
+            )
+            == ()
+        )
+    finally:
+        repository.close()
+
+
+def test_external_identifier_lookup_matches_any_and_removes_duplicates(
+    tmp_path: Path,
+) -> None:
+    repository = _populated_repository(tmp_path / "metadata.sqlite3")
+    supplied = (
+        ExternalIdentifier("doi", "10.1000/shared"),
+        ExternalIdentifier("pmid", "first-only"),
+    )
+    try:
+        candidates = repository.find_document_versions_by_external_identifiers(supplied)
+
+        assert candidates == (_FIRST, _SECOND)
+        assert (
+            IdentityResolutionRequest(
+                _OTHER_HASH,
+                external_identifiers=supplied,
+                candidates=candidates,
+            ).candidates
+            == candidates
+        )
+    finally:
+        repository.close()
+
+
+def test_external_identifier_lookup_covers_zero_one_and_conflicting_matches(
+    tmp_path: Path,
+) -> None:
+    repository = _populated_repository(tmp_path / "metadata.sqlite3")
+    try:
+        assert repository.find_document_versions_by_external_identifiers(()) == ()
+        assert repository.find_document_versions_by_external_identifiers(
+            (ExternalIdentifier("pmid", "first-only"),)
+        ) == (_FIRST,)
+        assert (
+            repository.find_document_versions_by_external_identifiers(
+                (ExternalIdentifier("pmid", "missing"),)
+            )
+            == ()
+        )
+        assert repository.find_document_versions_by_external_identifiers(
+            (
+                ExternalIdentifier("arxiv", "third-only"),
+                ExternalIdentifier("doi", "10.1000/shared"),
+            )
+        ) == (_FIRST, _SECOND, _THIRD)
+    finally:
+        repository.close()
+
+
+def test_transaction_queries_include_its_uncommitted_version(tmp_path: Path) -> None:
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+        applied_at_factory=_fixed_applied_at,
+    )
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_document(DocumentIdentity(_FIRST.document_id))
+            transaction.add_document_version(_FIRST)
+
+            assert transaction.find_document_versions_by_content_hash(_SHARED_HASH) == (
+                _FIRST,
+            )
+            assert transaction.find_document_versions_by_external_identifiers(
+                (ExternalIdentifier("doi", "10.1000/shared"),)
+            ) == (_FIRST,)
+    finally:
+        repository.close()

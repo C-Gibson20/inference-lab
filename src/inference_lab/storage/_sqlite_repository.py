@@ -10,11 +10,13 @@ from typing import Self
 import structlog
 
 from inference_lab.provenance import (
+    ContentHash,
     CorpusId,
     DocumentId,
     DocumentIdentity,
     DocumentVersion,
     DocumentVersionId,
+    ExternalIdentifier,
 )
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
@@ -38,6 +40,8 @@ from inference_lab.storage._sqlite_migration_execution import (
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_versions import (
     add_document_version,
+    find_document_versions_by_content_hash,
+    find_document_versions_by_external_identifiers,
     get_document_version,
     list_document_versions,
 )
@@ -131,6 +135,26 @@ class SQLiteMetadataRepository:
     ) -> tuple[DocumentVersion, ...]:
         """Return a document's versions in canonical identifier order."""
         return list_document_versions(self._connection_or_raise(), document_id)
+
+    def find_document_versions_by_content_hash(
+        self,
+        content_hash: ContentHash,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return exact-hash candidates in canonical request order."""
+        return find_document_versions_by_content_hash(
+            self._connection_or_raise(),
+            content_hash,
+        )
+
+    def find_document_versions_by_external_identifiers(
+        self,
+        external_identifiers: tuple[ExternalIdentifier, ...],
+    ) -> tuple[DocumentVersion, ...]:
+        """Return unique versions matching any supplied identifier."""
+        return find_document_versions_by_external_identifiers(
+            self._connection_or_raise(),
+            external_identifiers,
+        )
 
     def transaction(self) -> SQLiteMetadataTransaction:
         """Return a new write transaction that starts on context entry."""
@@ -294,6 +318,26 @@ class SQLiteMetadataTransaction:
     ) -> tuple[DocumentVersion, ...]:
         """Return a document's versions within this transaction."""
         return list_document_versions(self._connection_or_raise(), document_id)
+
+    def find_document_versions_by_content_hash(
+        self,
+        content_hash: ContentHash,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return exact-hash candidates within this transaction."""
+        return find_document_versions_by_content_hash(
+            self._connection_or_raise(),
+            content_hash,
+        )
+
+    def find_document_versions_by_external_identifiers(
+        self,
+        external_identifiers: tuple[ExternalIdentifier, ...],
+    ) -> tuple[DocumentVersion, ...]:
+        """Return identifier candidates within this transaction."""
+        return find_document_versions_by_external_identifiers(
+            self._connection_or_raise(),
+            external_identifiers,
+        )
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its external identifiers atomically."""

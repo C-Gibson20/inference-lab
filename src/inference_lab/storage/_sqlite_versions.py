@@ -11,6 +11,7 @@ from inference_lab.provenance import (
     ExternalIdentifier,
     HashAlgorithm,
 )
+from inference_lab.provenance.values import validate_external_identifiers
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage.errors import (
     CorruptStorageError,
@@ -121,6 +122,82 @@ def list_document_versions(
         return _reconstruct_document_versions(connection, rows)
     except CorruptStorageError:
         raise
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
+def find_document_versions_by_content_hash(
+    connection: sqlite3.Connection,
+    content_hash: ContentHash,
+) -> tuple[DocumentVersion, ...]:
+    """Return exact-hash candidates in resolution-request order."""
+    if not isinstance(content_hash, ContentHash):
+        raise TypeError("content_hash must be a ContentHash.")
+
+    try:
+        rows = connection.execute(
+            """SELECT document_version_id, document_id,
+                content_hash_algorithm, content_hash_digest
+            FROM document_versions
+            WHERE content_hash_algorithm = ? AND content_hash_digest = ?
+            ORDER BY document_id, document_version_id""",
+            (content_hash.algorithm.value, content_hash.digest),
+        ).fetchall()
+        return _reconstruct_document_versions(connection, rows)
+    except CorruptStorageError:
+        raise
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
+def find_document_versions_by_external_identifiers(
+    connection: sqlite3.Connection,
+    external_identifiers: tuple[ExternalIdentifier, ...],
+) -> tuple[DocumentVersion, ...]:
+    """Return unique versions matching any supplied external identifier."""
+    validate_external_identifiers(external_identifiers)
+    if not external_identifiers:
+        return ()
+
+    try:
+        matched_ids: set[str] = set()
+        for identifier in external_identifiers:
+            rows = connection.execute(
+                """SELECT document_version_id
+                FROM external_identifiers
+                WHERE namespace = ? AND identifier_value = ?""",
+                identifier.as_tuple(),
+            ).fetchall()
+            matched_ids.update(row["document_version_id"] for row in rows)
+
+        candidates: list[DocumentVersion] = []
+        for stored_id in matched_ids:
+            candidate = get_document_version(
+                connection,
+                DocumentVersionId.from_str(stored_id),
+            )
+            if candidate is None:
+                raise CorruptStorageError()
+            candidates.append(candidate)
+        return tuple(
+            sorted(
+                candidates,
+                key=lambda candidate: (
+                    candidate.document_id.as_str(),
+                    candidate.document_version_id.as_str(),
+                ),
+            )
+        )
+    except CorruptStorageError:
+        raise
+    except (TypeError, ValueError, KeyError, IndexError):
+        raise CorruptStorageError() from None
     except sqlite3.Error as error:
         raise translate_sqlite_error(
             error,
