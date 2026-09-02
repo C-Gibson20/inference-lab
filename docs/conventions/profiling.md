@@ -31,6 +31,12 @@ Every concrete record supplies its logging level. The structured-log emission
 adapter rejects records with a missing or unsupported level; it does not infer
 severity from other fields.
 
+Profiling records carry the shared nullable `document_id`, `corpus_id`, and
+`corpus_version` context fields. Instrumentation around a corpus-targeting
+operation records `corpus_id`; instrumentation around a published snapshot
+records both corpus and version. Corpus display names are not profiling
+context.
+
 Profiling records use `observed_at` for the UTC time at which the stage event,
 resource value, or failure was observed. This field survives serialisation and
 structured-log emission unchanged. The logging pipeline separately generates

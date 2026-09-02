@@ -10,7 +10,12 @@ from structlog.typing import EventDict, WrappedLogger
 from inference_lab.settings import LoggingConfig
 
 _HANDLER_MARKER = "_inference_lab_handler"
-_CONTEXT_FIELDS = ("document_id", "corpus_version", "pipeline_stage")
+_CONTEXT_FIELDS = (
+    "document_id",
+    "corpus_id",
+    "corpus_version",
+    "pipeline_stage",
+)
 _SENSITIVE_LOG_NAMES = frozenset(
     {
         "answer",

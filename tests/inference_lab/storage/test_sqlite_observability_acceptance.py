@@ -68,6 +68,7 @@ _REQUIRED_LOG_FIELDS = {
     "module",
     "pipeline_stage",
     "document_id",
+    "corpus_id",
     "corpus_version",
 }
 
@@ -86,6 +87,7 @@ def _assert_storage_log_shape(records: list[dict[str, object]]) -> None:
         assert _REQUIRED_LOG_FIELDS <= record.keys()
         assert record["pipeline_stage"] == "storage"
         assert record["document_id"] is None
+        assert record["corpus_id"] is None
         assert record["corpus_version"] is None
         assert isinstance(record["module"], str)
         assert record["module"].startswith("inference_lab.storage.")
