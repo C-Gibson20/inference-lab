@@ -106,3 +106,30 @@ The profiling record layer is complete when a deterministic caller can emit
 timing, resource, and failure records through the structured logging stream,
 while a benchmark can independently collect and analyse those records without
 requiring profiling code to know the experiment design.
+
+## Runtime memory snapshot integration
+
+Runtime memory snapshots compose the canonical profiling memory categories,
+bytes unit, statuses, UTC `observed_at`, and record schema version. Their
+runtime-owned fields add component role, memory space, device identity,
+exclusive-versus-roll-up contribution semantics, and adapter/calibration
+identity without changing the generic `ResourceMeasurement` shape.
+
+Snapshot totals count only exclusive measured contributions. Unreliable values
+remain separate diagnostics and unavailable values contribute no bytes; neither
+is silently treated as free capacity. Roll-ups are never included in totals,
+and their declared coverage must remain within one memory space and device.
+
+Memory records use `memory_component_measured` and
+`memory_budget_compared` events. Measured records are `INFO`, unavailable or
+unreliable observations are `WARNING`, and confirmed budget breaches are
+`ERROR`; incomplete budget comparisons are warnings. Emitted fields are limited
+to bounded identifiers, enums, byte values, counts, and safe correlation data.
+They must not contain paths, prompts, queries, document content, model output,
+allocator dumps, or raw exception data.
+
+The PyTorch calibration path counts unique tensor backing storage using the
+framework's inspectable storage byte size. Tied parameters and tensor views
+sharing storage are counted once. Allocator-reserved memory, process RSS
+deltas, power, thermal, utilisation, and long-running sampling remain outside
+the reusable profiling record contract.

@@ -33,6 +33,22 @@ from inference_lab.backends.runtime.memory import (
     MemoryTotal,
     RollupReconciliation,
 )
+from inference_lab.backends.runtime.memory_fake import FakeMemoryAccountingAdapter
+from inference_lab.backends.runtime.memory_pytorch import (
+    PyTorchMemoryCalibrationAdapter,
+)
+from inference_lab.backends.runtime.memory_records import (
+    MemoryBudgetRecord,
+    MemoryComponentRecord,
+    emit_memory_budget_comparison,
+    emit_memory_measurement,
+)
+from inference_lab.backends.runtime.memory_serialisation import (
+    deserialise_budget_comparison,
+    deserialise_memory_snapshot,
+    serialise_budget_comparison,
+    serialise_memory_snapshot,
+)
 from inference_lab.backends.runtime.protocols import (
     EmbeddingBackend,
     GeneratorBackend,
@@ -88,6 +104,7 @@ __all__ = [
     "FakeBackend",
     "FakeBackendConfig",
     "FakeFailureMode",
+    "FakeMemoryAccountingAdapter",
     "GenerationEvent",
     "GenerationEventType",
     "GenerationMessage",
@@ -101,15 +118,24 @@ __all__ = [
     "MemoryAccountingAdapter",
     "MemoryAdapterIdentity",
     "MemoryBudget",
+    "MemoryBudgetRecord",
+    "MemoryComponentRecord",
     "MemoryMeasurement",
     "MemorySnapshot",
     "MemorySpace",
     "MemoryTotal",
+    "PyTorchMemoryCalibrationAdapter",
     "RerankCandidate",
     "RerankRequest",
     "RerankResult",
     "RerankerBackend",
     "RollupReconciliation",
     "ScoredCandidate",
+    "deserialise_budget_comparison",
+    "deserialise_memory_snapshot",
+    "emit_memory_budget_comparison",
+    "emit_memory_measurement",
+    "serialise_budget_comparison",
+    "serialise_memory_snapshot",
     "validate_generation_stream",
 ]
