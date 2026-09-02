@@ -1,0 +1,158 @@
+import pytest
+from structlog.testing import capture_logs
+
+import inference_lab.retrieval as retrieval
+from inference_lab.provenance import (
+    CorpusVersionId,
+    DocumentId,
+    DocumentVersionId,
+    RecordId,
+    SourceSpanId,
+)
+from inference_lab.retrieval import (
+    CandidateKind,
+    ChannelScore,
+    EvidenceHit,
+    EvidenceResult,
+    EvidenceSource,
+    FailureCategory,
+    InvalidRetrievalContractError,
+    ResultStatus,
+    RetrievalCandidate,
+    RetrievalChannel,
+    RetrievalFailure,
+    RetrievalLimit,
+    RetrievalQuery,
+    deserialise_evidence_result,
+    deserialise_query,
+    serialise_evidence_result,
+    serialise_query,
+)
+
+
+def _source(number: int) -> EvidenceSource:
+    """Return deterministic source identities for the acceptance fixture."""
+    return EvidenceSource(
+        DocumentId.from_str(f"00000000-0000-4000-8000-{number:012d}"),
+        DocumentVersionId.from_str(f"00000000-0000-4000-8000-{number + 10:012d}"),
+        SourceSpanId.from_str(f"00000000-0000-4000-8000-{number + 20:012d}"),
+    )
+
+
+def test_all_retrieval_channels_share_one_provenance_preserving_envelope() -> None:
+    """Map every planned channel without losing its score or source identity."""
+    channels = (
+        (RetrievalChannel.LEXICAL, CandidateKind.ORIGINAL_PASSAGE, "bm25"),
+        (RetrievalChannel.DENSE, CandidateKind.ORIGINAL_PASSAGE, "cosine"),
+        (RetrievalChannel.METADATA, CandidateKind.ORIGINAL_PASSAGE, None),
+        (RetrievalChannel.STRUCTURED, CandidateKind.STRUCTURED_RECORD, "fact-match"),
+        (RetrievalChannel.SUMMARY, CandidateKind.GENERATED_SUMMARY, "summary-rank"),
+    )
+    hits = tuple(
+        EvidenceHit(
+            RetrievalCandidate(
+                RecordId.from_str(f"00000000-0000-4000-8000-{index + 100:012d}"),
+                kind,
+                f"candidate {index}",
+                (_source(index + 1),),
+            ),
+            (
+                ChannelScore(
+                    channel,
+                    index,
+                    None if label is None else float(index),
+                    label,
+                ),
+            ),
+            index,
+        )
+        for index, (channel, kind, label) in enumerate(channels, start=1)
+    )
+    result = EvidenceResult(
+        CorpusVersionId.from_str("00000000-0000-4000-8000-000000000200"),
+        hits,
+        ResultStatus.COMPLETED,
+        (),
+    )
+
+    restored = deserialise_evidence_result(serialise_evidence_result(result))
+    assert restored == result
+    assert tuple(hit.contributions[0].channel for hit in restored.hits) == tuple(
+        channel for channel, _, _ in channels
+    )
+    assert tuple(hit.contributions[0].score_label for hit in restored.hits) == tuple(
+        label for _, _, label in channels
+    )
+    assert tuple(hit.candidate.sources[0] for hit in restored.hits) == tuple(
+        _source(index) for index in range(2, 7)
+    )
+
+
+def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
+    """Keep internal payload helpers and implementation details private."""
+    expected = {
+        "CandidateKind",
+        "ChannelScore",
+        "EvidenceHit",
+        "EvidenceResult",
+        "EvidenceSource",
+        "FailureCategory",
+        "InvalidRetrievalContractError",
+        "InvalidRetrievalResultError",
+        "InvalidRetrievalSerialisationError",
+        "ResultStatus",
+        "RetrievalCandidate",
+        "RetrievalChannel",
+        "RetrievalFailure",
+        "RetrievalLimit",
+        "RetrievalQuery",
+        "CURRENT_RETRIEVAL_SCHEMA_VERSION",
+        "SUPPORTED_RETRIEVAL_SCHEMA_VERSIONS",
+        "UnsupportedRetrievalSchemaVersionError",
+        "AllFilter",
+        "AnyFilter",
+        "ExactFilter",
+        "ExistsFilter",
+        "FilterExpression",
+        "FilterScalar",
+        "MissingFilter",
+        "NotFilter",
+        "OneOfFilter",
+        "RangeFilter",
+        "deserialise_evidence_result",
+        "deserialise_query",
+        "serialise_evidence_result",
+        "serialise_query",
+    }
+    assert set(retrieval.__all__) == expected
+    assert not hasattr(retrieval, "_filter_payload")
+    assert not hasattr(retrieval, "_candidate_payload")
+
+
+def test_validation_and_serialisation_are_payload_private_and_log_free() -> None:
+    """Ensure canary query/candidate text never appears in errors or logs."""
+    marker = "private-retrieval-payload-marker"
+    query = RetrievalQuery(marker, CorpusVersionId.generate(), RetrievalLimit(1))
+    with capture_logs() as logs:
+        assert deserialise_query(serialise_query(query)) == query
+        with pytest.raises(InvalidRetrievalContractError) as error:
+            RetrievalCandidate(
+                RecordId.generate(), CandidateKind.ORIGINAL_PASSAGE, marker, ()
+            )
+    assert marker not in str(error.value)
+    assert logs == []
+
+
+def test_failure_values_remain_typed_and_do_not_change_empty_result_semantics() -> None:
+    """Keep a channel failure distinct from a successful zero-hit result."""
+    version = CorpusVersionId.generate()
+    empty = EvidenceResult(version, (), ResultStatus.COMPLETED, ())
+    failed = EvidenceResult(
+        version,
+        (),
+        ResultStatus.FAILED,
+        (RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, True),),
+    )
+    assert empty.status is ResultStatus.COMPLETED
+    assert failed.status is ResultStatus.FAILED
+    assert failed.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
