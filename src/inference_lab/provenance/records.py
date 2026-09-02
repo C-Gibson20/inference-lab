@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from inference_lab.provenance.identifiers import (
+    CorpusId,
     DocumentId,
     DocumentVersionId,
     SourceObservationId,
@@ -15,12 +16,38 @@ from inference_lab.provenance.values import (
 
 
 @dataclass(frozen=True, slots=True)
+class CorpusMetadata:
+    """Describe one named corpus without using its name as identity."""
+
+    corpus_id: CorpusId
+    display_name: str
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the fields of the CorpusMetadata."""
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(self.display_name, str):
+            raise TypeError("display_name must be a string.")
+        if not self.display_name.strip():
+            raise ValueError("display_name must not be blank.")
+        if "\x00" in self.display_name:
+            raise ValueError("display_name must not contain NUL characters.")
+
+
+@dataclass(frozen=True, slots=True)
 class DocumentIdentity:
     """Identify one logical document across immutable source versions."""
 
     document_id: DocumentId
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the fields of the DocumentIdentity."""
         if not isinstance(self.document_id, DocumentId):
             raise TypeError("document_id must be a DocumentId.")
 
@@ -35,6 +62,10 @@ class DocumentVersion:
     external_identifiers: tuple[ExternalIdentifier, ...] = ()
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the fields of the DocumentVersion."""
         if not isinstance(self.document_version_id, DocumentVersionId):
             raise TypeError("document_version_id must be a DocumentVersionId.")
 

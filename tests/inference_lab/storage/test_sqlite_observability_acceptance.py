@@ -10,6 +10,7 @@ from inference_lab.logging.logging_config import configure_logging
 from inference_lab.provenance import (
     ContentHash,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -33,6 +34,7 @@ from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 _APPLIED_AT = datetime(2026, 9, 2, 15, 0, tzinfo=UTC)
 _CORPUS_ID = CorpusId("ea304c92-db98-4112-9976-38d2d67a28d4")
+_CORPUS = CorpusMetadata(_CORPUS_ID, "Private test corpus")
 _FAMILY_ID = DocumentFamilyId("815236bc-44b7-4784-84cc-f56bf72bb6d2")
 _FIRST_DOCUMENT_ID = DocumentId("0d64c130-cea0-4c1d-8a44-298941893072")
 _SECOND_DOCUMENT_ID = DocumentId("354c3b10-9a1a-47f2-91c9-76640ea573c2")
@@ -98,7 +100,7 @@ def _assert_storage_log_shape(records: list[dict[str, object]]) -> None:
 
 
 def _add_complete_graph(transaction: MetadataTransaction) -> None:
-    transaction.add_corpus(_CORPUS_ID)
+    transaction.add_corpus(_CORPUS)
     transaction.add_document_family(_FAMILY_ID)
     transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
     transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))

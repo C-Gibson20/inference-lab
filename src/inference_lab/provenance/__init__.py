@@ -43,11 +43,13 @@ from inference_lab.provenance.operations import (
     ProducingOperation,
 )
 from inference_lab.provenance.records import (
+    CorpusMetadata,
     DocumentIdentity,
     DocumentVersion,
     SourceObservationState,
 )
 from inference_lab.provenance.relationships import (
+    CorpusDocumentVersionMembership,
     DocumentFamilyMembership,
     DuplicateRelationship,
     InvalidRelationshipError,
@@ -97,7 +99,9 @@ __all__ = [
     "ComponentRole",
     "ConfigurationIdentity",
     "ContentHash",
+    "CorpusDocumentVersionMembership",
     "CorpusId",
+    "CorpusMetadata",
     "CorpusVersionId",
     "DerivationFingerprint",
     "DerivedRecordKind",

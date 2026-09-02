@@ -11,7 +11,9 @@ import structlog
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -35,6 +37,13 @@ from inference_lab.storage._sqlite_core import (
     get_corpus,
     get_document,
     get_document_family,
+    list_corpora,
+    set_corpus_display_name,
+)
+from inference_lab.storage._sqlite_corpus_memberships import (
+    add_corpus_document_version_membership,
+    get_corpus_document_version_membership,
+    list_corpus_document_version_memberships,
 )
 from inference_lab.storage._sqlite_inspection import (
     SchemaInspection,
@@ -138,9 +147,32 @@ class SQLiteMetadataRepository:
             migrations=self._migrations,
         )
 
-    def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
-        """Return a persistent corpus identity, or ``None`` when absent."""
+    def get_corpus(self, corpus_id: CorpusId) -> CorpusMetadata | None:
+        """Return a named corpus, or ``None`` when absent."""
         return get_corpus(self._connection_or_raise(), corpus_id)
+
+    def list_corpora(self) -> tuple[CorpusMetadata, ...]:
+        """Return all named corpora in canonical identifier order."""
+        return list_corpora(self._connection_or_raise())
+
+    def get_corpus_document_version_membership(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> CorpusDocumentVersionMembership | None:
+        """Return one corpus catalogue membership, or ``None``."""
+        return get_corpus_document_version_membership(
+            self._connection_or_raise(), corpus_id, document_version_id
+        )
+
+    def list_corpus_document_version_memberships(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return a corpus catalogue in canonical order."""
+        return list_corpus_document_version_memberships(
+            self._connection_or_raise(), corpus_id
+        )
 
     def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
         """Return a logical document, or ``None`` when absent."""
@@ -414,13 +446,51 @@ class SQLiteMetadataTransaction:
         _safe_log("info", "transaction_completed")
         return False
 
-    def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
-        """Return a corpus identity within this transaction."""
+    def get_corpus(self, corpus_id: CorpusId) -> CorpusMetadata | None:
+        """Return a named corpus within this transaction."""
         return self._execute(get_corpus, corpus_id)
 
-    def add_corpus(self, corpus_id: CorpusId) -> None:
-        """Create a corpus identity within this transaction."""
-        self._execute(add_corpus, corpus_id)
+    def list_corpora(self) -> tuple[CorpusMetadata, ...]:
+        """Return all named corpora within this transaction."""
+        return self._execute(list_corpora)
+
+    def add_corpus(self, corpus: CorpusMetadata) -> None:
+        """Create a named corpus within this transaction."""
+        self._execute(add_corpus, corpus)
+
+    def set_corpus_display_name(
+        self,
+        corpus_id: CorpusId,
+        display_name: str,
+    ) -> CorpusMetadata:
+        """Replace a corpus display name within this transaction."""
+        return self._execute(set_corpus_display_name, corpus_id, display_name)
+
+    def get_corpus_document_version_membership(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> CorpusDocumentVersionMembership | None:
+        """Return one corpus catalogue membership within this transaction."""
+        return self._execute(
+            get_corpus_document_version_membership,
+            corpus_id,
+            document_version_id,
+        )
+
+    def list_corpus_document_version_memberships(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return a corpus catalogue within this transaction."""
+        return self._execute(list_corpus_document_version_memberships, corpus_id)
+
+    def add_corpus_document_version_membership(
+        self,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Add a corpus catalogue membership within this transaction."""
+        self._execute(add_corpus_document_version_membership, membership)
 
     def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
         """Return a logical document within this transaction."""

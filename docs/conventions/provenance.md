@@ -132,6 +132,12 @@ interchange, or recovery format, have no compatible reader contract, and must
 not be stored as durable identity records.
 
 SQLite schema migrations own compatibility for the current metadata store.
+The transition from the original deployment-global catalogue may backfill all
+existing document versions into a corpus only when exactly one corpus exists.
+With no corpus, legacy records remain unassigned; with multiple corpora and any
+document versions, migration must stop without mutation because membership
+cannot be inferred safely. Legacy corpus display names default to their stable
+IDs and may be renamed explicitly after migration.
 STOR-08 owns any future portable backup/export record schema after corpus
 generations and the complete persistent-state shape exist. The lineage
 serialisation contract below remains independently versioned because PROV-03

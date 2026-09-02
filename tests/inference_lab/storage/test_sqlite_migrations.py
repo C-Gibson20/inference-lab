@@ -15,6 +15,8 @@ _OTHER_DOCUMENT_ID = "00000000-0000-0000-0000-000000000002"
 _VERSION_ID = "00000000-0000-0000-0000-000000000003"
 _OTHER_VERSION_ID = "00000000-0000-0000-0000-000000000004"
 _FAMILY_ID = "00000000-0000-0000-0000-000000000005"
+_CORPUS_ID = "00000000-0000-0000-0000-000000000006"
+_OTHER_CORPUS_ID = "00000000-0000-0000-0000-000000000007"
 _DIGEST = "a" * 64
 
 
@@ -58,7 +60,7 @@ def _insert_version(
 def test_revision_one_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 3
+    assert len(MIGRATIONS) == 4
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "initial_metadata"
     assert MIGRATIONS[0].checksum == (
@@ -74,6 +76,97 @@ def test_revision_one_is_stable_and_registry_is_valid() -> None:
     assert MIGRATIONS[2].checksum == (
         "5341fdcb642e8868be679df0930f8fe0604b9eca67e71333847eaba94f63b95b"
     )
+    assert MIGRATIONS[3].revision == 4
+    assert MIGRATIONS[3].migration_id == "corpus_catalogue_membership"
+    assert MIGRATIONS[3].checksum == (
+        "aa9e6a65702f728b0d5f67af695417681732a2fe20542f0d7e16e135d9bbd0db"
+    )
+
+
+def test_revision_four_backfills_unambiguous_legacy_catalogue() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:3]:
+        for statement in migration.statements:
+            connection.execute(statement)
+    connection.execute("INSERT INTO corpora (corpus_id) VALUES (?)", (_CORPUS_ID,))
+    _insert_document(connection, _DOCUMENT_ID)
+    _insert_version(
+        connection,
+        version_id=_VERSION_ID,
+        document_id=_DOCUMENT_ID,
+    )
+
+    for statement in MIGRATIONS[3].statements:
+        connection.execute(statement)
+
+    assert connection.execute(
+        "SELECT corpus_id, display_name FROM corpora"
+    ).fetchall() == [(_CORPUS_ID, _CORPUS_ID)]
+    assert connection.execute(
+        """SELECT corpus_id, document_id, document_version_id
+        FROM corpus_document_version_memberships"""
+    ).fetchall() == [(_CORPUS_ID, _DOCUMENT_ID, _VERSION_ID)]
+    connection.close()
+
+
+def test_revision_four_rejects_ambiguous_legacy_catalogue_atomically() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:3]:
+        for statement in migration.statements:
+            connection.execute(statement)
+    connection.executemany(
+        "INSERT INTO corpora (corpus_id) VALUES (?)",
+        ((_CORPUS_ID,), (_OTHER_CORPUS_ID,)),
+    )
+    _insert_document(connection, _DOCUMENT_ID)
+    _insert_version(
+        connection,
+        version_id=_VERSION_ID,
+        document_id=_DOCUMENT_ID,
+    )
+    connection.commit()
+
+    connection.execute("BEGIN IMMEDIATE")
+    with pytest.raises(sqlite3.IntegrityError):
+        for statement in MIGRATIONS[3].statements:
+            connection.execute(statement)
+    connection.rollback()
+
+    columns = connection.execute("PRAGMA table_info(corpora)").fetchall()
+    assert [column[1] for column in columns] == ["storage_id", "corpus_id"]
+    assert (
+        connection.execute(
+            """SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = 'corpus_document_version_memberships'"""
+        ).fetchone()
+        is None
+    )
+    connection.close()
+
+
+def test_revision_four_allows_multiple_empty_legacy_corpora() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:3]:
+        for statement in migration.statements:
+            connection.execute(statement)
+    connection.executemany(
+        "INSERT INTO corpora (corpus_id) VALUES (?)",
+        ((_CORPUS_ID,), (_OTHER_CORPUS_ID,)),
+    )
+
+    for statement in MIGRATIONS[3].statements:
+        connection.execute(statement)
+
+    assert connection.execute(
+        "SELECT corpus_id, display_name FROM corpora ORDER BY corpus_id"
+    ).fetchall() == [
+        (_CORPUS_ID, _CORPUS_ID),
+        (_OTHER_CORPUS_ID, _OTHER_CORPUS_ID),
+    ]
+    connection.close()
 
 
 def test_revision_one_creates_only_the_initial_metadata_scope(

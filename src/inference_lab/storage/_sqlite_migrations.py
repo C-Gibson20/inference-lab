@@ -343,6 +343,70 @@ END""",
 SET duplicate_class = duplicate_class""",
 )
 
+_REVISION_4_STATEMENTS: Final = (
+    """CREATE TABLE corpus_membership_migration_guard (
+    guard INTEGER NOT NULL CHECK (guard = 0)
+) STRICT""",
+    """INSERT INTO corpus_membership_migration_guard (guard)
+SELECT 1
+WHERE (SELECT count(*) FROM corpora) > 1
+    AND EXISTS (SELECT 1 FROM document_versions)""",
+    "DROP TABLE corpus_membership_migration_guard",
+    "ALTER TABLE corpora RENAME TO corpora_revision_3",
+    """CREATE TABLE corpora (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL UNIQUE
+        CHECK (
+            length(corpus_id) = 36
+            AND corpus_id = lower(corpus_id)
+            AND substr(corpus_id, 9, 1) = '-'
+            AND substr(corpus_id, 14, 1) = '-'
+            AND substr(corpus_id, 19, 1) = '-'
+            AND substr(corpus_id, 24, 1) = '-'
+            AND length(replace(corpus_id, '-', '')) = 32
+            AND corpus_id NOT GLOB '*[^0-9a-f-]*'
+        ),
+    display_name TEXT NOT NULL
+        CHECK (
+            length(trim(display_name)) > 0
+            AND instr(display_name, char(0)) = 0
+        )
+) STRICT""",
+    """INSERT INTO corpora (corpus_id, display_name)
+SELECT corpus_id, corpus_id
+FROM corpora_revision_3
+ORDER BY corpus_id""",
+    "DROP TABLE corpora_revision_3",
+    """CREATE TABLE corpus_document_version_memberships (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    FOREIGN KEY (corpus_id) REFERENCES corpora (corpus_id),
+    FOREIGN KEY (document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    UNIQUE (corpus_id, document_version_id)
+) STRICT""",
+    """CREATE INDEX corpus_document_version_memberships_document_idx
+ON corpus_document_version_memberships (
+    corpus_id,
+    document_id,
+    document_version_id
+)""",
+    """CREATE INDEX corpus_document_version_memberships_version_idx
+ON corpus_document_version_memberships (document_version_id, corpus_id)""",
+    """INSERT INTO corpus_document_version_memberships (
+    corpus_id,
+    document_id,
+    document_version_id
+)
+SELECT corpora.corpus_id, versions.document_id, versions.document_version_id
+FROM corpora
+CROSS JOIN document_versions AS versions
+WHERE (SELECT count(*) FROM corpora) = 1
+ORDER BY versions.document_id, versions.document_version_id""",
+)
+
 MIGRATIONS: Final = (
     MigrationDefinition(
         revision=1,
@@ -358,6 +422,11 @@ MIGRATIONS: Final = (
         revision=3,
         migration_id="duplicate_hash_integrity",
         statements=_REVISION_3_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=4,
+        migration_id="corpus_catalogue_membership",
+        statements=_REVISION_4_STATEMENTS,
     ),
 )
 

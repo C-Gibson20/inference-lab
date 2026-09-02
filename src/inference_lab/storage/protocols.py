@@ -5,7 +5,9 @@ from typing import Protocol, Self, runtime_checkable
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -23,8 +25,27 @@ from inference_lab.provenance import (
 class MetadataReader(Protocol):
     """Read immutable corpus identity metadata using provenance values."""
 
-    def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
-        """Return a persistent corpus identity, or ``None`` when absent."""
+    def get_corpus(self, corpus_id: CorpusId) -> CorpusMetadata | None:
+        """Return a named corpus, or ``None`` when absent."""
+        ...
+
+    def list_corpora(self) -> tuple[CorpusMetadata, ...]:
+        """Return all named corpora in canonical identifier order."""
+        ...
+
+    def get_corpus_document_version_membership(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> CorpusDocumentVersionMembership | None:
+        """Return one corpus catalogue membership, or ``None``."""
+        ...
+
+    def list_corpus_document_version_memberships(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return a corpus catalogue in canonical document/version order."""
         ...
 
     def get_document_family(
@@ -107,8 +128,23 @@ class MetadataReader(Protocol):
 class MetadataWriter(Protocol):
     """Write identity metadata within an owned transaction."""
 
-    def add_corpus(self, corpus_id: CorpusId) -> None:
-        """Create a corpus identity, treating exact replay as a no-op."""
+    def add_corpus(self, corpus: CorpusMetadata) -> None:
+        """Create a named corpus, treating exact replay as a no-op."""
+        ...
+
+    def set_corpus_display_name(
+        self,
+        corpus_id: CorpusId,
+        display_name: str,
+    ) -> CorpusMetadata:
+        """Replace a corpus display name without changing its identity."""
+        ...
+
+    def add_corpus_document_version_membership(
+        self,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Add an explicit catalogue membership or accept exact replay."""
         ...
 
     def add_document_family(self, family_id: DocumentFamilyId) -> None:

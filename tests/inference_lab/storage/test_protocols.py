@@ -4,7 +4,9 @@ from typing import Self
 import inference_lab.storage as storage
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -34,7 +36,17 @@ class StructuralTransaction:
     ) -> bool:
         return False
 
-    def add_corpus(self, corpus_id: CorpusId) -> None:
+    def add_corpus(self, corpus: CorpusMetadata) -> None:
+        pass
+
+    def set_corpus_display_name(
+        self, corpus_id: CorpusId, display_name: str
+    ) -> CorpusMetadata:
+        raise NotImplementedError
+
+    def add_corpus_document_version_membership(
+        self, membership: CorpusDocumentVersionMembership
+    ) -> None:
         pass
 
     def add_document_family(self, family_id: DocumentFamilyId) -> None:
@@ -69,8 +81,23 @@ class StructuralTransaction:
     def add_family_membership(self, membership: DocumentFamilyMembership) -> None:
         pass
 
-    def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
+    def get_corpus(self, corpus_id: CorpusId) -> CorpusMetadata | None:
         return None
+
+    def list_corpora(self) -> tuple[CorpusMetadata, ...]:
+        return ()
+
+    def get_corpus_document_version_membership(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> CorpusDocumentVersionMembership | None:
+        return None
+
+    def list_corpus_document_version_memberships(
+        self, corpus_id: CorpusId
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        return ()
 
     def get_document_family(
         self, family_id: DocumentFamilyId
@@ -159,6 +186,13 @@ def test_storage_protocols_are_structural() -> None:
 def test_reader_without_writes_is_not_a_transaction() -> None:
     class ReaderOnly:
         get_corpus = StructuralTransaction.get_corpus
+        list_corpora = StructuralTransaction.list_corpora
+        get_corpus_document_version_membership = (
+            StructuralTransaction.get_corpus_document_version_membership
+        )
+        list_corpus_document_version_memberships = (
+            StructuralTransaction.list_corpus_document_version_memberships
+        )
         get_document_family = StructuralTransaction.get_document_family
         get_document = StructuralTransaction.get_document
         get_document_version = StructuralTransaction.get_document_version
