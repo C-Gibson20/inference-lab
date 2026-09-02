@@ -13,6 +13,7 @@ from inference_lab.provenance import (
     ContentHash,
     CorpusId,
     DocumentFamilyId,
+    DocumentFamilyMembership,
     DocumentId,
     DocumentIdentity,
     DocumentVersion,
@@ -44,7 +45,11 @@ from inference_lab.storage._sqlite_migration_execution import (
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_relationships import (
     add_duplicate_relationship,
+    add_family_membership,
     list_duplicate_relationships,
+    list_family_memberships_by_document,
+    list_family_memberships_by_document_version,
+    list_family_memberships_by_family,
 )
 from inference_lab.storage._sqlite_versions import (
     add_document_version,
@@ -177,6 +182,36 @@ class SQLiteMetadataRepository:
     ) -> tuple[DuplicateRelationship, ...]:
         """Return a version's duplicate relationships in canonical order."""
         return list_duplicate_relationships(
+            self._connection_or_raise(),
+            document_version_id,
+        )
+
+    def list_family_memberships_by_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return a family's memberships in canonical key order."""
+        return list_family_memberships_by_family(
+            self._connection_or_raise(),
+            family_id,
+        )
+
+    def list_family_memberships_by_document(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return a document's memberships in canonical key order."""
+        return list_family_memberships_by_document(
+            self._connection_or_raise(),
+            document_id,
+        )
+
+    def list_family_memberships_by_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return a version's memberships in canonical key order."""
+        return list_family_memberships_by_document_version(
             self._connection_or_raise(),
             document_version_id,
         )
@@ -395,6 +430,43 @@ class SQLiteMetadataTransaction:
     ) -> None:
         """Create a duplicate relationship within this transaction."""
         add_duplicate_relationship(self._connection_or_raise(), relationship)
+
+    def list_family_memberships_by_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return a family's memberships within this transaction."""
+        return list_family_memberships_by_family(
+            self._connection_or_raise(),
+            family_id,
+        )
+
+    def list_family_memberships_by_document(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return a document's memberships within this transaction."""
+        return list_family_memberships_by_document(
+            self._connection_or_raise(),
+            document_id,
+        )
+
+    def list_family_memberships_by_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return a version's memberships within this transaction."""
+        return list_family_memberships_by_document_version(
+            self._connection_or_raise(),
+            document_version_id,
+        )
+
+    def add_family_membership(
+        self,
+        membership: DocumentFamilyMembership,
+    ) -> None:
+        """Create a family membership within this transaction."""
+        add_family_membership(self._connection_or_raise(), membership)
 
     def _connection_or_raise(self) -> sqlite3.Connection:
         if not self._active or self._finished:
