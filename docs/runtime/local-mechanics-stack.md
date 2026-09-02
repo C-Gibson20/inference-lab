@@ -99,5 +99,21 @@ UV_CACHE_DIR=/private/tmp/inference-lab-uv-cache \
 uv run python -c 'from pathlib import Path; import torch; from transformers import AutoModelForCausalLM, AutoTokenizer; p=Path("tests/fixtures/backends/runtime/local_mechanics"); t=AutoTokenizer.from_pretrained(p, local_files_only=True); m=AutoModelForCausalLM.from_pretrained(p, local_files_only=True); x=t("hello world", return_tensors="pt"); y=m(**x, use_cache=True); assert y.past_key_values'
 ```
 
-The adapter and its focused acceptance command are added by later RUN-02
-sub-PRs.
+The adapter and focused acceptance suite are implemented in
+`inference_lab.backends.runtime.local` and
+`tests/inference_lab/backends/runtime/test_local.py`. Run the focused suite
+offline from the repository root with:
+
+```sh
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
+uv run pytest tests/inference_lab/backends/runtime/test_local.py
+```
+
+The full repository gate remains required for completion:
+
+```sh
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest
+```

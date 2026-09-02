@@ -3,8 +3,9 @@
 The `inference_lab.backends.runtime` package defines the model-backend boundary
 used by retrieval, serving, ingest, evaluation, and later runtime scheduling.
 It provides protocols, immutable request and result values, typed errors,
-stream validation, and a deterministic fake. It does not select or integrate
-a real model implementation.
+stream validation, and a deterministic fake. RUN-02 additionally supplies a
+small local mechanics backend for the focused acceptance suite; it does not
+introduce production model selection or deployment configuration.
 
 ## Public API and protocol detection
 
@@ -112,6 +113,54 @@ limit truncated output; otherwise it reports `stop`.
 
 `temperature`, `top_p`, and `seed` are rejected explicitly. A fixed-output fake
 cannot represent their sampling semantics honestly.
+
+## RUN-02 local mechanics backend
+
+RUN-02 uses the pinned PyTorch, Transformers, Tokenizers, and Safetensors stack
+recorded in [`docs/runtime/local-mechanics-stack.md`](../runtime/local-mechanics-stack.md).
+The checked-in fixture is a one-layer GPT-2-compatible causal model and a
+project-owned BPE tokeniser. It is CPU-only, loaded from an explicit local
+directory, and never acquires model artefacts from a network or model registry.
+The fixture is for runtime mechanics and contract evidence, not answer quality,
+production sizing, or 27B-model feasibility.
+
+`LocalCausalBackend` is generation-only. Its metadata advertises streaming,
+cancellation, and token usage, and does not advertise embedding, reranking, or
+batching. Loading is explicit and idempotent while ready; closing is idempotent
+and permanently prevents reuse. The backend uses the minimum of its configured
+context limit and the model's declared context limit.
+
+Prompt accounting is based on the complete string rendered by the versioned
+chat template, followed by the fast BPE tokeniser. The rendered prompt is not
+reconstructed from message lengths. Generation is greedy and repeatable for
+the pinned fixture; sampling options (`temperature`, `top_p`, and `seed`) are
+rejected because this backend does not implement their semantics. Usage reports
+the rendered input token count, generated token count, and their total. Stop
+sequences are buffered across token and delta boundaries and matched text is
+never emitted.
+
+Generation uses the model's native past/KV state for autoregressive
+continuation and returns an asynchronous stream validated by the RUN-01
+stream adapter. The implementation-only `LocalMechanicsHarness` compares full
+uncached execution with repeated and partial-prefix native continuation,
+including next-token selection and logits equivalence. It records token counts,
+cache outcomes, and stable identity only; it does not expose cache handles,
+ownership, persistence, eviction, memory bytes, or a public cache protocol.
+Those lifecycle and accounting concerns remain downstream work for RUN-07 and
+RUN-03 respectively.
+
+The focused offline CPU acceptance suite is:
+
+```sh
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
+uv run pytest tests/inference_lab/backends/runtime/test_local.py
+```
+
+The normal repository gate remains authoritative and must also pass Ruff,
+Ruff format checking, Pyright, and the complete Pytest suite. RUN-02 logging
+uses the runtime policy: lifecycle records at `INFO`, mechanics at `DEBUG`,
+failures at `ERROR`, and no prompts, generated chunks, raw exception messages,
+credentials, or sensitive paths.
 
 ## Logging and privacy
 
