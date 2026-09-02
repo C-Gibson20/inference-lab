@@ -21,6 +21,10 @@ from inference_lab.backends.runtime import (
     LifecycleBackend,
     LocalCausalBackend,
 )
+from inference_lab.backends.runtime.local import (
+    CacheObservationOutcome,
+    LocalMechanicsHarness,
+)
 
 FIXTURE_DIR = Path("tests/fixtures/backends/runtime/local_mechanics")
 
@@ -301,3 +305,136 @@ def test_local_backend_cancellation_stops_without_completion() -> None:
         assert follow_up_events[-1].usage is not None
 
     asyncio.run(consume())
+
+
+def test_mechanics_harness_proves_exact_repeated_prefix_equivalence() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(messages=(GenerationMessage("user", "hello"),))
+
+    observation = LocalMechanicsHarness(backend).observe_prefixes(request, request)
+
+    assert observation.rendered_input_tokens == 4
+    assert observation.common_prefix_tokens == 4
+    assert observation.tokens_evaluated_without_cache == 4
+    assert observation.tokens_evaluated_after_cache == 0
+    assert observation.cache_outcomes == (
+        CacheObservationOutcome.CREATED,
+        CacheObservationOutcome.REUSED,
+        CacheObservationOutcome.CLEARED,
+    )
+    assert observation.logits_equivalent is True
+    assert observation.selection_equivalent is True
+
+
+def test_mechanics_harness_proves_partial_prefix_equivalence() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    first = GenerationRequest(messages=(GenerationMessage("user", "hello"),))
+    second = GenerationRequest(messages=(GenerationMessage("user", "hello world"),))
+
+    observation = LocalMechanicsHarness(backend).observe_prefixes(first, second)
+
+    assert observation.common_prefix_tokens == 3
+    assert observation.tokens_evaluated_without_cache == 5
+    assert observation.tokens_evaluated_after_cache == 2
+    assert observation.logits_equivalent is True
+    assert observation.selection_equivalent is True
+
+
+@pytest.mark.parametrize(
+    ("first_token_ids", "second_token_ids", "expected_common"),
+    [
+        ((1, 2, 3), (1, 2, 4), 2),
+        ((1, 2), (3, 4), 0),
+    ],
+)
+def test_mechanics_harness_records_one_token_difference_and_no_prefix(
+    first_token_ids: tuple[int, ...],
+    second_token_ids: tuple[int, ...],
+    expected_common: int,
+) -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+
+    observation = LocalMechanicsHarness(backend).observe_token_prefixes(
+        first_token_ids, second_token_ids
+    )
+
+    assert observation.common_prefix_tokens == expected_common
+    assert observation.tokens_evaluated_without_cache == len(second_token_ids)
+    if expected_common:
+        assert observation.cache_outcomes == (
+            CacheObservationOutcome.CREATED,
+            CacheObservationOutcome.REUSED,
+            CacheObservationOutcome.CLEARED,
+        )
+        assert observation.tokens_evaluated_after_cache == (
+            len(second_token_ids) - expected_common
+        )
+        assert observation.logits_equivalent is True
+        assert observation.selection_equivalent is True
+    else:
+        assert observation.cache_outcomes == (
+            CacheObservationOutcome.REJECTED,
+            CacheObservationOutcome.CLEARED,
+        )
+        assert observation.tokens_evaluated_after_cache == 0
+        assert observation.logits_equivalent is None
+        assert observation.selection_equivalent is None
+
+
+def test_mechanics_harness_rejects_incompatible_cache_identity() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(messages=(GenerationMessage("user", "hello"),))
+
+    observation = LocalMechanicsHarness(backend).observe_prefixes(
+        request,
+        request,
+        cache_revision="incompatible-revision",
+    )
+
+    assert observation.cache_outcomes == (
+        CacheObservationOutcome.REJECTED,
+        CacheObservationOutcome.CLEARED,
+    )
+    assert observation.tokens_evaluated_after_cache == 0
+    assert observation.logits_equivalent is None
+    assert observation.selection_equivalent is None
+
+
+def test_mechanics_observation_is_immutable_and_payload_free() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(messages=(GenerationMessage("user", "hello"),))
+    observation = LocalMechanicsHarness(backend).observe_prefixes(request, request)
+
+    with pytest.raises(AttributeError):
+        observation.common_prefix_tokens = 0  # type: ignore[misc]
+    assert "hello" not in repr(observation)
+    assert "1, 5, 40" not in repr(observation)
+
+
+def test_mechanics_harness_clears_cache_after_failure() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    marker = "private-cache-failure-marker"
+
+    class FailingModel:
+        config = SimpleNamespace(eos_token_id=2)
+
+        def __call__(self, **_kwargs: object) -> None:
+            raise RuntimeError(marker)
+
+    setattr(backend, "_model", FailingModel())
+
+    with pytest.raises(BackendExecutionError) as error:
+        LocalMechanicsHarness(backend).observe_token_prefixes(
+            (1, 5, 40),
+            (1, 5, 40, 44),
+        )
+
+    assert backend._active_cache_state is None
+    assert marker not in str(error.value)
+    assert error.value.__cause__ is None
