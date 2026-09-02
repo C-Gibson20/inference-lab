@@ -17,12 +17,21 @@ from inference_lab.backends.runtime.fake import (
 )
 from inference_lab.backends.runtime.local import LocalCausalBackend
 from inference_lab.backends.runtime.memory import (
+    CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION,
+    SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS,
+    BudgetComparison,
+    BudgetState,
+    Completeness,
     ComponentRole,
     ContributionKind,
     MemoryAccountingAdapter,
     MemoryAdapterIdentity,
+    MemoryBudget,
     MemoryMeasurement,
+    MemorySnapshot,
     MemorySpace,
+    MemoryTotal,
+    RollupReconciliation,
 )
 from inference_lab.backends.runtime.protocols import (
     EmbeddingBackend,
@@ -53,6 +62,8 @@ from inference_lab.backends.runtime.types import (
 )
 
 __all__ = [
+    "CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION",
+    "SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS",
     "BackendCancelledError",
     "BackendCapability",
     "BackendClosedError",
@@ -64,6 +75,9 @@ __all__ = [
     "BackendProtocolError",
     "BackendRequestError",
     "BackendResourceError",
+    "BudgetComparison",
+    "BudgetState",
+    "Completeness",
     "ComponentRole",
     "ContributionKind",
     "EmbeddingBackend",
@@ -86,12 +100,16 @@ __all__ = [
     "LocalCausalBackend",
     "MemoryAccountingAdapter",
     "MemoryAdapterIdentity",
+    "MemoryBudget",
     "MemoryMeasurement",
+    "MemorySnapshot",
     "MemorySpace",
+    "MemoryTotal",
     "RerankCandidate",
     "RerankRequest",
     "RerankResult",
     "RerankerBackend",
+    "RollupReconciliation",
     "ScoredCandidate",
     "validate_generation_stream",
 ]
