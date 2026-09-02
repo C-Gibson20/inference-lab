@@ -15,6 +15,7 @@ from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage.errors import (
     CorruptStorageError,
     RepositoryUnavailableError,
+    StorageConflictError,
 )
 
 _MEMBERSHIPS_BY_FAMILY = """SELECT family_id, document_id, document_version_id
@@ -82,6 +83,32 @@ def add_duplicate_relationship(
         raise TypeError("relationship must be a DuplicateRelationship.")
 
     try:
+        endpoints = connection.execute(
+            """SELECT
+                first.content_hash_algorithm AS first_algorithm,
+                first.content_hash_digest AS first_digest,
+                second.content_hash_algorithm AS second_algorithm,
+                second.content_hash_digest AS second_digest
+            FROM document_versions AS first
+            JOIN document_versions AS second
+                ON second.document_version_id = ?
+            WHERE first.document_version_id = ?""",
+            (
+                relationship.second_version_id.as_str(),
+                relationship.first_version_id.as_str(),
+            ),
+        ).fetchone()
+        if endpoints is None:
+            raise StorageConflictError()
+        if (
+            endpoints["first_algorithm"],
+            endpoints["first_digest"],
+        ) != (
+            endpoints["second_algorithm"],
+            endpoints["second_digest"],
+        ):
+            raise StorageConflictError()
+
         row = connection.execute(
             """SELECT duplicate_class, first_version_id, second_version_id
             FROM duplicate_relationships
@@ -104,7 +131,7 @@ def add_duplicate_relationship(
             ) VALUES (?, ?, ?)""",
             relationship.key(),
         )
-    except CorruptStorageError:
+    except (CorruptStorageError, StorageConflictError):
         raise
     except sqlite3.Error as error:
         raise translate_sqlite_error(

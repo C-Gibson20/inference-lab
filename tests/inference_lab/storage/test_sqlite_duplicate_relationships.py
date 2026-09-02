@@ -45,7 +45,10 @@ def _open_repository(path: Path) -> SQLiteMetadataRepository:
     )
 
 
-def _version(version_id: DocumentVersionId, digest_character: str) -> DocumentVersion:
+def _version(
+    version_id: DocumentVersionId,
+    digest_character: str = "a",
+) -> DocumentVersion:
     return DocumentVersion(
         version_id,
         _DOCUMENT_ID,
@@ -59,8 +62,8 @@ def _add_versions(
 ) -> None:
     with repository.transaction() as transaction:
         transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
-        for index, version_id in enumerate(version_ids, start=1):
-            transaction.add_document_version(_version(version_id, str(index)))
+        for version_id in version_ids:
+            transaction.add_document_version(_version(version_id))
 
 
 def test_duplicate_relationships_round_trip_and_list_by_either_endpoint(
@@ -125,6 +128,25 @@ def test_missing_duplicate_endpoint_rolls_back_the_composite_write(
 
         assert repository.get_document(_DOCUMENT_ID) is None
         assert repository.get_document_version(_FIRST_VERSION_ID) is None
+        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == ()
+    finally:
+        repository.close()
+
+
+def test_byte_identical_relationship_rejects_mismatched_content_hashes(
+    tmp_path: Path,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    with repository.transaction() as transaction:
+        transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
+        transaction.add_document_version(_version(_FIRST_VERSION_ID))
+        transaction.add_document_version(_version(_SECOND_VERSION_ID, "b"))
+
+    try:
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.add_duplicate_relationship(_FIRST_RELATIONSHIP)
+
         assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == ()
     finally:
         repository.close()

@@ -45,7 +45,7 @@ _FIRST_VERSION = DocumentVersion(
 _SECOND_VERSION = DocumentVersion(
     _SECOND_VERSION_ID,
     _SECOND_DOCUMENT_ID,
-    ContentHash(HashAlgorithm.SHA256, "b" * 64),
+    ContentHash(HashAlgorithm.SHA256, "a" * 64),
 )
 _DUPLICATE = DuplicateRelationship(
     _FIRST_VERSION_ID,
