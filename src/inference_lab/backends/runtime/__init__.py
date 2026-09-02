@@ -16,6 +16,14 @@ from inference_lab.backends.runtime.fake import (
     FakeFailureMode,
 )
 from inference_lab.backends.runtime.local import LocalCausalBackend
+from inference_lab.backends.runtime.memory import (
+    ComponentRole,
+    ContributionKind,
+    MemoryAccountingAdapter,
+    MemoryAdapterIdentity,
+    MemoryMeasurement,
+    MemorySpace,
+)
 from inference_lab.backends.runtime.protocols import (
     EmbeddingBackend,
     GeneratorBackend,
@@ -56,6 +64,8 @@ __all__ = [
     "BackendProtocolError",
     "BackendRequestError",
     "BackendResourceError",
+    "ComponentRole",
+    "ContributionKind",
     "EmbeddingBackend",
     "EmbeddingOptions",
     "EmbeddingRequest",
@@ -74,6 +84,10 @@ __all__ = [
     "GeneratorBackend",
     "LifecycleBackend",
     "LocalCausalBackend",
+    "MemoryAccountingAdapter",
+    "MemoryAdapterIdentity",
+    "MemoryMeasurement",
+    "MemorySpace",
     "RerankCandidate",
     "RerankRequest",
     "RerankResult",
