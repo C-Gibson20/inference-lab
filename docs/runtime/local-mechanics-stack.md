@@ -60,9 +60,10 @@ The current artefact identities are:
 | `tokenizer.json` | `6f4399da12154ba12fa4c43f689201cce5945c4b4ac544e92762d3004b35e794` |
 | `chat_template.jinja` | `fb9aa64d5765e07f84beacb7326c5947bc7d39ab187e808dee99e2c6fa07b56d` |
 
-The model, tokeniser, chat-template, and generation-adapter identities must be
-combined into the backend revision once the adapter is implemented. Any
-mechanics change requires refreshed reviewed goldens and a new revision.
+The current `LocalCausalBackend` revision combines the model, tokeniser,
+chat-template, and prompt-rendering identities as
+`fixture-20260902-model-b00e17e66e7913bf56c0d9d063f8c905fd124c8939c2ad7230a8741c708bd60a-tokeniser-6f4399da12154ba12fa4c43f689201cce5945c4b4ac544e92762d3004b35e794-template-fb9aa64d5765e07f84beacb7326c5947bc7d39ab187e808dee99e2c6fa07b56d-prompt-v1`.
+Any mechanics change requires refreshed reviewed goldens and a new revision.
 
 ## Footprint
 
