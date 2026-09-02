@@ -9,7 +9,13 @@ from typing import Self
 
 import structlog
 
-from inference_lab.provenance import CorpusId, DocumentId, DocumentIdentity
+from inference_lab.provenance import (
+    CorpusId,
+    DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
+    DocumentVersionId,
+)
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     translate_sqlite_error,
@@ -30,6 +36,11 @@ from inference_lab.storage._sqlite_migration_execution import (
     utc_now,
 )
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
+from inference_lab.storage._sqlite_versions import (
+    add_document_version,
+    get_document_version,
+    list_document_versions,
+)
 from inference_lab.storage.errors import (
     RepositoryClosedError,
     RepositoryUnavailableError,
@@ -103,6 +114,23 @@ class SQLiteMetadataRepository:
     def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
         """Return a logical document, or ``None`` when absent."""
         return get_document(self._connection_or_raise(), document_id)
+
+    def get_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> DocumentVersion | None:
+        """Return an immutable document version, or ``None`` when absent."""
+        return get_document_version(
+            self._connection_or_raise(),
+            document_version_id,
+        )
+
+    def list_document_versions(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return a document's versions in canonical identifier order."""
+        return list_document_versions(self._connection_or_raise(), document_id)
 
     def transaction(self) -> SQLiteMetadataTransaction:
         """Return a new write transaction that starts on context entry."""
@@ -249,6 +277,27 @@ class SQLiteMetadataTransaction:
     def add_document(self, document: DocumentIdentity) -> None:
         """Create a logical document within this transaction."""
         add_document(self._connection_or_raise(), document)
+
+    def get_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> DocumentVersion | None:
+        """Return an immutable version within this transaction."""
+        return get_document_version(
+            self._connection_or_raise(),
+            document_version_id,
+        )
+
+    def list_document_versions(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return a document's versions within this transaction."""
+        return list_document_versions(self._connection_or_raise(), document_id)
+
+    def add_document_version(self, document_version: DocumentVersion) -> None:
+        """Create a version and its external identifiers atomically."""
+        add_document_version(self._connection_or_raise(), document_version)
 
     def _connection_or_raise(self) -> sqlite3.Connection:
         if not self._active or self._finished:
