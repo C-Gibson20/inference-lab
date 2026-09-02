@@ -1,5 +1,8 @@
 import asyncio
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -10,6 +13,7 @@ from inference_lab.backends.runtime import (
     BackendNotReadyError,
     BackendOperation,
     BackendRequestError,
+    GenerationEvent,
     GenerationMessage,
     GenerationOptions,
     GenerationRequest,
@@ -183,14 +187,117 @@ def test_local_backend_rejects_prompt_with_no_context_for_output() -> None:
         backend._prepare_generation(request)
 
 
-def test_generation_remains_an_explicit_boundary_until_streaming_sub_pr() -> None:
+def test_local_backend_streams_greedy_deltas_and_exact_usage() -> None:
     backend = LocalCausalBackend(FIXTURE_DIR)
     backend.load()
+    request = GenerationRequest(
+        messages=(GenerationMessage("user", "hello"),),
+        options=GenerationOptions(maximum_output_tokens=3),
+    )
+
+    async def consume() -> list[GenerationEvent]:
+        return [event async for event in backend.generate(request)]
+
+    events = asyncio.run(consume())
+
+    assert [event.sequence_number for event in events] == [0, 1, 2]
+    assert all(event.text_delta for event in events[:2])
+    completion = events[-1]
+    assert completion.finish_reason == "length"
+    assert completion.usage is not None
+    assert completion.usage.input_tokens == 4
+    assert completion.usage.output_tokens == 3
+    assert completion.usage.total_tokens == 7
+
+
+def test_local_backend_generation_is_repeatable() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(
+        messages=(GenerationMessage("user", "hello"),),
+        options=GenerationOptions(maximum_output_tokens=4),
+    )
+
+    async def consume() -> tuple[str, ...]:
+        chunks: list[str] = []
+        async for event in backend.generate(request):
+            if event.text_delta is not None:
+                chunks.append(event.text_delta)
+        return tuple(chunks)
+
+    assert asyncio.run(consume()) == asyncio.run(consume())
+
+
+def test_local_backend_buffers_and_excludes_a_stop_sequence() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(
+        messages=(GenerationMessage("user", "hello"),),
+        options=GenerationOptions(stop_sequences=(" ",)),
+    )
+
+    async def consume() -> list[GenerationEvent]:
+        return [event async for event in backend.generate(request)]
+
+    events = asyncio.run(consume())
+
+    assert " " not in "".join(event.text_delta or "" for event in events)
+    assert events[-1].finish_reason == "stop"
+    assert events[-1].usage is not None
+    assert events[-1].usage.output_tokens == 3
+
+
+def test_local_backend_translates_model_failures_without_raw_details() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    marker = "private-model-failure-marker"
+
+    class FailingModel:
+        config = SimpleNamespace(eos_token_id=2)
+
+        def __call__(self, **_kwargs: object) -> None:
+            raise RuntimeError(marker)
+
+    setattr(backend, "_model", FailingModel())
     request = GenerationRequest(messages=(GenerationMessage("user", "hello"),))
 
     async def consume() -> None:
-        with pytest.raises(BackendRequestError):
-            async for _event in backend.generate(request):
-                pass
+        async for _event in backend.generate(request):
+            pass
+
+    with pytest.raises(BackendExecutionError) as error:
+        asyncio.run(consume())
+
+    assert marker not in str(error.value)
+    assert error.value.__cause__ is None
+
+
+def test_local_backend_cancellation_stops_without_completion() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    request = GenerationRequest(
+        messages=(GenerationMessage("user", "hello"),),
+        options=GenerationOptions(maximum_output_tokens=8),
+    )
+
+    async def consume() -> None:
+        stream = cast(AsyncGenerator[GenerationEvent, None], backend.generate(request))
+        first_event = await anext(stream)
+        assert first_event.text_delta is not None
+
+        async def read_next_event() -> GenerationEvent:
+            return await anext(stream)
+
+        pending_event = asyncio.create_task(read_next_event())
+        pending_event.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending_event
+
+        await stream.aclose()
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+
+        follow_up_events = [event async for event in backend.generate(request)]
+        assert follow_up_events[-1].usage is not None
 
     asyncio.run(consume())

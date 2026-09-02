@@ -1,26 +1,35 @@
 """Local causal-model backend boundary for runtime mechanics fixtures."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import urlsplit
 
 import structlog
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.cache_utils import DynamicCache
 
 from inference_lab.backends.runtime._validation import validate_integer
 from inference_lab.backends.runtime.errors import (
     BackendClosedError,
+    BackendError,
     BackendExecutionError,
     BackendNotReadyError,
     BackendRequestError,
+    BackendResourceError,
 )
+from inference_lab.backends.runtime.streaming import validate_generation_stream
 from inference_lab.backends.runtime.types import (
     BackendCapability,
     BackendMetadata,
     BackendOperation,
     GenerationEvent,
+    GenerationEventType,
     GenerationRequest,
+    GenerationUsage,
 )
 
 _LOGGER = structlog.get_logger(__name__)
@@ -40,6 +49,20 @@ _MODEL_REVISION = (
     "template-fb9aa64d5765e07f84beacb7326c5947bc7d39ab187e808dee99e2c6fa07b56d-"
     "prompt-v1"
 )
+
+
+class _Tokeniser(Protocol):
+    """Minimal tokeniser surface required by the streaming implementation."""
+
+    def decode(
+        self,
+        token_ids: list[int],
+        *,
+        skip_special_tokens: bool,
+        clean_up_tokenization_spaces: bool,
+    ) -> str:
+        """Decode generated token IDs into text."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,15 +208,212 @@ class LocalCausalBackend:
         )
 
     def generate(self, request: GenerationRequest) -> AsyncIterator[GenerationEvent]:
-        """Reserve the generation boundary for the following RUN-02 sub-PR."""
+        """Return a validated asynchronous stream for one generation request."""
         self._ensure_available()
-        self._prepare_generation(request)
+        prepared = self._prepare_generation(request)
+        _LOGGER.debug(
+            "backend_generation_started",
+            pipeline_stage="runtime",
+            backend_name=self.metadata.backend_name,
+            operation=BackendOperation.GENERATE.value,
+            input_tokens=prepared.input_tokens,
+            output_token_budget=prepared.available_output_tokens,
+        )
+        return validate_generation_stream(self._generate_events(request, prepared))
 
-        async def unsupported_generation() -> AsyncIterator[GenerationEvent]:
-            raise BackendRequestError()
-            yield  # pragma: no cover
+    async def _generate_events(
+        self,
+        request: GenerationRequest,
+        prepared: _PreparedGeneration,
+    ) -> AsyncIterator[GenerationEvent]:
+        """Generate greedy tokens and expose only validated stream events."""
+        model = self._model
+        tokeniser = self._tokeniser
+        if model is None or tokeniser is None:
+            raise BackendNotReadyError()
 
-        return unsupported_generation()
+        generated_ids: list[int] = []
+        emitted_text = ""
+        sequence_number = 0
+        finish_reason = "length"
+        attention_mask = torch.ones((1, prepared.input_tokens), dtype=torch.long)
+        input_ids = torch.tensor([prepared.input_ids], dtype=torch.long)
+        outputs = None
+        past_key_values = None
+        output_tokens = 0
+
+        try:
+            with torch.inference_mode():
+                await asyncio.sleep(0)
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=True,
+                )
+                past_key_values = DynamicCache.from_legacy_cache(
+                    outputs.past_key_values
+                )
+                for _ in range(prepared.available_output_tokens):
+                    self._ensure_available()
+                    next_token = int(torch.argmax(outputs.logits[:, -1, :], dim=-1))
+                    generated_ids.append(next_token)
+                    finish_reason = (
+                        "stop" if self._is_end_token(model, next_token) else "length"
+                    )
+
+                    decoded = self._decode(tokeniser, generated_ids)
+                    stop_position = self._stop_position(
+                        decoded, request.options.stop_sequences
+                    )
+                    if stop_position is not None:
+                        visible_text = decoded[:stop_position]
+                        finish_reason = "stop"
+                    else:
+                        visible_text = decoded
+
+                    safe_length = self._safe_decoded_length(
+                        visible_text,
+                        request.options.stop_sequences,
+                        stop_position is not None,
+                    )
+                    safe_text = visible_text[:safe_length]
+                    delta = safe_text[len(emitted_text) :]
+                    if delta:
+                        emitted_text = safe_text
+                        yield GenerationEvent(
+                            event_type=GenerationEventType.DELTA,
+                            sequence_number=sequence_number,
+                            text_delta=delta,
+                        )
+                        sequence_number += 1
+
+                    if stop_position is not None or finish_reason == "stop":
+                        break
+
+                    await asyncio.sleep(0)
+                    input_ids = torch.tensor([[next_token]], dtype=torch.long)
+                    attention_mask = torch.cat(
+                        (attention_mask, torch.ones((1, 1), dtype=torch.long)),
+                        dim=1,
+                    )
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        past_key_values=past_key_values,
+                        use_cache=True,
+                    )
+                    past_key_values = outputs.past_key_values
+
+                if finish_reason == "length":
+                    decoded = self._decode(tokeniser, generated_ids)
+                    stop_position = self._stop_position(
+                        decoded, request.options.stop_sequences
+                    )
+                    visible_text = (
+                        decoded[:stop_position]
+                        if stop_position is not None
+                        else decoded
+                    )
+                    delta = visible_text[len(emitted_text) :]
+                    if delta:
+                        emitted_text = visible_text
+                        yield GenerationEvent(
+                            event_type=GenerationEventType.DELTA,
+                            sequence_number=sequence_number,
+                            text_delta=delta,
+                        )
+                        sequence_number += 1
+        except asyncio.CancelledError:
+            raise
+        except BackendError:
+            raise
+        except MemoryError:
+            _LOGGER.error(
+                "backend_generation_failed",
+                pipeline_stage="runtime",
+                backend_name=self.metadata.backend_name,
+                operation=BackendOperation.GENERATE.value,
+                failure_category="resource",
+                retryable=True,
+            )
+            raise BackendResourceError() from None
+        except Exception:
+            _LOGGER.error(
+                "backend_generation_failed",
+                pipeline_stage="runtime",
+                backend_name=self.metadata.backend_name,
+                operation=BackendOperation.GENERATE.value,
+                failure_category="execution",
+                retryable=False,
+            )
+            raise BackendExecutionError() from None
+        finally:
+            output_tokens = len(generated_ids)
+            del past_key_values
+            del outputs
+            del input_ids
+            del attention_mask
+            generated_ids.clear()
+
+        yield GenerationEvent(
+            event_type=GenerationEventType.COMPLETED,
+            sequence_number=sequence_number,
+            finish_reason=finish_reason,
+            usage=GenerationUsage(
+                input_tokens=prepared.input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=prepared.input_tokens + output_tokens,
+            ),
+        )
+
+    @staticmethod
+    def _is_end_token(model: object, token_id: int) -> bool:
+        """Return whether a generated token is one of the model end tokens."""
+        end_token_ids = getattr(getattr(model, "config", None), "eos_token_id", None)
+        if isinstance(end_token_ids, int):
+            return token_id == end_token_ids
+        return isinstance(end_token_ids, list) and token_id in end_token_ids
+
+    @staticmethod
+    def _decode(tokeniser: _Tokeniser, token_ids: list[int]) -> str:
+        """Decode generated token IDs without exposing backend failures."""
+        try:
+            decoded = tokeniser.decode(
+                token_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+        except Exception:
+            raise BackendExecutionError() from None
+        if not isinstance(decoded, str):
+            raise BackendExecutionError()
+        return decoded
+
+    @staticmethod
+    def _stop_position(text: str, stop_sequences: tuple[str, ...]) -> int | None:
+        """Return the earliest matched stop-sequence position, if any."""
+        positions = tuple(
+            position
+            for sequence in stop_sequences
+            if (position := text.find(sequence)) >= 0
+        )
+        return min(positions) if positions else None
+
+    @staticmethod
+    def _safe_decoded_length(
+        text: str,
+        stop_sequences: tuple[str, ...],
+        stop_matched: bool,
+    ) -> int:
+        """Keep a suffix buffered while it could become a stop sequence."""
+        if stop_matched or not stop_sequences:
+            return len(text)
+        buffered_length = 0
+        for sequence in stop_sequences:
+            for length in range(1, min(len(sequence), len(text)) + 1):
+                if text.endswith(sequence[:length]):
+                    buffered_length = max(buffered_length, length)
+        return len(text) - buffered_length
 
     @property
     def effective_context_limit_tokens(self) -> int:
