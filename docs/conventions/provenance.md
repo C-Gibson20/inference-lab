@@ -15,6 +15,7 @@ The system uses a distinct opaque identifier type for each identity domain:
 | --- | --- | --- | --- |
 | `document_id` | `DocumentId` | One logical document across source versions | Stable across file moves, renames, and unchanged re-ingest |
 | `document_version_id` | `DocumentVersionId` | One immutable source version | Changes when the source artefact changes |
+| `source_observation_id` | `SourceObservationId` | One independently observed input source | Stable across moves and renames; distinct for independently citable duplicate sources |
 | `document_family_id` | `DocumentFamilyId` | One publication or patent family independently of its member documents | Stable for the family membership represented by the record |
 | `record_id` | `RecordId` | One canonical or derived record | Stable for the lifetime of that record |
 | `corpus_id` | `CorpusId` | One persistent corpus | Stable across corpus snapshots |
@@ -41,6 +42,14 @@ Generation does not decide whether an incoming document should reuse an
 existing identity. Identity resolution belongs to ingest and storage. Content
 hashes support unchanged-ingest detection and duplicate analysis but do not
 replace primary identifiers.
+
+`SourceObservationId` supplies source-continuity evidence without making a
+filesystem path an identity. Discovery allocates one for a newly observed
+source and retains it when that source moves or is renamed. A separately
+observed source receives a distinct identifier even when its bytes match an
+existing source. The identity resolver therefore receives same-observation
+continuity candidates separately from global content-hash and external-
+identifier candidates.
 
 ## Stability rules
 

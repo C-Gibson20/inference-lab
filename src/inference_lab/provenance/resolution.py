@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from inference_lab.provenance.identifiers import DocumentVersionId
+from inference_lab.provenance.identifiers import DocumentVersionId, SourceObservationId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship
 from inference_lab.provenance.values import (
@@ -22,6 +22,7 @@ class ResolutionReason(StrEnum):
     """Reasons explaining a deterministic resolution outcome."""
 
     EXACT_HASH_MATCH = "exact_hash_match"
+    SOURCE_CONTINUITY_MATCH = "source_continuity_match"
     EXTERNAL_IDENTIFIER_MATCH = "external_identifier_match"
     NO_MATCH = "no_match"
     DUPLICATE_HASH_MATCH = "duplicate_hash_match"
@@ -67,36 +68,108 @@ class IdentityResolutionRequest:
     """Evidence and candidates supplied to identity resolution."""
 
     content_hash: ContentHash
+    source_observation_id: SourceObservationId
     external_identifiers: tuple[ExternalIdentifier, ...] = ()
-    candidates: tuple[DocumentVersion, ...] = ()
+    continuity_candidates: tuple[DocumentVersion, ...] = ()
+    content_hash_candidates: tuple[DocumentVersion, ...] = ()
+    external_identifier_candidates: tuple[DocumentVersion, ...] = ()
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the request fields and candidate evidence roles."""
         if not isinstance(self.content_hash, ContentHash):
             raise TypeError("content_hash must be a ContentHash.")
+        if not isinstance(self.source_observation_id, SourceObservationId):
+            raise TypeError("source_observation_id must be a SourceObservationId.")
         validate_external_identifiers(self.external_identifiers)
-        _validate_candidates(self.candidates)
+        _validate_candidates(self.continuity_candidates)
+        _validate_candidates(self.content_hash_candidates)
+        _validate_candidates(self.external_identifier_candidates)
+        self._validate_candidate_roles()
+
+    def _validate_candidate_roles(self) -> None:
+        """Validate candidate evidence and cross-role representations."""
+        if any(
+            candidate.content_hash != self.content_hash
+            for candidate in self.content_hash_candidates
+        ):
+            raise InvalidResolutionError(
+                "content_hash_candidates must match the requested content hash."
+            )
+
+        representations: dict[DocumentVersionId, DocumentVersion] = {}
+        for role in (
+            self.continuity_candidates,
+            self.content_hash_candidates,
+            self.external_identifier_candidates,
+        ):
+            for candidate in role:
+                existing = representations.setdefault(
+                    candidate.document_version_id, candidate
+                )
+                if existing != candidate:
+                    raise InvalidResolutionError(
+                        "candidate roles must use one representation per version."
+                    )
+
+    @property
+    def all_candidates(self) -> tuple[DocumentVersion, ...]:
+        """Return unique candidates across evidence roles in canonical order."""
+        candidates = {
+            candidate.document_version_id: candidate
+            for role in (
+                self.continuity_candidates,
+                self.content_hash_candidates,
+                self.external_identifier_candidates,
+            )
+            for candidate in role
+        }
+        return tuple(
+            sorted(
+                candidates.values(),
+                key=lambda candidate: candidate.document_version_id.as_str(),
+            )
+        )
 
     def as_dict(self) -> dict[str, object]:
         """Return deterministic, JSON-compatible request data."""
         return {
             "content_hash": self.content_hash.as_str(),
+            "source_observation_id": self.source_observation_id.as_str(),
             "external_identifiers": [
                 {"namespace": item.namespace, "value": item.value}
                 for item in self.external_identifiers
             ],
-            "candidates": [
-                {
-                    "document_id": candidate.document_id.as_str(),
-                    "document_version_id": candidate.document_version_id.as_str(),
-                    "content_hash": candidate.content_hash.as_str(),
-                    "external_identifiers": [
-                        {"namespace": item.namespace, "value": item.value}
-                        for item in candidate.external_identifiers
-                    ],
-                }
-                for candidate in self.candidates
-            ],
+            "continuity_candidates": self._candidate_payloads(
+                self.continuity_candidates
+            ),
+            "content_hash_candidates": self._candidate_payloads(
+                self.content_hash_candidates
+            ),
+            "external_identifier_candidates": self._candidate_payloads(
+                self.external_identifier_candidates
+            ),
         }
+
+    @staticmethod
+    def _candidate_payloads(
+        candidates: tuple[DocumentVersion, ...],
+    ) -> list[dict[str, object]]:
+        """Return deterministic candidate payloads for one evidence role."""
+        return [
+            {
+                "document_id": candidate.document_id.as_str(),
+                "document_version_id": candidate.document_version_id.as_str(),
+                "content_hash": candidate.content_hash.as_str(),
+                "external_identifiers": [
+                    {"namespace": item.namespace, "value": item.value}
+                    for item in candidate.external_identifiers
+                ],
+            }
+            for candidate in candidates
+        ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +184,10 @@ class IdentityResolutionOutcome:
     duplicate_relationships: tuple[DuplicateRelationship, ...] = ()
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the outcome fields and relationships."""
         if not isinstance(self.kind, ResolutionKind):
             raise TypeError("kind must be a ResolutionKind.")
         if not isinstance(self.reason, ResolutionReason):
@@ -151,7 +228,14 @@ class IdentityResolutionOutcome:
             self._require_no_relationship()
         elif self.kind is ResolutionKind.NEW_VERSION:
             self._require_assigned()
-            self._require_reason(ResolutionReason.EXTERNAL_IDENTIFIER_MATCH)
+            if self.reason not in {
+                ResolutionReason.SOURCE_CONTINUITY_MATCH,
+                ResolutionReason.EXTERNAL_IDENTIFIER_MATCH,
+            }:
+                raise InvalidResolutionError(
+                    "new_version resolution requires source continuity or "
+                    "external-identifier evidence."
+                )
             if not self.matched_version_ids:
                 raise InvalidResolutionError(
                     "new-version resolution requires a matching candidate."

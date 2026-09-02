@@ -23,6 +23,7 @@ from inference_lab.provenance.identifiers import (
     DocumentId,
     DocumentVersionId,
     RecordId,
+    SourceObservationId,
     SourceSpanId,
 )
 from inference_lab.provenance.lineage import (
@@ -133,6 +134,7 @@ __all__ = [
     "ResolutionKind",
     "ResolutionReason",
     "SourceAnchor",
+    "SourceObservationId",
     "SourceSpanId",
     "UnsupportedLineageSchemaVersionError",
     "UuidIdentityIdAllocator",

@@ -46,12 +46,8 @@ class UuidIdentityIdAllocator:
 def _hash_matches(
     request: IdentityResolutionRequest,
 ) -> tuple[DocumentVersion, ...]:
-    """Return candidates with exactly matching source hashes."""
-    return tuple(
-        candidate
-        for candidate in request.candidates
-        if candidate.content_hash == request.content_hash
-    )
+    """Return global candidates with exactly matching source hashes."""
+    return request.content_hash_candidates
 
 
 def _identifier_matches(
@@ -66,7 +62,7 @@ def _identifier_matches(
 
     return tuple(
         candidate
-        for candidate in request.candidates
+        for candidate in request.external_identifier_candidates
         if request_identifiers.intersection(
             identifier.as_tuple() for identifier in candidate.external_identifiers
         )
@@ -81,6 +77,18 @@ def _matching_document_ids(
         sorted(
             {candidate.document_id for candidate in candidates},
             key=lambda document_id: document_id.as_str(),
+        )
+    )
+
+
+def _matched_version_ids(
+    candidates: tuple[DocumentVersion, ...],
+) -> tuple[DocumentVersionId, ...]:
+    """Return unique matched version IDs in canonical order."""
+    return tuple(
+        sorted(
+            {candidate.document_version_id for candidate in candidates},
+            key=lambda version_id: version_id.as_str(),
         )
     )
 
@@ -127,7 +135,8 @@ def _new_version(
             "allocator.new_document_version_id() must return a DocumentVersionId."
         )
     if any(
-        candidate.document_version_id == version_id for candidate in request.candidates
+        candidate.document_version_id == version_id
+        for candidate in request.all_candidates
     ):
         raise InvalidResolutionError(
             "allocator returned an existing DocumentVersionId."
@@ -227,30 +236,43 @@ def resolve_identity(
     def complete(outcome: IdentityResolutionOutcome) -> IdentityResolutionOutcome:
         _log_resolution_completed(
             outcome=outcome,
-            candidate_count=len(request.candidates),
+            candidate_count=len(request.all_candidates),
             pipeline_stage=pipeline_stage,
         )
         return outcome
 
     try:
-        hash_matches = _hash_matches(request)
-        if hash_matches:
+        continuity_candidates = request.continuity_candidates
+        continuity_hash_matches = tuple(
+            candidate
+            for candidate in continuity_candidates
+            if candidate.content_hash == request.content_hash
+        )
+        if continuity_candidates:
             if any(
                 _conflicting_identifiers(request, candidate)
-                for candidate in hash_matches
+                for candidate in continuity_candidates
             ):
                 return complete(
                     IdentityResolutionOutcome(
                         kind=ResolutionKind.CONFLICT,
                         reason=ResolutionReason.CONFLICTING_EVIDENCE,
-                        matched_version_ids=tuple(
-                            candidate.document_version_id for candidate in hash_matches
-                        ),
+                        matched_version_ids=_matched_version_ids(continuity_candidates),
                     )
                 )
 
-            if len(hash_matches) == 1:
-                candidate = hash_matches[0]
+            matching_documents = _matching_document_ids(continuity_candidates)
+            if len(matching_documents) > 1 or len(continuity_hash_matches) > 1:
+                return complete(
+                    IdentityResolutionOutcome(
+                        kind=ResolutionKind.AMBIGUOUS,
+                        reason=ResolutionReason.MULTIPLE_CANDIDATES,
+                        matched_version_ids=_matched_version_ids(continuity_candidates),
+                    )
+                )
+
+            if continuity_hash_matches:
+                candidate = continuity_hash_matches[0]
                 return complete(
                     IdentityResolutionOutcome(
                         kind=ResolutionKind.UNCHANGED,
@@ -261,7 +283,23 @@ def resolve_identity(
                     )
                 )
 
-            document_id = _allocate_document_id(allocator, request.candidates)
+            document_id = continuity_candidates[0].document_id
+            version = _new_version(
+                request, document_id=document_id, allocator=allocator
+            )
+            return complete(
+                IdentityResolutionOutcome(
+                    kind=ResolutionKind.NEW_VERSION,
+                    reason=ResolutionReason.SOURCE_CONTINUITY_MATCH,
+                    document=DocumentIdentity(document_id),
+                    version=version,
+                    matched_version_ids=_matched_version_ids(continuity_candidates),
+                )
+            )
+
+        hash_matches = _hash_matches(request)
+        if hash_matches:
+            document_id = _allocate_document_id(allocator, request.all_candidates)
             version = _new_version(
                 request, document_id=document_id, allocator=allocator
             )
@@ -278,9 +316,7 @@ def resolve_identity(
                     reason=ResolutionReason.DUPLICATE_HASH_MATCH,
                     document=DocumentIdentity(document_id),
                     version=version,
-                    matched_version_ids=tuple(
-                        candidate.document_version_id for candidate in hash_matches
-                    ),
+                    matched_version_ids=_matched_version_ids(hash_matches),
                     duplicate_relationships=relationships,
                 )
             )
@@ -292,10 +328,7 @@ def resolve_identity(
                 IdentityResolutionOutcome(
                     kind=ResolutionKind.AMBIGUOUS,
                     reason=ResolutionReason.MULTIPLE_CANDIDATES,
-                    matched_version_ids=tuple(
-                        candidate.document_version_id
-                        for candidate in identifier_matches
-                    ),
+                    matched_version_ids=_matched_version_ids(identifier_matches),
                 )
             )
 
@@ -310,14 +343,11 @@ def resolve_identity(
                     reason=ResolutionReason.EXTERNAL_IDENTIFIER_MATCH,
                     document=DocumentIdentity(document_id),
                     version=version,
-                    matched_version_ids=tuple(
-                        candidate.document_version_id
-                        for candidate in identifier_matches
-                    ),
+                    matched_version_ids=_matched_version_ids(identifier_matches),
                 )
             )
 
-        document_id = _allocate_document_id(allocator, request.candidates)
+        document_id = _allocate_document_id(allocator, request.all_candidates)
         version = _new_version(request, document_id=document_id, allocator=allocator)
         return complete(
             IdentityResolutionOutcome(
@@ -330,7 +360,7 @@ def resolve_identity(
     except Exception as error:
         _log_resolution_failed(
             error=error,
-            candidate_count=len(request.candidates),
+            candidate_count=len(request.all_candidates),
             pipeline_stage=pipeline_stage,
         )
         raise
