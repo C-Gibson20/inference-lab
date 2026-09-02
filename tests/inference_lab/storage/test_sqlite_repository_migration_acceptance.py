@@ -136,8 +136,6 @@ def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
     )
     assert repository.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
-    assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == (_DUPLICATE,)
-    assert repository.list_family_memberships_by_family(_FAMILY_ID) == (_MEMBERSHIP,)
 
 
 def test_production_migrations_preserve_revision_one_graph(
@@ -152,7 +150,7 @@ def test_production_migrations_preserve_revision_one_graph(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert migrated.schema_inspection.current_revision == 4
+        assert migrated.schema_inspection.current_revision == 5
         assert migrated.get_corpus(_CORPUS_ID) == CorpusMetadata(
             _CORPUS_ID, _CORPUS_ID.as_str()
         )
@@ -163,6 +161,12 @@ def test_production_migrations_preserve_revision_one_graph(
             CorpusDocumentVersionMembership(
                 _CORPUS_ID, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID
             ),
+        )
+        assert migrated.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
+            _DUPLICATE,
+        )
+        assert migrated.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
+            _MEMBERSHIP,
         )
         _assert_complete_graph(migrated)
     finally:

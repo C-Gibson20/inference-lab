@@ -197,11 +197,13 @@ def test_document_version_is_immutable() -> None:
 
 
 def test_source_observation_state_validates_revision_and_typed_identities() -> None:
+    corpus_id = CorpusId.generate()
     source_observation_id = SourceObservationId.generate()
     document_id = DocumentId.generate()
     document_version_id = DocumentVersionId.generate()
 
     state = SourceObservationState(
+        corpus_id,
         source_observation_id,
         1,
         document_id,
@@ -211,6 +213,7 @@ def test_source_observation_state_validates_revision_and_typed_identities() -> N
     assert state.observation_revision == 1
     with pytest.raises(ValueError, match="at least one"):
         SourceObservationState(
+            corpus_id,
             source_observation_id,
             0,
             document_id,
@@ -218,6 +221,7 @@ def test_source_observation_state_validates_revision_and_typed_identities() -> N
         )
     with pytest.raises(TypeError, match="integer"):
         SourceObservationState(
+            corpus_id,
             source_observation_id,
             True,
             document_id,

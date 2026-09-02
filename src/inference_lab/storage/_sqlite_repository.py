@@ -204,91 +204,109 @@ class SQLiteMetadataRepository:
 
     def find_document_versions_by_content_hash(
         self,
+        corpus_id: CorpusId,
         content_hash: ContentHash,
     ) -> tuple[DocumentVersion, ...]:
         """Return exact-hash candidates in canonical request order."""
         return find_document_versions_by_content_hash(
             self._connection_or_raise(),
+            corpus_id,
             content_hash,
         )
 
     def find_document_versions_by_external_identifiers(
         self,
+        corpus_id: CorpusId,
         external_identifiers: tuple[ExternalIdentifier, ...],
     ) -> tuple[DocumentVersion, ...]:
         """Return unique versions matching any supplied identifier."""
         return find_document_versions_by_external_identifiers(
             self._connection_or_raise(),
+            corpus_id,
             external_identifiers,
         )
 
     def get_source_observation(
         self,
+        corpus_id: CorpusId,
         source_observation_id: SourceObservationId,
     ) -> SourceObservationState | None:
         """Return the current state for an observed source, or ``None``."""
         return get_source_observation(
             self._connection_or_raise(),
+            corpus_id,
             source_observation_id,
         )
 
     def list_source_observation_history(
         self,
+        corpus_id: CorpusId,
         source_observation_id: SourceObservationId,
     ) -> tuple[SourceObservationState, ...]:
         """Return an observed source's append-only state history."""
         return list_source_observation_history(
             self._connection_or_raise(),
+            corpus_id,
             source_observation_id,
         )
 
     def list_external_identifier_assertions(
         self,
+        corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[ExternalIdentifierAssertion, ...]:
         """Return append-only assertions for one source version."""
         return list_external_identifier_assertions(
             self._connection_or_raise(),
+            corpus_id,
             document_version_id,
         )
 
     def list_duplicate_relationships(
         self,
+        corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[DuplicateRelationship, ...]:
         """Return a version's duplicate relationships in canonical order."""
         return list_duplicate_relationships(
             self._connection_or_raise(),
+            corpus_id,
             document_version_id,
         )
 
     def list_family_memberships_by_family(
         self,
+        corpus_id: CorpusId,
         family_id: DocumentFamilyId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a family's memberships in canonical key order."""
         return list_family_memberships_by_family(
             self._connection_or_raise(),
+            corpus_id,
             family_id,
         )
 
     def list_family_memberships_by_document(
         self,
+        corpus_id: CorpusId,
         document_id: DocumentId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a document's memberships in canonical key order."""
         return list_family_memberships_by_document(
             self._connection_or_raise(),
+            corpus_id,
             document_id,
         )
 
     def list_family_memberships_by_document_version(
         self,
+        corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a version's memberships in canonical key order."""
         return list_family_memberships_by_document_version(
             self._connection_or_raise(),
+            corpus_id,
             document_version_id,
         )
 
@@ -527,44 +545,55 @@ class SQLiteMetadataTransaction:
 
     def find_document_versions_by_content_hash(
         self,
+        corpus_id: CorpusId,
         content_hash: ContentHash,
     ) -> tuple[DocumentVersion, ...]:
         """Return exact-hash candidates within this transaction."""
-        return self._execute(find_document_versions_by_content_hash, content_hash)
+        return self._execute(
+            find_document_versions_by_content_hash, corpus_id, content_hash
+        )
 
     def find_document_versions_by_external_identifiers(
         self,
+        corpus_id: CorpusId,
         external_identifiers: tuple[ExternalIdentifier, ...],
     ) -> tuple[DocumentVersion, ...]:
         """Return identifier candidates within this transaction."""
         return self._execute(
-            find_document_versions_by_external_identifiers, external_identifiers
+            find_document_versions_by_external_identifiers,
+            corpus_id,
+            external_identifiers,
         )
 
     def get_source_observation(
         self,
+        corpus_id: CorpusId,
         source_observation_id: SourceObservationId,
     ) -> SourceObservationState | None:
         """Return the current observed-source state within this transaction."""
-        return self._execute(get_source_observation, source_observation_id)
+        return self._execute(get_source_observation, corpus_id, source_observation_id)
 
     def list_source_observation_history(
         self,
+        corpus_id: CorpusId,
         source_observation_id: SourceObservationId,
     ) -> tuple[SourceObservationState, ...]:
         """Return observed-source history within this transaction."""
         return self._execute(
             list_source_observation_history,
+            corpus_id,
             source_observation_id,
         )
 
     def list_external_identifier_assertions(
         self,
+        corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[ExternalIdentifierAssertion, ...]:
         """Return identifier assertions within this transaction."""
         return self._execute(
             list_external_identifier_assertions,
+            corpus_id,
             document_version_id,
         )
 
@@ -578,6 +607,7 @@ class SQLiteMetadataTransaction:
 
     def advance_source_observation(
         self,
+        corpus_id: CorpusId,
         source_observation_id: SourceObservationId,
         *,
         expected_version_id: DocumentVersionId,
@@ -586,6 +616,7 @@ class SQLiteMetadataTransaction:
         """Atomically advance an observed source from its expected version."""
         return self._execute(
             advance_source_observation,
+            corpus_id,
             source_observation_id,
             expected_version_id=expected_version_id,
             new_version_id=new_version_id,
@@ -593,17 +624,21 @@ class SQLiteMetadataTransaction:
 
     def add_external_identifier_assertions(
         self,
+        corpus_id: CorpusId,
         assertions: tuple[ExternalIdentifierAssertion, ...],
     ) -> None:
         """Append a canonical identifier-evidence batch."""
-        self._execute(add_external_identifier_assertions, assertions)
+        self._execute(add_external_identifier_assertions, corpus_id, assertions)
 
     def list_duplicate_relationships(
         self,
+        corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[DuplicateRelationship, ...]:
         """Return duplicate relationships within this transaction."""
-        return self._execute(list_duplicate_relationships, document_version_id)
+        return self._execute(
+            list_duplicate_relationships, corpus_id, document_version_id
+        )
 
     def add_duplicate_relationship(
         self,
@@ -614,25 +649,32 @@ class SQLiteMetadataTransaction:
 
     def list_family_memberships_by_family(
         self,
+        corpus_id: CorpusId,
         family_id: DocumentFamilyId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a family's memberships within this transaction."""
-        return self._execute(list_family_memberships_by_family, family_id)
+        return self._execute(list_family_memberships_by_family, corpus_id, family_id)
 
     def list_family_memberships_by_document(
         self,
+        corpus_id: CorpusId,
         document_id: DocumentId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a document's memberships within this transaction."""
-        return self._execute(list_family_memberships_by_document, document_id)
+        return self._execute(
+            list_family_memberships_by_document, corpus_id, document_id
+        )
 
     def list_family_memberships_by_document_version(
         self,
+        corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a version's memberships within this transaction."""
         return self._execute(
-            list_family_memberships_by_document_version, document_version_id
+            list_family_memberships_by_document_version,
+            corpus_id,
+            document_version_id,
         )
 
     def add_family_membership(

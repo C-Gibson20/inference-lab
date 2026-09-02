@@ -82,6 +82,7 @@ class DocumentVersion:
 class SourceObservationState:
     """Record one append-only revision of a source-to-version association."""
 
+    corpus_id: CorpusId
     source_observation_id: SourceObservationId
     observation_revision: int
     document_id: DocumentId
@@ -92,6 +93,8 @@ class SourceObservationState:
 
     def _validate(self) -> None:
         """Validate the fields of the SourceObservationState."""
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
         if not isinstance(self.source_observation_id, SourceObservationId):
             raise TypeError("source_observation_id must be a SourceObservationId.")
         if not isinstance(self.observation_revision, int) or isinstance(

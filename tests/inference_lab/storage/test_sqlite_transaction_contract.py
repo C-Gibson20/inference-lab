@@ -7,6 +7,7 @@ from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
     DocumentFamilyId,
@@ -80,6 +81,14 @@ def _add_complete_graph(transaction: MetadataTransaction) -> None:
     transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
     transaction.add_document_version(_FIRST_VERSION)
     transaction.add_document_version(_SECOND_VERSION)
+    for version in (_FIRST_VERSION, _SECOND_VERSION):
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID,
+                version.document_id,
+                version.document_version_id,
+            )
+        )
     transaction.add_duplicate_relationship(_DUPLICATE)
     transaction.add_family_membership(_MEMBERSHIP)
 
@@ -115,10 +124,10 @@ def test_complete_metadata_graph_commits_atomically(tmp_path: Path) -> None:
             _FIRST_DOCUMENT_ID
         )
         assert repository.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
-        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == (
-            _DUPLICATE,
-        )
-        assert repository.list_family_memberships_by_family(_FAMILY_ID) == (
+        assert repository.list_duplicate_relationships(
+            _CORPUS_ID, _FIRST_VERSION_ID
+        ) == (_DUPLICATE,)
+        assert repository.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
             _MEMBERSHIP,
         )
     finally:
@@ -146,8 +155,12 @@ def test_failure_at_final_relationship_step_rolls_back_complete_graph(
         assert repository.get_document(_SECOND_DOCUMENT_ID) is None
         assert repository.get_document_version(_FIRST_VERSION_ID) is None
         assert repository.get_document_version(_SECOND_VERSION_ID) is None
-        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == ()
-        assert repository.list_family_memberships_by_family(_FAMILY_ID) == ()
+        assert (
+            repository.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == ()
+        )
+        assert (
+            repository.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == ()
+        )
     finally:
         repository.close()
 

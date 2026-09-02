@@ -71,55 +71,57 @@ class MetadataReader(Protocol):
         ...
 
     def find_document_versions_by_content_hash(
-        self, content_hash: ContentHash
+        self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:
         """Return exact-hash candidates in canonical identifier order."""
         ...
 
     def find_document_versions_by_external_identifiers(
-        self, external_identifiers: tuple[ExternalIdentifier, ...]
+        self,
+        corpus_id: CorpusId,
+        external_identifiers: tuple[ExternalIdentifier, ...],
     ) -> tuple[DocumentVersion, ...]:
         """Return unique candidates matching any supplied external identifier."""
         ...
 
     def get_source_observation(
-        self, source_observation_id: SourceObservationId
+        self, corpus_id: CorpusId, source_observation_id: SourceObservationId
     ) -> SourceObservationState | None:
         """Return the current state for an observed source, or ``None``."""
         ...
 
     def list_source_observation_history(
-        self, source_observation_id: SourceObservationId
+        self, corpus_id: CorpusId, source_observation_id: SourceObservationId
     ) -> tuple[SourceObservationState, ...]:
         """Return an observed source's append-only state history."""
         ...
 
     def list_external_identifier_assertions(
-        self, document_version_id: DocumentVersionId
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[ExternalIdentifierAssertion, ...]:
         """Return append-only identifier assertions for one source version."""
         ...
 
     def list_duplicate_relationships(
-        self, document_version_id: DocumentVersionId
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[DuplicateRelationship, ...]:
         """Return relationships involving a version in canonical key order."""
         ...
 
     def list_family_memberships_by_family(
-        self, family_id: DocumentFamilyId
+        self, corpus_id: CorpusId, family_id: DocumentFamilyId
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a family's memberships in canonical membership-key order."""
         ...
 
     def list_family_memberships_by_document(
-        self, document_id: DocumentId
+        self, corpus_id: CorpusId, document_id: DocumentId
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a document's memberships in canonical membership-key order."""
         ...
 
     def list_family_memberships_by_document_version(
-        self, document_version_id: DocumentVersionId
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a version's memberships in canonical membership-key order."""
         ...
@@ -165,6 +167,7 @@ class MetadataWriter(Protocol):
 
     def advance_source_observation(
         self,
+        corpus_id: CorpusId,
         source_observation_id: SourceObservationId,
         *,
         expected_version_id: DocumentVersionId,
@@ -174,7 +177,9 @@ class MetadataWriter(Protocol):
         ...
 
     def add_external_identifier_assertions(
-        self, assertions: tuple[ExternalIdentifierAssertion, ...]
+        self,
+        corpus_id: CorpusId,
+        assertions: tuple[ExternalIdentifierAssertion, ...],
     ) -> None:
         """Append one canonical identifier-evidence batch or accept replay."""
         ...

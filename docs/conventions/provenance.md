@@ -137,7 +137,10 @@ existing document versions into a corpus only when exactly one corpus exists.
 With no corpus, legacy records remain unassigned; with multiple corpora and any
 document versions, migration must stop without mutation because membership
 cannot be inferred safely. Legacy corpus display names default to their stable
-IDs and may be renamed explicitly after migration.
+IDs and may be renamed explicitly after migration. Legacy source observations
+and their identifier assertions may be assigned only when exactly one corpus
+exists; otherwise a non-empty source-observation store is likewise an
+ambiguous, non-mutating migration failure.
 STOR-08 owns any future portable backup/export record schema after corpus
 generations and the complete persistent-state shape exist. The lineage
 serialisation contract below remains independently versioned because PROV-03

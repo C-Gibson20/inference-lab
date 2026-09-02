@@ -17,6 +17,7 @@ _OTHER_VERSION_ID = "00000000-0000-0000-0000-000000000004"
 _FAMILY_ID = "00000000-0000-0000-0000-000000000005"
 _CORPUS_ID = "00000000-0000-0000-0000-000000000006"
 _OTHER_CORPUS_ID = "00000000-0000-0000-0000-000000000007"
+_SOURCE_OBSERVATION_ID = "00000000-0000-0000-0000-000000000008"
 _DIGEST = "a" * 64
 
 
@@ -60,7 +61,7 @@ def _insert_version(
 def test_revision_one_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 4
+    assert len(MIGRATIONS) == 5
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "initial_metadata"
     assert MIGRATIONS[0].checksum == (
@@ -80,6 +81,11 @@ def test_revision_one_is_stable_and_registry_is_valid() -> None:
     assert MIGRATIONS[3].migration_id == "corpus_catalogue_membership"
     assert MIGRATIONS[3].checksum == (
         "aa9e6a65702f728b0d5f67af695417681732a2fe20542f0d7e16e135d9bbd0db"
+    )
+    assert MIGRATIONS[4].revision == 5
+    assert MIGRATIONS[4].migration_id == "corpus_owned_source_observations"
+    assert MIGRATIONS[4].checksum == (
+        "2081ebb00c9f7f903a190dda256369c56d9d19b0322d13fa4ca3c912c3a060ca"
     )
 
 
@@ -166,6 +172,116 @@ def test_revision_four_allows_multiple_empty_legacy_corpora() -> None:
         (_CORPUS_ID, _CORPUS_ID),
         (_OTHER_CORPUS_ID, _OTHER_CORPUS_ID),
     ]
+    connection.close()
+
+
+def test_revision_five_backfills_unambiguous_source_ownership() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:3]:
+        for statement in migration.statements:
+            connection.execute(statement)
+    connection.execute("INSERT INTO corpora (corpus_id) VALUES (?)", (_CORPUS_ID,))
+    _insert_document(connection, _DOCUMENT_ID)
+    _insert_version(
+        connection,
+        version_id=_VERSION_ID,
+        document_id=_DOCUMENT_ID,
+    )
+    connection.execute(
+        """INSERT INTO source_observations (
+            source_observation_id, document_id,
+            current_document_version_id, current_revision
+        ) VALUES (?, ?, ?, 1)""",
+        (_SOURCE_OBSERVATION_ID, _DOCUMENT_ID, _VERSION_ID),
+    )
+    connection.execute(
+        """INSERT INTO source_observation_history (
+            source_observation_id, observation_revision,
+            document_id, document_version_id
+        ) VALUES (?, 1, ?, ?)""",
+        (_SOURCE_OBSERVATION_ID, _DOCUMENT_ID, _VERSION_ID),
+    )
+    connection.execute(
+        """INSERT INTO external_identifier_assertions (
+            source_observation_id, document_version_id, document_id,
+            namespace, identifier_value
+        ) VALUES (?, ?, ?, 'doi', '10.1000/migrated')""",
+        (_SOURCE_OBSERVATION_ID, _VERSION_ID, _DOCUMENT_ID),
+    )
+    for migration in MIGRATIONS[3:]:
+        for statement in migration.statements:
+            connection.execute(statement)
+
+    assert connection.execute(
+        """SELECT corpus_id, source_observation_id,
+            document_id, current_document_version_id
+        FROM source_observations"""
+    ).fetchall() == [(_CORPUS_ID, _SOURCE_OBSERVATION_ID, _DOCUMENT_ID, _VERSION_ID)]
+    assert connection.execute(
+        """SELECT corpus_id, source_observation_id,
+            document_id, document_version_id
+        FROM source_observation_history"""
+    ).fetchall() == [(_CORPUS_ID, _SOURCE_OBSERVATION_ID, _DOCUMENT_ID, _VERSION_ID)]
+    assert connection.execute(
+        """SELECT corpus_id, source_observation_id,
+            document_version_id, namespace, identifier_value
+        FROM external_identifier_assertions"""
+    ).fetchall() == [
+        (
+            _CORPUS_ID,
+            _SOURCE_OBSERVATION_ID,
+            _VERSION_ID,
+            "doi",
+            "10.1000/migrated",
+        )
+    ]
+    connection.close()
+
+
+def test_revision_five_rejects_ambiguous_source_ownership_atomically() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:4]:
+        for statement in migration.statements:
+            connection.execute(statement)
+    connection.executemany(
+        "INSERT INTO corpora (corpus_id, display_name) VALUES (?, ?)",
+        ((_CORPUS_ID, "First"), (_OTHER_CORPUS_ID, "Second")),
+    )
+    _insert_document(connection, _DOCUMENT_ID)
+    _insert_version(
+        connection,
+        version_id=_VERSION_ID,
+        document_id=_DOCUMENT_ID,
+    )
+    connection.execute(
+        """INSERT INTO source_observations (
+            source_observation_id, document_id,
+            current_document_version_id, current_revision
+        ) VALUES (?, ?, ?, 1)""",
+        (_SOURCE_OBSERVATION_ID, _DOCUMENT_ID, _VERSION_ID),
+    )
+    connection.execute(
+        """INSERT INTO source_observation_history (
+            source_observation_id, observation_revision,
+            document_id, document_version_id
+        ) VALUES (?, 1, ?, ?)""",
+        (_SOURCE_OBSERVATION_ID, _DOCUMENT_ID, _VERSION_ID),
+    )
+    connection.commit()
+
+    connection.execute("BEGIN IMMEDIATE")
+    with pytest.raises(sqlite3.IntegrityError):
+        for statement in MIGRATIONS[4].statements:
+            connection.execute(statement)
+    connection.rollback()
+
+    columns = connection.execute("PRAGMA table_info(source_observations)").fetchall()
+    assert "corpus_id" not in [column[1] for column in columns]
+    assert connection.execute(
+        "SELECT count(*) FROM source_observations"
+    ).fetchone() == (1,)
     connection.close()
 
 

@@ -63,6 +63,7 @@ class StructuralTransaction:
 
     def advance_source_observation(
         self,
+        corpus_id: CorpusId,
         source_observation_id: SourceObservationId,
         *,
         expected_version_id: DocumentVersionId,
@@ -71,7 +72,9 @@ class StructuralTransaction:
         raise NotImplementedError
 
     def add_external_identifier_assertions(
-        self, assertions: tuple[ExternalIdentifierAssertion, ...]
+        self,
+        corpus_id: CorpusId,
+        assertions: tuple[ExternalIdentifierAssertion, ...],
     ) -> None:
         pass
 
@@ -118,47 +121,49 @@ class StructuralTransaction:
         return ()
 
     def find_document_versions_by_content_hash(
-        self, content_hash: ContentHash
+        self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:
         return ()
 
     def find_document_versions_by_external_identifiers(
-        self, external_identifiers: tuple[ExternalIdentifier, ...]
+        self,
+        corpus_id: CorpusId,
+        external_identifiers: tuple[ExternalIdentifier, ...],
     ) -> tuple[DocumentVersion, ...]:
         return ()
 
     def get_source_observation(
-        self, source_observation_id: SourceObservationId
+        self, corpus_id: CorpusId, source_observation_id: SourceObservationId
     ) -> SourceObservationState | None:
         return None
 
     def list_source_observation_history(
-        self, source_observation_id: SourceObservationId
+        self, corpus_id: CorpusId, source_observation_id: SourceObservationId
     ) -> tuple[SourceObservationState, ...]:
         return ()
 
     def list_external_identifier_assertions(
-        self, document_version_id: DocumentVersionId
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[ExternalIdentifierAssertion, ...]:
         return ()
 
     def list_duplicate_relationships(
-        self, document_version_id: DocumentVersionId
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[DuplicateRelationship, ...]:
         return ()
 
     def list_family_memberships_by_family(
-        self, family_id: DocumentFamilyId
+        self, corpus_id: CorpusId, family_id: DocumentFamilyId
     ) -> tuple[DocumentFamilyMembership, ...]:
         return ()
 
     def list_family_memberships_by_document(
-        self, document_id: DocumentId
+        self, corpus_id: CorpusId, document_id: DocumentId
     ) -> tuple[DocumentFamilyMembership, ...]:
         return ()
 
     def list_family_memberships_by_document_version(
-        self, document_version_id: DocumentVersionId
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[DocumentFamilyMembership, ...]:
         return ()
 

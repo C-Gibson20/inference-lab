@@ -62,9 +62,9 @@ def test_current_database_inspection_is_read_only(tmp_path: Path) -> None:
         inspection = validate_database_schema(connection)
 
         assert inspection == SchemaInspection(
-            current_revision=4,
-            latest_supported_revision=4,
-            applied_migration_count=4,
+            current_revision=5,
+            latest_supported_revision=5,
+            applied_migration_count=5,
         )
         assert connection.total_changes == changes_before
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -161,7 +161,7 @@ def test_supported_pending_migration_is_reported_without_application(
 @pytest.mark.parametrize(
     "mutation",
     [
-        "PRAGMA user_version = 5",
+        "PRAGMA user_version = 6",
         "UPDATE metadata_schema SET current_revision = 0",
         "DELETE FROM migration_history",
         "UPDATE migration_history SET checksum = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",

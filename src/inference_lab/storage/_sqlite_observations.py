@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Sequence
 
 from inference_lab.provenance import (
+    CorpusId,
     DocumentId,
     DocumentVersionId,
     ExternalIdentifier,
@@ -25,6 +26,7 @@ def _reconstruct_states(
     try:
         return tuple(
             SourceObservationState(
+                corpus_id=CorpusId.from_str(row["corpus_id"]),
                 source_observation_id=SourceObservationId.from_str(
                     row["source_observation_id"]
                 ),
@@ -42,19 +44,22 @@ def _reconstruct_states(
 
 def list_source_observation_history(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     source_observation_id: SourceObservationId,
 ) -> tuple[SourceObservationState, ...]:
     """Return one source observation's validated append-only history."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(source_observation_id, SourceObservationId):
         raise TypeError("source_observation_id must be a SourceObservationId.")
     try:
         rows = connection.execute(
-            """SELECT source_observation_id, observation_revision,
+            """SELECT corpus_id, source_observation_id, observation_revision,
                 document_id, document_version_id
             FROM source_observation_history
-            WHERE source_observation_id = ?
+            WHERE corpus_id = ? AND source_observation_id = ?
             ORDER BY observation_revision""",
-            (source_observation_id.as_str(),),
+            (corpus_id.as_str(), source_observation_id.as_str()),
         ).fetchall()
         states = _reconstruct_states(rows)
         if tuple(state.observation_revision for state in states) != tuple(
@@ -75,25 +80,30 @@ def list_source_observation_history(
 
 def get_source_observation(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     source_observation_id: SourceObservationId,
 ) -> SourceObservationState | None:
     """Return the current validated state for one observed source."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(source_observation_id, SourceObservationId):
         raise TypeError("source_observation_id must be a SourceObservationId.")
     try:
         row = connection.execute(
-            """SELECT source_observation_id,
+            """SELECT corpus_id, source_observation_id,
                 current_revision AS observation_revision,
                 document_id,
                 current_document_version_id AS document_version_id
             FROM source_observations
-            WHERE source_observation_id = ?""",
-            (source_observation_id.as_str(),),
+            WHERE corpus_id = ? AND source_observation_id = ?""",
+            (corpus_id.as_str(), source_observation_id.as_str()),
         ).fetchone()
         if row is None:
             return None
         current = _reconstruct_states((row,))[0]
-        history = list_source_observation_history(connection, source_observation_id)
+        history = list_source_observation_history(
+            connection, corpus_id, source_observation_id
+        )
         if not history or history[-1] != current:
             raise CorruptStorageError()
         return current
@@ -115,13 +125,16 @@ def add_source_observation(
         raise TypeError("state must be a SourceObservationState.")
     if state.observation_revision != 1:
         raise StorageConflictError()
-    existing = get_source_observation(connection, state.source_observation_id)
+    existing = get_source_observation(
+        connection, state.corpus_id, state.source_observation_id
+    )
     if existing == state:
         return
     if existing is not None:
         raise StorageConflictError()
 
     values = (
+        state.corpus_id.as_str(),
         state.source_observation_id.as_str(),
         state.document_id.as_str(),
         state.document_version_id.as_str(),
@@ -129,20 +142,22 @@ def add_source_observation(
     try:
         connection.execute(
             """INSERT INTO source_observations (
+                corpus_id,
                 source_observation_id,
                 document_id,
                 current_document_version_id,
                 current_revision
-            ) VALUES (?, ?, ?, 1)""",
+            ) VALUES (?, ?, ?, ?, 1)""",
             values,
         )
         connection.execute(
             """INSERT INTO source_observation_history (
+                corpus_id,
                 source_observation_id,
                 observation_revision,
                 document_id,
                 document_version_id
-            ) VALUES (?, 1, ?, ?)""",
+            ) VALUES (?, ?, 1, ?, ?)""",
             values,
         )
     except sqlite3.Error as error:
@@ -168,6 +183,7 @@ def _is_exact_advance_replay(
 
 def _identifier_values_for_source(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     source_observation_id: SourceObservationId,
 ) -> dict[str, set[str]]:
     rows = connection.execute(
@@ -175,12 +191,17 @@ def _identifier_values_for_source(
         FROM source_observation_history AS history
         JOIN external_identifiers AS identifiers
             ON identifiers.document_version_id = history.document_version_id
-        WHERE history.source_observation_id = ?
+        WHERE history.corpus_id = ? AND history.source_observation_id = ?
         UNION
         SELECT namespace, identifier_value
         FROM external_identifier_assertions
-        WHERE source_observation_id = ?""",
-        (source_observation_id.as_str(), source_observation_id.as_str()),
+        WHERE corpus_id = ? AND source_observation_id = ?""",
+        (
+            corpus_id.as_str(),
+            source_observation_id.as_str(),
+            corpus_id.as_str(),
+            source_observation_id.as_str(),
+        ),
     ).fetchall()
     values: dict[str, set[str]] = {}
     for row in rows:
@@ -206,10 +227,13 @@ def _identifier_values_for_version(
 
 def _ensure_advance_identifiers_are_consistent(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     source_observation_id: SourceObservationId,
     new_version_id: DocumentVersionId,
 ) -> None:
-    existing = _identifier_values_for_source(connection, source_observation_id)
+    existing = _identifier_values_for_source(
+        connection, corpus_id, source_observation_id
+    )
     incoming = _identifier_values_for_version(connection, new_version_id)
     if any(
         existing[namespace] != incoming[namespace]
@@ -220,12 +244,15 @@ def _ensure_advance_identifiers_are_consistent(
 
 def advance_source_observation(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     source_observation_id: SourceObservationId,
     *,
     expected_version_id: DocumentVersionId,
     new_version_id: DocumentVersionId,
 ) -> SourceObservationState:
     """Atomically advance an observed source from its expected version."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(source_observation_id, SourceObservationId):
         raise TypeError("source_observation_id must be a SourceObservationId.")
     if not isinstance(expected_version_id, DocumentVersionId):
@@ -233,10 +260,12 @@ def advance_source_observation(
     if not isinstance(new_version_id, DocumentVersionId):
         raise TypeError("new_version_id must be a DocumentVersionId.")
 
-    current = get_source_observation(connection, source_observation_id)
+    current = get_source_observation(connection, corpus_id, source_observation_id)
     if current is None:
         raise StorageConflictError()
-    history = list_source_observation_history(connection, source_observation_id)
+    history = list_source_observation_history(
+        connection, corpus_id, source_observation_id
+    )
     if _is_exact_advance_replay(
         history,
         expected_version_id=expected_version_id,
@@ -249,6 +278,7 @@ def advance_source_observation(
     try:
         _ensure_advance_identifiers_are_consistent(
             connection,
+            corpus_id,
             source_observation_id,
             new_version_id,
         )
@@ -261,6 +291,7 @@ def advance_source_observation(
         ) from None
 
     next_state = SourceObservationState(
+        corpus_id=corpus_id,
         source_observation_id=source_observation_id,
         observation_revision=current.observation_revision + 1,
         document_id=current.document_id,
@@ -269,12 +300,14 @@ def advance_source_observation(
     try:
         connection.execute(
             """INSERT INTO source_observation_history (
+                corpus_id,
                 source_observation_id,
                 observation_revision,
                 document_id,
                 document_version_id
-            ) VALUES (?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?)""",
             (
+                corpus_id.as_str(),
                 source_observation_id.as_str(),
                 next_state.observation_revision,
                 current.document_id.as_str(),
@@ -285,12 +318,14 @@ def advance_source_observation(
             """UPDATE source_observations
             SET current_document_version_id = ?, current_revision = ?
             WHERE source_observation_id = ?
+                AND corpus_id = ?
                 AND current_document_version_id = ?
                 AND current_revision = ?""",
             (
                 new_version_id.as_str(),
                 next_state.observation_revision,
                 source_observation_id.as_str(),
+                corpus_id.as_str(),
                 expected_version_id.as_str(),
                 current.observation_revision,
             ),
@@ -332,9 +367,12 @@ def _reconstruct_assertions(
 
 def list_external_identifier_assertions(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     document_version_id: DocumentVersionId,
 ) -> tuple[ExternalIdentifierAssertion, ...]:
     """Return append-only assertions for one source version."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(document_version_id, DocumentVersionId):
         raise TypeError("document_version_id must be a DocumentVersionId.")
     try:
@@ -342,10 +380,10 @@ def list_external_identifier_assertions(
             """SELECT source_observation_id, document_version_id,
                 namespace, identifier_value
             FROM external_identifier_assertions
-            WHERE document_version_id = ?
+            WHERE corpus_id = ? AND document_version_id = ?
             ORDER BY document_version_id, source_observation_id,
                 namespace, identifier_value""",
-            (document_version_id.as_str(),),
+            (corpus_id.as_str(), document_version_id.as_str()),
         ).fetchall()
         return _reconstruct_assertions(rows)
     except CorruptStorageError:
@@ -385,9 +423,12 @@ def _validate_assertion_batch(
 
 def add_external_identifier_assertions(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     assertions: tuple[ExternalIdentifierAssertion, ...],
 ) -> None:
     """Append one complete identifier-evidence batch or accept exact replay."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     _validate_assertion_batch(assertions)
     if not assertions:
         return
@@ -398,8 +439,9 @@ def add_external_identifier_assertions(
         association = connection.execute(
             """SELECT document_id
             FROM source_observation_history
-            WHERE source_observation_id = ? AND document_version_id = ?""",
-            (source_id, version_id),
+            WHERE corpus_id = ? AND source_observation_id = ?
+                AND document_version_id = ?""",
+            (corpus_id.as_str(), source_id, version_id),
         ).fetchone()
         if association is None:
             raise StorageConflictError()
@@ -411,6 +453,7 @@ def add_external_identifier_assertions(
 
         existing = _identifier_values_for_source(
             connection,
+            corpus_id,
             first.source_observation_id,
         )
         if any(
@@ -426,21 +469,23 @@ def add_external_identifier_assertions(
         stored_rows = connection.execute(
             """SELECT namespace, identifier_value
             FROM external_identifier_assertions
-            WHERE source_observation_id = ?
+            WHERE corpus_id = ? AND source_observation_id = ?
                 AND document_version_id = ?""",
-            (source_id, version_id),
+            (corpus_id.as_str(), source_id, version_id),
         ).fetchall()
         stored = {(row["namespace"], row["identifier_value"]) for row in stored_rows}
         connection.executemany(
             """INSERT INTO external_identifier_assertions (
+                corpus_id,
                 source_observation_id,
                 document_version_id,
                 document_id,
                 namespace,
                 identifier_value
-            ) VALUES (?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?)""",
             tuple(
                 (
+                    corpus_id.as_str(),
                     source_id,
                     version_id,
                     association["document_id"],
