@@ -14,6 +14,9 @@ from inference_lab.provenance import (
     DocumentVersionId,
     DuplicateRelationship,
     ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    SourceObservationId,
+    SourceObservationState,
 )
 
 
@@ -58,6 +61,24 @@ class MetadataReader(Protocol):
         """Return unique candidates matching any supplied external identifier."""
         ...
 
+    def get_source_observation(
+        self, source_observation_id: SourceObservationId
+    ) -> SourceObservationState | None:
+        """Return the current state for an observed source, or ``None``."""
+        ...
+
+    def list_source_observation_history(
+        self, source_observation_id: SourceObservationId
+    ) -> tuple[SourceObservationState, ...]:
+        """Return an observed source's append-only state history."""
+        ...
+
+    def list_external_identifier_assertions(
+        self, document_version_id: DocumentVersionId
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
+        """Return append-only identifier assertions for one source version."""
+        ...
+
     def list_duplicate_relationships(
         self, document_version_id: DocumentVersionId
     ) -> tuple[DuplicateRelationship, ...]:
@@ -84,7 +105,7 @@ class MetadataReader(Protocol):
 
 
 class MetadataWriter(Protocol):
-    """Create immutable identity metadata within an owned transaction."""
+    """Write identity metadata within an owned transaction."""
 
     def add_corpus(self, corpus_id: CorpusId) -> None:
         """Create a corpus identity, treating exact replay as a no-op."""
@@ -100,6 +121,26 @@ class MetadataWriter(Protocol):
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its ordered external identifiers atomically."""
+        ...
+
+    def add_source_observation(self, state: SourceObservationState) -> None:
+        """Create an observed source at revision one or accept exact replay."""
+        ...
+
+    def advance_source_observation(
+        self,
+        source_observation_id: SourceObservationId,
+        *,
+        expected_version_id: DocumentVersionId,
+        new_version_id: DocumentVersionId,
+    ) -> SourceObservationState:
+        """Atomically advance an observed source from its expected version."""
+        ...
+
+    def add_external_identifier_assertions(
+        self, assertions: tuple[ExternalIdentifierAssertion, ...]
+    ) -> None:
+        """Append one canonical identifier-evidence batch or accept replay."""
         ...
 
     def add_duplicate_relationship(self, relationship: DuplicateRelationship) -> None:

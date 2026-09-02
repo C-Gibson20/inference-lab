@@ -51,6 +51,7 @@ def _initialise_revision_one(path: Path) -> sqlite3.Connection:
     connection = open_sqlite_connection(path)
     initialise_empty_database(
         connection,
+        migrations=(MIGRATIONS[0],),
         applied_at_factory=_fixed_applied_at,
     )
     connection.execute("INSERT INTO corpora (corpus_id) VALUES (?)", (_CORPUS_ID,))

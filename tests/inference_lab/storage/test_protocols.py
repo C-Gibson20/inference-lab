@@ -13,6 +13,9 @@ from inference_lab.provenance import (
     DocumentVersionId,
     DuplicateRelationship,
     ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    SourceObservationId,
+    SourceObservationState,
 )
 from inference_lab.storage import MetadataRepository, MetadataTransaction
 
@@ -41,6 +44,23 @@ class StructuralTransaction:
         pass
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
+        pass
+
+    def add_source_observation(self, state: SourceObservationState) -> None:
+        pass
+
+    def advance_source_observation(
+        self,
+        source_observation_id: SourceObservationId,
+        *,
+        expected_version_id: DocumentVersionId,
+        new_version_id: DocumentVersionId,
+    ) -> SourceObservationState:
+        raise NotImplementedError
+
+    def add_external_identifier_assertions(
+        self, assertions: tuple[ExternalIdentifierAssertion, ...]
+    ) -> None:
         pass
 
     def add_duplicate_relationship(self, relationship: DuplicateRelationship) -> None:
@@ -78,6 +98,21 @@ class StructuralTransaction:
     def find_document_versions_by_external_identifiers(
         self, external_identifiers: tuple[ExternalIdentifier, ...]
     ) -> tuple[DocumentVersion, ...]:
+        return ()
+
+    def get_source_observation(
+        self, source_observation_id: SourceObservationId
+    ) -> SourceObservationState | None:
+        return None
+
+    def list_source_observation_history(
+        self, source_observation_id: SourceObservationId
+    ) -> tuple[SourceObservationState, ...]:
+        return ()
+
+    def list_external_identifier_assertions(
+        self, document_version_id: DocumentVersionId
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
         return ()
 
     def list_duplicate_relationships(
@@ -133,6 +168,13 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         )
         find_document_versions_by_external_identifiers = (
             StructuralTransaction.find_document_versions_by_external_identifiers
+        )
+        get_source_observation = StructuralTransaction.get_source_observation
+        list_source_observation_history = (
+            StructuralTransaction.list_source_observation_history
+        )
+        list_external_identifier_assertions = (
+            StructuralTransaction.list_external_identifier_assertions
         )
         list_duplicate_relationships = (
             StructuralTransaction.list_duplicate_relationships

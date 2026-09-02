@@ -35,7 +35,7 @@ def _schema_objects(connection: sqlite3.Connection) -> list[tuple[str, str]]:
     return [(row[0], row[1]) for row in rows]
 
 
-def test_initialisation_atomically_publishes_revision_one(tmp_path: Path) -> None:
+def test_initialisation_atomically_publishes_current_revision(tmp_path: Path) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     connection = open_sqlite_connection(database_path)
     try:
@@ -48,14 +48,14 @@ def test_initialisation_atomically_publishes_revision_one(tmp_path: Path) -> Non
         assert connection.execute("PRAGMA application_id").fetchone()[0] == (
             SQLITE_APPLICATION_ID
         )
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
         schema_row = connection.execute(
             "SELECT schema_name, current_revision FROM metadata_schema"
         ).fetchone()
-        assert tuple(schema_row) == ("inference_lab_metadata", 1)
+        assert tuple(schema_row) == ("inference_lab_metadata", 2)
         history_rows = connection.execute(
             """SELECT revision, migration_id, checksum, applied_at_utc
-            FROM migration_history"""
+            FROM migration_history ORDER BY revision"""
         ).fetchall()
         assert [tuple(row) for row in history_rows] == [
             (
@@ -63,7 +63,13 @@ def test_initialisation_atomically_publishes_revision_one(tmp_path: Path) -> Non
                 "initial_metadata",
                 MIGRATIONS[0].checksum,
                 "2026-09-01T12:30:00.000000+00:00",
-            )
+            ),
+            (
+                2,
+                "source_observation_identity",
+                MIGRATIONS[1].checksum,
+                "2026-09-01T12:30:00.000000+00:00",
+            ),
         ]
     finally:
         connection.close()
@@ -73,12 +79,12 @@ def test_initialisation_atomically_publishes_revision_one(tmp_path: Path) -> Non
         assert reopened.execute("PRAGMA application_id").fetchone()[0] == (
             SQLITE_APPLICATION_ID
         )
-        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 2
         assert (
             reopened.execute("SELECT current_revision FROM metadata_schema").fetchone()[
                 0
             ]
-            == 1
+            == 2
         )
     finally:
         reopened.close()

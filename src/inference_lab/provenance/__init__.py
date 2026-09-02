@@ -45,6 +45,7 @@ from inference_lab.provenance.operations import (
 from inference_lab.provenance.records import (
     DocumentIdentity,
     DocumentVersion,
+    SourceObservationState,
 )
 from inference_lab.provenance.relationships import (
     DocumentFamilyMembership,
@@ -141,6 +142,7 @@ __all__ = [
     "ResolutionReason",
     "SourceAnchor",
     "SourceObservationId",
+    "SourceObservationState",
     "SourceSpanId",
     "UnsupportedLineageSchemaVersionError",
     "UuidIdentityIdAllocator",

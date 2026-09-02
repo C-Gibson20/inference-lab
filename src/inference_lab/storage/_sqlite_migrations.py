@@ -213,11 +213,88 @@ ON document_family_memberships (document_version_id, family_id, document_id)
 WHERE document_version_id IS NOT NULL""",
 )
 
+_REVISION_2_STATEMENTS: Final = (
+    """CREATE TABLE source_observations (
+    storage_id INTEGER PRIMARY KEY,
+    source_observation_id TEXT NOT NULL UNIQUE,
+    document_id TEXT NOT NULL,
+    current_document_version_id TEXT NOT NULL,
+    current_revision INTEGER NOT NULL CHECK (current_revision >= 1),
+    FOREIGN KEY (document_id) REFERENCES documents (document_id),
+    FOREIGN KEY (current_document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    UNIQUE (source_observation_id, document_id),
+    CHECK (
+        length(source_observation_id) = 36
+        AND source_observation_id = lower(source_observation_id)
+        AND substr(source_observation_id, 9, 1) = '-'
+        AND substr(source_observation_id, 14, 1) = '-'
+        AND substr(source_observation_id, 19, 1) = '-'
+        AND substr(source_observation_id, 24, 1) = '-'
+        AND length(replace(source_observation_id, '-', '')) = 32
+        AND source_observation_id NOT GLOB '*[^0-9a-f-]*'
+    )
+) STRICT""",
+    """CREATE TABLE source_observation_history (
+    storage_id INTEGER PRIMARY KEY,
+    source_observation_id TEXT NOT NULL,
+    observation_revision INTEGER NOT NULL CHECK (observation_revision >= 1),
+    document_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    FOREIGN KEY (source_observation_id, document_id)
+        REFERENCES source_observations (source_observation_id, document_id),
+    FOREIGN KEY (document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    UNIQUE (source_observation_id, observation_revision),
+    UNIQUE (source_observation_id, document_version_id),
+    UNIQUE (source_observation_id, document_version_id, document_id)
+) STRICT""",
+    """CREATE INDEX source_observation_history_version_idx
+ON source_observation_history (document_version_id, source_observation_id)""",
+    """CREATE TABLE external_identifier_assertions (
+    storage_id INTEGER PRIMARY KEY,
+    source_observation_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    namespace TEXT NOT NULL
+        CHECK (
+            length(namespace) > 0
+            AND substr(namespace, 1, 1) GLOB '[a-z]'
+            AND namespace NOT GLOB '*[^a-z0-9_-]*'
+        ),
+    identifier_value TEXT NOT NULL CHECK (length(trim(identifier_value)) > 0),
+    FOREIGN KEY (source_observation_id, document_version_id, document_id)
+        REFERENCES source_observation_history (
+            source_observation_id,
+            document_version_id,
+            document_id
+        ),
+    UNIQUE (
+        source_observation_id,
+        document_version_id,
+        namespace,
+        identifier_value
+    )
+) STRICT""",
+    """CREATE INDEX external_identifier_assertions_lookup_idx
+ON external_identifier_assertions (
+    namespace,
+    identifier_value,
+    document_version_id,
+    source_observation_id
+)""",
+)
+
 MIGRATIONS: Final = (
     MigrationDefinition(
         revision=1,
         migration_id="initial_metadata",
         statements=_REVISION_1_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=2,
+        migration_id="source_observation_identity",
+        statements=_REVISION_2_STATEMENTS,
     ),
 )
 

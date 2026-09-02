@@ -20,6 +20,9 @@ from inference_lab.provenance import (
     DocumentVersionId,
     DuplicateRelationship,
     ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    SourceObservationId,
+    SourceObservationState,
 )
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
@@ -43,6 +46,14 @@ from inference_lab.storage._sqlite_migration_execution import (
     utc_now,
 )
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
+from inference_lab.storage._sqlite_observations import (
+    add_external_identifier_assertions,
+    add_source_observation,
+    advance_source_observation,
+    get_source_observation,
+    list_external_identifier_assertions,
+    list_source_observation_history,
+)
 from inference_lab.storage._sqlite_relationships import (
     add_duplicate_relationship,
     add_family_membership,
@@ -177,6 +188,36 @@ class SQLiteMetadataRepository:
         return find_document_versions_by_external_identifiers(
             self._connection_or_raise(),
             external_identifiers,
+        )
+
+    def get_source_observation(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> SourceObservationState | None:
+        """Return the current state for an observed source, or ``None``."""
+        return get_source_observation(
+            self._connection_or_raise(),
+            source_observation_id,
+        )
+
+    def list_source_observation_history(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return an observed source's append-only state history."""
+        return list_source_observation_history(
+            self._connection_or_raise(),
+            source_observation_id,
+        )
+
+    def list_external_identifier_assertions(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
+        """Return append-only assertions for one source version."""
+        return list_external_identifier_assertions(
+            self._connection_or_raise(),
+            document_version_id,
         )
 
     def list_duplicate_relationships(
@@ -430,9 +471,62 @@ class SQLiteMetadataTransaction:
             find_document_versions_by_external_identifiers, external_identifiers
         )
 
+    def get_source_observation(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> SourceObservationState | None:
+        """Return the current observed-source state within this transaction."""
+        return self._execute(get_source_observation, source_observation_id)
+
+    def list_source_observation_history(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return observed-source history within this transaction."""
+        return self._execute(
+            list_source_observation_history,
+            source_observation_id,
+        )
+
+    def list_external_identifier_assertions(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
+        """Return identifier assertions within this transaction."""
+        return self._execute(
+            list_external_identifier_assertions,
+            document_version_id,
+        )
+
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its external identifiers atomically."""
         self._execute(add_document_version, document_version)
+
+    def add_source_observation(self, state: SourceObservationState) -> None:
+        """Create an observed source at revision one."""
+        self._execute(add_source_observation, state)
+
+    def advance_source_observation(
+        self,
+        source_observation_id: SourceObservationId,
+        *,
+        expected_version_id: DocumentVersionId,
+        new_version_id: DocumentVersionId,
+    ) -> SourceObservationState:
+        """Atomically advance an observed source from its expected version."""
+        return self._execute(
+            advance_source_observation,
+            source_observation_id,
+            expected_version_id=expected_version_id,
+            new_version_id=new_version_id,
+        )
+
+    def add_external_identifier_assertions(
+        self,
+        assertions: tuple[ExternalIdentifierAssertion, ...],
+    ) -> None:
+        """Append a canonical identifier-evidence batch."""
+        self._execute(add_external_identifier_assertions, assertions)
 
     def list_duplicate_relationships(
         self,

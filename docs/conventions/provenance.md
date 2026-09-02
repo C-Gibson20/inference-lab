@@ -51,6 +51,13 @@ existing source. The identity resolver therefore receives same-observation
 continuity candidates separately from global content-hash and external-
 identifier candidates.
 
+Persistence records source continuity as append-only `SourceObservationState`
+revisions plus one validated current-state pointer. Initial state is revision
+one. Advancement names the expected current document version and fails on a
+stale expectation or an attempt to switch logical documents; exact retry is a
+no-op. Historical states remain available for audit, while identity resolution
+uses only the current state as continuity evidence.
+
 External identifiers are evidence, not primary identity. The default
 `conservative` policy declares no namespace authoritative, so an external-
 identifier-only match is ambiguous rather than silently creating a new source
