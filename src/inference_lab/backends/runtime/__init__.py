@@ -34,6 +34,9 @@ from inference_lab.backends.runtime.memory import (
     RollupReconciliation,
 )
 from inference_lab.backends.runtime.memory_fake import FakeMemoryAccountingAdapter
+from inference_lab.backends.runtime.memory_pytorch import (
+    PyTorchMemoryCalibrationAdapter,
+)
 from inference_lab.backends.runtime.memory_records import (
     MemoryBudgetRecord,
     MemoryComponentRecord,
@@ -121,6 +124,7 @@ __all__ = [
     "MemorySnapshot",
     "MemorySpace",
     "MemoryTotal",
+    "PyTorchMemoryCalibrationAdapter",
     "RerankCandidate",
     "RerankRequest",
     "RerankResult",
