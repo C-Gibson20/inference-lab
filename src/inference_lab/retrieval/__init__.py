@@ -13,6 +13,7 @@ from inference_lab.retrieval.filters import (
     OneOfFilter,
     RangeFilter,
 )
+from inference_lab.retrieval.query import RetrievalQuery
 from inference_lab.retrieval.values import RetrievalChannel, RetrievalLimit
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "RangeFilter",
     "RetrievalChannel",
     "RetrievalLimit",
+    "RetrievalQuery",
 ]
