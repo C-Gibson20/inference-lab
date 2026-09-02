@@ -17,6 +17,7 @@ from inference_lab.provenance import (
     DocumentIdentity,
     DocumentVersion,
     DocumentVersionId,
+    DuplicateRelationship,
     ExternalIdentifier,
 )
 from inference_lab.storage._sqlite_connection import (
@@ -41,6 +42,10 @@ from inference_lab.storage._sqlite_migration_execution import (
     utc_now,
 )
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
+from inference_lab.storage._sqlite_relationships import (
+    add_duplicate_relationship,
+    list_duplicate_relationships,
+)
 from inference_lab.storage._sqlite_versions import (
     add_document_version,
     find_document_versions_by_content_hash,
@@ -164,6 +169,16 @@ class SQLiteMetadataRepository:
         return find_document_versions_by_external_identifiers(
             self._connection_or_raise(),
             external_identifiers,
+        )
+
+    def list_duplicate_relationships(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DuplicateRelationship, ...]:
+        """Return a version's duplicate relationships in canonical order."""
+        return list_duplicate_relationships(
+            self._connection_or_raise(),
+            document_version_id,
         )
 
     def transaction(self) -> SQLiteMetadataTransaction:
@@ -363,6 +378,23 @@ class SQLiteMetadataTransaction:
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its external identifiers atomically."""
         add_document_version(self._connection_or_raise(), document_version)
+
+    def list_duplicate_relationships(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DuplicateRelationship, ...]:
+        """Return duplicate relationships within this transaction."""
+        return list_duplicate_relationships(
+            self._connection_or_raise(),
+            document_version_id,
+        )
+
+    def add_duplicate_relationship(
+        self,
+        relationship: DuplicateRelationship,
+    ) -> None:
+        """Create a duplicate relationship within this transaction."""
+        add_duplicate_relationship(self._connection_or_raise(), relationship)
 
     def _connection_or_raise(self) -> sqlite3.Connection:
         if not self._active or self._finished:
