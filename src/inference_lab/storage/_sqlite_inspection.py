@@ -59,6 +59,8 @@ def _validate_integrity(connection: sqlite3.Connection) -> None:
     rows = connection.execute("PRAGMA quick_check").fetchall()
     if len(rows) != 1 or rows[0][0] != "ok":
         raise CorruptStorageError()
+    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise CorruptStorageError()
 
 
 def _validate_applied_at(value: object) -> datetime:

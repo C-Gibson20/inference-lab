@@ -61,6 +61,7 @@ from inference_lab.storage._sqlite_versions import (
 from inference_lab.storage.errors import (
     RepositoryClosedError,
     RepositoryUnavailableError,
+    StorageError,
     StorageTransactionError,
 )
 
@@ -323,7 +324,19 @@ class SQLiteMetadataTransaction:
             finally:
                 self._finish()
             if exception is not None:
-                if rolled_back:
+                if self._failed and rolled_back:
+                    error = (
+                        exception
+                        if isinstance(exception, StorageError)
+                        else StorageTransactionError()
+                    )
+                    _safe_log(
+                        "error",
+                        "transaction_failed",
+                        error_category=error.category.value,
+                        retryable=error.retryable,
+                    )
+                elif rolled_back:
                     _safe_log("info", "transaction_rolled_back")
                 return False
 
