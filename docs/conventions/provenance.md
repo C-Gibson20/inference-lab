@@ -51,6 +51,30 @@ existing source. The identity resolver therefore receives same-observation
 continuity candidates separately from global content-hash and external-
 identifier candidates.
 
+External identifiers are evidence, not primary identity. The default
+`conservative` policy declares no namespace authoritative, so an external-
+identifier-only match is ambiguous rather than silently creating a new source
+version. A corpus may select authoritative namespaces only through an explicit
+`ExternalIdentifierResolutionPolicy` with a canonical policy name and semantic
+version. Corpus-specific authority must be supported by the corpus audit; the
+provenance layer does not build in DOI, patent, publication, or other namespace
+preferences.
+
+For every namespace shared by an observation and a candidate, the complete set
+of asserted values must agree. A match in one namespace does not override a
+conflict in another. Conflicting evidence fails closed, while a consistent
+match without an authoritative namespace remains ambiguous.
+
+When unchanged bytes carry an identifier in a previously unasserted namespace,
+the resolver returns an `ExternalIdentifierAssertion` in
+`identifier_assertions_to_add` while retaining the immutable `DocumentVersion`.
+Each assertion identifies the retained version, source observation, namespace,
+and value. Persistence stores these values append-only, treating exact replay
+as a no-op; it must not rewrite the original version record. Existing
+assertions are supplied on later resolution requests and participate in match,
+conflict, and enrichment decisions. A different value in an already asserted
+namespace is a conflict, not an enrichment.
+
 ## Stability rules
 
 Document identity is distinct from document-version identity:

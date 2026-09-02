@@ -3,6 +3,7 @@
 import pytest
 
 from inference_lab.provenance import (
+    CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY,
     ContentHash,
     DocumentId,
     DocumentIdentity,
@@ -10,6 +11,9 @@ from inference_lab.provenance import (
     DocumentVersionId,
     DuplicateClass,
     DuplicateRelationship,
+    ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    ExternalIdentifierResolutionPolicy,
     HashAlgorithm,
     IdentityResolutionOutcome,
     IdentityResolutionRequest,
@@ -50,6 +54,12 @@ def test_request_validates_and_serialises_candidates() -> None:
 
     assert request.as_dict()["content_hash"] == HASH.as_str()
     assert request.as_dict()["source_observation_id"] == SOURCE_OBSERVATION_ID.as_str()
+    assert request.as_dict()["external_identifier_policy"] == {
+        "policy_name": "conservative",
+        "policy_version": "1.0.0",
+        "authoritative_namespaces": [],
+    }
+    assert request.external_identifier_policy is CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY
 
 
 def test_request_rejects_reversed_candidates() -> None:
@@ -92,6 +102,71 @@ def test_request_rejects_conflicting_cross_role_representation() -> None:
         )
 
 
+def test_request_rejects_assertion_for_unsupplied_candidate() -> None:
+    assertion = ExternalIdentifierAssertion(
+        SOURCE_OBSERVATION_ID,
+        FIRST_VERSION_ID,
+        ExternalIdentifier("doi", "10.1000/example"),
+    )
+
+    with pytest.raises(InvalidResolutionError, match="supplied candidate versions"):
+        IdentityResolutionRequest(
+            HASH,
+            SOURCE_OBSERVATION_ID,
+            identifier_assertions=(assertion,),
+        )
+
+
+def test_request_serialises_identifier_assertion_evidence() -> None:
+    assertion = ExternalIdentifierAssertion(
+        SOURCE_OBSERVATION_ID,
+        FIRST_VERSION_ID,
+        ExternalIdentifier("doi", "10.1000/example"),
+    )
+    request = IdentityResolutionRequest(
+        HASH,
+        SOURCE_OBSERVATION_ID,
+        continuity_candidates=(_version(FIRST_VERSION_ID),),
+        identifier_assertions=(assertion,),
+    )
+
+    assert request.as_dict()["identifier_assertions"] == [
+        {
+            "source_observation_id": SOURCE_OBSERVATION_ID.as_str(),
+            "document_version_id": FIRST_VERSION_ID.as_str(),
+            "external_identifier": {
+                "namespace": "doi",
+                "value": "10.1000/example",
+            },
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error_type"),
+    [
+        ({"policy_name": "Not-Canonical"}, ValueError),
+        ({"policy_version": "1"}, ValueError),
+        ({"authoritative_namespaces": ["doi"]}, TypeError),
+        ({"authoritative_namespaces": ("pmid", "doi")}, ValueError),
+        ({"authoritative_namespaces": ("doi", "doi")}, ValueError),
+    ],
+)
+def test_external_identifier_policy_rejects_noncanonical_values(
+    kwargs: dict[str, object],
+    error_type: type[Exception],
+) -> None:
+    arguments: dict[str, object] = {
+        "policy_name": "fixture-policy",
+        "policy_version": "1.0.0",
+        "authoritative_namespaces": (),
+    }
+    arguments.update(kwargs)
+
+    with pytest.raises(error_type):
+        ExternalIdentifierResolutionPolicy(**arguments)  # type: ignore[arg-type]
+
+
 def test_unchanged_outcome_requires_retained_version() -> None:
     outcome = IdentityResolutionOutcome(
         ResolutionKind.UNCHANGED,
@@ -102,6 +177,51 @@ def test_unchanged_outcome_requires_retained_version() -> None:
     )
 
     assert outcome.as_dict()["kind"] == "unchanged"
+
+
+def test_unchanged_outcome_allows_new_namespace_enrichment() -> None:
+    enrichment = ExternalIdentifier("pmid", "12345678")
+    assertion = ExternalIdentifierAssertion(
+        SOURCE_OBSERVATION_ID,
+        FIRST_VERSION_ID,
+        enrichment,
+    )
+    outcome = IdentityResolutionOutcome(
+        ResolutionKind.UNCHANGED,
+        ResolutionReason.EXACT_HASH_MATCH,
+        _identity(),
+        _version(FIRST_VERSION_ID),
+        (FIRST_VERSION_ID,),
+        identifier_assertions_to_add=(assertion,),
+    )
+
+    assert outcome.identifier_assertions_to_add == (assertion,)
+
+
+def test_unchanged_outcome_rejects_enrichment_of_existing_namespace() -> None:
+    existing = ExternalIdentifier("doi", "10.1000/existing")
+    version = DocumentVersion(
+        FIRST_VERSION_ID,
+        DOCUMENT_ID,
+        HASH,
+        (existing,),
+    )
+
+    with pytest.raises(InvalidResolutionError, match="unasserted namespaces"):
+        IdentityResolutionOutcome(
+            ResolutionKind.UNCHANGED,
+            ResolutionReason.EXACT_HASH_MATCH,
+            _identity(),
+            version,
+            (FIRST_VERSION_ID,),
+            identifier_assertions_to_add=(
+                ExternalIdentifierAssertion(
+                    SOURCE_OBSERVATION_ID,
+                    FIRST_VERSION_ID,
+                    ExternalIdentifier("doi", "10.1000/different"),
+                ),
+            ),
+        )
 
 
 def test_new_document_outcome_requires_no_match() -> None:

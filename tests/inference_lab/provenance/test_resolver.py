@@ -7,6 +7,7 @@ import pytest
 
 import inference_lab.provenance.resolver as resolver_module
 from inference_lab.provenance import (
+    CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY,
     ContentHash,
     DocumentId,
     DocumentIdentity,
@@ -14,6 +15,8 @@ from inference_lab.provenance import (
     DocumentVersionId,
     DuplicateClass,
     ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    ExternalIdentifierResolutionPolicy,
     HashAlgorithm,
     IdentityResolutionRequest,
     InvalidResolutionError,
@@ -40,6 +43,11 @@ SOURCE_OBSERVATION_ID = SourceObservationId.from_str(
 )
 OTHER_SOURCE_OBSERVATION_ID = SourceObservationId.from_str(
     "00000000-0000-4000-8000-000000000009"
+)
+AUTHORITATIVE_DOI_POLICY = ExternalIdentifierResolutionPolicy(
+    policy_name="fixture-doi",
+    policy_version="1.0.0",
+    authoritative_namespaces=("doi",),
 )
 
 
@@ -78,6 +86,10 @@ def _request(
     continuity_candidates: tuple[DocumentVersion, ...] = (),
     content_hash_candidates: tuple[DocumentVersion, ...] = (),
     external_identifier_candidates: tuple[DocumentVersion, ...] = (),
+    identifier_assertions: tuple[ExternalIdentifierAssertion, ...] = (),
+    external_identifier_policy: ExternalIdentifierResolutionPolicy = (
+        CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY
+    ),
 ) -> IdentityResolutionRequest:
     return IdentityResolutionRequest(
         content_hash=content_hash,
@@ -86,6 +98,8 @@ def _request(
         continuity_candidates=continuity_candidates,
         content_hash_candidates=content_hash_candidates,
         external_identifier_candidates=external_identifier_candidates,
+        identifier_assertions=identifier_assertions,
+        external_identifier_policy=external_identifier_policy,
     )
 
 
@@ -284,6 +298,193 @@ def test_multiple_identifier_documents_are_ambiguous() -> None:
     assert outcome.kind is ResolutionKind.AMBIGUOUS
 
 
+def test_single_identifier_match_is_ambiguous_without_authority_policy() -> None:
+    identifier = ExternalIdentifier("doi", "10.1000/example")
+    candidate = _version(FIRST_VERSION_ID, identifiers=(identifier,))
+
+    outcome = resolve_identity(
+        _request(
+            HASH_B,
+            (identifier,),
+            external_identifier_candidates=(candidate,),
+        ),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert outcome.kind is ResolutionKind.AMBIGUOUS
+    assert outcome.reason is ResolutionReason.UNESTABLISHED_IDENTIFIER_AUTHORITY
+    assert outcome.matched_version_ids == (FIRST_VERSION_ID,)
+
+
+def test_authoritative_identifier_policy_can_create_new_version() -> None:
+    identifier = ExternalIdentifier("doi", "10.1000/example")
+    candidate = _version(FIRST_VERSION_ID, identifiers=(identifier,))
+
+    outcome = resolve_identity(
+        _request(
+            HASH_B,
+            (identifier,),
+            external_identifier_candidates=(candidate,),
+            external_identifier_policy=AUTHORITATIVE_DOI_POLICY,
+        ),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert outcome.kind is ResolutionKind.NEW_VERSION
+    assert outcome.reason is ResolutionReason.EXTERNAL_IDENTIFIER_MATCH
+    assert outcome.document == DocumentIdentity(DOCUMENT_ID)
+
+
+def test_identifier_match_with_another_namespace_conflict_fails_closed() -> None:
+    requested = (
+        ExternalIdentifier("doi", "10.1000/example"),
+        ExternalIdentifier("pmid", "new"),
+    )
+    candidate = _version(
+        FIRST_VERSION_ID,
+        identifiers=(
+            ExternalIdentifier("doi", "10.1000/example"),
+            ExternalIdentifier("pmid", "old"),
+        ),
+    )
+
+    outcome = resolve_identity(
+        _request(
+            HASH_B,
+            requested,
+            external_identifier_candidates=(candidate,),
+            external_identifier_policy=AUTHORITATIVE_DOI_POLICY,
+        ),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert outcome.kind is ResolutionKind.CONFLICT
+    assert outcome.matched_version_ids == (FIRST_VERSION_ID,)
+
+
+def test_same_namespace_conflict_without_exact_match_fails_closed() -> None:
+    candidate = _version(
+        FIRST_VERSION_ID,
+        identifiers=(ExternalIdentifier("doi", "10.1000/old"),),
+    )
+
+    outcome = resolve_identity(
+        _request(
+            HASH_B,
+            (ExternalIdentifier("doi", "10.1000/new"),),
+            external_identifier_candidates=(candidate,),
+            external_identifier_policy=AUTHORITATIVE_DOI_POLICY,
+        ),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert outcome.kind is ResolutionKind.CONFLICT
+    assert outcome.matched_version_ids == (FIRST_VERSION_ID,)
+
+
+def test_appended_assertion_participates_in_authoritative_match() -> None:
+    identifier = ExternalIdentifier("doi", "10.1000/example")
+    candidate = _version(FIRST_VERSION_ID)
+    assertion = ExternalIdentifierAssertion(
+        SOURCE_OBSERVATION_ID,
+        FIRST_VERSION_ID,
+        identifier,
+    )
+
+    outcome = resolve_identity(
+        _request(
+            HASH_B,
+            (identifier,),
+            external_identifier_candidates=(candidate,),
+            identifier_assertions=(assertion,),
+            external_identifier_policy=AUTHORITATIVE_DOI_POLICY,
+        ),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert outcome.kind is ResolutionKind.NEW_VERSION
+    assert outcome.document == DocumentIdentity(DOCUMENT_ID)
+
+
+def test_unchanged_source_returns_append_only_identifier_enrichment() -> None:
+    doi = ExternalIdentifier("doi", "10.1000/example")
+    pmid = ExternalIdentifier("pmid", "12345678")
+    candidate = _version(FIRST_VERSION_ID, identifiers=(doi,))
+
+    outcome = resolve_identity(
+        _request(
+            HASH_A,
+            (doi, pmid),
+            continuity_candidates=(candidate,),
+        ),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert outcome.kind is ResolutionKind.UNCHANGED
+    assert outcome.version == candidate
+    assert outcome.identifier_assertions_to_add == (
+        ExternalIdentifierAssertion(
+            SOURCE_OBSERVATION_ID,
+            FIRST_VERSION_ID,
+            pmid,
+        ),
+    )
+
+
+def test_persisted_identifier_enrichment_is_idempotent_on_reingest() -> None:
+    doi = ExternalIdentifier("doi", "10.1000/example")
+    pmid = ExternalIdentifier("pmid", "12345678")
+    candidate = _version(FIRST_VERSION_ID, identifiers=(doi,))
+    assertion = ExternalIdentifierAssertion(
+        SOURCE_OBSERVATION_ID,
+        FIRST_VERSION_ID,
+        pmid,
+    )
+
+    outcome = resolve_identity(
+        _request(
+            HASH_A,
+            (doi, pmid),
+            continuity_candidates=(candidate,),
+            identifier_assertions=(assertion,),
+        ),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert outcome.kind is ResolutionKind.UNCHANGED
+    assert outcome.identifier_assertions_to_add == ()
+
+
+def test_persisted_identifier_enrichment_participates_in_conflict_check() -> None:
+    doi = ExternalIdentifier("doi", "10.1000/example")
+    candidate = _version(FIRST_VERSION_ID, identifiers=(doi,))
+    assertion = ExternalIdentifierAssertion(
+        SOURCE_OBSERVATION_ID,
+        FIRST_VERSION_ID,
+        ExternalIdentifier("pmid", "old"),
+    )
+
+    outcome = resolve_identity(
+        _request(
+            HASH_A,
+            (doi, ExternalIdentifier("pmid", "new")),
+            continuity_candidates=(candidate,),
+            identifier_assertions=(assertion,),
+        ),
+        allocator=FixedAllocator(),
+        pipeline_stage="ingest",
+    )
+
+    assert outcome.kind is ResolutionKind.CONFLICT
+
+
 def test_conflicting_identifier_for_hash_match_fails_closed() -> None:
     candidate_identifier = ExternalIdentifier("doi", "10.1000/old")
     request_identifier = ExternalIdentifier("doi", "10.1000/new")
@@ -328,6 +529,7 @@ def test_allocator_type_errors_are_reported() -> None:
                 external_identifier_candidates=(
                     _version(FIRST_VERSION_ID, content_hash=HASH_A),
                 ),
+                external_identifier_policy=AUTHORITATIVE_DOI_POLICY,
             ),
             "new_document_version_id",
         ),
@@ -436,6 +638,7 @@ def test_completed_resolution_emits_privacy_safe_structured_event(
                         identifiers=(ExternalIdentifier("doi", "10.1000/example"),),
                     ),
                 ),
+                external_identifier_policy=AUTHORITATIVE_DOI_POLICY,
             ),
             "new_version",
             "external_identifier_match",

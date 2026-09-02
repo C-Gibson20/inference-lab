@@ -52,6 +52,9 @@ from inference_lab.provenance.relationships import (
     InvalidRelationshipError,
 )
 from inference_lab.provenance.resolution import (
+    CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY,
+    ExternalIdentifierAssertion,
+    ExternalIdentifierResolutionPolicy,
     IdentityResolutionOutcome,
     IdentityResolutionRequest,
     InvalidResolutionError,
@@ -87,6 +90,7 @@ from inference_lab.provenance.versioning import (
 )
 
 __all__ = [
+    "CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY",
     "CURRENT_LINEAGE_SCHEMA_VERSION",
     "SUPPORTED_LINEAGE_SCHEMA_VERSIONS",
     "ComponentRole",
@@ -107,6 +111,8 @@ __all__ = [
     "DuplicateClass",
     "DuplicateRelationship",
     "ExternalIdentifier",
+    "ExternalIdentifierAssertion",
+    "ExternalIdentifierResolutionPolicy",
     "HashAlgorithm",
     "IdentityIdAllocator",
     "IdentityResolutionOutcome",

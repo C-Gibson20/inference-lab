@@ -8,13 +8,18 @@ from inference_lab.provenance.identifiers import DocumentId, DocumentVersionId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship
 from inference_lab.provenance.resolution import (
+    ExternalIdentifierAssertion,
     IdentityResolutionOutcome,
     IdentityResolutionRequest,
     InvalidResolutionError,
     ResolutionReason,
 )
 from inference_lab.provenance.utils import is_lowercase_slug
-from inference_lab.provenance.values import DuplicateClass, ResolutionKind
+from inference_lab.provenance.values import (
+    DuplicateClass,
+    ExternalIdentifier,
+    ResolutionKind,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -54,17 +59,40 @@ def _identifier_matches(
     request: IdentityResolutionRequest,
 ) -> tuple[DocumentVersion, ...]:
     """Return candidates sharing at least one external identifier."""
-    request_identifiers = set(
-        identifier.as_tuple() for identifier in request.external_identifiers
-    )
-    if not request_identifiers:
+    if not request.external_identifiers:
         return ()
 
     return tuple(
         candidate
         for candidate in request.external_identifier_candidates
-        if request_identifiers.intersection(
-            identifier.as_tuple() for identifier in candidate.external_identifiers
+        if _matching_identifier_namespaces(request, candidate)
+    )
+
+
+def _identifier_values_by_namespace(
+    identifiers: tuple[ExternalIdentifier, ...],
+) -> dict[str, frozenset[str]]:
+    """Group validated external-identifier values by namespace."""
+    grouped: dict[str, set[str]] = {}
+    for identifier in identifiers:
+        grouped.setdefault(identifier.namespace, set()).add(identifier.value)
+    return {namespace: frozenset(values) for namespace, values in grouped.items()}
+
+
+def _matching_identifier_namespaces(
+    request: IdentityResolutionRequest,
+    candidate: DocumentVersion,
+) -> tuple[str, ...]:
+    """Return namespaces whose complete asserted value sets agree."""
+    request_by_namespace = _identifier_values_by_namespace(request.external_identifiers)
+    candidate_by_namespace = _identifier_values_by_namespace(
+        _candidate_external_identifiers(request, candidate)
+    )
+    return tuple(
+        sorted(
+            namespace
+            for namespace in request_by_namespace.keys() & candidate_by_namespace.keys()
+            if request_by_namespace[namespace] == candidate_by_namespace[namespace]
         )
     )
 
@@ -98,14 +126,49 @@ def _conflicting_identifiers(
     candidate: DocumentVersion,
 ) -> bool:
     """Return whether shared namespaces contain conflicting values."""
-    request_by_namespace = {
-        identifier.namespace: identifier.value
-        for identifier in request.external_identifiers
-    }
+    request_by_namespace = _identifier_values_by_namespace(request.external_identifiers)
+    candidate_by_namespace = _identifier_values_by_namespace(
+        _candidate_external_identifiers(request, candidate)
+    )
     return any(
-        request_by_namespace.get(identifier.namespace) is not None
-        and request_by_namespace[identifier.namespace] != identifier.value
+        request_by_namespace[namespace] != candidate_by_namespace[namespace]
+        for namespace in request_by_namespace.keys() & candidate_by_namespace.keys()
+    )
+
+
+def _candidate_external_identifiers(
+    request: IdentityResolutionRequest,
+    candidate: DocumentVersion,
+) -> tuple[ExternalIdentifier, ...]:
+    """Return base and appended identifiers for one candidate."""
+    identifiers = {
+        identifier.as_tuple(): identifier
         for identifier in candidate.external_identifiers
+    }
+    for assertion in request.identifier_assertions:
+        if assertion.document_version_id == candidate.document_version_id:
+            identifier = assertion.external_identifier
+            identifiers[identifier.as_tuple()] = identifier
+    return tuple(identifiers[key] for key in sorted(identifiers))
+
+
+def _identifier_assertions_to_add(
+    request: IdentityResolutionRequest,
+    candidate: DocumentVersion,
+) -> tuple[ExternalIdentifierAssertion, ...]:
+    """Return append-only assertions that add a new namespace."""
+    existing_namespaces = {
+        identifier.namespace
+        for identifier in _candidate_external_identifiers(request, candidate)
+    }
+    return tuple(
+        ExternalIdentifierAssertion(
+            source_observation_id=request.source_observation_id,
+            document_version_id=candidate.document_version_id,
+            external_identifier=identifier,
+        )
+        for identifier in request.external_identifiers
+        if identifier.namespace not in existing_namespaces
     )
 
 
@@ -280,6 +343,9 @@ def resolve_identity(
                         document=DocumentIdentity(candidate.document_id),
                         version=candidate,
                         matched_version_ids=(candidate.document_version_id,),
+                        identifier_assertions_to_add=(
+                            _identifier_assertions_to_add(request, candidate)
+                        ),
                     )
                 )
 
@@ -322,6 +388,20 @@ def resolve_identity(
             )
 
         identifier_matches = _identifier_matches(request)
+        if any(
+            _conflicting_identifiers(request, candidate)
+            for candidate in request.external_identifier_candidates
+        ):
+            return complete(
+                IdentityResolutionOutcome(
+                    kind=ResolutionKind.CONFLICT,
+                    reason=ResolutionReason.CONFLICTING_EVIDENCE,
+                    matched_version_ids=_matched_version_ids(
+                        request.external_identifier_candidates
+                    ),
+                )
+            )
+
         matching_documents = _matching_document_ids(identifier_matches)
         if len(matching_documents) > 1:
             return complete(
@@ -333,6 +413,22 @@ def resolve_identity(
             )
 
         if matching_documents:
+            matched_namespaces = {
+                namespace
+                for candidate in identifier_matches
+                for namespace in _matching_identifier_namespaces(request, candidate)
+            }
+            authoritative_namespaces = set(
+                request.external_identifier_policy.authoritative_namespaces
+            )
+            if not matched_namespaces & authoritative_namespaces:
+                return complete(
+                    IdentityResolutionOutcome(
+                        kind=ResolutionKind.AMBIGUOUS,
+                        reason=(ResolutionReason.UNESTABLISHED_IDENTIFIER_AUTHORITY),
+                        matched_version_ids=_matched_version_ids(identifier_matches),
+                    )
+                )
             document_id = matching_documents[0]
             version = _new_version(
                 request, document_id=document_id, allocator=allocator
