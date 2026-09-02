@@ -1,0 +1,1 @@
+{{ bos_token }}{% for message in messages %}{% if message['role'] == 'system' %}[SYSTEM]{% elif message['role'] == 'user' %}[USER]{% elif message['role'] == 'assistant' %}[ASSISTANT]{% else %}[UNK]{% endif %} {{ message['content'] }}{% endfor %}[ASSISTANT]

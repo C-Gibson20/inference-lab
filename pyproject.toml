@@ -11,6 +11,8 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "requests>=2.34.2",
     "structlog>=26.1.0",
+    "torch==2.8.0",
+    "transformers==4.55.4",
 ]
 
 [project.scripts]

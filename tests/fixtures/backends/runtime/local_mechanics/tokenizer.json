@@ -1,0 +1,252 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "[PAD]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "[BOS]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "[EOS]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 3,
+      "content": "[UNK]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 4,
+      "content": "[SYSTEM]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 5,
+      "content": "[USER]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 6,
+      "content": "[ASSISTANT]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "BPE",
+    "dropout": null,
+    "unk_token": "[UNK]",
+    "continuing_subword_prefix": null,
+    "end_of_word_suffix": null,
+    "fuse_unk": false,
+    "byte_fallback": false,
+    "ignore_merges": false,
+    "vocab": {
+      "[PAD]": 0,
+      "[BOS]": 1,
+      "[EOS]": 2,
+      "[UNK]": 3,
+      "[SYSTEM]": 4,
+      "[USER]": 5,
+      "[ASSISTANT]": 6,
+      "a": 7,
+      "b": 8,
+      "c": 9,
+      "d": 10,
+      "e": 11,
+      "f": 12,
+      "g": 13,
+      "h": 14,
+      "i": 15,
+      "j": 16,
+      "k": 17,
+      "l": 18,
+      "m": 19,
+      "n": 20,
+      "o": 21,
+      "p": 22,
+      "q": 23,
+      "r": 24,
+      "s": 25,
+      "t": 26,
+      "u": 27,
+      "v": 28,
+      "w": 29,
+      "x": 30,
+      "y": 31,
+      "z": 32,
+      "!": 33,
+      "?": 34,
+      ".": 35,
+      ",": 36,
+      "he": 37,
+      "hel": 38,
+      "hell": 39,
+      "hello": 40,
+      "wo": 41,
+      "wor": 42,
+      "worl": 43,
+      "world": 44,
+      "lo": 45,
+      "loc": 46,
+      "loca": 47,
+      "local": 48,
+      "ru": 49,
+      "run": 50,
+      "runt": 51,
+      "runti": 52,
+      "runtim": 53,
+      "runtime": 54,
+      "ca": 55,
+      "cac": 56,
+      "cach": 57,
+      "cache": 58,
+      "te": 59,
+      "tes": 60,
+      "test": 61
+    },
+    "merges": [
+      [
+        "h",
+        "e"
+      ],
+      [
+        "he",
+        "l"
+      ],
+      [
+        "hel",
+        "l"
+      ],
+      [
+        "hell",
+        "o"
+      ],
+      [
+        "w",
+        "o"
+      ],
+      [
+        "wo",
+        "r"
+      ],
+      [
+        "wor",
+        "l"
+      ],
+      [
+        "worl",
+        "d"
+      ],
+      [
+        "l",
+        "o"
+      ],
+      [
+        "lo",
+        "c"
+      ],
+      [
+        "loc",
+        "a"
+      ],
+      [
+        "loca",
+        "l"
+      ],
+      [
+        "r",
+        "u"
+      ],
+      [
+        "ru",
+        "n"
+      ],
+      [
+        "run",
+        "t"
+      ],
+      [
+        "runt",
+        "i"
+      ],
+      [
+        "runti",
+        "m"
+      ],
+      [
+        "runtim",
+        "e"
+      ],
+      [
+        "c",
+        "a"
+      ],
+      [
+        "ca",
+        "c"
+      ],
+      [
+        "cac",
+        "h"
+      ],
+      [
+        "cach",
+        "e"
+      ],
+      [
+        "t",
+        "e"
+      ],
+      [
+        "te",
+        "s"
+      ],
+      [
+        "tes",
+        "t"
+      ]
+    ]
+  }
+}
