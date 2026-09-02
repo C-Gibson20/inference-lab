@@ -1,0 +1,174 @@
+from types import TracebackType
+from typing import Self
+
+import inference_lab.storage as storage
+from inference_lab.provenance import (
+    ContentHash,
+    CorpusId,
+    DocumentFamilyId,
+    DocumentFamilyMembership,
+    DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
+    DocumentVersionId,
+    DuplicateRelationship,
+    ExternalIdentifier,
+)
+from inference_lab.storage import MetadataRepository, MetadataTransaction
+
+
+class StructuralTransaction:
+    """Complete structural implementation independent of the protocols."""
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        return False
+
+    def add_corpus(self, corpus_id: CorpusId) -> None:
+        pass
+
+    def add_document_family(self, family_id: DocumentFamilyId) -> None:
+        pass
+
+    def add_document(self, document: DocumentIdentity) -> None:
+        pass
+
+    def add_document_version(self, document_version: DocumentVersion) -> None:
+        pass
+
+    def add_duplicate_relationship(self, relationship: DuplicateRelationship) -> None:
+        pass
+
+    def add_family_membership(self, membership: DocumentFamilyMembership) -> None:
+        pass
+
+    def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
+        return None
+
+    def get_document_family(
+        self, family_id: DocumentFamilyId
+    ) -> DocumentFamilyId | None:
+        return None
+
+    def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
+        return None
+
+    def get_document_version(
+        self, document_version_id: DocumentVersionId
+    ) -> DocumentVersion | None:
+        return None
+
+    def list_document_versions(
+        self, document_id: DocumentId
+    ) -> tuple[DocumentVersion, ...]:
+        return ()
+
+    def find_document_versions_by_content_hash(
+        self, content_hash: ContentHash
+    ) -> tuple[DocumentVersion, ...]:
+        return ()
+
+    def find_document_versions_by_external_identifiers(
+        self, external_identifiers: tuple[ExternalIdentifier, ...]
+    ) -> tuple[DocumentVersion, ...]:
+        return ()
+
+    def list_duplicate_relationships(
+        self, document_version_id: DocumentVersionId
+    ) -> tuple[DuplicateRelationship, ...]:
+        return ()
+
+    def list_family_memberships_by_family(
+        self, family_id: DocumentFamilyId
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        return ()
+
+    def list_family_memberships_by_document(
+        self, document_id: DocumentId
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        return ()
+
+    def list_family_memberships_by_document_version(
+        self, document_version_id: DocumentVersionId
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        return ()
+
+
+class StructuralRepository(StructuralTransaction):
+    """Complete structural repository without protocol inheritance."""
+
+    is_closed = False
+
+    def transaction(self) -> MetadataTransaction:
+        return StructuralTransaction()
+
+    def close(self) -> None:
+        pass
+
+
+def test_storage_protocols_are_structural() -> None:
+    transaction = StructuralTransaction()
+    repository = StructuralRepository()
+
+    assert isinstance(transaction, MetadataTransaction)
+    assert isinstance(repository, MetadataRepository)
+
+
+def test_reader_without_writes_is_not_a_transaction() -> None:
+    class ReaderOnly:
+        get_corpus = StructuralTransaction.get_corpus
+        get_document_family = StructuralTransaction.get_document_family
+        get_document = StructuralTransaction.get_document
+        get_document_version = StructuralTransaction.get_document_version
+        list_document_versions = StructuralTransaction.list_document_versions
+        find_document_versions_by_content_hash = (
+            StructuralTransaction.find_document_versions_by_content_hash
+        )
+        find_document_versions_by_external_identifiers = (
+            StructuralTransaction.find_document_versions_by_external_identifiers
+        )
+        list_duplicate_relationships = (
+            StructuralTransaction.list_duplicate_relationships
+        )
+        list_family_memberships_by_family = (
+            StructuralTransaction.list_family_memberships_by_family
+        )
+        list_family_memberships_by_document = (
+            StructuralTransaction.list_family_memberships_by_document
+        )
+        list_family_memberships_by_document_version = (
+            StructuralTransaction.list_family_memberships_by_document_version
+        )
+
+    assert not isinstance(ReaderOnly(), MetadataTransaction)
+
+
+def test_public_storage_api_contains_only_contract_boundary() -> None:
+    expected_exports = {
+        "CorruptStorageError",
+        "IncompatibleSchemaError",
+        "MetadataReader",
+        "MetadataRepository",
+        "MetadataTransaction",
+        "MetadataWriter",
+        "MigrationRequiredError",
+        "RepositoryClosedError",
+        "RepositoryUnavailableError",
+        "StorageConcurrencyError",
+        "StorageConflictError",
+        "StorageError",
+        "StorageErrorCategory",
+        "StorageMigrationError",
+        "StorageTransactionError",
+    }
+
+    assert set(storage.__all__) == expected_exports
+    assert all(hasattr(storage, name) for name in expected_exports)
+    assert not any("sqlite" in name.lower() for name in storage.__all__)

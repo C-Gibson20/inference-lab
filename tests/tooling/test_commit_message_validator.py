@@ -20,6 +20,16 @@ VALID_MESSAGES = [
     "[tooling] ci: add coverage reporting step",
 ]
 
+MERGE_MESSAGES = [
+    "Merge pull request #43 from C-Gibson20/feature/stor-01-05-acceptance",
+    "Merge pull request #42 from C-Gibson20/feature/stor-01-04-relationships",
+    "Merge pull request #41 from C-Gibson20/feature/stor-01-03-identity",
+    "Merge pull request #40 from C-Gibson20/feature/stor-01-02-schema",
+    "Merge pull request #39 from C-Gibson20/feature/stor-01-01-contracts",
+    "Merge branch 'feature/stor-01' into feature/storage",
+    "Merge remote-tracking branch 'origin/main' into feature/storage",
+]
+
 INVALID_MESSAGES = [
     "add raw document loader",
     "[ingest] add raw document loader",
@@ -30,6 +40,8 @@ INVALID_MESSAGES = [
     "[ingest]feat: no space after bracket",
     "[Ingest] feat: wrong case module",
     "[ingest] FEAT: uppercase type",
+    "Merge",
+    "merge pull request #43 from example/branch",
 ]
 
 
@@ -48,6 +60,15 @@ def test_valid_commit_messages_pass(message):
 
     assert result.returncode == 0, (
         f"expected valid message to pass: {message!r}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.parametrize("message", MERGE_MESSAGES)
+def test_generated_merge_commit_messages_pass(message):
+    result = run_validator(message)
+
+    assert result.returncode == 0, (
+        f"expected merge message to pass: {message!r}\nstderr: {result.stderr}"
     )
 
 
@@ -102,7 +123,7 @@ def test_file_mode_rejects_empty_subject(tmp_path):
 
 
 def test_stdin_mode_accepts_multiple_valid_messages():
-    messages = "\n".join(VALID_MESSAGES) + "\n"
+    messages = "\n".join([*VALID_MESSAGES, *MERGE_MESSAGES]) + "\n"
     result = subprocess.run(
         [str(SCRIPT), "--stdin"],
         input=messages,
