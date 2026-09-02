@@ -33,6 +33,7 @@ from inference_lab.backends.runtime.memory import (
     MemoryTotal,
     RollupReconciliation,
 )
+from inference_lab.backends.runtime.memory_fake import FakeMemoryAccountingAdapter
 from inference_lab.backends.runtime.memory_records import (
     MemoryBudgetRecord,
     MemoryComponentRecord,
@@ -100,6 +101,7 @@ __all__ = [
     "FakeBackend",
     "FakeBackendConfig",
     "FakeFailureMode",
+    "FakeMemoryAccountingAdapter",
     "GenerationEvent",
     "GenerationEventType",
     "GenerationMessage",
