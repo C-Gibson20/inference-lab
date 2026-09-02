@@ -4,6 +4,8 @@ set -eu
 MODULES='ingest|retrieval|serving|runtime|storage|provenance|evaluation|profiling|docs|tooling'
 TYPES='feat|fix|perf|refactor|docs|test|build|ci|chore'
 PATTERN='^\[('"$MODULES"')\] ('"$TYPES"')(!)?: [^[:space:]].*$'
+# Git and hosting providers generate merge subjects outside the project format.
+MERGE_PATTERN='^Merge [^[:space:]].*$'
 
 usage() {
     printf '%s\n' \
@@ -14,6 +16,9 @@ usage() {
 
 check_one() {
     msg=$1
+    if printf '%s\n' "$msg" | grep -Eq "$MERGE_PATTERN"; then
+        return 0
+    fi
     if ! printf '%s\n' "$msg" | grep -Eq "$PATTERN"; then
         printf '%s\n' "Invalid commit message: $msg" >&2
         printf '%s\n' 'Expected: [<module>] <type>: <description>' >&2

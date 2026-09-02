@@ -53,6 +53,17 @@ def test_commit_msg_hook_validates_message_file(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_commit_msg_hook_accepts_generated_merge_message(tmp_path: Path) -> None:
+    message_file = tmp_path / "COMMIT_EDITMSG"
+    message_file.write_text(
+        "Merge pull request #43 from C-Gibson20/feature/stor-01-05-acceptance\n"
+    )
+
+    result = run_script(COMMIT_MSG, str(message_file))
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_commit_msg_hook_rejects_invalid_message_file(tmp_path: Path) -> None:
     message_file = tmp_path / "COMMIT_EDITMSG"
     message_file.write_text("not a valid commit message\n")
