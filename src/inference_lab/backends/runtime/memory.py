@@ -395,6 +395,11 @@ class MemorySnapshot:
 
     def __post_init__(self) -> None:
         self._validate()
+        object.__setattr__(
+            self,
+            "measurements",
+            tuple(sorted(self.measurements, key=lambda m: m.measurement_id)),
+        )
         object.__setattr__(self, "_reconciliations", self._build_reconciliations())
 
     def _validate(self) -> None:
