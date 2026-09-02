@@ -33,6 +33,12 @@ from inference_lab.backends.runtime.memory import (
     MemoryTotal,
     RollupReconciliation,
 )
+from inference_lab.backends.runtime.memory_serialisation import (
+    deserialise_budget_comparison,
+    deserialise_memory_snapshot,
+    serialise_budget_comparison,
+    serialise_memory_snapshot,
+)
 from inference_lab.backends.runtime.protocols import (
     EmbeddingBackend,
     GeneratorBackend,
@@ -111,5 +117,9 @@ __all__ = [
     "RerankerBackend",
     "RollupReconciliation",
     "ScoredCandidate",
+    "deserialise_budget_comparison",
+    "deserialise_memory_snapshot",
+    "serialise_budget_comparison",
+    "serialise_memory_snapshot",
     "validate_generation_stream",
 ]
