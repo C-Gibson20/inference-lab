@@ -1,8 +1,13 @@
-"""Internal SQLite persistence for corpus and logical-document identities."""
+"""Internal SQLite persistence for stable metadata identities."""
 
 import sqlite3
 
-from inference_lab.provenance import CorpusId, DocumentId, DocumentIdentity
+from inference_lab.provenance import (
+    CorpusId,
+    DocumentFamilyId,
+    DocumentId,
+    DocumentIdentity,
+)
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage.errors import (
     CorruptStorageError,
@@ -93,6 +98,53 @@ def add_document(
         connection.execute(
             "INSERT INTO documents (document_id) VALUES (?)",
             (document.document_id.as_str(),),
+        )
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
+def get_document_family(
+    connection: sqlite3.Connection,
+    family_id: DocumentFamilyId,
+) -> DocumentFamilyId | None:
+    """Reconstruct one document-family identity without its storage row."""
+    if not isinstance(family_id, DocumentFamilyId):
+        raise TypeError("family_id must be a DocumentFamilyId.")
+
+    try:
+        row = connection.execute(
+            "SELECT family_id FROM document_families WHERE family_id = ?",
+            (family_id.as_str(),),
+        ).fetchone()
+        if row is None:
+            return None
+        return DocumentFamilyId.from_str(row["family_id"])
+    except (TypeError, ValueError, KeyError, IndexError):
+        raise CorruptStorageError() from None
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
+def add_document_family(
+    connection: sqlite3.Connection,
+    family_id: DocumentFamilyId,
+) -> None:
+    """Insert a document-family identity, accepting exact replay."""
+    if not isinstance(family_id, DocumentFamilyId):
+        raise TypeError("family_id must be a DocumentFamilyId.")
+    if get_document_family(connection, family_id) is not None:
+        return
+
+    try:
+        connection.execute(
+            "INSERT INTO document_families (family_id) VALUES (?)",
+            (family_id.as_str(),),
         )
     except sqlite3.Error as error:
         raise translate_sqlite_error(

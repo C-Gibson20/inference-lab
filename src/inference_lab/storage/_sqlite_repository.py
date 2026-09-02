@@ -12,6 +12,7 @@ import structlog
 from inference_lab.provenance import (
     ContentHash,
     CorpusId,
+    DocumentFamilyId,
     DocumentId,
     DocumentIdentity,
     DocumentVersion,
@@ -25,8 +26,10 @@ from inference_lab.storage._sqlite_connection import (
 from inference_lab.storage._sqlite_core import (
     add_corpus,
     add_document,
+    add_document_family,
     get_corpus,
     get_document,
+    get_document_family,
 )
 from inference_lab.storage._sqlite_inspection import (
     SchemaInspection,
@@ -118,6 +121,13 @@ class SQLiteMetadataRepository:
     def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
         """Return a logical document, or ``None`` when absent."""
         return get_document(self._connection_or_raise(), document_id)
+
+    def get_document_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> DocumentFamilyId | None:
+        """Return a document-family identity, or ``None`` when absent."""
+        return get_document_family(self._connection_or_raise(), family_id)
 
     def get_document_version(
         self,
@@ -301,6 +311,17 @@ class SQLiteMetadataTransaction:
     def add_document(self, document: DocumentIdentity) -> None:
         """Create a logical document within this transaction."""
         add_document(self._connection_or_raise(), document)
+
+    def get_document_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> DocumentFamilyId | None:
+        """Return a family identity within this transaction."""
+        return get_document_family(self._connection_or_raise(), family_id)
+
+    def add_document_family(self, family_id: DocumentFamilyId) -> None:
+        """Create a document-family identity within this transaction."""
+        add_document_family(self._connection_or_raise(), family_id)
 
     def get_document_version(
         self,
