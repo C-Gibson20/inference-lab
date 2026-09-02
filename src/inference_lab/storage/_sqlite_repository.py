@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Callable, Concatenate, ParamSpec, Self, TypeVar
 
 import structlog
 
@@ -65,6 +65,8 @@ from inference_lab.storage.errors import (
 )
 
 _LOGGER = structlog.get_logger(__name__)
+_OperationParameters = ParamSpec("_OperationParameters")
+_OperationResult = TypeVar("_OperationResult")
 
 
 def _safe_log(method_name: str, event: str, **fields: object) -> None:
@@ -268,6 +270,7 @@ class SQLiteMetadataTransaction:
         self._repository = repository
         self._active = False
         self._finished = False
+        self._failed = False
 
     def __enter__(self) -> Self:
         """Acquire the write transaction, rejecting nesting and reuse."""
@@ -304,23 +307,34 @@ class SQLiteMetadataTransaction:
         del exception_type, traceback
         connection = self._connection_or_raise()
 
-        if exception is not None:
+        if exception is not None or self._failed:
             rolled_back = False
             try:
                 connection.rollback()
                 rolled_back = True
             except sqlite3.Error:
-                _safe_log(
-                    "error",
-                    "transaction_failed",
-                    error_category=StorageTransactionError.category.value,
-                    retryable=StorageTransactionError.retryable,
-                )
+                if exception is not None:
+                    _safe_log(
+                        "error",
+                        "transaction_failed",
+                        error_category=StorageTransactionError.category.value,
+                        retryable=StorageTransactionError.retryable,
+                    )
             finally:
                 self._finish()
-            if rolled_back:
-                _safe_log("info", "transaction_rolled_back")
-            return False
+            if exception is not None:
+                if rolled_back:
+                    _safe_log("info", "transaction_rolled_back")
+                return False
+
+            error = StorageTransactionError()
+            _safe_log(
+                "error",
+                "transaction_failed",
+                error_category=error.category.value,
+                retryable=error.retryable,
+            )
+            raise error from None
 
         try:
             connection.commit()
@@ -348,117 +362,100 @@ class SQLiteMetadataTransaction:
 
     def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
         """Return a corpus identity within this transaction."""
-        return get_corpus(self._connection_or_raise(), corpus_id)
+        return self._execute(get_corpus, corpus_id)
 
     def add_corpus(self, corpus_id: CorpusId) -> None:
         """Create a corpus identity within this transaction."""
-        add_corpus(self._connection_or_raise(), corpus_id)
+        self._execute(add_corpus, corpus_id)
 
     def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
         """Return a logical document within this transaction."""
-        return get_document(self._connection_or_raise(), document_id)
+        return self._execute(get_document, document_id)
 
     def add_document(self, document: DocumentIdentity) -> None:
         """Create a logical document within this transaction."""
-        add_document(self._connection_or_raise(), document)
+        self._execute(add_document, document)
 
     def get_document_family(
         self,
         family_id: DocumentFamilyId,
     ) -> DocumentFamilyId | None:
         """Return a family identity within this transaction."""
-        return get_document_family(self._connection_or_raise(), family_id)
+        return self._execute(get_document_family, family_id)
 
     def add_document_family(self, family_id: DocumentFamilyId) -> None:
         """Create a document-family identity within this transaction."""
-        add_document_family(self._connection_or_raise(), family_id)
+        self._execute(add_document_family, family_id)
 
     def get_document_version(
         self,
         document_version_id: DocumentVersionId,
     ) -> DocumentVersion | None:
         """Return an immutable version within this transaction."""
-        return get_document_version(
-            self._connection_or_raise(),
-            document_version_id,
-        )
+        return self._execute(get_document_version, document_version_id)
 
     def list_document_versions(
         self,
         document_id: DocumentId,
     ) -> tuple[DocumentVersion, ...]:
         """Return a document's versions within this transaction."""
-        return list_document_versions(self._connection_or_raise(), document_id)
+        return self._execute(list_document_versions, document_id)
 
     def find_document_versions_by_content_hash(
         self,
         content_hash: ContentHash,
     ) -> tuple[DocumentVersion, ...]:
         """Return exact-hash candidates within this transaction."""
-        return find_document_versions_by_content_hash(
-            self._connection_or_raise(),
-            content_hash,
-        )
+        return self._execute(find_document_versions_by_content_hash, content_hash)
 
     def find_document_versions_by_external_identifiers(
         self,
         external_identifiers: tuple[ExternalIdentifier, ...],
     ) -> tuple[DocumentVersion, ...]:
         """Return identifier candidates within this transaction."""
-        return find_document_versions_by_external_identifiers(
-            self._connection_or_raise(),
-            external_identifiers,
+        return self._execute(
+            find_document_versions_by_external_identifiers, external_identifiers
         )
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its external identifiers atomically."""
-        add_document_version(self._connection_or_raise(), document_version)
+        self._execute(add_document_version, document_version)
 
     def list_duplicate_relationships(
         self,
         document_version_id: DocumentVersionId,
     ) -> tuple[DuplicateRelationship, ...]:
         """Return duplicate relationships within this transaction."""
-        return list_duplicate_relationships(
-            self._connection_or_raise(),
-            document_version_id,
-        )
+        return self._execute(list_duplicate_relationships, document_version_id)
 
     def add_duplicate_relationship(
         self,
         relationship: DuplicateRelationship,
     ) -> None:
         """Create a duplicate relationship within this transaction."""
-        add_duplicate_relationship(self._connection_or_raise(), relationship)
+        self._execute(add_duplicate_relationship, relationship)
 
     def list_family_memberships_by_family(
         self,
         family_id: DocumentFamilyId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a family's memberships within this transaction."""
-        return list_family_memberships_by_family(
-            self._connection_or_raise(),
-            family_id,
-        )
+        return self._execute(list_family_memberships_by_family, family_id)
 
     def list_family_memberships_by_document(
         self,
         document_id: DocumentId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a document's memberships within this transaction."""
-        return list_family_memberships_by_document(
-            self._connection_or_raise(),
-            document_id,
-        )
+        return self._execute(list_family_memberships_by_document, document_id)
 
     def list_family_memberships_by_document_version(
         self,
         document_version_id: DocumentVersionId,
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a version's memberships within this transaction."""
-        return list_family_memberships_by_document_version(
-            self._connection_or_raise(),
-            document_version_id,
+        return self._execute(
+            list_family_memberships_by_document_version, document_version_id
         )
 
     def add_family_membership(
@@ -466,7 +463,25 @@ class SQLiteMetadataTransaction:
         membership: DocumentFamilyMembership,
     ) -> None:
         """Create a family membership within this transaction."""
-        add_family_membership(self._connection_or_raise(), membership)
+        self._execute(add_family_membership, membership)
+
+    def _execute(
+        self,
+        operation: Callable[
+            Concatenate[sqlite3.Connection, _OperationParameters],
+            _OperationResult,
+        ],
+        *args: _OperationParameters.args,
+        **kwargs: _OperationParameters.kwargs,
+    ) -> _OperationResult:
+        connection = self._connection_or_raise()
+        if self._failed:
+            raise StorageTransactionError()
+        try:
+            return operation(connection, *args, **kwargs)
+        except BaseException:
+            self._failed = True
+            raise
 
     def _connection_or_raise(self) -> sqlite3.Connection:
         if not self._active or self._finished:
