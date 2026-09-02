@@ -132,7 +132,7 @@ def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
     assert repository.list_family_memberships_by_family(_FAMILY_ID) == (_MEMBERSHIP,)
 
 
-def test_production_source_observation_migration_preserves_revision_one_graph(
+def test_production_migrations_preserve_revision_one_graph(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
@@ -144,7 +144,7 @@ def test_production_source_observation_migration_preserves_revision_one_graph(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert migrated.schema_inspection.current_revision == 2
+        assert migrated.schema_inspection.current_revision == 3
         _assert_complete_graph(migrated)
     finally:
         migrated.close()

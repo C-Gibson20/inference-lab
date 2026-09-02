@@ -61,6 +61,22 @@ def _validate_integrity(connection: sqlite3.Connection) -> None:
         raise CorruptStorageError()
     if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
         raise CorruptStorageError()
+    mismatched_duplicate = connection.execute(
+        """SELECT 1
+        FROM duplicate_relationships AS relationship
+        JOIN document_versions AS first
+            ON first.document_version_id = relationship.first_version_id
+        JOIN document_versions AS second
+            ON second.document_version_id = relationship.second_version_id
+        WHERE relationship.duplicate_class = 'byte_identical'
+            AND (
+                first.content_hash_algorithm != second.content_hash_algorithm
+                OR first.content_hash_digest != second.content_hash_digest
+            )
+        LIMIT 1"""
+    ).fetchone()
+    if mismatched_duplicate is not None:
+        raise CorruptStorageError()
 
 
 def _validate_applied_at(value: object) -> datetime:

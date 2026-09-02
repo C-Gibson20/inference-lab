@@ -151,6 +151,25 @@ def test_reopen_rejects_rows_violating_schema_checks(tmp_path: Path) -> None:
         SQLiteMetadataRepository.open(database_path)
 
 
+def test_reopen_rejects_tampered_byte_identical_hashes(tmp_path: Path) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_populated_database(database_path)
+    _mutate_database(
+        database_path,
+        (
+            "DROP TRIGGER document_versions_duplicate_hash_update",
+            """UPDATE document_versions
+            SET content_hash_digest =
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            WHERE document_version_id =
+                '22222222-2222-4222-8222-222222222222'""",
+        ),
+    )
+
+    with pytest.raises(CorruptStorageError):
+        SQLiteMetadataRepository.open(database_path)
+
+
 def test_noncanonical_stored_identifier_order_fails_on_reconstruction(
     tmp_path: Path,
 ) -> None:

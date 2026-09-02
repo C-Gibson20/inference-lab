@@ -285,6 +285,64 @@ ON external_identifier_assertions (
 )""",
 )
 
+_REVISION_3_STATEMENTS: Final = (
+    """CREATE TRIGGER duplicate_relationships_hash_insert
+BEFORE INSERT ON duplicate_relationships
+WHEN NEW.duplicate_class = 'byte_identical'
+    AND NOT EXISTS (
+        SELECT 1
+        FROM document_versions AS first
+        JOIN document_versions AS second
+            ON second.document_version_id = NEW.second_version_id
+        WHERE first.document_version_id = NEW.first_version_id
+            AND first.content_hash_algorithm = second.content_hash_algorithm
+            AND first.content_hash_digest = second.content_hash_digest
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'byte-identical duplicate hashes must match');
+END""",
+    """CREATE TRIGGER duplicate_relationships_hash_update
+BEFORE UPDATE ON duplicate_relationships
+WHEN NEW.duplicate_class = 'byte_identical'
+    AND NOT EXISTS (
+        SELECT 1
+        FROM document_versions AS first
+        JOIN document_versions AS second
+            ON second.document_version_id = NEW.second_version_id
+        WHERE first.document_version_id = NEW.first_version_id
+            AND first.content_hash_algorithm = second.content_hash_algorithm
+            AND first.content_hash_digest = second.content_hash_digest
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'byte-identical duplicate hashes must match');
+END""",
+    """CREATE TRIGGER document_versions_duplicate_hash_update
+BEFORE UPDATE OF content_hash_algorithm, content_hash_digest ON document_versions
+WHEN EXISTS (
+    SELECT 1
+    FROM duplicate_relationships AS relationship
+    JOIN document_versions AS other
+        ON other.document_version_id = CASE
+            WHEN relationship.first_version_id = OLD.document_version_id
+                THEN relationship.second_version_id
+            ELSE relationship.first_version_id
+        END
+    WHERE OLD.document_version_id IN (
+        relationship.first_version_id,
+        relationship.second_version_id
+    )
+        AND (
+            NEW.content_hash_algorithm != other.content_hash_algorithm
+            OR NEW.content_hash_digest != other.content_hash_digest
+        )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'byte-identical duplicate hashes must match');
+END""",
+    """UPDATE duplicate_relationships
+SET duplicate_class = duplicate_class""",
+)
+
 MIGRATIONS: Final = (
     MigrationDefinition(
         revision=1,
@@ -295,6 +353,11 @@ MIGRATIONS: Final = (
         revision=2,
         migration_id="source_observation_identity",
         statements=_REVISION_2_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=3,
+        migration_id="duplicate_hash_integrity",
+        statements=_REVISION_3_STATEMENTS,
     ),
 )
 
