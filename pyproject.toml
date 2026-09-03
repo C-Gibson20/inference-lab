@@ -64,3 +64,11 @@ ban-relative-imports = "all"
 include = ["src", "tests", "scripts"]
 pythonVersion = "3.13"
 typeCheckingMode = "standard"
+
+[tool.coverage.run]
+branch = true
+source = ["inference_lab"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

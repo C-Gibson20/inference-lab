@@ -367,6 +367,8 @@ def _filter(value: JsonValue) -> FilterExpression:
     if not isinstance(value, dict):
         raise InvalidRetrievalSerialisationError("filter must be an object.")
     payload = cast(JsonObject, value)
+    if "kind" not in payload:
+        raise InvalidRetrievalSerialisationError("filter requires a kind.")
     kind = _string(payload["kind"], name="filter.kind")
     # The kind is used to select the exact object schema before parsing fields.
     schemas: dict[str, frozenset[str]] = {

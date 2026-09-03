@@ -21,6 +21,7 @@ from inference_lab.retrieval import (
     ExactFilter,
     FailureCategory,
     InvalidRetrievalSerialisationError,
+    OneOfFilter,
     ResultStatus,
     RetrievalCandidate,
     RetrievalChannel,
@@ -60,6 +61,26 @@ def test_query_serialisation_is_canonical_and_round_trips() -> None:
     )
     assert serialise_query(query) == expected
     assert deserialise_query(expected) == query
+
+
+def test_set_like_filters_have_order_independent_canonical_bytes() -> None:
+    """Give equivalent one-of sets the same query and cache-key representation."""
+    version = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000001")
+    first = RetrievalQuery(
+        "question",
+        version,
+        RetrievalLimit(3),
+        OneOfFilter("document-type", ("paper", "patent")),
+    )
+    second = RetrievalQuery(
+        "question",
+        version,
+        RetrievalLimit(3),
+        OneOfFilter("document-type", ("patent", "paper")),
+    )
+
+    assert first == second
+    assert serialise_query(first) == serialise_query(second)
 
 
 def _result_fixture() -> EvidenceResult:
@@ -151,6 +172,33 @@ def test_query_deserialisation_rejects_non_canonical_or_malformed_payloads(
 ) -> None:
     """Reject malformed JSON, duplicate/unknown fields, and coercion."""
     with pytest.raises((InvalidRetrievalSerialisationError, TypeError)):
+        deserialise_query(data)
+
+
+@pytest.mark.parametrize(
+    "filter_payload",
+    [
+        {},
+        {"field": "document-type"},
+        {"kind": "all", "children": [{}]},
+        {"kind": "not", "child": {}},
+    ],
+)
+def test_nested_filters_without_discriminators_use_serialisation_error(
+    filter_payload: object,
+) -> None:
+    """Never leak mapping implementation errors from malformed filter trees."""
+    data = json.dumps(
+        {
+            "retrieval_schema_version": "2.0.0",
+            "text": "question",
+            "corpus_version": "00000000-0000-4000-8000-000000000001",
+            "limit": 1,
+            "filter": filter_payload,
+        }
+    ).encode()
+
+    with pytest.raises(InvalidRetrievalSerialisationError, match="filter"):
         deserialise_query(data)
 
 

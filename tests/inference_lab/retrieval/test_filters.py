@@ -75,3 +75,24 @@ def test_filter_scalars_distinguish_dates_booleans_and_finite_numbers() -> None:
         ExactFilter("score", float("inf"))
     with pytest.raises(TypeError):
         ExactFilter("score", object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (("patent", "paper"), ("paper", "patent")),
+        ((10, -2, 3), (-2, 3, 10)),
+        ((1.5, -2.0, 0.0), (-2.0, 0.0, 1.5)),
+        ((True, False), (False, True)),
+        (
+            (date(2024, 3, 1), date(2023, 12, 1)),
+            (date(2023, 12, 1), date(2024, 3, 1)),
+        ),
+    ],
+)
+def test_one_of_values_are_canonical_within_their_scalar_type(
+    values: tuple[object, ...],
+    expected: tuple[object, ...],
+) -> None:
+    """Make set-like filters independent of incidental caller ordering."""
+    assert OneOfFilter("field", values).values == expected  # type: ignore[arg-type]

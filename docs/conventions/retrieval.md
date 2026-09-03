@@ -13,7 +13,11 @@ strictly positive `RetrievalLimit`. Filters support exact values, non-empty
 typed sets, bounded ranges, presence/missing checks, and non-empty all/any/not
 composition. Field names are lowercase project-owned slugs. Filter values are
 strict strings, integers, finite floats, booleans, or calendar dates; no value
-is normalised, rewritten, or inferred.
+is normalised, rewritten, or inferred. `OneOfFilter` values are set-like and
+are sorted canonically within their single scalar type. `AllFilter` and
+`AnyFilter` child order remains the producer's expression/planning order and is
+preserved in canonical bytes; consumers must not infer relevance or authority
+from that order.
 
 ## Candidates, scores, and results
 
@@ -66,7 +70,9 @@ values, implicit coercion, non-canonical identifiers, and invalid value
 invariants. Version `1.0.0` results did not persist their requested limit and
 are not accepted as version `2.0.0` data; the shared schema version is bumped
 for queries as well so one version continues to identify the complete
-retrieval wire contract.
+retrieval wire contract. Malformed filter discriminators at any nesting depth
+raise `InvalidRetrievalSerialisationError`; mapping implementation exceptions
+are not part of the public failure surface.
 
 Pure retrieval values and serialisation emit no logs. Operational retrieval
 stages may log bounded lifecycle information through the shared `structlog`
