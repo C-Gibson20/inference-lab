@@ -296,7 +296,7 @@ def resolve_identity(
     _validate_pipeline_stage(pipeline_stage)
     _validate_allocator(allocator)
 
-    def complete(outcome: IdentityResolutionOutcome) -> IdentityResolutionOutcome:
+    def _complete(outcome: IdentityResolutionOutcome) -> IdentityResolutionOutcome:
         _log_resolution_completed(
             outcome=outcome,
             candidate_count=len(request.all_candidates),
@@ -316,7 +316,7 @@ def resolve_identity(
                 _conflicting_identifiers(request, candidate)
                 for candidate in continuity_candidates
             ):
-                return complete(
+                return _complete(
                     IdentityResolutionOutcome(
                         kind=ResolutionKind.CONFLICT,
                         reason=ResolutionReason.CONFLICTING_EVIDENCE,
@@ -326,7 +326,7 @@ def resolve_identity(
 
             matching_documents = _matching_document_ids(continuity_candidates)
             if len(matching_documents) > 1 or len(continuity_hash_matches) > 1:
-                return complete(
+                return _complete(
                     IdentityResolutionOutcome(
                         kind=ResolutionKind.AMBIGUOUS,
                         reason=ResolutionReason.MULTIPLE_CANDIDATES,
@@ -336,7 +336,7 @@ def resolve_identity(
 
             if continuity_hash_matches:
                 candidate = continuity_hash_matches[0]
-                return complete(
+                return _complete(
                     IdentityResolutionOutcome(
                         kind=ResolutionKind.UNCHANGED,
                         reason=ResolutionReason.EXACT_HASH_MATCH,
@@ -353,7 +353,7 @@ def resolve_identity(
             version = _new_version(
                 request, document_id=document_id, allocator=allocator
             )
-            return complete(
+            return _complete(
                 IdentityResolutionOutcome(
                     kind=ResolutionKind.NEW_VERSION,
                     reason=ResolutionReason.SOURCE_CONTINUITY_MATCH,
@@ -376,7 +376,7 @@ def resolve_identity(
                 )
                 for candidate in hash_matches
             )
-            return complete(
+            return _complete(
                 IdentityResolutionOutcome(
                     kind=ResolutionKind.DUPLICATE,
                     reason=ResolutionReason.DUPLICATE_HASH_MATCH,
@@ -392,7 +392,7 @@ def resolve_identity(
             _conflicting_identifiers(request, candidate)
             for candidate in request.external_identifier_candidates
         ):
-            return complete(
+            return _complete(
                 IdentityResolutionOutcome(
                     kind=ResolutionKind.CONFLICT,
                     reason=ResolutionReason.CONFLICTING_EVIDENCE,
@@ -404,7 +404,7 @@ def resolve_identity(
 
         matching_documents = _matching_document_ids(identifier_matches)
         if len(matching_documents) > 1:
-            return complete(
+            return _complete(
                 IdentityResolutionOutcome(
                     kind=ResolutionKind.AMBIGUOUS,
                     reason=ResolutionReason.MULTIPLE_CANDIDATES,
@@ -422,7 +422,7 @@ def resolve_identity(
                 request.external_identifier_policy.authoritative_namespaces
             )
             if not matched_namespaces & authoritative_namespaces:
-                return complete(
+                return _complete(
                     IdentityResolutionOutcome(
                         kind=ResolutionKind.AMBIGUOUS,
                         reason=(ResolutionReason.UNESTABLISHED_IDENTIFIER_AUTHORITY),
@@ -433,7 +433,7 @@ def resolve_identity(
             version = _new_version(
                 request, document_id=document_id, allocator=allocator
             )
-            return complete(
+            return _complete(
                 IdentityResolutionOutcome(
                     kind=ResolutionKind.NEW_VERSION,
                     reason=ResolutionReason.EXTERNAL_IDENTIFIER_MATCH,
@@ -445,7 +445,7 @@ def resolve_identity(
 
         document_id = _allocate_document_id(allocator, request.all_candidates)
         version = _new_version(request, document_id=document_id, allocator=allocator)
-        return complete(
+        return _complete(
             IdentityResolutionOutcome(
                 kind=ResolutionKind.NEW_DOCUMENT,
                 reason=ResolutionReason.NO_MATCH,

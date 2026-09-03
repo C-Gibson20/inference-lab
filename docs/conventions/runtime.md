@@ -189,10 +189,12 @@ sensitive paths.
 
 ## Scope boundary
 
-The runtime contract layer does not include a tokenizer or local model, real
-embedding, reranking, or generation integrations, cache lifecycle operations,
-scheduling, residency, or microbatching. Those capabilities build on these
-contracts without changing the fake into a production model backend.
+The runtime contract layer includes the checked-in, CPU-only local mechanics
+fixture described above, but it does not yet include production model
+selection, real embedding or reranking integrations, cache lifecycle
+operations, scheduling, residency, or microbatching. Those capabilities build
+on these contracts without turning either the fake or mechanics fixture into a
+production model backend.
 
 ## Component memory accounting
 

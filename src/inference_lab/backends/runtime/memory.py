@@ -703,7 +703,7 @@ class MemorySnapshot:
         visiting: set[str] = set()
         visited: set[str] = set()
 
-        def visit(measurement_id: str) -> None:
+        def _visit(measurement_id: str) -> None:
             if measurement_id in visiting:
                 raise ValueError("roll-up coverage must be acyclic")
             if measurement_id in visited:
@@ -711,12 +711,12 @@ class MemorySnapshot:
             visiting.add(measurement_id)
             measurement = measurements_by_id[measurement_id]
             for covered_id in measurement.covers_measurement_ids:
-                visit(covered_id)
+                _visit(covered_id)
             visiting.remove(measurement_id)
             visited.add(measurement_id)
 
         for measurement_id in measurements_by_id:
-            visit(measurement_id)
+            _visit(measurement_id)
 
     def _build_reconciliations(self) -> tuple[RollupReconciliation, ...]:
         measurements_by_id = {

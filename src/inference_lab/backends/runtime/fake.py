@@ -494,7 +494,7 @@ class FakeBackend:
 
     @staticmethod
     def _token_limit_cutoff(text: str, maximum_tokens: int | None) -> int | None:
-        """Return the character cutoff required by the fake whitespace tokenizer."""
+        """Return the character cutoff required by the fake whitespace tokeniser."""
         if maximum_tokens is None:
             return None
         tokens = tuple(re.finditer(r"\S+", text))

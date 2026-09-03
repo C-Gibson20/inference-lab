@@ -1,7 +1,8 @@
 # Ingest parser contract and boundaries
 
-The current ingest parser is a deterministic text-native parsing baseline. It establishes the contract consumed by later ingest stages; it is not the
-complete document ingestion pipeline.
+The current ingest parser is a deterministic text-native parsing baseline. It
+establishes the contract consumed by later ingest stages; it is not the complete
+document ingestion pipeline.
 
 ## Parser contract
 
@@ -16,7 +17,9 @@ The parser accepts a `ParserInput` containing:
 - a named text encoding supported by the Python codec registry.
 
 Input validation occurs before decoding. Invalid identifiers, non-byte
-content, unsupported media types, missing encodings, and unknown encodings are rejected with a named `ParserInputError` category. The parser does not accept paths or read files; callers own source acquisition and preservation.
+content, unsupported media types, missing encodings, and unknown encodings are
+rejected with a named `ParserInputError` category. The parser does not accept
+paths or read files; callers own source acquisition and preservation.
 
 The source-size limit comes from `Settings.ingest.max_source_bytes`. It is
 measured in raw input bytes and checked before decoding. It must not be
@@ -58,8 +61,10 @@ content. Indentation and other whitespace on content lines are preserved.
 
 ### Source spans and provenance
 
-Every emitted block has a `SourceSpan` linked to the input `DocumentVersionId`. Offsets are half-open Unicode code-point offsets into
-`source_text`: `[start_offset, end_offset)`. They are not byte offsets and are not offsets into normalised text.
+Every emitted block has a `SourceSpan` linked to the input `DocumentVersionId`.
+Offsets are half-open Unicode code-point offsets into `source_text`:
+`[start_offset, end_offset)`. They are not byte offsets and are not offsets into
+normalised text.
 
 Canonical document text must equal the defined normalisation of
 `source_text`. Each block's text must likewise equal the normalised source
@@ -97,7 +102,10 @@ collections are immutable tuples. A successful outcome has one document and
 no failures; a recoverable outcome has one document and only recoverable
 failures; a failed outcome has no document and at least one fatal failure.
 
-Parser lifecycle and failure events use privacy-safe structured logging through `structlog`. Log fields may include stable document identity, parser version, failure category, source byte count, output character count, and emitted record count where applicable.
+Parser lifecycle and failure events use privacy-safe structured logging through
+`structlog`. Log fields may include stable document identity, parser version,
+failure category, source byte count, output character count, and emitted record
+count where applicable.
 
 ## Text-native parser acceptance gate
 

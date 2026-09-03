@@ -91,18 +91,11 @@ UV_CACHE_DIR=/private/tmp/inference-lab-uv-cache \
 uv run python scripts/inference_lab/backends/create_local_mechanics_fixture.py
 ```
 
-Verify local-only loading and native cache availability:
-
-```sh
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
-UV_CACHE_DIR=/private/tmp/inference-lab-uv-cache \
-uv run python -c 'from pathlib import Path; import torch; from transformers import AutoModelForCausalLM, AutoTokenizer; p=Path("tests/fixtures/backends/runtime/local_mechanics"); t=AutoTokenizer.from_pretrained(p, local_files_only=True); m=AutoModelForCausalLM.from_pretrained(p, local_files_only=True); x=t("hello world", return_tensors="pt"); y=m(**x, use_cache=True); assert y.past_key_values'
-```
-
 The adapter and focused acceptance suite are implemented in
 `inference_lab.backends.runtime.local` and
-`tests/inference_lab/backends/runtime/test_local.py`. Run the focused suite
-offline from the repository root with:
+`tests/inference_lab/backends/runtime/test_local.py`. The suite verifies
+local-only loading, native cache availability, cache equivalence, and cleanup.
+Run it offline from the repository root with:
 
 ```sh
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false \
