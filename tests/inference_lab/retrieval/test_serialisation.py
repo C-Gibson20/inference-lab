@@ -55,7 +55,7 @@ def test_query_serialisation_is_canonical_and_round_trips() -> None:
         b'"filter":{"children":[{"field":"is-public","kind":"exact",'
         b'"value":{"type":"boolean","value":true}},{"field":"priority-date",'
         b'"kind":"exact","value":{"type":"date","value":"2024-01-02"}}],'
-        b'"kind":"all"},"limit":3,"retrieval_schema_version":"1.0.0",'
+        b'"kind":"all"},"limit":3,"retrieval_schema_version":"2.0.0",'
         b'"text":"  assay date?  "}\n'
     )
     assert serialise_query(query) == expected
@@ -85,6 +85,7 @@ def _result_fixture() -> EvidenceResult:
     )
     return EvidenceResult(
         CorpusVersionId.from_str("00000000-0000-4000-8000-000000000014"),
+        RetrievalLimit(1),
         (hit,),
         ResultStatus.PARTIAL,
         (RetrievalFailure(FailureCategory.CHANNEL_UNAVAILABLE, True),),
@@ -99,19 +100,50 @@ def test_evidence_result_round_trips_full_provenance_and_failures() -> None:
     assert b'"document_id"' in encoded
     assert b'"document_version_id"' in encoded
     assert b'"source_span_id"' in encoded
+    assert json.loads(encoded)["requested_limit"] == result.requested_limit.value
     assert deserialise_evidence_result(encoded) == result
+
+
+def test_result_deserialisation_rejects_limit_and_mismatch_contradictions() -> None:
+    """Keep result invariants enforceable after crossing the wire boundary."""
+    compatible_payload = json.loads(serialise_evidence_result(_result_fixture()))
+    compatible_payload["failures"][0] = {
+        "category": "corpus_version_mismatch",
+        "channel": "metadata",
+        "retryable": False,
+    }
+    compatible = deserialise_evidence_result(json.dumps(compatible_payload).encode())
+    assert compatible.failures[0].channel is RetrievalChannel.METADATA
+
+    payload = json.loads(serialise_evidence_result(_result_fixture()))
+    second_hit = json.loads(json.dumps(payload["hits"][0]))
+    second_hit["rank"] = 2
+    second_hit["candidate"]["record_id"] = "00000000-0000-4000-8000-000000000099"
+    payload["hits"].append(second_hit)
+    with pytest.raises(InvalidRetrievalSerialisationError):
+        deserialise_evidence_result(json.dumps(payload).encode())
+
+    for channel in ("lexical", None):
+        payload = json.loads(serialise_evidence_result(_result_fixture()))
+        payload["failures"][0] = {
+            "category": "corpus_version_mismatch",
+            "channel": channel,
+            "retryable": False,
+        }
+        with pytest.raises(InvalidRetrievalSerialisationError):
+            deserialise_evidence_result(json.dumps(payload).encode())
 
 
 @pytest.mark.parametrize(
     "data",
     [
         b"not json",
-        b'\xff{"retrieval_schema_version":"1.0.0"}',
-        b'{"retrieval_schema_version":"1.0.0","retrieval_schema_version":"1.0.0"}',
-        b'{"retrieval_schema_version":"1.0.0","text":"x"}',
-        b'{"retrieval_schema_version":"1.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1,"filter":null,"extra":true}',
-        b'{"retrieval_schema_version":"1.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1.0,"filter":null}',
-        b'{"retrieval_schema_version":"1.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1,"filter":{"kind":"exact","field":"x","value":{"type":"integer","value":true}}}',
+        b'\xff{"retrieval_schema_version":"2.0.0"}',
+        b'{"retrieval_schema_version":"2.0.0","retrieval_schema_version":"2.0.0"}',
+        b'{"retrieval_schema_version":"2.0.0","text":"x"}',
+        b'{"retrieval_schema_version":"2.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1,"filter":null,"extra":true}',
+        b'{"retrieval_schema_version":"2.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1.0,"filter":null}',
+        b'{"retrieval_schema_version":"2.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1,"filter":{"kind":"exact","field":"x","value":{"type":"integer","value":true}}}',
     ],
 )
 def test_query_deserialisation_rejects_non_canonical_or_malformed_payloads(
@@ -122,15 +154,26 @@ def test_query_deserialisation_rejects_non_canonical_or_malformed_payloads(
         deserialise_query(data)
 
 
-def test_deserialisation_rejects_unsupported_and_non_finite_versions() -> None:
+@pytest.mark.parametrize("version", ["1.0.0", "9.0.0"])
+def test_deserialisation_rejects_unsupported_and_non_finite_versions(
+    version: str,
+) -> None:
     """Reject unsupported schema versions and non-finite numeric values."""
     with pytest.raises(UnsupportedRetrievalSchemaVersionError):
         deserialise_query(
-            b'{"retrieval_schema_version":"9.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1,"filter":null}'
+            json.dumps(
+                {
+                    "retrieval_schema_version": version,
+                    "text": "x",
+                    "corpus_version": "00000000-0000-4000-8000-000000000001",
+                    "limit": 1,
+                    "filter": None,
+                }
+            ).encode()
         )
     with pytest.raises(InvalidRetrievalSerialisationError):
         deserialise_query(
-            b'{"retrieval_schema_version":"1.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1,"filter":{"kind":"exact","field":"x","value":{"type":"float","value":NaN}}}'
+            b'{"retrieval_schema_version":"2.0.0","text":"x","corpus_version":"00000000-0000-4000-8000-000000000001","limit":1,"filter":{"kind":"exact","field":"x","value":{"type":"float","value":NaN}}}'
         )
 
 
@@ -139,7 +182,7 @@ def test_serialisation_rejection_does_not_echo_private_payload_or_log() -> None:
     marker = "private-query-and-candidate-marker"
     data = json.dumps(
         {
-            "retrieval_schema_version": "1.0.0",
+            "retrieval_schema_version": "2.0.0",
             "text": marker,
             "corpus_version": "not-an-id",
             "limit": 1,

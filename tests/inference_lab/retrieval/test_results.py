@@ -53,23 +53,26 @@ def test_result_validates_order_identity_and_statuses(
         True,
         RetrievalChannel.DENSE,
     )
-    assert EvidenceResult(version, (hit,), ResultStatus.COMPLETED, ()).hits == (hit,)
-    assert EvidenceResult(version, (), ResultStatus.COMPLETED, ()).hits == ()
+    limit = RetrievalLimit(1)
+    assert EvidenceResult(version, limit, (hit,), ResultStatus.COMPLETED, ()).hits == (
+        hit,
+    )
+    assert EvidenceResult(version, limit, (), ResultStatus.COMPLETED, ()).hits == ()
     assert (
-        EvidenceResult(version, (hit,), ResultStatus.PARTIAL, (failure,)).status
+        EvidenceResult(version, limit, (hit,), ResultStatus.PARTIAL, (failure,)).status
         is ResultStatus.PARTIAL
     )
     assert (
-        EvidenceResult(version, (), ResultStatus.FAILED, (failure,)).status
+        EvidenceResult(version, limit, (), ResultStatus.FAILED, (failure,)).status
         is ResultStatus.FAILED
     )
 
     with pytest.raises(InvalidRetrievalResultError):
-        EvidenceResult(version, (hit,), ResultStatus.COMPLETED, (failure,))
+        EvidenceResult(version, limit, (hit,), ResultStatus.COMPLETED, (failure,))
     with pytest.raises(InvalidRetrievalResultError):
-        EvidenceResult(version, (), ResultStatus.PARTIAL, (failure,))
+        EvidenceResult(version, limit, (), ResultStatus.PARTIAL, (failure,))
     with pytest.raises(InvalidRetrievalResultError):
-        EvidenceResult(version, (hit,), ResultStatus.FAILED, (failure,))
+        EvidenceResult(version, limit, (hit,), ResultStatus.FAILED, (failure,))
 
 
 def test_result_ranks_are_contiguous_and_candidate_ids_unique(
@@ -95,11 +98,17 @@ def test_result_ranks_are_contiguous_and_candidate_ids_unique(
     first_hit = EvidenceHit(first, (ChannelScore(RetrievalChannel.LEXICAL, 1),), 1)
     second_hit = EvidenceHit(second, (ChannelScore(RetrievalChannel.LEXICAL, 2),), 2)
     result = EvidenceResult(
-        version, (first_hit, second_hit), ResultStatus.COMPLETED, ()
+        version, RetrievalLimit(2), (first_hit, second_hit), ResultStatus.COMPLETED, ()
     )
     assert result.hits == (first_hit, second_hit)
     with pytest.raises(InvalidRetrievalResultError):
-        EvidenceResult(version, (second_hit, first_hit), ResultStatus.COMPLETED, ())
+        EvidenceResult(
+            version,
+            RetrievalLimit(2),
+            (second_hit, first_hit),
+            ResultStatus.COMPLETED,
+            (),
+        )
 
 
 def test_from_query_fails_closed_on_corpus_version_mismatch(
@@ -119,7 +128,99 @@ def test_from_query_fails_closed_on_corpus_version_mismatch(
         failures=(),
     )
     assert result.corpus_version is requested
+    assert result.requested_limit == query.limit
     assert result.hits == ()
     assert result.status is ResultStatus.FAILED
     assert result.failures[0].category is FailureCategory.CORPUS_VERSION_MISMATCH
     assert result.failures[0].channel is None
+
+
+def test_result_enforces_requested_limit_at_query_and_value_boundaries(
+    candidate: RetrievalCandidate,
+    source: EvidenceSource,
+) -> None:
+    """Reject oversized producer output and retain the originating limit."""
+    version = CorpusVersionId.generate()
+    query = RetrievalQuery("question", version, RetrievalLimit(1))
+    first = EvidenceHit(
+        candidate,
+        (ChannelScore(RetrievalChannel.LEXICAL, 1),),
+        1,
+    )
+    second_candidate = RetrievalCandidate(
+        RecordId.generate(),
+        CandidateKind.ORIGINAL_PASSAGE,
+        "second passage",
+        (source,),
+    )
+    second = EvidenceHit(
+        second_candidate,
+        (ChannelScore(RetrievalChannel.LEXICAL, 2),),
+        2,
+    )
+
+    exact = EvidenceResult.from_query(
+        query,
+        observed_corpus_version=version,
+        hits=(first,),
+        status=ResultStatus.COMPLETED,
+        failures=(),
+    )
+    assert exact.requested_limit == query.limit
+
+    with pytest.raises(InvalidRetrievalResultError, match="requested retrieval limit"):
+        EvidenceResult.from_query(
+            query,
+            observed_corpus_version=version,
+            hits=(first, second),
+            status=ResultStatus.COMPLETED,
+            failures=(),
+        )
+
+
+def test_corpus_mismatch_failures_exclude_only_affected_channel_hits(
+    candidate: RetrievalCandidate,
+) -> None:
+    """Permit compatible partial aggregation but reject mismatched contributions."""
+    version = CorpusVersionId.generate()
+    hit = EvidenceHit(
+        candidate,
+        (ChannelScore(RetrievalChannel.LEXICAL, 1),),
+        1,
+    )
+    dense_mismatch = RetrievalFailure(
+        FailureCategory.CORPUS_VERSION_MISMATCH,
+        False,
+        RetrievalChannel.DENSE,
+    )
+
+    partial = EvidenceResult(
+        version,
+        RetrievalLimit(1),
+        (hit,),
+        ResultStatus.PARTIAL,
+        (dense_mismatch,),
+    )
+    assert partial.hits == (hit,)
+
+    lexical_mismatch = RetrievalFailure(
+        FailureCategory.CORPUS_VERSION_MISMATCH,
+        False,
+        RetrievalChannel.LEXICAL,
+    )
+    with pytest.raises(InvalidRetrievalResultError, match="mismatched channel"):
+        EvidenceResult(
+            version,
+            RetrievalLimit(1),
+            (hit,),
+            ResultStatus.PARTIAL,
+            (lexical_mismatch,),
+        )
+    with pytest.raises(InvalidRetrievalResultError, match="unscoped corpus mismatch"):
+        EvidenceResult(
+            version,
+            RetrievalLimit(1),
+            (hit,),
+            ResultStatus.PARTIAL,
+            (RetrievalFailure(FailureCategory.CORPUS_VERSION_MISMATCH, False),),
+        )
