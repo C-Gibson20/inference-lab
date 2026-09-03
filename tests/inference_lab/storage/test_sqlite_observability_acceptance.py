@@ -1,3 +1,5 @@
+"""Acceptance tests for SQLite observability."""
+
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -10,10 +12,10 @@ from inference_lab.logging.logging_config import configure_logging
 from inference_lab.provenance import (
     ContentHash,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
-    DocumentIdentity,
     DocumentVersion,
     DocumentVersionId,
     DuplicateClass,
@@ -23,7 +25,6 @@ from inference_lab.provenance import (
 )
 from inference_lab.settings import LoggingConfig
 from inference_lab.storage import (
-    MetadataTransaction,
     RepositoryUnavailableError,
     StorageConflictError,
     StorageMigrationError,
@@ -31,8 +32,17 @@ from inference_lab.storage import (
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 15, 0, tzinfo=UTC)
+from .fixtures import (  # noqa: TID252
+    APPLIED_AT,
+    CompleteMetadataGraph,
+    add_complete_graph,
+)
+from .fixtures import (  # noqa: TID252
+    fixed_applied_at as _fixed_applied_at,
+)
+
 _CORPUS_ID = CorpusId("ea304c92-db98-4112-9976-38d2d67a28d4")
+_CORPUS = CorpusMetadata(_CORPUS_ID, "Private test corpus")
 _FAMILY_ID = DocumentFamilyId("815236bc-44b7-4784-84cc-f56bf72bb6d2")
 _FIRST_DOCUMENT_ID = DocumentId("0d64c130-cea0-4c1d-8a44-298941893072")
 _SECOND_DOCUMENT_ID = DocumentId("354c3b10-9a1a-47f2-91c9-76640ea573c2")
@@ -49,7 +59,7 @@ _FIRST_VERSION = DocumentVersion(
 _SECOND_VERSION = DocumentVersion(
     _SECOND_VERSION_ID,
     _SECOND_DOCUMENT_ID,
-    ContentHash(HashAlgorithm.SHA256, "d" * 64),
+    ContentHash(HashAlgorithm.SHA256, _PRIVATE_DIGEST),
 )
 _DUPLICATE = DuplicateRelationship(
     _FIRST_VERSION_ID,
@@ -68,12 +78,9 @@ _REQUIRED_LOG_FIELDS = {
     "module",
     "pipeline_stage",
     "document_id",
+    "corpus_id",
     "corpus_version",
 }
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _records(stream: StringIO) -> list[dict[str, object]]:
@@ -86,24 +93,23 @@ def _assert_storage_log_shape(records: list[dict[str, object]]) -> None:
         assert _REQUIRED_LOG_FIELDS <= record.keys()
         assert record["pipeline_stage"] == "storage"
         assert record["document_id"] is None
+        assert record["corpus_id"] is None
         assert record["corpus_version"] is None
         assert isinstance(record["module"], str)
         assert record["module"].startswith("inference_lab.storage.")
         assert isinstance(record["timestamp"], str)
         assert datetime.fromisoformat(record["timestamp"]).utcoffset() == UTC.utcoffset(
-            _APPLIED_AT
+            APPLIED_AT
         )
 
 
-def _add_complete_graph(transaction: MetadataTransaction) -> None:
-    transaction.add_corpus(_CORPUS_ID)
-    transaction.add_document_family(_FAMILY_ID)
-    transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
-    transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
-    transaction.add_document_version(_FIRST_VERSION)
-    transaction.add_document_version(_SECOND_VERSION)
-    transaction.add_duplicate_relationship(_DUPLICATE)
-    transaction.add_family_membership(_MEMBERSHIP)
+_COMPLETE_GRAPH = CompleteMetadataGraph(
+    corpus=_CORPUS,
+    family_id=_FAMILY_ID,
+    versions=(_FIRST_VERSION, _SECOND_VERSION),
+    duplicate_relationships=(_DUPLICATE,),
+    family_memberships=(_MEMBERSHIP,),
+)
 
 
 def test_configured_logs_are_complete_and_payload_free_across_restart(
@@ -121,9 +127,9 @@ def test_configured_logs_are_complete_and_payload_free_across_restart(
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
-        _add_complete_graph(transaction)
+        add_complete_graph(transaction, _COMPLETE_GRAPH)
     with repository.transaction() as transaction:
-        _add_complete_graph(transaction)
+        add_complete_graph(transaction, _COMPLETE_GRAPH)
     with pytest.raises(RuntimeError, match=private_exception):
         with repository.transaction():
             raise RuntimeError(private_exception)
@@ -141,8 +147,12 @@ def test_configured_logs_are_complete_and_payload_free_across_restart(
     reopened = SQLiteMetadataRepository.open(database_path)
     try:
         assert reopened.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
-        assert reopened.list_duplicate_relationships(_FIRST_VERSION_ID) == (_DUPLICATE,)
-        assert reopened.list_family_memberships_by_family(_FAMILY_ID) == (_MEMBERSHIP,)
+        assert reopened.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
+            _DUPLICATE,
+        )
+        assert reopened.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
+            _MEMBERSHIP,
+        )
     finally:
         reopened.close()
 
@@ -190,6 +200,7 @@ def test_configured_migration_failure_logs_exclude_sql_and_raw_errors(
     initial = SQLiteMetadataRepository.open(
         database_path,
         apply_migrations=True,
+        migrations=(MIGRATIONS[0],),
         applied_at_factory=_fixed_applied_at,
     )
     initial.close()

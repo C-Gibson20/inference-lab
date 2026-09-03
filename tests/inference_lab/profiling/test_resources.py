@@ -4,12 +4,34 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from inference_lab.profiling import ResourceMeasurement
+from inference_lab.profiling import (
+    MEASUREMENT_STATUSES,
+    MEMORY_RESOURCE_CATEGORIES,
+    RESOURCE_CATEGORIES,
+    ResourceMeasurement,
+)
 
 
 def fixed_timestamp() -> datetime:
     """Return a deterministic UTC timestamp for record tests."""
     return datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
+
+
+def test_resource_vocabularies_are_published_from_one_canonical_definition() -> None:
+    assert MEMORY_RESOURCE_CATEGORIES == frozenset(
+        {
+            "model_weights",
+            "kv_cache",
+            "activations",
+            "embedding_reranker_memory",
+            "index_memory",
+            "framework_overhead",
+            "pinned_host_memory",
+            "storage_cache",
+        }
+    )
+    assert MEMORY_RESOURCE_CATEGORIES < RESOURCE_CATEGORIES
+    assert MEASUREMENT_STATUSES == frozenset({"measured", "unavailable", "unreliable"})
 
 
 def test_measured_resource_serialises_all_fields() -> None:
@@ -41,8 +63,9 @@ def test_measured_resource_serialises_all_fields() -> None:
         "run_id": "run-1",
         "request_id": None,
         "document_id": None,
+        "corpus_id": None,
         "corpus_version": None,
-        "record_schema_version": 2,
+        "record_schema_version": "3.0.0",
     }
 
 
@@ -250,5 +273,5 @@ def test_resource_measurement_rejects_invalid_schema_version() -> None:
         ResourceMeasurement(
             category="power",
             value=100,
-            record_schema_version=0,
+            record_schema_version="2.0.0",
         )

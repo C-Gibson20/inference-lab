@@ -64,9 +64,10 @@ def test_emits_each_record_as_structured_json(
     assert payload["module"] is not None
     assert "pipeline_stage" in payload
     assert "document_id" in payload
+    assert "corpus_id" in payload
     assert "corpus_version" in payload
     assert payload["level"] in {"info", "warning", "error", "critical"}
-    assert payload["record_schema_version"] == 2
+    assert payload["record_schema_version"] == "3.0.0"
 
 
 def test_emitted_record_preserves_context_and_nullable_fields() -> None:
@@ -85,6 +86,7 @@ def test_emitted_record_preserves_context_and_nullable_fields() -> None:
             run_id="run-1",
             request_id="request-1",
             document_id="document-1",
+            corpus_id="corpus-1",
             corpus_version="corpus-version-1",
         ),
     )
@@ -97,6 +99,7 @@ def test_emitted_record_preserves_context_and_nullable_fields() -> None:
     assert payload["run_id"] == "run-1"
     assert payload["request_id"] == "request-1"
     assert payload["document_id"] == "document-1"
+    assert payload["corpus_id"] == "corpus-1"
     assert payload["corpus_version"] == "corpus-version-1"
 
 

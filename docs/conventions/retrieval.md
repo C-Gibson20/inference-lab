@@ -6,13 +6,18 @@ and candidate content, but it does not log or persist those payloads.
 
 ## Query and filters
 
-`RetrievalQuery` preserves non-blank query text exactly, selects one
-`CorpusVersionId`, optionally carries a typed filter tree, and requires a
+`RetrievalQuery` preserves non-blank query text exactly and selects one
+`CorpusVersionId`, whose owning `CorpusId` is validated by the execution and
+storage boundary. It optionally carries a typed filter tree and requires a
 strictly positive `RetrievalLimit`. Filters support exact values, non-empty
 typed sets, bounded ranges, presence/missing checks, and non-empty all/any/not
 composition. Field names are lowercase project-owned slugs. Filter values are
 strict strings, integers, finite floats, booleans, or calendar dates; no value
-is normalised, rewritten, or inferred.
+is normalised, rewritten, or inferred. `OneOfFilter` values are set-like and
+are sorted canonically within their single scalar type. `AllFilter` and
+`AnyFilter` child order remains the producer's expression/planning order and is
+preserved in canonical bytes; consumers must not infer relevance or authority
+from that order.
 
 ## Candidates, scores, and results
 
@@ -35,19 +40,39 @@ Results are scoped to one corpus version:
 - `partial` has at least one hit and at least one typed failure; and
 - `failed` has no hits and at least one typed failure.
 
-A corpus-version mismatch fails closed and emits no hits from the incompatible
-snapshot. Failure values expose only a bounded category, optional channel, and
-retryability; they never carry raw exception messages or payloads.
+Every result retains the query's `requested_limit` and must contain no more
+hits than that limit. A corpus-version mismatch fails closed: an unscoped
+mismatch requires a failed, hit-free result, while a channel-scoped mismatch
+may appear in a partial aggregate only when none of its hits contains a score
+contribution from that channel. Failure values expose only a bounded category,
+optional channel, and retryability; they never carry raw exception messages or
+payloads.
+
+Every retrieval execution therefore targets exactly one corpus. Each channel
+must validate that its index generation belongs to the query's corpus version
+and must restrict candidates to document and record membership in that
+generation. A shared physical catalogue or index does not relax this filter.
+Fusion and reranking cannot introduce a candidate that was not visible in the
+selected corpus version.
+
+Cross-corpus or federated retrieval is outside this contract and the first
+build. Comparing corpora requires separate queries and results; callers must
+not combine their hits into a result labelled as one corpus version.
 
 ## Serialisation and privacy
 
-Queries and evidence results use retrieval schema version `1.0.0` and
+Queries and evidence results use retrieval schema version `2.0.0` and
 deterministic UTF-8 JSON: sorted keys, compact separators, full field names,
 and one trailing newline. Filter scalars are tagged so dates, booleans,
 integers, and floats cannot be confused. Deserialisation rejects malformed
 UTF-8/JSON, duplicate or unknown fields, unsupported versions, non-finite
 values, implicit coercion, non-canonical identifiers, and invalid value
-invariants.
+invariants. Version `1.0.0` results did not persist their requested limit and
+are not accepted as version `2.0.0` data; the shared schema version is bumped
+for queries as well so one version continues to identify the complete
+retrieval wire contract. Malformed filter discriminators at any nesting depth
+raise `InvalidRetrievalSerialisationError`; mapping implementation exceptions
+are not part of the public failure surface.
 
 Pure retrieval values and serialisation emit no logs. Operational retrieval
 stages may log bounded lifecycle information through the shared `structlog`

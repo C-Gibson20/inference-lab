@@ -1,10 +1,11 @@
 """Internal SQLite connection policy and exception translation."""
 
-import re
 import sqlite3
 from pathlib import Path
 from typing import Final
 
+from inference_lab._validation import is_local_path_shape
+from inference_lab.storage._sqlite_cleanup import close_preserving_primary
 from inference_lab.storage.errors import (
     CorruptStorageError,
     RepositoryUnavailableError,
@@ -14,7 +15,6 @@ from inference_lab.storage.errors import (
 )
 
 DEFAULT_BUSY_TIMEOUT_MS: Final = 5_000
-_REMOTE_SCHEME: Final = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _SQLITE_PRIMARY_CODE_MASK: Final = 0xFF
 
 
@@ -54,13 +54,7 @@ def _validated_database_path(path: Path) -> Path:
         raise TypeError("path must be a Path.")
 
     raw_path = str(path)
-    if (
-        not raw_path
-        or "\x00" in raw_path
-        or raw_path == ":memory:"
-        or raw_path.startswith(("//", "\\\\"))
-        or _REMOTE_SCHEME.match(raw_path) is not None
-    ):
+    if not is_local_path_shape(path) or raw_path == ":memory:":
         raise RepositoryUnavailableError()
 
     try:
@@ -81,16 +75,6 @@ def _validate_busy_timeout(busy_timeout_ms: int) -> None:
         raise TypeError("busy_timeout_ms must be an integer.")
     if busy_timeout_ms <= 0:
         raise ValueError("busy_timeout_ms must be greater than zero.")
-
-
-def _close_after_failed_open(connection: sqlite3.Connection | None) -> None:
-    """Release a partial connection without replacing the primary failure."""
-    if connection is None:
-        return
-    try:
-        connection.close()
-    except sqlite3.Error:
-        pass
 
 
 def open_sqlite_connection(
@@ -126,10 +110,10 @@ def open_sqlite_connection(
         if connection.execute("PRAGMA trusted_schema").fetchone()[0] != 0:
             raise RepositoryUnavailableError()
     except StorageError:
-        _close_after_failed_open(connection)
+        close_preserving_primary(connection)
         raise
     except sqlite3.Error as error:
-        _close_after_failed_open(connection)
+        close_preserving_primary(connection)
         raise translate_sqlite_error(
             error,
             default=RepositoryUnavailableError,

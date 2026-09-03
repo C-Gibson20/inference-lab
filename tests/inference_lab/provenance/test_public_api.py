@@ -52,19 +52,16 @@ _LINEAGE_EXPORTS = {
 
 
 def test_lineage_contract_is_published_through_provenance() -> None:
-    """Expose every supported lineage value and operation from the package."""
     assert _LINEAGE_EXPORTS <= set(provenance.__all__)
     assert all(hasattr(provenance, name) for name in _LINEAGE_EXPORTS)
 
 
 def test_mutable_payload_builders_are_not_top_level_exports() -> None:
-    """Keep the package API focused on immutable values and canonical bytes."""
     assert "derived_record_payload" not in provenance.__all__
     assert "lineage_bundle_payload" not in provenance.__all__
 
 
 def test_all_published_lineage_failures_are_value_errors() -> None:
-    """Keep correctly typed invariant failures under one catchable base."""
     error_types = (
         provenance.InvalidDerivedRecordError,
         provenance.InvalidLineageGraphError,
@@ -81,7 +78,6 @@ def test_all_published_lineage_failures_are_value_errors() -> None:
 
 
 def test_public_lineage_value_operations_do_not_emit_logs() -> None:
-    """Leave operational logging to persistence and transaction boundaries."""
     bundle = LineageBundle()
 
     with capture_logs() as logs:
@@ -93,7 +89,6 @@ def test_public_lineage_value_operations_do_not_emit_logs() -> None:
 
 
 def test_rejected_private_payload_is_not_logged_or_echoed() -> None:
-    """Reject private serialised content without exposing it diagnostically."""
     private_marker = "private-document-text-marker"
     data = f'{{"payload":"{private_marker}"}}'.encode()
 

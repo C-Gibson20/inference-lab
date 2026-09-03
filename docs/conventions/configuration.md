@@ -29,6 +29,11 @@ The current sections are:
 
 Run the application from the directory containing `config.toml`.
 
+Storage paths configure one local deployment, not one corpus. The metadata
+database and index root may contain multiple named corpora. Corpus creation and
+selection are runtime domain operations using `CorpusId`; they are not achieved
+by swapping configuration files or assigning one database path per corpus.
+
 There is no generic `[feature_flags]` section. Feature flags are introduced
 only alongside the feature they control, in the relevant typed settings model.
 The owning feature must document each flag's TOML field, environment override,
@@ -70,6 +75,13 @@ The loader rejects missing required values and invalid types. Paths are
 validated as `Path` values; loading configuration does not require the target
 paths to exist.
 
+All path trust boundaries use the shared local-path syntax policy. Empty and
+NUL-containing paths, URI schemes before or after `Path` coercion, and
+UNC-shaped network locations are rejected. POSIX and relative paths are local;
+Windows drive paths are local only on a Windows host. The shared check does not
+resolve paths or touch the filesystem. Each consuming domain owns those later
+actions and translates rejection into its own public error contract.
+
 Required values are:
 
 - `models.embedder_path`
@@ -84,6 +96,12 @@ Required values are:
 `get_settings()` caches the validated settings for the process lifetime.
 Changes to `config.toml` or the environment take effect after a process
 restart. Tests and other controlled callers may clear the cache explicitly.
+
+Application composition opens metadata through
+`inference_lab.storage.open_metadata_repository()`, passing the validated
+`settings.storage.metadata_db_path`. Schema creation and supported forward
+migrations occur only when the caller explicitly sets `apply_migrations=True`;
+the default open policy is non-mutating and rejects a missing or older schema.
 
 Configuration errors must fail startup clearly. They must not be replaced with
 guessed model paths, storage paths, or runtime values.

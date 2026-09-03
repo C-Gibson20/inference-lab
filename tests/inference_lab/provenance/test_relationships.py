@@ -5,6 +5,8 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from inference_lab.provenance import (
+    CorpusDocumentVersionMembership,
+    CorpusId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -139,3 +141,19 @@ def test_family_membership_is_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         membership.family_id = FAMILY_ID  # type: ignore[misc]
+
+
+def test_corpus_document_version_membership_requires_typed_identifiers() -> None:
+    values: dict[str, object] = {
+        "corpus_id": CorpusId.generate(),
+        "document_id": DocumentId.generate(),
+        "document_version_id": DocumentVersionId.generate(),
+    }
+
+    membership = CorpusDocumentVersionMembership(**values)  # type: ignore[arg-type]
+    assert membership.corpus_id == values["corpus_id"]
+
+    for field in values:
+        invalid = values | {field: None}
+        with pytest.raises(TypeError, match=field):
+            CorpusDocumentVersionMembership(**invalid)  # type: ignore[arg-type]

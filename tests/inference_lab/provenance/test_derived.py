@@ -23,15 +23,14 @@ from inference_lab.provenance.identifiers import (
 from inference_lab.provenance.lineage import (
     LineageInputs,
     ParentRecordReference,
-    SourceAnchor,
 )
 from inference_lab.provenance.operations import (
-    ConfigurationIdentity,
     DigestAlgorithm,
-    OperationKind,
     ProducingOperation,
 )
 from inference_lab.provenance.versioning import CURRENT_LINEAGE_SCHEMA_VERSION
+
+from .fixtures import producing_operation, source_inputs  # noqa: TID252
 
 _RECORD_A = RecordId.from_str("11111111-1111-4111-8111-111111111111")
 _RECORD_B = RecordId.from_str("22222222-2222-4222-8222-222222222222")
@@ -40,29 +39,13 @@ _SOURCE_SPAN = SourceSpanId.from_str("44444444-4444-4444-8444-444444444444")
 _CONFIGURATION_DIGEST = "a" * 64
 _OUTPUT_DIGEST = "b" * 64
 _FINGERPRINT = "c" * 64
-
-
-def _operation() -> ProducingOperation:
-    return ProducingOperation(
-        kind=OperationKind("chunking"),
-        implementation="structure-aware-chunker",
-        contract_version="1.0.0",
-        configuration_identity=ConfigurationIdentity(
-            algorithm=DigestAlgorithm.SHA256,
-            digest=_CONFIGURATION_DIGEST,
-        ),
-    )
-
-
-def _source_inputs() -> LineageInputs:
-    return LineageInputs(
-        source_anchors=(
-            SourceAnchor(
-                document_version_id=_DOCUMENT_VERSION,
-                source_span_id=_SOURCE_SPAN,
-            ),
-        )
-    )
+_OPERATION = producing_operation(
+    kind="chunking",
+    implementation="structure-aware-chunker",
+    contract_version="1.0.0",
+    configuration_digest=_CONFIGURATION_DIGEST,
+)
+_SOURCE_INPUTS = source_inputs(_DOCUMENT_VERSION, _SOURCE_SPAN)
 
 
 def _metadata(
@@ -76,8 +59,8 @@ def _metadata(
     supersedes_record_id: RecordId | None = None,
 ) -> DerivedRecordMetadata:
     selected_kind = record_kind or DerivedRecordKind("chunk")
-    selected_inputs = inputs or _source_inputs()
-    selected_operation = operation or _operation()
+    selected_inputs = inputs or _SOURCE_INPUTS
+    selected_operation = operation or _OPERATION
     selected_output_digest = output_digest or OutputDigest(
         DigestAlgorithm.SHA256,
         _OUTPUT_DIGEST,
@@ -107,8 +90,8 @@ def test_derived_record_metadata_composes_complete_direct_lineage() -> None:
     assert metadata.record_id == _RECORD_A
     assert metadata.record_kind.as_str() == "chunk"
     assert metadata.lineage_schema_version == CURRENT_LINEAGE_SCHEMA_VERSION
-    assert metadata.inputs == _source_inputs()
-    assert metadata.operation == _operation()
+    assert metadata.inputs == _SOURCE_INPUTS
+    assert metadata.operation == _OPERATION
     assert metadata.output_digest.as_str() == f"sha256:{_OUTPUT_DIGEST}"
     assert metadata.derivation_fingerprint == build_derivation_fingerprint(
         record_kind=metadata.record_kind,
@@ -205,8 +188,8 @@ def test_metadata_rejects_unsupported_lineage_schema_version() -> None:
             record_id=_RECORD_A,
             record_kind=DerivedRecordKind("chunk"),
             lineage_schema_version="2.0.0",
-            inputs=_source_inputs(),
-            operation=_operation(),
+            inputs=_SOURCE_INPUTS,
+            operation=_OPERATION,
             output_digest=OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
             derivation_fingerprint=DerivationFingerprint(
                 DigestAlgorithm.SHA256,
@@ -219,16 +202,16 @@ def test_metadata_enforces_typed_contract_fields() -> None:
     fingerprint = build_derivation_fingerprint(
         record_kind=DerivedRecordKind("chunk"),
         lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
-        inputs=_source_inputs(),
-        operation=_operation(),
+        inputs=_SOURCE_INPUTS,
+        operation=_OPERATION,
         output_digest=OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
     )
     valid = {
         "record_id": _RECORD_A,
         "record_kind": DerivedRecordKind("chunk"),
         "lineage_schema_version": CURRENT_LINEAGE_SCHEMA_VERSION,
-        "inputs": _source_inputs(),
-        "operation": _operation(),
+        "inputs": _SOURCE_INPUTS,
+        "operation": _OPERATION,
         "output_digest": OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
         "derivation_fingerprint": fingerprint,
     }
@@ -269,8 +252,8 @@ def test_metadata_has_no_unvalidated_payload_or_observation_fields() -> None:
     fingerprint = build_derivation_fingerprint(
         record_kind=DerivedRecordKind("chunk"),
         lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
-        inputs=_source_inputs(),
-        operation=_operation(),
+        inputs=_SOURCE_INPUTS,
+        operation=_OPERATION,
         output_digest=OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
     )
     with pytest.raises(TypeError):
@@ -278,8 +261,8 @@ def test_metadata_has_no_unvalidated_payload_or_observation_fields() -> None:
             record_id=_RECORD_A,
             record_kind=DerivedRecordKind("chunk"),
             lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
-            inputs=_source_inputs(),
-            operation=_operation(),
+            inputs=_SOURCE_INPUTS,
+            operation=_OPERATION,
             output_digest=OutputDigest(DigestAlgorithm.SHA256, _OUTPUT_DIGEST),
             derivation_fingerprint=fingerprint,
             payload="private chunk text",  # type: ignore[call-arg]

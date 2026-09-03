@@ -1,11 +1,6 @@
-"""Utilities for parsing and ingesting documents."""
+"""Canonical text transformations for ingest source content."""
 
 import unicodedata
-
-
-def is_strict_integer(value: object) -> bool:
-    """Return whether a runtime value is an integer but not a boolean."""
-    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def normalise_source_text(source_text: str) -> str:

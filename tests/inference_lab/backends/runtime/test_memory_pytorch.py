@@ -1,10 +1,12 @@
+"""Tests for PyTorch runtime memory measurement."""
+
 from datetime import UTC, datetime
 
 import pytest
 import torch
 
 from inference_lab.backends.runtime import (
-    ComponentRole,
+    MemoryComponentRole,
     MemorySpace,
     PyTorchMemoryCalibrationAdapter,
 )
@@ -61,7 +63,7 @@ def test_calibration_counts_unique_native_kv_storage_once() -> None:
     )
 
     assert kv_cache.value_bytes == 24
-    assert kv_cache.component_role is ComponentRole.KV_CACHE
+    assert kv_cache.component_role is MemoryComponentRole.KV_CACHE
 
 
 def test_calibration_is_repeatable_and_returns_sorted_measurements() -> None:
@@ -93,6 +95,14 @@ def test_unsupported_or_missing_storage_is_unavailable() -> None:
     no_model_measurements = no_model.measure_memory()
     meta_measurements = meta_model.measure_memory()
 
+    assert {item.category for item in no_model_measurements} == {
+        "kv_cache",
+        "model_weights",
+    }
+    assert {item.category for item in meta_measurements} == {
+        "kv_cache",
+        "model_weights",
+    }
     assert all(item.status == "unavailable" for item in no_model_measurements)
     assert all(item.status == "unavailable" for item in meta_measurements)
 
@@ -100,7 +110,7 @@ def test_unsupported_or_missing_storage_is_unavailable() -> None:
 def test_calibration_validates_inputs() -> None:
     with pytest.raises(TypeError, match="torch.nn.Module"):
         PyTorchMemoryCalibrationAdapter("model")  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="ComponentRole"):
+    with pytest.raises(TypeError, match="MemoryComponentRole"):
         PyTorchMemoryCalibrationAdapter(
             None,
             component_role="generator",  # type: ignore[arg-type]

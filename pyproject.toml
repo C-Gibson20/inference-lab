@@ -55,7 +55,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D100", "D101", "D102", "D103", "D104"]
+"tests/**" = ["D101", "D102", "D103", "D104"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
@@ -64,3 +64,11 @@ ban-relative-imports = "all"
 include = ["src", "tests", "scripts"]
 pythonVersion = "3.13"
 typeCheckingMode = "standard"
+
+[tool.coverage.run]
+branch = true
+source = ["inference_lab"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

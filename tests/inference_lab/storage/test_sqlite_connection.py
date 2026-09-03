@@ -1,5 +1,8 @@
+"""Tests for SQLite connection policy and error translation."""
+
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -55,18 +58,16 @@ def test_wal_is_enabled_only_when_explicitly_requested(tmp_path: Path) -> None:
         reopened.close()
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        Path(":memory:"),
-        Path("https:/remote.example/metadata.sqlite3"),
-        Path("file:metadata.sqlite3"),
-        Path("//remote-host/share/metadata.sqlite3"),
-    ],
-)
-def test_open_rejects_nonlocal_or_nonpersistent_paths(path: Path) -> None:
+def test_open_rejects_nonlocal_paths(
+    rejected_local_path_shape: str | Path,
+) -> None:
     with pytest.raises(RepositoryUnavailableError):
-        open_sqlite_connection(path)
+        open_sqlite_connection(Path(rejected_local_path_shape))
+
+
+def test_open_rejects_nonpersistent_memory_database() -> None:
+    with pytest.raises(RepositoryUnavailableError):
+        open_sqlite_connection(Path(":memory:"))
 
 
 def test_open_rejects_a_directory_target_without_exposing_it(tmp_path: Path) -> None:
@@ -151,3 +152,54 @@ def test_busy_and_locked_codes_are_retryable_concurrency_errors() -> None:
 
         assert isinstance(translated, StorageConcurrencyError)
         assert translated.retryable is True
+
+
+def test_error_translation_rejects_invalid_contract_types() -> None:
+    error = sqlite3.OperationalError("private-details")
+
+    with pytest.raises(TypeError, match="error"):
+        translate_sqlite_error(
+            cast("sqlite3.Error", RuntimeError("not SQLite")),
+            default=RepositoryUnavailableError,
+        )
+    with pytest.raises(TypeError, match="default"):
+        translate_sqlite_error(
+            error,
+            default=RuntimeError,  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="constraint"):
+        translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+            constraint=RuntimeError,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("error_code", [True, "5"])
+def test_invalid_sqlite_error_codes_fall_back_to_the_default(
+    error_code: object,
+) -> None:
+    error = sqlite3.OperationalError("private-details")
+    setattr(error, "sqlite_errorcode", error_code)
+
+    translated = translate_sqlite_error(
+        error,
+        default=RepositoryUnavailableError,
+    )
+
+    assert isinstance(translated, RepositoryUnavailableError)
+
+
+def test_connection_functions_reject_wrong_runtime_types(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="path"):
+        open_sqlite_connection(str(tmp_path / "metadata.sqlite3"))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="connection"):
+        enable_durable_wal(object())  # type: ignore[arg-type]
+
+
+def test_enabling_wal_on_a_closed_connection_is_unavailable(tmp_path: Path) -> None:
+    connection = open_sqlite_connection(tmp_path / "metadata.sqlite3")
+    connection.close()
+
+    with pytest.raises(RepositoryUnavailableError):
+        enable_durable_wal(connection)

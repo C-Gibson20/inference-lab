@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
-from inference_lab.provenance.utils import is_sha256_hex_digest
+from inference_lab.provenance._validation import is_sha256_hex_digest
 
 _IDENTIFIER_NAMESPACE: Final = re.compile(r"^[a-z][a-z0-9_-]*$")
 

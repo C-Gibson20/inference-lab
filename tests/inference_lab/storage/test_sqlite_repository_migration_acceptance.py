@@ -1,12 +1,15 @@
+"""Acceptance tests for SQLite repository migration."""
+
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -22,7 +25,8 @@ from inference_lab.storage import MigrationRequiredError, StorageMigrationError
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 14, 0, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
 _CORPUS_ID = CorpusId("01014415-1989-449f-8824-cb13e418d92f")
 _FAMILY_ID = DocumentFamilyId("6a5a72ce-e82f-4168-adb4-36c090dd19f0")
 _FIRST_DOCUMENT_ID = DocumentId("056b503e-e15d-4ed2-87db-d352ff97dcf2")
@@ -38,7 +42,7 @@ _FIRST_VERSION = DocumentVersion(
 _SECOND_VERSION = DocumentVersion(
     _SECOND_VERSION_ID,
     _SECOND_DOCUMENT_ID,
-    ContentHash(HashAlgorithm.SHA256, "b" * 64),
+    ContentHash(HashAlgorithm.SHA256, "a" * 64),
 )
 _DUPLICATE = DuplicateRelationship(
     _FIRST_VERSION_ID,
@@ -50,10 +54,6 @@ _MEMBERSHIP = DocumentFamilyMembership(
     _FIRST_DOCUMENT_ID,
     _FIRST_VERSION_ID,
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _revision_two() -> MigrationDefinition:
@@ -75,19 +75,34 @@ def _failing_revision_three() -> MigrationDefinition:
     )
 
 
-def _create_complete_revision_one(path: Path) -> None:
+def _create_complete_baseline(path: Path) -> None:
     repository = SQLiteMetadataRepository.open(
         path,
         apply_migrations=True,
+        migrations=(MIGRATIONS[0],),
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
-        transaction.add_corpus(_CORPUS_ID)
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Primary corpus"))
         transaction.add_document_family(_FAMILY_ID)
         transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
         transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
         transaction.add_document_version(_FIRST_VERSION)
         transaction.add_document_version(_SECOND_VERSION)
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID,
+                _FIRST_DOCUMENT_ID,
+                _FIRST_VERSION_ID,
+            )
+        )
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID,
+                _SECOND_DOCUMENT_ID,
+                _SECOND_VERSION_ID,
+            )
+        )
         transaction.add_duplicate_relationship(_DUPLICATE)
         transaction.add_family_membership(_MEMBERSHIP)
     repository.close()
@@ -120,22 +135,50 @@ def _database_snapshot(path: Path) -> tuple[object, ...]:
 
 
 def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
-    assert repository.get_corpus(_CORPUS_ID) == _CORPUS_ID
     assert repository.get_document_family(_FAMILY_ID) == _FAMILY_ID
     assert repository.get_document(_FIRST_DOCUMENT_ID) == DocumentIdentity(
         _FIRST_DOCUMENT_ID
     )
     assert repository.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
-    assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == (_DUPLICATE,)
-    assert repository.list_family_memberships_by_family(_FAMILY_ID) == (_MEMBERSHIP,)
+
+
+def test_current_baseline_persists_complete_multi_corpus_graph(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_complete_baseline(database_path)
+
+    reopened = SQLiteMetadataRepository.open(database_path)
+    try:
+        assert reopened.schema_inspection.current_revision == 1
+        assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
+            _CORPUS_ID, "Primary corpus"
+        )
+        assert reopened.list_corpus_document_version_memberships(_CORPUS_ID) == (
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID
+            ),
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID
+            ),
+        )
+        assert reopened.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
+            _DUPLICATE,
+        )
+        assert reopened.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
+            _MEMBERSHIP,
+        )
+        _assert_complete_graph(reopened)
+    finally:
+        reopened.close()
 
 
 def test_non_empty_repository_requires_explicit_upgrade_without_mutation(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_revision_one(database_path)
+    _create_complete_baseline(database_path)
     migrations = (MIGRATIONS[0], _revision_two())
     before = _database_snapshot(database_path)
 
@@ -149,7 +192,7 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_revision_one(database_path)
+    _create_complete_baseline(database_path)
     migrations = (MIGRATIONS[0], _revision_two())
 
     migrated = SQLiteMetadataRepository.open(
@@ -190,7 +233,7 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_revision_one(database_path)
+    _create_complete_baseline(database_path)
     revision_two = _revision_two()
 
     with pytest.raises(StorageMigrationError):

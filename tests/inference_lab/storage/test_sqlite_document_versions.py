@@ -1,5 +1,6 @@
+"""Tests for SQLite document-version persistence."""
+
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,22 +17,11 @@ from inference_lab.provenance import (
 from inference_lab.storage import CorruptStorageError, StorageConflictError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
+from .fixtures import open_repository as _open_repository  # noqa: TID252
+
 _DOCUMENT_ID = DocumentId("37d4f985-0237-4f7c-a37a-360c873e259e")
 _FIRST_VERSION_ID = DocumentVersionId("11111111-1111-4111-8111-111111111111")
 _SECOND_VERSION_ID = DocumentVersionId("99999999-9999-4999-8999-999999999999")
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def _version(

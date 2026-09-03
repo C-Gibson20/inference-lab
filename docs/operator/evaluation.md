@@ -10,6 +10,10 @@ Always load a dataset through the public loader. It validates the manifest,
 case-file checksum, case count, split membership, evidence corpus version, and
 local-only path boundary.
 
+Each dataset names one `corpus_id` and one version owned by that corpus. Do not
+mix evidence from multiple corpora in a dataset or run; compare separate
+single-corpus run outputs when a corpus comparison is needed.
+
 ```python
 from pathlib import Path
 

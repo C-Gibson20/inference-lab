@@ -71,6 +71,12 @@ def test_split_policy_rejects_invalid_values() -> None:
     with pytest.raises(ValueError, match="near_duplicate_threshold"):
         SplitPolicy(0.5, 0.25, 0.25, near_duplicate_threshold=False)
 
+    with pytest.raises(TypeError, match="seed must be a string"):
+        SplitPolicy(0.5, 0.25, 0.25, seed=1)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="seed must not be empty"):
+        SplitPolicy(0.5, 0.25, 0.25, seed="")
+
 
 def test_stable_digest_and_jaccard_are_deterministic() -> None:
     assert stable_digest("value") == stable_digest("value")

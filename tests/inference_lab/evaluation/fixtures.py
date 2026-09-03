@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from inference_lab.evaluation.cases import EvaluationCase, QuestionType
-from inference_lab.evaluation.utils import SplitName
+from inference_lab.evaluation.contracts import SplitName
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
 CORPUS_ID = "00000000-0000-4000-8000-000000000001"
@@ -86,7 +86,7 @@ def write_dataset_fixture(
     manifest: dict[str, Any] = {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "dataset_id": "baseline-v1",
-        "dataset_version": "1",
+        "dataset_version": "1.0.0",
         "description": "Evaluation fixture",
         "corpus_id": CORPUS_ID,
         "corpus_version": CORPUS_VERSION,

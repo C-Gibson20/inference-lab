@@ -43,6 +43,7 @@ _REQUIRED_FIELDS = (
     "module",
     "pipeline_stage",
     "document_id",
+    "corpus_id",
     "corpus_version",
 )
 

@@ -1,5 +1,6 @@
+"""Tests for SQLite metadata transaction contracts."""
+
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from structlog.testing import capture_logs
 from inference_lab.provenance import (
     ContentHash,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -25,12 +27,20 @@ from inference_lab.storage import (
     StorageConflictError,
     StorageTransactionError,
 )
-from inference_lab.storage import _sqlite_repository as repository_module
+from inference_lab.storage import _sqlite_logging as logging_module
 from inference_lab.storage._sqlite_migrations import MIGRATIONS
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 11, 0, tzinfo=UTC)
+from .fixtures import (  # noqa: TID252
+    CompleteMetadataGraph,
+    add_complete_graph,
+)
+from .fixtures import (  # noqa: TID252
+    open_repository as _open_repository,
+)
+
 _CORPUS_ID = CorpusId("62738887-ac02-4c50-98d3-637658880de5")
+_CORPUS = CorpusMetadata(_CORPUS_ID, "Test corpus")
 _FAMILY_ID = DocumentFamilyId("66f40173-12bb-4054-a427-0bb08f79aa34")
 _FIRST_DOCUMENT_ID = DocumentId("429569cc-9094-4b22-97a4-a43838b4cd44")
 _SECOND_DOCUMENT_ID = DocumentId("59c7ea2d-72d9-4af7-b76f-822dd84c6e35")
@@ -45,7 +55,7 @@ _FIRST_VERSION = DocumentVersion(
 _SECOND_VERSION = DocumentVersion(
     _SECOND_VERSION_ID,
     _SECOND_DOCUMENT_ID,
-    ContentHash(HashAlgorithm.SHA256, "b" * 64),
+    ContentHash(HashAlgorithm.SHA256, "a" * 64),
 )
 _DUPLICATE = DuplicateRelationship(
     _FIRST_VERSION_ID,
@@ -59,27 +69,13 @@ _MEMBERSHIP = DocumentFamilyMembership(
 )
 
 
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
-
-
-def _add_complete_graph(transaction: MetadataTransaction) -> None:
-    transaction.add_corpus(_CORPUS_ID)
-    transaction.add_document_family(_FAMILY_ID)
-    transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
-    transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
-    transaction.add_document_version(_FIRST_VERSION)
-    transaction.add_document_version(_SECOND_VERSION)
-    transaction.add_duplicate_relationship(_DUPLICATE)
-    transaction.add_family_membership(_MEMBERSHIP)
+_COMPLETE_GRAPH = CompleteMetadataGraph(
+    corpus=_CORPUS,
+    family_id=_FAMILY_ID,
+    versions=(_FIRST_VERSION, _SECOND_VERSION),
+    duplicate_relationships=(_DUPLICATE,),
+    family_memberships=(_MEMBERSHIP,),
+)
 
 
 def test_concrete_repository_and_transaction_satisfy_public_protocols(
@@ -96,7 +92,7 @@ def test_concrete_repository_and_transaction_satisfy_public_protocols(
         assert not hasattr(repository, "add_document_version")
 
         with transaction_contract:
-            transaction_contract.add_corpus(_CORPUS_ID)
+            transaction_contract.add_corpus(_CORPUS)
     finally:
         repository.close()
 
@@ -105,18 +101,18 @@ def test_complete_metadata_graph_commits_atomically(tmp_path: Path) -> None:
     repository = _open_repository(tmp_path / "metadata.sqlite3")
     try:
         with repository.transaction() as transaction:
-            _add_complete_graph(transaction)
+            add_complete_graph(transaction, _COMPLETE_GRAPH)
 
-        assert repository.get_corpus(_CORPUS_ID) == _CORPUS_ID
+        assert repository.get_corpus(_CORPUS_ID) == _CORPUS
         assert repository.get_document_family(_FAMILY_ID) == _FAMILY_ID
         assert repository.get_document(_FIRST_DOCUMENT_ID) == DocumentIdentity(
             _FIRST_DOCUMENT_ID
         )
         assert repository.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
-        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == (
-            _DUPLICATE,
-        )
-        assert repository.list_family_memberships_by_family(_FAMILY_ID) == (
+        assert repository.list_duplicate_relationships(
+            _CORPUS_ID, _FIRST_VERSION_ID
+        ) == (_DUPLICATE,)
+        assert repository.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
             _MEMBERSHIP,
         )
     finally:
@@ -135,7 +131,7 @@ def test_failure_at_final_relationship_step_rolls_back_complete_graph(
     try:
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
-                _add_complete_graph(transaction)
+                add_complete_graph(transaction, _COMPLETE_GRAPH)
                 transaction.add_family_membership(invalid_membership)
 
         assert repository.get_corpus(_CORPUS_ID) is None
@@ -144,8 +140,12 @@ def test_failure_at_final_relationship_step_rolls_back_complete_graph(
         assert repository.get_document(_SECOND_DOCUMENT_ID) is None
         assert repository.get_document_version(_FIRST_VERSION_ID) is None
         assert repository.get_document_version(_SECOND_VERSION_ID) is None
-        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == ()
-        assert repository.list_family_memberships_by_family(_FAMILY_ID) == ()
+        assert (
+            repository.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == ()
+        )
+        assert (
+            repository.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == ()
+        )
     finally:
         repository.close()
 
@@ -158,7 +158,7 @@ def test_caught_constraint_failure_marks_transaction_rollback_only(
         with capture_logs() as logs:
             with pytest.raises(StorageTransactionError):
                 with repository.transaction() as transaction:
-                    transaction.add_corpus(_CORPUS_ID)
+                    transaction.add_corpus(_CORPUS)
                     try:
                         transaction.add_document_version(_FIRST_VERSION)
                     except StorageConflictError:
@@ -190,7 +190,7 @@ def test_caught_conversion_failure_marks_transaction_rollback_only(
     try:
         with pytest.raises(StorageTransactionError):
             with repository.transaction() as transaction:
-                transaction.add_corpus(_CORPUS_ID)
+                transaction.add_corpus(_CORPUS)
                 try:
                     transaction.add_document("private-value")  # type: ignore[arg-type]
                 except TypeError:
@@ -213,12 +213,12 @@ def test_logging_failure_does_not_replace_primary_transaction_exception(
             raise RuntimeError("logging failed")
 
     repository = _open_repository(tmp_path / "metadata.sqlite3")
-    monkeypatch.setattr(repository_module, "_LOGGER", FailingLogger())
+    monkeypatch.setattr(logging_module, "_LOGGER", FailingLogger())
     primary = RuntimeError("private-primary")
     try:
         with pytest.raises(RuntimeError) as raised:
             with repository.transaction() as transaction:
-                transaction.add_corpus(_CORPUS_ID)
+                transaction.add_corpus(_CORPUS)
                 raise primary
 
         assert raised.value is primary
@@ -249,7 +249,7 @@ def test_rollback_failure_does_not_replace_primary_transaction_exception(
         with capture_logs() as logs:
             with pytest.raises(RuntimeError) as raised:
                 with repository.transaction() as transaction:
-                    transaction.add_corpus(_CORPUS_ID)
+                    transaction.add_corpus(_CORPUS)
                     raise primary
 
         assert raised.value is primary

@@ -6,10 +6,7 @@ from copy import deepcopy
 import pytest
 
 from inference_lab.provenance.derived import (
-    DerivedRecordKind,
     DerivedRecordMetadata,
-    OutputDigest,
-    build_derivation_fingerprint,
 )
 from inference_lab.provenance.errors import (
     InvalidDerivedRecordError,
@@ -24,17 +21,10 @@ from inference_lab.provenance.identifiers import (
 )
 from inference_lab.provenance.lineage import (
     InputRole,
-    LineageInputs,
-    ParentRecordReference,
-    SourceAnchor,
 )
 from inference_lab.provenance.operations import (
     ComponentRole,
-    ConfigurationIdentity,
-    DigestAlgorithm,
-    OperationKind,
     ProducingComponent,
-    ProducingOperation,
 )
 from inference_lab.provenance.serialisation import (
     derived_record_payload,
@@ -45,7 +35,13 @@ from inference_lab.provenance.serialisation import (
     serialise_lineage_bundle,
 )
 from inference_lab.provenance.validation import KnownSourceSpan, LineageBundle
-from inference_lab.provenance.versioning import CURRENT_LINEAGE_SCHEMA_VERSION
+
+from .fixtures import (  # noqa: TID252
+    derived_record,
+    parent_inputs,
+    producing_operation,
+    source_inputs,
+)
 
 _DOCUMENT_A = DocumentVersionId.from_str("11111111-1111-4111-8111-111111111111")
 _DOCUMENT_B = DocumentVersionId.from_str("22222222-2222-4222-8222-222222222222")
@@ -57,117 +53,78 @@ _RECORD_C = RecordId.from_str("77777777-7777-4777-8777-777777777777")
 _RECORD_D = RecordId.from_str("88888888-8888-4888-8888-888888888888")
 
 
-def _operation() -> ProducingOperation:
-    return ProducingOperation(
-        kind=OperationKind("summarisation"),
-        implementation="traceable-summariser",
-        contract_version="1.2.0",
-        configuration_identity=ConfigurationIdentity(
-            algorithm=DigestAlgorithm.SHA256,
-            digest="a" * 64,
+_OPERATION = producing_operation(
+    kind="summarisation",
+    implementation="traceable-summariser",
+    contract_version="1.2.0",
+    configuration_digest="a" * 64,
+    components=(
+        ProducingComponent(
+            role=ComponentRole("generator-model"),
+            implementation="local-generator-adapter",
+            contract_version="2.0.0",
+            artefact_identity="organisation/model",
+            artefact_revision="revision-a",
         ),
-        components=(
-            ProducingComponent(
-                role=ComponentRole("generator-model"),
-                implementation="local-generator-adapter",
-                contract_version="2.0.0",
-                artefact_identity="organisation/model",
-                artefact_revision="revision-a",
-            ),
-            ProducingComponent(
-                role=ComponentRole("prompt"),
-                implementation="summary-prompt",
-                contract_version="1.0.0",
-                artefact_identity="topic-summary",
-                artefact_revision="v2",
-            ),
+        ProducingComponent(
+            role=ComponentRole("prompt"),
+            implementation="summary-prompt",
+            contract_version="1.0.0",
+            artefact_identity="topic-summary",
+            artefact_revision="v2",
         ),
-    )
-
-
-def _source_inputs(
-    document_version_id: DocumentVersionId,
-    source_span_id: SourceSpanId,
-) -> LineageInputs:
-    return LineageInputs(
-        source_anchors=(
-            SourceAnchor(
-                document_version_id=document_version_id,
-                source_span_id=source_span_id,
-                input_role=InputRole("supporting-passage"),
-                input_ordinal=0,
-            ),
-        )
-    )
-
-
-def _parent_inputs(*record_ids: RecordId) -> LineageInputs:
-    return LineageInputs(
-        parent_records=tuple(
-            ParentRecordReference(
-                record_id=record_id,
-                input_role=InputRole("summary-input"),
-                input_ordinal=ordinal,
-            )
-            for ordinal, record_id in enumerate(record_ids)
-        )
-    )
-
-
-def _record(
-    record_id: RecordId,
-    *,
-    record_kind: str,
-    inputs: LineageInputs,
-    output_character: str,
-    supersedes_record_id: RecordId | None = None,
-) -> DerivedRecordMetadata:
-    kind = DerivedRecordKind(record_kind)
-    operation = _operation()
-    output_digest = OutputDigest(DigestAlgorithm.SHA256, output_character * 64)
-    fingerprint = build_derivation_fingerprint(
-        record_kind=kind,
-        lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
-        inputs=inputs,
-        operation=operation,
-        output_digest=output_digest,
-    )
-    return DerivedRecordMetadata(
-        record_id=record_id,
-        record_kind=kind,
-        lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
-        inputs=inputs,
-        operation=operation,
-        output_digest=output_digest,
-        derivation_fingerprint=fingerprint,
-        supersedes_record_id=supersedes_record_id,
-    )
+    ),
+)
 
 
 def _records() -> tuple[DerivedRecordMetadata, ...]:
-    first = _record(
+    first = derived_record(
         _RECORD_A,
         record_kind="document-summary",
-        inputs=_source_inputs(_DOCUMENT_A, _SPAN_A),
-        output_character="b",
+        inputs=source_inputs(
+            _DOCUMENT_A,
+            _SPAN_A,
+            input_role=InputRole("supporting-passage"),
+            input_ordinal=0,
+        ),
+        operation=_OPERATION,
+        output_digest="b" * 64,
     )
-    second = _record(
+    second = derived_record(
         _RECORD_B,
         record_kind="document-summary",
-        inputs=_source_inputs(_DOCUMENT_B, _SPAN_B),
-        output_character="c",
+        inputs=source_inputs(
+            _DOCUMENT_B,
+            _SPAN_B,
+            input_role=InputRole("supporting-passage"),
+            input_ordinal=0,
+        ),
+        operation=_OPERATION,
+        output_digest="c" * 64,
     )
-    topic = _record(
+    topic = derived_record(
         _RECORD_C,
         record_kind="topic-summary",
-        inputs=_parent_inputs(_RECORD_A, _RECORD_B),
-        output_character="d",
+        inputs=parent_inputs(
+            _RECORD_A,
+            _RECORD_B,
+            input_role=InputRole("summary-input"),
+            include_ordinals=True,
+        ),
+        operation=_OPERATION,
+        output_digest="d" * 64,
     )
-    replacement = _record(
+    replacement = derived_record(
         _RECORD_D,
         record_kind="topic-summary",
-        inputs=_parent_inputs(_RECORD_A, _RECORD_B),
-        output_character="e",
+        inputs=parent_inputs(
+            _RECORD_A,
+            _RECORD_B,
+            input_role=InputRole("summary-input"),
+            include_ordinals=True,
+        ),
+        operation=_OPERATION,
+        output_digest="e" * 64,
         supersedes_record_id=_RECORD_C,
     )
     return first, second, topic, replacement

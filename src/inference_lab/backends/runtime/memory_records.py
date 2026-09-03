@@ -3,10 +3,12 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from inference_lab.backends.runtime.memory import (
+from inference_lab.backends.runtime._memory_accounting import (
     BudgetComparison,
     BudgetState,
     Completeness,
+)
+from inference_lab.backends.runtime._memory_values import (
     MemoryMeasurement,
 )
 from inference_lab.profiling import ProfilingLogger, emit_record
@@ -33,6 +35,7 @@ class MemoryComponentRecord:
             "module": "runtime",
             "pipeline_stage": "memory_accounting",
             "document_id": None,
+            "corpus_id": None,
             "corpus_version": None,
             "measurement_id": measurement.measurement_id,
             "component_id": measurement.component_id,
@@ -82,6 +85,7 @@ class MemoryBudgetRecord:
             "module": "runtime",
             "pipeline_stage": "memory_accounting",
             "document_id": None,
+            "corpus_id": None,
             "corpus_version": None,
             "state": comparison.state.value,
             "completeness": comparison.completeness.value,
@@ -93,6 +97,7 @@ class MemoryBudgetRecord:
             "measured_count": comparison.measured_count,
             "unreliable_count": comparison.unreliable_count,
             "unavailable_count": comparison.unavailable_count,
+            "missing_count": comparison.missing_count,
             "observed_at": self.observed_at.isoformat(),
             "record_schema_version": CURRENT_RECORD_SCHEMA_VERSION,
         }

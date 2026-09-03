@@ -1,3 +1,5 @@
+"""Tests for application logging configuration."""
+
 import json
 import logging
 from io import StringIO
@@ -80,8 +82,25 @@ def test_required_context_fields_default_to_null() -> None:
 
     assert record["module"] == "tooling"
     assert record["document_id"] is None
+    assert record["corpus_id"] is None
     assert record["corpus_version"] is None
     assert record["pipeline_stage"] is None
+
+
+def test_corpus_context_is_preserved() -> None:
+    stream = StringIO()
+    configure_logging(LoggingConfig(format="json"), stream=stream)
+
+    structlog.get_logger("retrieval").info(
+        "query_completed",
+        corpus_id="corpus-1",
+        corpus_version="corpus-version-1",
+    )
+
+    record = json.loads(stream.getvalue())
+
+    assert record["corpus_id"] == "corpus-1"
+    assert record["corpus_version"] == "corpus-version-1"
 
 
 def test_auto_uses_json_for_non_tty() -> None:

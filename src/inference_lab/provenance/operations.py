@@ -5,18 +5,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final, Self
 
-from inference_lab.provenance.errors import InvalidLineageMetadataError
-from inference_lab.provenance.utils import (
+from inference_lab._validation import is_canonical_semantic_version
+from inference_lab.provenance._validation import (
     is_lowercase_slug,
     is_sha256_hex_digest,
 )
+from inference_lab.provenance.errors import InvalidLineageMetadataError
 
-_SEMANTIC_VERSION_PATTERN: Final = re.compile(
-    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
-    r"(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-)
 _REVISION_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 
 
@@ -33,7 +28,7 @@ def _validate_semantic_version(value: object, field_name: str) -> str:
     """Return a canonical Semantic Version after strict validation."""
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
-    if _SEMANTIC_VERSION_PATTERN.fullmatch(value) is None:
+    if not is_canonical_semantic_version(value):
         raise InvalidLineageMetadataError(
             f"{field_name} must be a canonical semantic version."
         )

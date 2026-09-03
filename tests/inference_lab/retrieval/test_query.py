@@ -13,7 +13,6 @@ from inference_lab.retrieval import (
 
 
 def test_query_and_channel_values_are_strict_and_immutable() -> None:
-    """Construct valid values, preserve text, and reject mutation."""
     corpus_version = CorpusVersionId.generate()
     expression = ExactFilter("document-type", "paper")
     query = RetrievalQuery(
@@ -30,7 +29,6 @@ def test_query_and_channel_values_are_strict_and_immutable() -> None:
 
 
 def test_query_requires_text_corpus_version_limit_and_filter_types() -> None:
-    """Reject blank text and values from the wrong contract domains."""
     corpus_version = CorpusVersionId.generate()
     with pytest.raises(InvalidRetrievalContractError):
         RetrievalQuery(" \n", corpus_version, RetrievalLimit(1))

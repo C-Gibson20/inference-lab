@@ -1,4 +1,4 @@
-"""Internal, append-only SQLite metadata migration definitions."""
+"""Internal SQLite metadata baseline and migration definitions."""
 
 import hashlib
 import json
@@ -65,7 +65,7 @@ class MigrationDefinition:
                 )
 
 
-_REVISION_1_STATEMENTS: Final = (
+_CORE_SCHEMA_STATEMENTS: Final = (
     """CREATE TABLE metadata_schema (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_name TEXT NOT NULL UNIQUE
@@ -102,6 +102,11 @@ VALUES (1, 'inference_lab_metadata', 0)""",
             AND substr(corpus_id, 24, 1) = '-'
             AND length(replace(corpus_id, '-', '')) = 32
             AND corpus_id NOT GLOB '*[^0-9a-f-]*'
+        ),
+    display_name TEXT NOT NULL
+        CHECK (
+            length(trim(display_name)) > 0
+            AND instr(display_name, char(0)) = 0
         )
 ) STRICT""",
     """CREATE TABLE documents (
@@ -213,11 +218,196 @@ ON document_family_memberships (document_version_id, family_id, document_id)
 WHERE document_version_id IS NOT NULL""",
 )
 
+_CORPUS_MEMBERSHIP_STATEMENTS: Final = (
+    """CREATE TABLE corpus_document_version_memberships (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    FOREIGN KEY (corpus_id) REFERENCES corpora (corpus_id),
+    FOREIGN KEY (document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    UNIQUE (corpus_id, document_version_id)
+) STRICT""",
+    """CREATE INDEX corpus_document_version_memberships_document_idx
+ON corpus_document_version_memberships (
+    corpus_id,
+    document_id,
+    document_version_id
+)""",
+    """CREATE INDEX corpus_document_version_memberships_version_idx
+ON corpus_document_version_memberships (document_version_id, corpus_id)""",
+)
+
+_SOURCE_OBSERVATION_STATEMENTS: Final = (
+    """CREATE TABLE source_observations (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    source_observation_id TEXT NOT NULL UNIQUE,
+    document_id TEXT NOT NULL,
+    current_document_version_id TEXT NOT NULL,
+    current_revision INTEGER NOT NULL CHECK (current_revision >= 1),
+    FOREIGN KEY (corpus_id) REFERENCES corpora (corpus_id),
+    FOREIGN KEY (current_document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    FOREIGN KEY (corpus_id, current_document_version_id)
+        REFERENCES corpus_document_version_memberships (
+            corpus_id,
+            document_version_id
+        ),
+    UNIQUE (source_observation_id, corpus_id, document_id),
+    CHECK (
+        length(source_observation_id) = 36
+        AND source_observation_id = lower(source_observation_id)
+        AND substr(source_observation_id, 9, 1) = '-'
+        AND substr(source_observation_id, 14, 1) = '-'
+        AND substr(source_observation_id, 19, 1) = '-'
+        AND substr(source_observation_id, 24, 1) = '-'
+        AND length(replace(source_observation_id, '-', '')) = 32
+        AND source_observation_id NOT GLOB '*[^0-9a-f-]*'
+    )
+) STRICT""",
+    """CREATE INDEX source_observations_corpus_idx
+ON source_observations (corpus_id, source_observation_id)""",
+    """CREATE TABLE source_observation_history (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    source_observation_id TEXT NOT NULL,
+    observation_revision INTEGER NOT NULL CHECK (observation_revision >= 1),
+    document_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    FOREIGN KEY (source_observation_id, corpus_id, document_id)
+        REFERENCES source_observations (
+            source_observation_id,
+            corpus_id,
+            document_id
+        ),
+    FOREIGN KEY (document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    FOREIGN KEY (corpus_id, document_version_id)
+        REFERENCES corpus_document_version_memberships (
+            corpus_id,
+            document_version_id
+        ),
+    UNIQUE (source_observation_id, observation_revision),
+    UNIQUE (source_observation_id, document_version_id),
+    UNIQUE (source_observation_id, corpus_id, document_version_id, document_id)
+) STRICT""",
+    """CREATE INDEX source_observation_history_version_idx
+ON source_observation_history (
+    corpus_id,
+    document_version_id,
+    source_observation_id
+)""",
+    """CREATE TABLE external_identifier_assertions (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    source_observation_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    namespace TEXT NOT NULL
+        CHECK (
+            length(namespace) > 0
+            AND substr(namespace, 1, 1) GLOB '[a-z]'
+            AND namespace NOT GLOB '*[^a-z0-9_-]*'
+        ),
+    identifier_value TEXT NOT NULL CHECK (length(trim(identifier_value)) > 0),
+    FOREIGN KEY (
+        source_observation_id,
+        corpus_id,
+        document_version_id,
+        document_id
+    ) REFERENCES source_observation_history (
+        source_observation_id,
+        corpus_id,
+        document_version_id,
+        document_id
+    ),
+    UNIQUE (
+        source_observation_id,
+        document_version_id,
+        namespace,
+        identifier_value
+    )
+) STRICT""",
+    """CREATE INDEX external_identifier_assertions_lookup_idx
+ON external_identifier_assertions (
+    corpus_id,
+    namespace,
+    identifier_value,
+    document_version_id,
+    source_observation_id
+)""",
+)
+
+_DUPLICATE_INTEGRITY_STATEMENTS: Final = (
+    """CREATE TRIGGER duplicate_relationships_hash_insert
+BEFORE INSERT ON duplicate_relationships
+WHEN NEW.duplicate_class = 'byte_identical'
+    AND NOT EXISTS (
+        SELECT 1
+        FROM document_versions AS first
+        JOIN document_versions AS second
+            ON second.document_version_id = NEW.second_version_id
+        WHERE first.document_version_id = NEW.first_version_id
+            AND first.content_hash_algorithm = second.content_hash_algorithm
+            AND first.content_hash_digest = second.content_hash_digest
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'byte-identical duplicate hashes must match');
+END""",
+    """CREATE TRIGGER duplicate_relationships_hash_update
+BEFORE UPDATE ON duplicate_relationships
+WHEN NEW.duplicate_class = 'byte_identical'
+    AND NOT EXISTS (
+        SELECT 1
+        FROM document_versions AS first
+        JOIN document_versions AS second
+            ON second.document_version_id = NEW.second_version_id
+        WHERE first.document_version_id = NEW.first_version_id
+            AND first.content_hash_algorithm = second.content_hash_algorithm
+            AND first.content_hash_digest = second.content_hash_digest
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'byte-identical duplicate hashes must match');
+END""",
+    """CREATE TRIGGER document_versions_duplicate_hash_update
+BEFORE UPDATE OF content_hash_algorithm, content_hash_digest ON document_versions
+WHEN EXISTS (
+    SELECT 1
+    FROM duplicate_relationships AS relationship
+    JOIN document_versions AS other
+        ON other.document_version_id = CASE
+            WHEN relationship.first_version_id = OLD.document_version_id
+                THEN relationship.second_version_id
+            ELSE relationship.first_version_id
+        END
+    WHERE OLD.document_version_id IN (
+        relationship.first_version_id,
+        relationship.second_version_id
+    )
+        AND (
+            NEW.content_hash_algorithm != other.content_hash_algorithm
+            OR NEW.content_hash_digest != other.content_hash_digest
+        )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'byte-identical duplicate hashes must match');
+END""",
+)
+
+_BASELINE_STATEMENTS: Final = (
+    *_CORE_SCHEMA_STATEMENTS,
+    *_CORPUS_MEMBERSHIP_STATEMENTS,
+    *_SOURCE_OBSERVATION_STATEMENTS,
+    *_DUPLICATE_INTEGRITY_STATEMENTS,
+)
+
 MIGRATIONS: Final = (
     MigrationDefinition(
         revision=1,
-        migration_id="initial_metadata",
-        statements=_REVISION_1_STATEMENTS,
+        migration_id="multi_corpus_metadata_baseline",
+        statements=_BASELINE_STATEMENTS,
     ),
 )
 

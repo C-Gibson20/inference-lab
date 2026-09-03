@@ -9,9 +9,9 @@ from datetime import datetime
 from types import TracebackType
 from typing import Final, Literal, Self, get_args
 
+from inference_lab._clock import utc_now
 from inference_lab.profiling._validation import validate_utc_datetime
 from inference_lab.profiling.types import LogLevel
-from inference_lab.profiling.utils import utc_now
 from inference_lab.profiling.versioning import (
     CURRENT_RECORD_SCHEMA_VERSION,
     validate_record_schema_version,
@@ -69,7 +69,8 @@ class StageTiming:
     document_id: str | None = None
     corpus_version: str | None = None
     parent_stage_id: str | None = None
-    record_schema_version: int = CURRENT_RECORD_SCHEMA_VERSION
+    record_schema_version: str = CURRENT_RECORD_SCHEMA_VERSION
+    corpus_id: str | None = None
 
     def __post_init__(self) -> None:
         self._validate()
@@ -116,6 +117,7 @@ class StageTiming:
             "run_id": self.run_id,
             "request_id": self.request_id,
             "document_id": self.document_id,
+            "corpus_id": self.corpus_id,
             "corpus_version": self.corpus_version,
             "parent_stage_id": self.parent_stage_id,
             "record_schema_version": self.record_schema_version,
@@ -151,6 +153,7 @@ class StageTimer:
         run_id: str | None = None,
         request_id: str | None = None,
         document_id: str | None = None,
+        corpus_id: str | None = None,
         corpus_version: str | None = None,
         parent_stage_id: str | None = None,
     ) -> None:
@@ -171,6 +174,7 @@ class StageTimer:
         self._run_id = run_id
         self._request_id = request_id
         self._document_id = document_id
+        self._corpus_id = corpus_id
         self._corpus_version = corpus_version
         self._parent_stage_id = parent_stage_id
         self._start_ns: int | None = None
@@ -257,6 +261,7 @@ class StageTimer:
             run_id=self._run_id,
             request_id=self._request_id,
             document_id=self._document_id,
+            corpus_id=self._corpus_id,
             corpus_version=self._corpus_version,
             parent_stage_id=self._parent_stage_id,
         )

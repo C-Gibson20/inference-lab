@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+"""Tests for SQLite repository ownership and closure."""
+
 from pathlib import Path
 
 import pytest
@@ -7,11 +8,7 @@ from structlog.testing import capture_logs
 from inference_lab.storage import RepositoryClosedError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
 
 
 def test_repository_owns_validated_schema_state(tmp_path: Path) -> None:

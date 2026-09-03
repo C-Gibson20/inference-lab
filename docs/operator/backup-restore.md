@@ -4,51 +4,57 @@
 > operations, exact commands, and storage-specific procedures remain deferred
 > until the persistent component interfaces are implemented.
 
-This runbook covers backup and restore of the persistent corpus state. The
-normative policy is defined in the [backup-restore conventions](../conventions/backup-restore.md).
+This runbook covers backup and restore of persistent multi-corpus state. The
+portable baseline covers one selected corpus; compatible recovery snapshots
+may cover the complete deployment. The normative policy is defined in the
+[backup-restore conventions](../conventions/backup-restore.md).
 
 ## Recovery objectives
 
-Recovery should restore a validated corpus state that can serve queries
-without reconstructing unchanged data. A complete recovery also requires the
-original source documents to be available through the separate source-data
-backup or availability policy.
+Recovery should restore a validated selected-corpus state that can serve
+queries without reconstructing unchanged data and without changing unrelated
+corpora. A complete recovery also requires the original source documents to be
+available through the separate source-data backup or availability policy.
 
 ## Backup procedure
 
 1. Confirm that the destination has sufficient local storage.
-2. Identify the corpus version to capture.
+2. Identify the `CorpusId` and owned `CorpusVersionId` to capture.
 3. Coordinate with ingest so the corpus version cannot advance during capture.
 4. Keep read-only queries available where supported.
-5. Capture the metadata store and all persistent indexes for the selected
-   corpus version.
+5. Capture the selected corpus's membership, reachable canonical metadata, and
+   all persistent indexes for its selected version. Do not include another
+   corpus's membership or private derived state.
 6. Include the recovery manifest and integrity information.
 7. Validate every component, version, generation, and checksum.
 8. Publish the backup atomically only after validation succeeds.
-9. Record the backup identity, corpus version, component status, and validation
-   result.
+9. Record the backup identity, corpus ID and version, component status, and
+   validation result.
 
 Failed or interrupted work must remain unpublished and must not replace the
 previous published backup.
 
 ## Restore procedure
 
-1. Select a published backup and confirm that it is the intended corpus
+1. Select a published backup and confirm that it is the intended corpus and
    version.
 2. Confirm that the required source documents are available.
 3. Validate the manifest, checksums, schema version, index format versions, and
    software compatibility.
 4. Confirm that the restore destination has sufficient storage.
-5. Create a pre-restore backup when replacing an active installation.
+5. Create a pre-restore backup when replacing an active corpus or installation.
 6. Restore into a separate staging location.
 7. Open and validate the metadata store and every included index.
 8. Run smoke checks for metadata queries, index queries, provenance, and source
    spans.
 9. Record whether indexes were restored directly or rebuilt from canonical
    records.
-10. Atomically activate the validated staged restore.
-11. Restart or reconnect serving components.
-12. Verify restart-to-serve behaviour and run post-activation checks.
+10. Reuse exact deployment-global immutable records already present, and reject
+    conflicting content for an existing ID.
+11. Atomically activate the validated staged restore without changing
+    unrelated corpora.
+12. Restart or reconnect serving components.
+13. Verify restart-to-serve behaviour and run post-activation checks.
 
 The active installation must remain unchanged if any validation, activation, or
 post-activation check fails.
@@ -69,6 +75,7 @@ post-activation check fails.
 After restore, verify:
 
 - The expected corpus version is active.
+- Other corpora retain their membership and active versions.
 - The metadata store opens and returns expected fixture records.
 - Each persistent index opens and returns expected results.
 - Results resolve to document IDs, source spans, and source locations.
@@ -90,12 +97,14 @@ local recovery.
 ## Initial backup contract
 
 The initial implementation uses immutable, generation-based full portable
-backups. A portable backup contains a logical metadata-store export, canonical
-chunks and provenance, index configuration and generation metadata, a manifest,
-schema information, and checksums. Serialised indexes are included only when
-their format is documented and portable; otherwise they are rebuilt from the
-canonical records during restore. Compatible recovery snapshots are an
-optimisation and do not replace this baseline contract.
+backups of one selected corpus. A portable backup contains that corpus's
+membership, a logical export of reachable canonical metadata, chunks and
+provenance, index configuration and generation metadata, a manifest, schema
+information, and checksums. Serialised indexes are included only when their
+format is documented and portable; otherwise they are rebuilt from canonical
+records during restore. Compatible recovery snapshots may cover the complete
+deployment by listing the active version of every included corpus; they are an
+optimisation and do not replace the per-corpus portable baseline.
 
 Backup settings belong under `[storage]` and follow the normal precedence order
 (explicit `Settings(...)` values, environment variables, then `config.toml`):

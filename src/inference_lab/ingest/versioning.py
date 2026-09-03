@@ -4,16 +4,10 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from inference_lab.ingest.utils import is_strict_integer
+from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
 
 _IMPLEMENTATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
-_SEMANTIC_VERSION_PATTERN = re.compile(
-    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
-    r"(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,13 +27,9 @@ class ParserVersion:
             self.implementation, str
         ) or not _IMPLEMENTATION_PATTERN.fullmatch(self.implementation):
             raise ValueError("parser_implementation_must_be_slug")
-        if not isinstance(
-            self.contract_version, str
-        ) or not _SEMANTIC_VERSION_PATTERN.fullmatch(self.contract_version):
+        if not is_canonical_semantic_version(self.contract_version):
             raise ValueError("parser_contract_version_must_be_semantic_version")
-        if not isinstance(
-            self.normalisation_version, str
-        ) or not _SEMANTIC_VERSION_PATTERN.fullmatch(self.normalisation_version):
+        if not is_canonical_semantic_version(self.normalisation_version):
             raise ValueError("normalisation_version_must_be_semantic_version")
 
     @property

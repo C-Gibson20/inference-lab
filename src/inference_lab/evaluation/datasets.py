@@ -14,15 +14,19 @@ from pydantic import (
     model_validator,
 )
 
-from inference_lab.evaluation.schemas import EvaluationPolicy
-from inference_lab.evaluation.utils import (
+from inference_lab._validation import (
+    CANONICAL_SEMANTIC_VERSION_PATTERN,
+    is_canonical_semantic_version,
+)
+from inference_lab.evaluation._validation import is_sha256_checksum
+from inference_lab.evaluation.contracts import (
     HELD_OUT_SPLIT,
     CaseId,
     DatasetId,
     SchemaVersion,
     SplitName,
-    is_sha256_pattern,
 )
+from inference_lab.evaluation.schemas import EvaluationPolicy
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 from inference_lab.provenance import CorpusId, CorpusVersionId
 
@@ -34,7 +38,9 @@ class DatasetManifest(BaseModel):
 
     schema_version: SchemaVersion = CURRENT_SCHEMA_VERSION
     dataset_id: DatasetId
-    dataset_version: str = Field(min_length=1)
+    dataset_version: str = Field(
+        json_schema_extra={"pattern": CANONICAL_SEMANTIC_VERSION_PATTERN}
+    )
     description: str = Field(min_length=1)
     corpus_id: str
     corpus_version: str
@@ -52,7 +58,15 @@ class DatasetManifest(BaseModel):
         """Serialise immutable mappings as ordinary JSON objects."""
         return dict(value)
 
-    @field_validator("dataset_version", "description", "case_file")
+    @field_validator("dataset_version")
+    @classmethod
+    def validate_dataset_version(cls, value: str) -> str:
+        """Require one canonical Semantic Version string."""
+        if not is_canonical_semantic_version(value):
+            raise ValueError("dataset_version must be a canonical semantic version")
+        return value
+
+    @field_validator("description", "case_file")
     @classmethod
     def validate_text_fields(cls, value: str) -> str:
         """Reject manifest strings without meaningful content."""
@@ -80,7 +94,7 @@ class DatasetManifest(BaseModel):
         if self.checksums:
             if set(self.checksums) != {self.case_file}:
                 raise ValueError("checksums must contain only the case file")
-            if not is_sha256_pattern(self.checksums[self.case_file]):
+            if not is_sha256_checksum(self.checksums[self.case_file]):
                 raise ValueError("Case-file checksum must use SHA256 format")
 
         object.__setattr__(self, "splits", MappingProxyType(dict(self.splits)))

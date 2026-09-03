@@ -16,11 +16,8 @@ from pydantic import (
     model_validator,
 )
 
-from inference_lab.evaluation.utils import (
-    EvidenceId,
-    ExpectationKey,
-    normalise_for_duplicate_detection,
-)
+from inference_lab.evaluation.contracts import EvidenceId, ExpectationKey
+from inference_lab.evaluation.normalisation import normalise_for_duplicate_detection
 from inference_lab.provenance import (
     CorpusVersionId,
     DocumentId,

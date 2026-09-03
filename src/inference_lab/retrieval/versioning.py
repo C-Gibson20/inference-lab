@@ -4,7 +4,7 @@ from typing import Final
 
 from inference_lab.retrieval.errors import UnsupportedRetrievalSchemaVersionError
 
-CURRENT_RETRIEVAL_SCHEMA_VERSION: Final[str] = "1.0.0"
+CURRENT_RETRIEVAL_SCHEMA_VERSION: Final[str] = "2.0.0"
 SUPPORTED_RETRIEVAL_SCHEMA_VERSIONS: Final[frozenset[str]] = frozenset(
     {CURRENT_RETRIEVAL_SCHEMA_VERSION}
 )

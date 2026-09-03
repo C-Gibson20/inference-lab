@@ -21,6 +21,22 @@ def _validate_field_and_value(field: object, value: object) -> None:
     validate_filter_scalar(value)
 
 
+def _canonical_scalar_values(
+    values: tuple[FilterScalar, ...],
+) -> tuple[FilterScalar, ...]:
+    """Sort an already validated same-type scalar tuple deterministically."""
+    first = values[0]
+    if isinstance(first, bool):
+        return tuple(sorted(cast(tuple[bool, ...], values)))
+    if isinstance(first, str):
+        return tuple(sorted(cast(tuple[str, ...], values)))
+    if type(first) is int:
+        return tuple(sorted(cast(tuple[int, ...], values)))
+    if type(first) is float:
+        return tuple(sorted(cast(tuple[float, ...], values)))
+    return tuple(sorted(cast(tuple[date, ...], values)))
+
+
 @dataclass(frozen=True, slots=True)
 class ExactFilter:
     """Match a field against one exactly typed value."""
@@ -55,6 +71,7 @@ class OneOfFilter:
             raise InvalidRetrievalContractError("values must not contain duplicates.")
         if len({type(value) for value in self.values}) != 1:
             raise InvalidRetrievalContractError("values must have one scalar type.")
+        object.__setattr__(self, "values", _canonical_scalar_values(self.values))
 
 
 @dataclass(frozen=True, slots=True)

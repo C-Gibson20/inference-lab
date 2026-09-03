@@ -194,7 +194,30 @@ def test_timing_record_serialises_nullable_fields() -> None:
     assert payload["items_processed"] is None
     assert payload["records_emitted"] is None
     assert payload["observed_at"] == "2026-08-21T12:00:00+00:00"
-    assert payload["record_schema_version"] == 2
+    assert payload["corpus_id"] is None
+    assert payload["record_schema_version"] == "3.0.0"
+
+
+def test_stage_timer_preserves_corpus_context() -> None:
+    records: list[StageTiming] = []
+
+    with StageTimer(
+        module="retrieval",
+        pipeline_stage="search",
+        stage_id="search-1",
+        corpus_id="corpus-1",
+        corpus_version="corpus-version-1",
+        emit=records.append,
+        clock=FakeClock(0, 1),
+        observed_at_factory=fixed_timestamp,
+    ):
+        pass
+
+    assert [record.corpus_id for record in records] == ["corpus-1", "corpus-1"]
+    assert [record.corpus_version for record in records] == [
+        "corpus-version-1",
+        "corpus-version-1",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -222,5 +245,5 @@ def test_timing_record_rejects_invalid_schema_version() -> None:
             stage_id="parse-1",
             duration_ms=1.0,
             status="completed",
-            record_schema_version=0,
+            record_schema_version="2.0.0",
         )

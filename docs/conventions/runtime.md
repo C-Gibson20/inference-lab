@@ -124,6 +124,15 @@ directory, and never acquires model artefacts from a network or model registry.
 The fixture is for runtime mechanics and contract evidence, not answer quality,
 production sizing, or 27B-model feasibility.
 
+The backend pins the exact inventory and SHA-256 digest of every model,
+generation, tokeniser, special-token, and chat-template file used by the
+fixture. It verifies that manifest before loading and again before publishing a
+ready backend. Missing, changed, or additional files fail closed under the
+privacy-safe load error; a directory cannot load while advertising the pinned
+fixture revision unless its complete byte identity matches. Model and tokeniser
+revision strings are derived from the expected manifest rather than maintained
+as independent labels.
+
 `LocalCausalBackend` is generation-only. Its metadata advertises streaming,
 cancellation, and token usage, and does not advertise embedding, reranking, or
 batching. Loading is explicit and idempotent while ready; closing is idempotent
@@ -139,15 +148,23 @@ the rendered input token count, generated token count, and their total. Stop
 sequences are buffered across token and delta boundaries and matched text is
 never emitted.
 
-Generation uses the model's native past/KV state for autoregressive
-continuation and returns an asynchronous stream validated by the RUN-01
-stream adapter. The implementation-only `LocalMechanicsHarness` compares full
-uncached execution with repeated and partial-prefix native continuation,
-including next-token selection and logits equivalence. It records token counts,
-cache outcomes, and stable identity only; it does not expose cache handles,
-ownership, persistence, eviction, memory bytes, or a public cache protocol.
-Those lifecycle and accounting concerns remain downstream work for RUN-07 and
-RUN-03 respectively.
+`local.py` owns artefact verification, lifecycle, and prompt preparation;
+transient stream execution belongs to `_local_generation.py`. Generation
+creates the model's native `DynamicCache` before the first model call, passes
+that same object throughout autoregressive continuation, and returns an
+asynchronous stream validated by the RUN-01 stream adapter. Legacy tuple cache
+conversion is not part of this boundary.
+
+The implementation-only mechanics types and `LocalMechanicsHarness` belong to
+`_local_mechanics.py`. The harness compares full uncached execution with cache
+state produced by executing the complete first request. For an extending,
+diverging, or shorter second request, it crops that native cache to the shared
+prefix and evaluates only the uncached suffix. It checks next-token selection
+and logits equivalence and separately records the tokens evaluated to create
+the first cache and after reuse. It records token counts, cache outcomes, and
+stable identity only; it does not expose cache handles, ownership, persistence,
+eviction, memory bytes, or a public cache protocol. Those lifecycle and
+accounting concerns remain downstream work for RUN-07 and RUN-03 respectively.
 
 The focused offline CPU acceptance suite is:
 
@@ -177,10 +194,12 @@ sensitive paths.
 
 ## Scope boundary
 
-The runtime contract layer does not include a tokenizer or local model, real
-embedding, reranking, or generation integrations, cache lifecycle operations,
-scheduling, residency, or microbatching. Those capabilities build on these
-contracts without changing the fake into a production model backend.
+The runtime contract layer includes the checked-in, CPU-only local mechanics
+fixture described above, but it does not yet include production model
+selection, real embedding or reranking integrations, cache lifecycle
+operations, scheduling, residency, or microbatching. Those capabilities build
+on these contracts without turning either the fake or mechanics fixture into a
+production model backend.
 
 ## Component memory accounting
 
@@ -189,23 +208,55 @@ component-attributed observations through the runtime memory contract. It is
 not part of the lifecycle, embedding, reranking, or generation protocols, so
 backends that do not implement memory reporting remain valid.
 
-Memory measurements use the profiling memory categories and
-`measured`/`unavailable`/`unreliable` statuses. Byte values are canonical
-non-negative integers. Component role and memory category are independent: for
-example, generator weights are `model_weights`, while an explicitly coarse
-embedder total may use `embedding_reranker_memory`.
+Memory measurements use the profiling `MemoryResourceCategory` vocabulary and
+`MeasurementStatus` values; profiling owns the corresponding immutable
+membership sets. Byte values are canonical non-negative integers. The closed
+runtime `MemoryComponentRole` identifies accounting ownership and is distinct
+from provenance's extensible `ComponentRole`, which describes a component's
+role in a producing operation. Integrations must map the two explicitly rather
+than interchange their values. Memory component role and category are also
+independent: for example, generator weights are `model_weights`, while an
+explicitly coarse embedder total may use `embedding_reranker_memory`.
 
-Exclusive contributions are counted once. Informational roll-ups declare the
-measurement IDs they cover and are excluded from totals. Snapshot validation
-rejects missing coverage, cross-space or cross-device coverage, and cycles.
-Adapters remain responsible for the physical non-overlap invariant: distinct
-exclusive IDs must refer to disjoint allocations.
+Memory snapshot schema version `2.0.0` separates the identity of the collector
+that assembles the snapshot from the identity of each adapter that supplies a
+measurement. Every snapshot declares a non-empty expected-contribution
+inventory. Each entry binds one component, role, category, memory space and
+device slot to its responsible adapter, so one snapshot may compose multiple
+adapters without weakening attribution. Schema version `1.0.0` snapshots are
+not accepted as `2.0.0` data. Snapshot, adapter, and collector versions use
+canonical semantic-version strings; calibration and inventory revisions remain
+opaque revision identifiers.
 
-Memory totals are never combined across accelerator, ordinary host, pinned
-host, and storage-cache spaces. A budget comparison is `within_budget` only
-when all counted contributions are measured and reliable; an incomplete result
-is `indeterminate` unless the reliable measured subtotal already breaches the
-budget.
+Exclusive contributions are counted once. The `disallow` overlap policy
+rejects duplicate expected slots and duplicate or unplanned exclusive
+measurements. Informational roll-ups declare the measurement IDs they cover
+and are excluded from totals. Snapshot validation rejects missing roll-up
+coverage, cross-space or cross-device coverage, and cycles. Adapters and the
+collector remain responsible for the physical non-overlap invariant: distinct
+exclusive slots must refer to disjoint allocations.
+
+Memory totals are derived once when the immutable snapshot is constructed,
+from the expected inventory rather than merely from the measurements that
+happened to arrive. Repeated reads and budget comparisons reuse that
+precomputed tuple. An absent expected contribution is reported separately as
+`missing`; unreliable, unavailable, and missing counts all make the affected
+total incomplete. Memory totals are never combined across accelerator,
+ordinary host, pinned-host, and storage-cache spaces.
+Accelerator contributions without a resolved device make every concrete
+device budget in that snapshot incomplete, and a measured accelerator value
+must identify its device. A budget comparison is `within_budget` only when all
+expected contributions affecting that device are measured and reliable; an
+incomplete result is `indeterminate` unless the reliable measured subtotal
+already breaches the budget.
+
+Budget comparison state, provisional headroom, and completeness are derived
+facts, not independently selectable fields. New comparisons must be created
+from the budget and accounting counts through the canonical factory. Direct
+construction and deserialisation validate the same relationships: headroom is
+the budget minus measured bytes, completeness agrees with all uncertainty
+counts, positive bytes and complete results have measured coverage, and state
+agrees with breach and completeness.
 
 The PyTorch calibration adapter is deliberately limited to inspectable tensor
 backing storage. It counts each storage allocation once, including tied

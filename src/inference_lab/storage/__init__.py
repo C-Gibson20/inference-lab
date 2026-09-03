@@ -13,6 +13,7 @@ from inference_lab.storage.errors import (
     StorageMigrationError,
     StorageTransactionError,
 )
+from inference_lab.storage.factory import open_metadata_repository
 from inference_lab.storage.protocols import (
     MetadataReader,
     MetadataRepository,
@@ -36,4 +37,5 @@ __all__ = [
     "StorageErrorCategory",
     "StorageMigrationError",
     "StorageTransactionError",
+    "open_metadata_repository",
 ]

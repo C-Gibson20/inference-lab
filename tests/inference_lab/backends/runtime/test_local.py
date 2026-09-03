@@ -1,12 +1,16 @@
+"""Tests for local runtime backend integration."""
+
 import asyncio
 import json
+import shutil
 from collections.abc import AsyncGenerator
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Callable, cast
 
 import pytest
+from transformers.cache_utils import DynamicCache
 
 from inference_lab.backends.runtime import (
     BackendCapability,
@@ -23,7 +27,7 @@ from inference_lab.backends.runtime import (
     LifecycleBackend,
     LocalCausalBackend,
 )
-from inference_lab.backends.runtime.local import (
+from inference_lab.backends.runtime._local_mechanics import (
     CacheObservationOutcome,
     LocalMechanicsHarness,
 )
@@ -31,6 +35,26 @@ from inference_lab.logging.logging_config import configure_logging
 from inference_lab.settings import LoggingConfig
 
 FIXTURE_DIR = Path("tests/fixtures/backends/runtime/local_mechanics")
+
+
+class _CacheRecordingModel:
+    def __init__(self, model: Callable[..., object]) -> None:
+        self._model = model
+        self.config = getattr(model, "config")
+        self.cache_inputs: list[object] = []
+
+    def __call__(self, **kwargs: object) -> object:
+        if kwargs.get("use_cache") is True:
+            self.cache_inputs.append(kwargs.get("past_key_values"))
+        return self._model(**kwargs)
+
+
+def _record_cache_inputs(backend: LocalCausalBackend) -> _CacheRecordingModel:
+    model = backend._model
+    assert model is not None
+    recording_model = _CacheRecordingModel(model)
+    setattr(backend, "_model", recording_model)
+    return recording_model
 
 
 def test_local_backend_exposes_generation_only_metadata() -> None:
@@ -48,13 +72,11 @@ def test_local_backend_exposes_generation_only_metadata() -> None:
     assert "prompt-v1" in backend.metadata.model_revision
 
 
-@pytest.mark.parametrize(
-    "artefact_dir",
-    ["https://example.invalid/model", "s3://bucket/model", "//server/model"],
-)
-def test_local_backend_rejects_non_local_paths(artefact_dir: str) -> None:
+def test_local_backend_rejects_non_local_paths(
+    rejected_local_path_shape: str | Path,
+) -> None:
     with pytest.raises(BackendRequestError):
-        LocalCausalBackend(artefact_dir)
+        LocalCausalBackend(rejected_local_path_shape)
 
 
 def test_local_backend_rejects_invalid_path_types() -> None:
@@ -120,6 +142,56 @@ def test_local_backend_fails_closed_when_artefacts_are_unavailable(
     assert not backend.is_ready
     assert backend._model is None
     assert backend._tokeniser is None
+
+
+def test_local_backend_rejects_modified_but_loadable_model_configuration(
+    tmp_path: Path,
+) -> None:
+    artefact_dir = tmp_path / "modified-model"
+    shutil.copytree(FIXTURE_DIR, artefact_dir)
+    config_path = artefact_dir / "config.json"
+    config_path.write_bytes(config_path.read_bytes() + b"\n")
+    backend = LocalCausalBackend(artefact_dir)
+
+    with pytest.raises(BackendExecutionError) as error:
+        backend.load()
+
+    assert error.value.__cause__ is None
+    assert not backend.is_ready
+    assert backend._model is None
+    assert backend._tokeniser is None
+
+
+def test_local_backend_rejects_swapped_valid_chat_template(tmp_path: Path) -> None:
+    artefact_dir = tmp_path / "swapped-template"
+    shutil.copytree(FIXTURE_DIR, artefact_dir)
+    template_path = artefact_dir / "chat_template.jinja"
+    template = template_path.read_text(encoding="utf-8")
+    template_path.write_text(
+        template.replace("[USER]", "[CLIENT]"),
+        encoding="utf-8",
+    )
+    backend = LocalCausalBackend(artefact_dir)
+
+    with pytest.raises(BackendExecutionError) as error:
+        backend.load()
+
+    assert error.value.__cause__ is None
+    assert not backend.is_ready
+    assert backend._model is None
+    assert backend._tokeniser is None
+
+
+def test_local_backend_rejects_unpinned_loader_artefacts(tmp_path: Path) -> None:
+    artefact_dir = tmp_path / "extra-artefact"
+    shutil.copytree(FIXTURE_DIR, artefact_dir)
+    (artefact_dir / "added_tokens.json").write_text("{}", encoding="utf-8")
+    backend = LocalCausalBackend(artefact_dir)
+
+    with pytest.raises(BackendExecutionError):
+        backend.load()
+
+    assert not backend.is_ready
 
 
 def test_local_backend_renders_and_counts_the_complete_prompt() -> None:
@@ -236,6 +308,28 @@ def test_local_backend_generation_is_repeatable() -> None:
     assert asyncio.run(consume()) == asyncio.run(consume())
 
 
+def test_local_backend_uses_one_native_cache_without_post_budget_advance() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    recording_model = _record_cache_inputs(backend)
+    request = GenerationRequest(
+        messages=(GenerationMessage("user", "hello"),),
+        options=GenerationOptions(maximum_output_tokens=3),
+    )
+
+    async def consume() -> None:
+        async for _event in backend.generate(request):
+            pass
+
+    asyncio.run(consume())
+
+    assert len(recording_model.cache_inputs) == 3
+    assert all(
+        isinstance(cache, DynamicCache) for cache in recording_model.cache_inputs
+    )
+    assert len({id(cache) for cache in recording_model.cache_inputs}) == 1
+
+
 def test_local_backend_buffers_and_excludes_a_stop_sequence() -> None:
     backend = LocalCausalBackend(FIXTURE_DIR)
     backend.load()
@@ -334,15 +428,23 @@ def test_local_backend_logs_are_structured_and_payload_free() -> None:
     backend.close()
 
     records = [
-        json.loads(line)
+        record
         for line in stream.getvalue().splitlines()
-        if '"module": "inference_lab.backends.runtime.local"' in line
+        if (record := json.loads(line))["module"].startswith(
+            "inference_lab.backends.runtime."
+        )
     ]
     assert [record["event"] for record in records] == [
         "backend_load_completed",
         "backend_generation_started",
         "backend_cache_observation_completed",
         "backend_close_completed",
+    ]
+    assert [record["module"] for record in records] == [
+        "inference_lab.backends.runtime.local",
+        "inference_lab.backends.runtime.local",
+        "inference_lab.backends.runtime._local_mechanics",
+        "inference_lab.backends.runtime.local",
     ]
     forbidden_values = (
         "private-prompt-marker",
@@ -357,6 +459,7 @@ def test_local_backend_logs_are_structured_and_payload_free() -> None:
             "module",
             "pipeline_stage",
             "document_id",
+            "corpus_id",
             "corpus_version",
         } <= record.keys()
         rendered_record = json.dumps(record)
@@ -394,6 +497,7 @@ def test_mechanics_harness_proves_exact_repeated_prefix_equivalence() -> None:
     assert observation.rendered_input_tokens == 4
     assert observation.common_prefix_tokens == 4
     assert observation.tokens_evaluated_without_cache == 4
+    assert observation.tokens_evaluated_to_create_cache == 4
     assert observation.tokens_evaluated_after_cache == 0
     assert observation.cache_outcomes == (
         CacheObservationOutcome.CREATED,
@@ -414,7 +518,65 @@ def test_mechanics_harness_proves_partial_prefix_equivalence() -> None:
 
     assert observation.common_prefix_tokens == 3
     assert observation.tokens_evaluated_without_cache == 5
+    assert observation.tokens_evaluated_to_create_cache == 4
     assert observation.tokens_evaluated_after_cache == 2
+    assert observation.logits_equivalent is True
+    assert observation.selection_equivalent is True
+
+
+def test_mechanics_harness_retains_one_native_cache_throughout_reuse() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    recording_model = _record_cache_inputs(backend)
+
+    observation = LocalMechanicsHarness(backend).observe_token_prefixes(
+        (1, 2, 3),
+        (1, 2, 3, 4),
+    )
+
+    assert observation.cache_outcomes == (
+        CacheObservationOutcome.CREATED,
+        CacheObservationOutcome.REUSED,
+        CacheObservationOutcome.CLEARED,
+    )
+    assert len(recording_model.cache_inputs) == 2
+    assert all(
+        isinstance(cache, DynamicCache) for cache in recording_model.cache_inputs
+    )
+    assert len({id(cache) for cache in recording_model.cache_inputs}) == 1
+
+
+@pytest.mark.parametrize(
+    ("first_token_ids", "second_token_ids", "expected_after_cache"),
+    [
+        ((1, 2, 3), (1, 2, 3, 4), 1),
+        ((1, 2, 3, 4), (1, 2), 0),
+    ],
+    ids=("extending", "shorter"),
+)
+def test_mechanics_harness_reuses_cache_created_by_the_complete_first_request(
+    first_token_ids: tuple[int, ...],
+    second_token_ids: tuple[int, ...],
+    expected_after_cache: int,
+) -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+
+    observation = LocalMechanicsHarness(backend).observe_token_prefixes(
+        first_token_ids,
+        second_token_ids,
+    )
+
+    assert observation.common_prefix_tokens == min(
+        len(first_token_ids), len(second_token_ids)
+    )
+    assert observation.tokens_evaluated_to_create_cache == len(first_token_ids)
+    assert observation.tokens_evaluated_after_cache == expected_after_cache
+    assert observation.cache_outcomes == (
+        CacheObservationOutcome.CREATED,
+        CacheObservationOutcome.REUSED,
+        CacheObservationOutcome.CLEARED,
+    )
     assert observation.logits_equivalent is True
     assert observation.selection_equivalent is True
 
@@ -449,6 +611,7 @@ def test_mechanics_harness_records_one_token_difference_and_no_prefix(
         assert observation.tokens_evaluated_after_cache == (
             len(second_token_ids) - expected_common
         )
+        assert observation.tokens_evaluated_to_create_cache == len(first_token_ids)
         assert observation.logits_equivalent is True
         assert observation.selection_equivalent is True
     else:
@@ -457,6 +620,7 @@ def test_mechanics_harness_records_one_token_difference_and_no_prefix(
             CacheObservationOutcome.CLEARED,
         )
         assert observation.tokens_evaluated_after_cache == 0
+        assert observation.tokens_evaluated_to_create_cache == 0
         assert observation.logits_equivalent is None
         assert observation.selection_equivalent is None
 
@@ -477,6 +641,7 @@ def test_mechanics_harness_rejects_incompatible_cache_identity() -> None:
         CacheObservationOutcome.CLEARED,
     )
     assert observation.tokens_evaluated_after_cache == 0
+    assert observation.tokens_evaluated_to_create_cache == 0
     assert observation.logits_equivalent is None
     assert observation.selection_equivalent is None
 
@@ -496,6 +661,7 @@ def test_mechanics_observation_is_immutable_and_payload_free() -> None:
 def test_mechanics_harness_clears_cache_after_failure() -> None:
     backend = LocalCausalBackend(FIXTURE_DIR)
     backend.load()
+    harness = LocalMechanicsHarness(backend)
     marker = "private-cache-failure-marker"
 
     class FailingModel:
@@ -507,11 +673,11 @@ def test_mechanics_harness_clears_cache_after_failure() -> None:
     setattr(backend, "_model", FailingModel())
 
     with pytest.raises(BackendExecutionError) as error:
-        LocalMechanicsHarness(backend).observe_token_prefixes(
+        harness.observe_token_prefixes(
             (1, 5, 40),
             (1, 5, 40, 44),
         )
 
-    assert backend._active_cache_state is None
+    assert harness._active_cache_state is None
     assert marker not in str(error.value)
     assert error.value.__cause__ is None

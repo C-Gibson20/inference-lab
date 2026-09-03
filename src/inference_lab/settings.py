@@ -1,6 +1,5 @@
 """Typed application settings and configuration-source precedence."""
 
-import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -13,15 +12,12 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-_URI_LOCATION = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+from inference_lab._validation import is_local_path_shape
 
 
 def _validate_local_path(value: object) -> object:
-    if isinstance(value, str):
-        if not value.strip():
-            raise ValueError("path must not be empty")
-        if _URI_LOCATION.match(value.strip()):
-            raise ValueError("path must be a local filesystem path")
+    if isinstance(value, (str, Path)) and not is_local_path_shape(value):
+        raise ValueError("path must be a local filesystem path")
     return value
 
 

@@ -1,3 +1,5 @@
+"""Tests for dependency-graph generation."""
+
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock

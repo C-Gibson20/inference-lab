@@ -1,5 +1,7 @@
+"""Tests for atomic SQLite schema initialisation."""
+
 import sqlite3
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -18,11 +20,7 @@ from inference_lab.storage._sqlite_migrations import (
     MigrationDefinition,
 )
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
 
 
 def _schema_objects(connection: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -35,7 +33,7 @@ def _schema_objects(connection: sqlite3.Connection) -> list[tuple[str, str]]:
     return [(row[0], row[1]) for row in rows]
 
 
-def test_initialisation_atomically_publishes_revision_one(tmp_path: Path) -> None:
+def test_initialisation_atomically_publishes_current_revision(tmp_path: Path) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     connection = open_sqlite_connection(database_path)
     try:
@@ -55,15 +53,15 @@ def test_initialisation_atomically_publishes_revision_one(tmp_path: Path) -> Non
         assert tuple(schema_row) == ("inference_lab_metadata", 1)
         history_rows = connection.execute(
             """SELECT revision, migration_id, checksum, applied_at_utc
-            FROM migration_history"""
+            FROM migration_history ORDER BY revision"""
         ).fetchall()
         assert [tuple(row) for row in history_rows] == [
             (
                 1,
-                "initial_metadata",
+                "multi_corpus_metadata_baseline",
                 MIGRATIONS[0].checksum,
                 "2026-09-01T12:30:00.000000+00:00",
-            )
+            ),
         ]
     finally:
         connection.close()
@@ -120,7 +118,7 @@ def test_initialisation_rejects_unrelated_schema_without_modifying_it(
         connection.close()
 
 
-def test_failed_later_migration_rolls_back_revision_one(tmp_path: Path) -> None:
+def test_failed_later_migration_rolls_back_baseline(tmp_path: Path) -> None:
     failing_migration = MigrationDefinition(
         revision=2,
         migration_id="failing_test_migration",
@@ -183,6 +181,29 @@ def test_initialisation_rejects_an_existing_transaction(tmp_path: Path) -> None:
         assert connection.in_transaction is True
         assert _schema_objects(connection) == []
         connection.rollback()
+    finally:
+        connection.close()
+
+
+def test_initialisation_rejects_invalid_boundary_values(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="connection"):
+        initialise_empty_database(object())  # type: ignore[arg-type]
+
+    connection = open_sqlite_connection(tmp_path / "metadata.sqlite3")
+    try:
+        with pytest.raises(TypeError, match="applied_at_factory"):
+            initialise_empty_database(
+                connection,
+                applied_at_factory=None,  # type: ignore[arg-type]
+            )
+        with pytest.raises(StorageMigrationError):
+            initialise_empty_database(
+                connection,
+                migrations=[],  # type: ignore[arg-type]
+            )
+
+        assert connection.in_transaction is False
+        assert _schema_objects(connection) == []
     finally:
         connection.close()
 

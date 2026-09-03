@@ -1,31 +1,58 @@
 """Strict deterministic serialisation for runtime memory accounting values."""
 
-import json
 from datetime import datetime
 from typing import Final, cast
 
-from inference_lab.backends.runtime.memory import (
-    SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS,
+from inference_lab._json import (
+    JsonDecodingError,
+    JsonDecodingFailure,
+    JsonFieldsError,
+    JsonObject,
+    JsonStructureError,
+    JsonValue,
+    canonical_json_bytes,
+    load_json_object,
+    require_exact_json_fields,
+    require_json_array,
+    require_json_integer,
+    require_json_object,
+    require_json_string,
+    require_optional_json_string,
+)
+from inference_lab.backends.runtime._memory_accounting import (
     BudgetComparison,
     BudgetState,
     Completeness,
-    ComponentRole,
-    ContributionKind,
-    MemoryAdapterIdentity,
     MemoryBudget,
-    MemoryMeasurement,
+)
+from inference_lab.backends.runtime._memory_snapshot import (
+    SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS,
     MemorySnapshot,
+)
+from inference_lab.backends.runtime._memory_values import (
+    ContributionKind,
+    ExpectedMemoryContribution,
+    MemoryAdapterIdentity,
+    MemoryCollectorIdentity,
+    MemoryComponentRole,
+    MemoryMeasurement,
+    MemoryOverlapPolicy,
     MemorySpace,
 )
-
-JsonObject = dict[str, object]
-JsonValue = object
+from inference_lab.profiling.resources import (
+    MEASUREMENT_STATUSES,
+    MEMORY_RESOURCE_CATEGORIES,
+    MeasurementStatus,
+    MemoryResourceCategory,
+)
 
 _SNAPSHOT_FIELDS: Final[frozenset[str]] = frozenset(
     {
-        "adapter",
+        "collector",
+        "expected_contributions",
         "measurements",
         "observed_at",
+        "overlap_policy",
         "request_id",
         "run_id",
         "schema_version",
@@ -50,6 +77,19 @@ _MEASUREMENT_FIELDS: Final[frozenset[str]] = frozenset(
 _ADAPTER_FIELDS: Final[frozenset[str]] = frozenset(
     {"adapter_name", "adapter_version", "calibration_revision"}
 )
+_COLLECTOR_FIELDS: Final[frozenset[str]] = frozenset(
+    {"collector_name", "collector_version", "inventory_revision"}
+)
+_EXPECTED_CONTRIBUTION_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "adapter",
+        "category",
+        "component_id",
+        "component_role",
+        "device_id",
+        "memory_space",
+    }
+)
 _BUDGET_FIELDS: Final[frozenset[str]] = frozenset(
     {"budget_bytes", "device_id", "memory_space"}
 )
@@ -59,6 +99,7 @@ _COMPARISON_FIELDS: Final[frozenset[str]] = frozenset(
         "completeness",
         "measured_bytes",
         "measured_count",
+        "missing_count",
         "provisional_headroom_bytes",
         "state",
         "unavailable_count",
@@ -67,30 +108,18 @@ _COMPARISON_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
-def _json_bytes(payload: JsonObject) -> bytes:
-    """Encode a JSON object with the project canonical JSON policy."""
-    return (
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def _object_pairs_without_duplicates(
-    pairs: list[tuple[str, JsonValue]],
-) -> JsonObject:
-    """Reject duplicate object keys before JSON values are interpreted."""
-    result: JsonObject = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("JSON object keys must be unique")
-        result[key] = value
-    return result
+_DECODING_MESSAGES = {
+    JsonDecodingFailure.INVALID_DATA: (
+        "serialised memory data must be valid UTF-8 JSON"
+    ),
+    JsonDecodingFailure.DUPLICATE_KEY: "JSON object keys must be unique",
+    JsonDecodingFailure.NON_FINITE_VALUE: (
+        "serialised memory data must not contain non-finite values"
+    ),
+    JsonDecodingFailure.ROOT_NOT_OBJECT: (
+        "serialised memory data must contain a JSON object"
+    ),
+}
 
 
 def _parse_json(data: bytes) -> JsonObject:
@@ -98,18 +127,9 @@ def _parse_json(data: bytes) -> JsonObject:
     if not isinstance(data, bytes):
         raise TypeError("serialised memory data must be bytes")
     try:
-        value = json.loads(
-            data.decode("utf-8"),
-            object_pairs_hook=_object_pairs_without_duplicates,
-            parse_constant=lambda constant: (_ for _ in ()).throw(
-                ValueError(f"non-finite JSON constant {constant} is not permitted")
-            ),
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("serialised memory data must be valid UTF-8 JSON") from error
-    if not isinstance(value, dict):
-        raise ValueError("serialised memory data must contain a JSON object")
-    return cast(JsonObject, value)
+        return load_json_object(data)
+    except JsonDecodingError as error:
+        raise ValueError(_DECODING_MESSAGES[error.failure]) from None
 
 
 def _require_exact_fields(
@@ -118,39 +138,68 @@ def _require_exact_fields(
     field_name: str,
 ) -> None:
     """Reject missing and unknown fields in one JSON object."""
-    actual = frozenset(payload)
-    if actual != expected:
-        missing = expected - actual
-        detail = "missing fields" if missing else "unknown fields"
-        raise ValueError(f"{field_name} contains {detail}")
+    try:
+        require_exact_json_fields(payload, expected)
+    except JsonFieldsError as error:
+        detail = "missing fields" if error.missing else "unknown fields"
+        raise ValueError(f"{field_name} contains {detail}") from None
+
+
+def _require_object(value: JsonValue, error_message: str) -> JsonObject:
+    """Require a JSON object and translate the structural error."""
+    try:
+        return require_json_object(value)
+    except JsonStructureError:
+        raise TypeError(error_message) from None
+
+
+def _require_array(value: JsonValue, error_message: str) -> list[JsonValue]:
+    """Require a JSON array and translate the structural error."""
+    try:
+        return require_json_array(value)
+    except JsonStructureError:
+        raise TypeError(error_message) from None
 
 
 def _require_string(payload: JsonObject, field_name: str) -> str:
-    value = payload[field_name]
-    if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string")
-    return value
+    try:
+        return require_json_string(payload[field_name])
+    except JsonStructureError:
+        raise TypeError(f"{field_name} must be a string") from None
 
 
 def _require_optional_string(payload: JsonObject, field_name: str) -> str | None:
-    value = payload[field_name]
-    if value is not None and not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string or null")
-    return value
+    try:
+        return require_optional_json_string(payload[field_name])
+    except JsonStructureError:
+        raise TypeError(f"{field_name} must be a string or null") from None
 
 
 def _require_integer(payload: JsonObject, field_name: str) -> int:
-    value = payload[field_name]
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field_name} must be an integer")
-    return value
+    try:
+        return require_json_integer(payload[field_name])
+    except JsonStructureError:
+        raise TypeError(f"{field_name} must be an integer") from None
 
 
-def _require_boolean(payload: JsonObject, field_name: str) -> bool:
-    value = payload[field_name]
-    if not isinstance(value, bool):
-        raise TypeError(f"{field_name} must be a boolean")
-    return value
+def _require_memory_category(
+    payload: JsonObject,
+    field_name: str,
+) -> MemoryResourceCategory:
+    value = _require_string(payload, field_name)
+    if value not in MEMORY_RESOURCE_CATEGORIES:
+        raise ValueError(f"{field_name} must be a supported memory category")
+    return cast(MemoryResourceCategory, value)
+
+
+def _require_measurement_status(
+    payload: JsonObject,
+    field_name: str,
+) -> MeasurementStatus:
+    value = _require_string(payload, field_name)
+    if value not in MEASUREMENT_STATUSES:
+        raise ValueError(f"{field_name} must be a supported measurement status")
+    return cast(MeasurementStatus, value)
 
 
 def _parse_datetime(payload: JsonObject, field_name: str) -> datetime:
@@ -170,14 +219,70 @@ def _adapter_payload(adapter: MemoryAdapterIdentity) -> JsonObject:
 
 
 def _parse_adapter(value: JsonValue) -> MemoryAdapterIdentity:
-    if not isinstance(value, dict):
-        raise TypeError("adapter must be a JSON object")
-    payload = cast(JsonObject, value)
+    payload = _require_object(value, "adapter must be a JSON object")
     _require_exact_fields(payload, _ADAPTER_FIELDS, "adapter")
     return MemoryAdapterIdentity(
         adapter_name=_require_string(payload, "adapter_name"),
         adapter_version=_require_string(payload, "adapter_version"),
         calibration_revision=_require_string(payload, "calibration_revision"),
+    )
+
+
+def _collector_payload(collector: MemoryCollectorIdentity) -> JsonObject:
+    return {
+        "collector_name": collector.collector_name,
+        "collector_version": collector.collector_version,
+        "inventory_revision": collector.inventory_revision,
+    }
+
+
+def _parse_collector(value: JsonValue) -> MemoryCollectorIdentity:
+    payload = _require_object(value, "collector must be a JSON object")
+    _require_exact_fields(payload, _COLLECTOR_FIELDS, "collector")
+    return MemoryCollectorIdentity(
+        collector_name=_require_string(payload, "collector_name"),
+        collector_version=_require_string(payload, "collector_version"),
+        inventory_revision=_require_string(payload, "inventory_revision"),
+    )
+
+
+def _expected_contribution_payload(
+    expected: ExpectedMemoryContribution,
+) -> JsonObject:
+    return {
+        "adapter": _adapter_payload(expected.adapter),
+        "category": expected.category,
+        "component_id": expected.component_id,
+        "component_role": expected.component_role.value,
+        "device_id": expected.device_id,
+        "memory_space": expected.memory_space.value,
+    }
+
+
+def _parse_expected_contribution(value: JsonValue) -> ExpectedMemoryContribution:
+    payload = _require_object(
+        value,
+        "expected_contributions must contain JSON objects",
+    )
+    _require_exact_fields(
+        payload,
+        _EXPECTED_CONTRIBUTION_FIELDS,
+        "expected contribution",
+    )
+    try:
+        component_role = MemoryComponentRole(_require_string(payload, "component_role"))
+        memory_space = MemorySpace(_require_string(payload, "memory_space"))
+    except ValueError as error:
+        raise ValueError(
+            "expected contribution contains an unsupported enum value"
+        ) from error
+    return ExpectedMemoryContribution(
+        component_id=_require_string(payload, "component_id"),
+        component_role=component_role,
+        category=_require_memory_category(payload, "category"),
+        memory_space=memory_space,
+        device_id=_require_optional_string(payload, "device_id"),
+        adapter=_parse_adapter(payload["adapter"]),
     )
 
 
@@ -199,17 +304,16 @@ def _measurement_payload(measurement: MemoryMeasurement) -> JsonObject:
 
 
 def _parse_measurement(value: JsonValue) -> MemoryMeasurement:
-    if not isinstance(value, dict):
-        raise TypeError("measurements must contain JSON objects")
-    payload = cast(JsonObject, value)
+    payload = _require_object(value, "measurements must contain JSON objects")
     _require_exact_fields(payload, _MEASUREMENT_FIELDS, "measurement")
-    coverage = payload["covers_measurement_ids"]
-    if not isinstance(coverage, list):
-        raise TypeError("covers_measurement_ids must be a JSON array")
+    coverage = _require_array(
+        payload["covers_measurement_ids"],
+        "covers_measurement_ids must be a JSON array",
+    )
     if not all(isinstance(item, str) for item in coverage):
         raise TypeError("covers_measurement_ids must contain strings")
     try:
-        component_role = ComponentRole(_require_string(payload, "component_role"))
+        component_role = MemoryComponentRole(_require_string(payload, "component_role"))
         contribution_kind = ContributionKind(
             _require_string(payload, "contribution_kind")
         )
@@ -221,15 +325,15 @@ def _parse_measurement(value: JsonValue) -> MemoryMeasurement:
         isinstance(value_bytes, bool) or not isinstance(value_bytes, int)
     ):
         raise TypeError("value_bytes must be an integer or null")
-    status = _require_string(payload, "status")
+    status = _require_measurement_status(payload, "status")
     return MemoryMeasurement(
         measurement_id=_require_string(payload, "measurement_id"),
         component_id=_require_string(payload, "component_id"),
         component_role=component_role,
-        category=_require_string(payload, "category"),  # type: ignore[arg-type]
+        category=_require_memory_category(payload, "category"),
         memory_space=memory_space,
         device_id=_require_optional_string(payload, "device_id"),
-        status=status,  # type: ignore[arg-type]
+        status=status,
         value_bytes=value_bytes,
         adapter=_parse_adapter(payload["adapter"]),
         contribution_kind=contribution_kind,
@@ -243,7 +347,11 @@ def serialise_memory_snapshot(snapshot: MemorySnapshot) -> bytes:
     if not isinstance(snapshot, MemorySnapshot):
         raise TypeError("snapshot must be a MemorySnapshot")
     payload: JsonObject = {
-        "adapter": _adapter_payload(snapshot.adapter),
+        "collector": _collector_payload(snapshot.collector),
+        "expected_contributions": [
+            _expected_contribution_payload(expected)
+            for expected in snapshot.expected_contributions
+        ],
         "measurements": [
             _measurement_payload(measurement)
             for measurement in sorted(
@@ -252,27 +360,41 @@ def serialise_memory_snapshot(snapshot: MemorySnapshot) -> bytes:
             )
         ],
         "observed_at": snapshot.observed_at.isoformat(),
+        "overlap_policy": snapshot.overlap_policy.value,
         "request_id": snapshot.request_id,
         "run_id": snapshot.run_id,
         "schema_version": snapshot.schema_version,
     }
-    return _json_bytes(payload)
+    return canonical_json_bytes(payload)
 
 
 def deserialise_memory_snapshot(data: bytes) -> MemorySnapshot:
     """Strictly deserialise one canonical memory snapshot."""
     payload = _parse_json(data)
     _require_exact_fields(payload, _SNAPSHOT_FIELDS, "snapshot")
-    schema_version = _require_integer(payload, "schema_version")
+    schema_version = _require_string(payload, "schema_version")
     if schema_version not in SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS:
         raise ValueError("unsupported memory snapshot schema version")
-    measurements = payload["measurements"]
-    if not isinstance(measurements, list):
-        raise TypeError("measurements must be a JSON array")
+    measurements = _require_array(
+        payload["measurements"],
+        "measurements must be a JSON array",
+    )
+    expected_contributions = _require_array(
+        payload["expected_contributions"],
+        "expected_contributions must be a JSON array",
+    )
+    try:
+        overlap_policy = MemoryOverlapPolicy(_require_string(payload, "overlap_policy"))
+    except ValueError as error:
+        raise ValueError("snapshot contains an unsupported overlap policy") from error
     return MemorySnapshot(
         observed_at=_parse_datetime(payload, "observed_at"),
-        adapter=_parse_adapter(payload["adapter"]),
+        collector=_parse_collector(payload["collector"]),
+        expected_contributions=tuple(
+            _parse_expected_contribution(item) for item in expected_contributions
+        ),
         measurements=tuple(_parse_measurement(item) for item in measurements),
+        overlap_policy=overlap_policy,
         run_id=_require_optional_string(payload, "run_id"),
         request_id=_require_optional_string(payload, "request_id"),
         schema_version=schema_version,
@@ -288,9 +410,7 @@ def _budget_payload(budget: MemoryBudget) -> JsonObject:
 
 
 def _parse_budget(value: JsonValue) -> MemoryBudget:
-    if not isinstance(value, dict):
-        raise TypeError("budget must be a JSON object")
-    payload = cast(JsonObject, value)
+    payload = _require_object(value, "budget must be a JSON object")
     _require_exact_fields(payload, _BUDGET_FIELDS, "budget")
     try:
         memory_space = MemorySpace(_require_string(payload, "memory_space"))
@@ -307,12 +427,13 @@ def serialise_budget_comparison(comparison: BudgetComparison) -> bytes:
     """Serialise a validated budget comparison as canonical UTF-8 JSON."""
     if not isinstance(comparison, BudgetComparison):
         raise TypeError("comparison must be a BudgetComparison")
-    return _json_bytes(
+    return canonical_json_bytes(
         {
             "budget": _budget_payload(comparison.budget),
             "completeness": comparison.completeness.value,
             "measured_bytes": comparison.measured_bytes,
             "measured_count": comparison.measured_count,
+            "missing_count": comparison.missing_count,
             "provisional_headroom_bytes": comparison.provisional_headroom_bytes,
             "state": comparison.state.value,
             "unavailable_count": comparison.unavailable_count,
@@ -343,5 +464,6 @@ def deserialise_budget_comparison(data: bytes) -> BudgetComparison:
         measured_count=_require_integer(payload, "measured_count"),
         unreliable_count=_require_integer(payload, "unreliable_count"),
         unavailable_count=_require_integer(payload, "unavailable_count"),
+        missing_count=_require_integer(payload, "missing_count"),
         completeness=completeness,
     )

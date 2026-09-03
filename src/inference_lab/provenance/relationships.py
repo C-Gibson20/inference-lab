@@ -3,11 +3,33 @@
 from dataclasses import dataclass
 
 from inference_lab.provenance.identifiers import (
+    CorpusId,
     DocumentFamilyId,
     DocumentId,
     DocumentVersionId,
 )
 from inference_lab.provenance.values import DuplicateClass
+
+
+@dataclass(frozen=True, slots=True)
+class CorpusDocumentVersionMembership:
+    """Make one immutable document version known to one corpus catalogue."""
+
+    corpus_id: CorpusId
+    document_id: DocumentId
+    document_version_id: DocumentVersionId
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the fields of the CorpusDocumentVersionMembership."""
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(self.document_id, DocumentId):
+            raise TypeError("document_id must be a DocumentId.")
+        if not isinstance(self.document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")
 
 
 class InvalidRelationshipError(ValueError):
@@ -39,6 +61,10 @@ class DuplicateRelationship:
     duplicate_class: DuplicateClass
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the fields of the DuplicateRelationship."""
         if not isinstance(self.first_version_id, DocumentVersionId):
             raise TypeError("first_version_id must be a DocumentVersionId.")
 
@@ -76,6 +102,10 @@ class DocumentFamilyMembership:
     document_version_id: DocumentVersionId | None = None
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the fields of the DocumentFamilyMembership."""
         if not isinstance(self.family_id, DocumentFamilyId):
             raise TypeError("family_id must be a DocumentFamilyId.")
 

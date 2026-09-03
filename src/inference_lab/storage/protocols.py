@@ -5,7 +5,9 @@ from typing import Protocol, Self, runtime_checkable
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -14,14 +16,36 @@ from inference_lab.provenance import (
     DocumentVersionId,
     DuplicateRelationship,
     ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    SourceObservationId,
+    SourceObservationState,
 )
 
 
 class MetadataReader(Protocol):
     """Read immutable corpus identity metadata using provenance values."""
 
-    def get_corpus(self, corpus_id: CorpusId) -> CorpusId | None:
-        """Return a persistent corpus identity, or ``None`` when absent."""
+    def get_corpus(self, corpus_id: CorpusId) -> CorpusMetadata | None:
+        """Return a named corpus, or ``None`` when absent."""
+        ...
+
+    def list_corpora(self) -> tuple[CorpusMetadata, ...]:
+        """Return all named corpora in canonical identifier order."""
+        ...
+
+    def get_corpus_document_version_membership(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> CorpusDocumentVersionMembership | None:
+        """Return one corpus catalogue membership, or ``None``."""
+        ...
+
+    def list_corpus_document_version_memberships(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return a corpus catalogue in canonical document/version order."""
         ...
 
     def get_document_family(
@@ -47,47 +71,82 @@ class MetadataReader(Protocol):
         ...
 
     def find_document_versions_by_content_hash(
-        self, content_hash: ContentHash
+        self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:
         """Return exact-hash candidates in canonical identifier order."""
         ...
 
     def find_document_versions_by_external_identifiers(
-        self, external_identifiers: tuple[ExternalIdentifier, ...]
+        self,
+        corpus_id: CorpusId,
+        external_identifiers: tuple[ExternalIdentifier, ...],
     ) -> tuple[DocumentVersion, ...]:
         """Return unique candidates matching any supplied external identifier."""
         ...
 
+    def get_source_observation(
+        self, corpus_id: CorpusId, source_observation_id: SourceObservationId
+    ) -> SourceObservationState | None:
+        """Return the current state for an observed source, or ``None``."""
+        ...
+
+    def list_source_observation_history(
+        self, corpus_id: CorpusId, source_observation_id: SourceObservationId
+    ) -> tuple[SourceObservationState, ...]:
+        """Return an observed source's append-only state history."""
+        ...
+
+    def list_external_identifier_assertions(
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
+        """Return append-only identifier assertions for one source version."""
+        ...
+
     def list_duplicate_relationships(
-        self, document_version_id: DocumentVersionId
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[DuplicateRelationship, ...]:
         """Return relationships involving a version in canonical key order."""
         ...
 
     def list_family_memberships_by_family(
-        self, family_id: DocumentFamilyId
+        self, corpus_id: CorpusId, family_id: DocumentFamilyId
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a family's memberships in canonical membership-key order."""
         ...
 
     def list_family_memberships_by_document(
-        self, document_id: DocumentId
+        self, corpus_id: CorpusId, document_id: DocumentId
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a document's memberships in canonical membership-key order."""
         ...
 
     def list_family_memberships_by_document_version(
-        self, document_version_id: DocumentVersionId
+        self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[DocumentFamilyMembership, ...]:
         """Return a version's memberships in canonical membership-key order."""
         ...
 
 
 class MetadataWriter(Protocol):
-    """Create immutable identity metadata within an owned transaction."""
+    """Write identity metadata within an owned transaction."""
 
-    def add_corpus(self, corpus_id: CorpusId) -> None:
-        """Create a corpus identity, treating exact replay as a no-op."""
+    def add_corpus(self, corpus: CorpusMetadata) -> None:
+        """Create a named corpus, treating exact replay as a no-op."""
+        ...
+
+    def set_corpus_display_name(
+        self,
+        corpus_id: CorpusId,
+        display_name: str,
+    ) -> CorpusMetadata:
+        """Replace a corpus display name without changing its identity."""
+        ...
+
+    def add_corpus_document_version_membership(
+        self,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Add an explicit catalogue membership or accept exact replay."""
         ...
 
     def add_document_family(self, family_id: DocumentFamilyId) -> None:
@@ -100,6 +159,29 @@ class MetadataWriter(Protocol):
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its ordered external identifiers atomically."""
+        ...
+
+    def add_source_observation(self, state: SourceObservationState) -> None:
+        """Create an observed source at revision one or accept exact replay."""
+        ...
+
+    def advance_source_observation(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+        *,
+        expected_version_id: DocumentVersionId,
+        new_version_id: DocumentVersionId,
+    ) -> SourceObservationState:
+        """Atomically advance an observed source from its expected version."""
+        ...
+
+    def add_external_identifier_assertions(
+        self,
+        corpus_id: CorpusId,
+        assertions: tuple[ExternalIdentifierAssertion, ...],
+    ) -> None:
+        """Append one canonical identifier-evidence batch or accept replay."""
         ...
 
     def add_duplicate_relationship(self, relationship: DuplicateRelationship) -> None:

@@ -7,9 +7,9 @@ from typing import Literal, Protocol
 import structlog
 
 from inference_lab.ingest.errors import ParserDecodeError
+from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.ingest.sources import StructuralBlock
-from inference_lab.ingest.utils import normalise_source_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,

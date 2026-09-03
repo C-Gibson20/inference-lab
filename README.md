@@ -1,9 +1,11 @@
 # inference-lab
 
-`inference-lab` is a locally hosted tool for interrogating papers and
-patents. It is designed around provenance-preserving ingestion, hybrid retrieval,
-evidence-grounded answers, and hardware-aware serving on one GPU. Documents,
-queries, and telemetry remain local in deployment.
+`inference-lab` is a locally hosted tool for interrogating multiple named
+corpora of papers and patents. It is designed around provenance-preserving
+ingestion, corpus-isolated hybrid retrieval, evidence-grounded answers, and
+hardware-aware serving on one GPU. Documents, queries, and telemetry remain
+local in deployment. Each first-build operation targets one selected corpus;
+federated cross-corpus querying is out of scope.
 
 ## Setup
 
@@ -51,10 +53,10 @@ different configuration-loading mechanism in the future.
 ## Checks
 
 ```sh
-uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 uv run pyright
+uv run pytest --cov
 ```
 
 Release versioning is derived from committed headers. Preview or apply the next

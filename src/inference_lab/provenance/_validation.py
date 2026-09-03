@@ -1,4 +1,4 @@
-"""Shared, side-effect-free validation helpers for provenance values."""
+"""Primitive validation predicates for provenance values."""
 
 import re
 from typing import Final

@@ -1,11 +1,15 @@
+"""Tests for persisted SQLite metadata integrity."""
+
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
+    CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -20,7 +24,10 @@ from inference_lab.provenance import (
 from inference_lab.storage import CorruptStorageError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
+_CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+_CORPUS = CorpusMetadata(_CORPUS_ID, "Integrity test corpus")
 _FAMILY_ID = DocumentFamilyId("ae06e397-6433-481d-bbe4-1d80250e8891")
 _FIRST_DOCUMENT_ID = DocumentId("488759cb-869f-4790-bf9d-1504f9d30fb8")
 _SECOND_DOCUMENT_ID = DocumentId("9bc9d26c-0408-4c8b-ab88-a93718847a16")
@@ -38,12 +45,8 @@ _FIRST_VERSION = DocumentVersion(
 _SECOND_VERSION = DocumentVersion(
     _SECOND_VERSION_ID,
     _SECOND_DOCUMENT_ID,
-    ContentHash(HashAlgorithm.SHA256, "b" * 64),
+    ContentHash(HashAlgorithm.SHA256, "a" * 64),
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _create_populated_database(path: Path) -> None:
@@ -53,11 +56,20 @@ def _create_populated_database(path: Path) -> None:
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
+        transaction.add_corpus(_CORPUS)
         transaction.add_document_family(_FAMILY_ID)
         transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
         transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
         transaction.add_document_version(_FIRST_VERSION)
         transaction.add_document_version(_SECOND_VERSION)
+        for version in (_FIRST_VERSION, _SECOND_VERSION):
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(
+                    _CORPUS_ID,
+                    version.document_id,
+                    version.document_version_id,
+                )
+            )
         transaction.add_duplicate_relationship(
             DuplicateRelationship(
                 _FIRST_VERSION_ID,
@@ -151,6 +163,25 @@ def test_reopen_rejects_rows_violating_schema_checks(tmp_path: Path) -> None:
         SQLiteMetadataRepository.open(database_path)
 
 
+def test_reopen_rejects_tampered_byte_identical_hashes(tmp_path: Path) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_populated_database(database_path)
+    _mutate_database(
+        database_path,
+        (
+            "DROP TRIGGER document_versions_duplicate_hash_update",
+            """UPDATE document_versions
+            SET content_hash_digest =
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            WHERE document_version_id =
+                '22222222-2222-4222-8222-222222222222'""",
+        ),
+    )
+
+    with pytest.raises(CorruptStorageError):
+        SQLiteMetadataRepository.open(database_path)
+
+
 def test_noncanonical_stored_identifier_order_fails_on_reconstruction(
     tmp_path: Path,
 ) -> None:
@@ -171,7 +202,7 @@ def test_noncanonical_stored_identifier_order_fails_on_reconstruction(
             repository.get_document_version(_FIRST_VERSION_ID)
         with pytest.raises(CorruptStorageError):
             repository.find_document_versions_by_content_hash(
-                _FIRST_VERSION.content_hash
+                _CORPUS_ID, _FIRST_VERSION.content_hash
             )
     finally:
         repository.close()

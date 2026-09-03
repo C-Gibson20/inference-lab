@@ -1,3 +1,5 @@
+"""Acceptance tests for channel-neutral retrieval contracts."""
+
 import pytest
 from structlog.testing import capture_logs
 
@@ -40,7 +42,6 @@ def _source(number: int) -> EvidenceSource:
 
 
 def test_all_retrieval_channels_share_one_provenance_preserving_envelope() -> None:
-    """Map every planned channel without losing its score or source identity."""
     channels = (
         (RetrievalChannel.LEXICAL, CandidateKind.ORIGINAL_PASSAGE, "bm25"),
         (RetrievalChannel.DENSE, CandidateKind.ORIGINAL_PASSAGE, "cosine"),
@@ -70,6 +71,7 @@ def test_all_retrieval_channels_share_one_provenance_preserving_envelope() -> No
     )
     result = EvidenceResult(
         CorpusVersionId.from_str("00000000-0000-4000-8000-000000000200"),
+        RetrievalLimit(5),
         hits,
         ResultStatus.COMPLETED,
         (),
@@ -89,7 +91,6 @@ def test_all_retrieval_channels_share_one_provenance_preserving_envelope() -> No
 
 
 def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
-    """Keep internal payload helpers and implementation details private."""
     expected = {
         "CandidateKind",
         "ChannelScore",
@@ -130,7 +131,6 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
 
 
 def test_validation_and_serialisation_are_payload_private_and_log_free() -> None:
-    """Ensure canary query/candidate text never appears in errors or logs."""
     marker = "private-retrieval-payload-marker"
     query = RetrievalQuery(marker, CorpusVersionId.generate(), RetrievalLimit(1))
     with capture_logs() as logs:
@@ -144,11 +144,11 @@ def test_validation_and_serialisation_are_payload_private_and_log_free() -> None
 
 
 def test_failure_values_remain_typed_and_do_not_change_empty_result_semantics() -> None:
-    """Keep a channel failure distinct from a successful zero-hit result."""
     version = CorpusVersionId.generate()
-    empty = EvidenceResult(version, (), ResultStatus.COMPLETED, ())
+    empty = EvidenceResult(version, RetrievalLimit(1), (), ResultStatus.COMPLETED, ())
     failed = EvidenceResult(
         version,
+        RetrievalLimit(1),
         (),
         ResultStatus.FAILED,
         (RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, True),),

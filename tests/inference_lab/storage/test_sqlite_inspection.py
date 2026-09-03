@@ -1,5 +1,6 @@
+"""Tests for SQLite schema inspection."""
+
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -18,21 +19,23 @@ from inference_lab.storage._sqlite_inspection import (
 )
 from inference_lab.storage._sqlite_migrations import (
     MIGRATIONS,
+    SQLITE_APPLICATION_ID,
     MigrationDefinition,
 )
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
 
 
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _initialise(path: Path) -> None:
+def _initialise(
+    path: Path,
+    *,
+    migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
+) -> None:
     connection = open_sqlite_connection(path)
     try:
         initialise_empty_database(
             connection,
+            migrations=migrations,
             applied_at_factory=_fixed_applied_at,
         )
     finally:
@@ -124,11 +127,39 @@ def test_unrelated_database_is_rejected_without_changing_journal_mode(
         reopened.close()
 
 
+def test_superseded_pre_release_repository_is_rejected_without_mutation(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "pre-release.sqlite3"
+    connection = sqlite3.connect(database_path)
+    connection.execute(f"PRAGMA application_id = {SQLITE_APPLICATION_ID}")
+    connection.execute("PRAGMA user_version = 5")
+    connection.execute("CREATE TABLE superseded_schema_marker (value TEXT)")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(IncompatibleSchemaError):
+        open_current_database(database_path)
+
+    reopened = sqlite3.connect(database_path)
+    try:
+        assert reopened.execute("PRAGMA application_id").fetchone()[0] == (
+            SQLITE_APPLICATION_ID
+        )
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert reopened.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert reopened.execute(
+            "SELECT name FROM sqlite_schema WHERE name = 'superseded_schema_marker'"
+        ).fetchone() == ("superseded_schema_marker",)
+    finally:
+        reopened.close()
+
+
 def test_supported_pending_migration_is_reported_without_application(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _initialise(database_path)
+    _initialise(database_path, migrations=(MIGRATIONS[0],))
     migrations = (MIGRATIONS[0], _second_migration())
     connection = open_sqlite_connection(database_path)
     try:
@@ -156,11 +187,11 @@ def test_supported_pending_migration_is_reported_without_application(
 @pytest.mark.parametrize(
     "mutation",
     [
-        "PRAGMA user_version = 2",
+        "PRAGMA user_version = 6",
         "UPDATE metadata_schema SET current_revision = 0",
         "DELETE FROM migration_history",
         "UPDATE migration_history SET checksum = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
-        "UPDATE migration_history SET migration_id = 'changed_migration'",
+        "UPDATE migration_history SET migration_id = 'changed_migration' WHERE revision = 1",
         "UPDATE migration_history SET applied_at_utc = 'not-a-timestamp'",
     ],
 )
@@ -176,6 +207,75 @@ def test_inconsistent_schema_or_history_is_rejected(
 
         with pytest.raises(IncompatibleSchemaError):
             validate_database_schema(connection)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "mutations",
+    [
+        ("DROP TABLE document_family_memberships",),
+        ("DROP INDEX document_versions_content_hash_idx",),
+        ("DROP TRIGGER duplicate_relationships_hash_insert",),
+        ("ALTER TABLE corpora ADD COLUMN unexpected_value TEXT",),
+        ("CREATE TABLE incompatible_extra (value TEXT) STRICT",),
+        (
+            "DROP TABLE external_identifiers",
+            """CREATE TABLE external_identifiers (
+                storage_id INTEGER PRIMARY KEY,
+                document_version_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                namespace TEXT NOT NULL,
+                identifier_value TEXT NOT NULL
+            ) STRICT""",
+        ),
+    ],
+    ids=(
+        "missing-table",
+        "missing-index",
+        "missing-trigger",
+        "changed-column",
+        "extra-object",
+        "changed-constraints",
+    ),
+)
+def test_schema_definition_drift_is_rejected_on_reopen(
+    tmp_path: Path,
+    mutations: tuple[str, ...],
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _initialise(database_path)
+    connection = open_sqlite_connection(database_path)
+    try:
+        for mutation in mutations:
+            connection.execute(mutation)
+        schema_before = tuple(
+            tuple(row)
+            for row in connection.execute(
+                """SELECT type, name, tbl_name, sql
+                FROM sqlite_schema
+                WHERE name NOT LIKE 'sqlite_%'
+                ORDER BY type, name, tbl_name"""
+            ).fetchall()
+        )
+    finally:
+        connection.close()
+
+    with pytest.raises(IncompatibleSchemaError):
+        open_current_database(database_path)
+
+    connection = sqlite3.connect(database_path)
+    try:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        schema_after = tuple(
+            connection.execute(
+                """SELECT type, name, tbl_name, sql
+                FROM sqlite_schema
+                WHERE name NOT LIKE 'sqlite_%'
+                ORDER BY type, name, tbl_name"""
+            ).fetchall()
+        )
+        assert schema_after == schema_before
     finally:
         connection.close()
 

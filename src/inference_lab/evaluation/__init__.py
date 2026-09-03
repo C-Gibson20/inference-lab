@@ -1,6 +1,7 @@
 """Versioned evaluation cases, datasets, and held-out split contracts."""
 
 from inference_lab.evaluation.cases import EvaluationCase, QuestionType
+from inference_lab.evaluation.contracts import HELD_OUT_SPLIT, SplitName
 from inference_lab.evaluation.coverage import (
     FINAL_BENCHMARK_POLICY,
     CoveragePolicy,
@@ -35,7 +36,6 @@ from inference_lab.evaluation.splitting import (
     generate_splits,
     validate_no_leakage,
 )
-from inference_lab.evaluation.utils import HELD_OUT_SPLIT, SplitName
 
 __all__ = [
     "FINAL_BENCHMARK_POLICY",

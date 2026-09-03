@@ -30,6 +30,57 @@ Use `TYPE_CHECKING` imports or postponed annotation evaluation only when they
 resolve a genuine runtime cycle or optional typing dependency. Do not add them
 pre-emptively.
 
+## Shared validation
+
+Side-effect-free predicates for formats used across domain boundaries belong
+in `inference_lab/_validation.py`. They classify values without raising a
+domain exception, resolving paths, or touching external state. Each owning
+boundary remains responsible for runtime type errors, domain-specific value
+errors, and any filesystem or lifecycle action that follows validation.
+
+Validation logic used by only one domain belongs in that domain's
+`_validation.py` or responsibility-named implementation module. Do not put
+validation predicates in a generic `utils.py` module.
+
+Pure domain transformations belong in a responsibility-named module such as
+`normalisation.py`. Public annotated aliases and their constants belong in a
+domain `contracts.py` or `types.py` module. A generic `utils.py` must not mix
+these responsibilities or act as a miscellaneous helper home.
+
+## Constructor validation
+
+Immutable dataclass constructors enforce their invariants in `__post_init__`
+so an invalid instance cannot escape construction. Multi-step validation uses
+a concise `__post_init__` that delegates to `_validate()` and, where useful,
+responsibility-named helpers. A trivial one- or two-field check may remain
+inline when delegation would obscure rather than clarify the invariant.
+
+Semantic and schema version validators at plain Python boundaries raise
+`TypeError` for a wrong runtime type and `ValueError`, or the owning domain's
+`ValueError` subclass, when a string violates the contract. Side-effect-free
+shared predicates remain exception-neutral. Framework-owned model boundaries
+may expose their normal validation wrapper instead.
+
+## Shared JSON mechanics
+
+`inference_lab._json` owns the recursive JSON types, compact canonical encoder,
+strict UTF-8 object decoder, duplicate-key and non-finite-value rejection, and
+primitive structural checks shared across domains. Domain serialisation modules
+own their schema field sets, compatibility checks, and translation into
+domain-specific, payload-private errors.
+
+Human-readable formats, such as indented evaluation manifests, retain a local
+encoder that makes that presentation policy explicit. JSON used as input to a
+semantic identity or fingerprint also remains with the identity owner because
+changing its byte policy would change persisted identities.
+
+## Shared clock
+
+Production code obtains the current timezone-aware UTC time from
+`inference_lab._clock.utc_now`. Callers that require deterministic timestamps
+accept a clock callable and use `utc_now` only as its default. Domain modules
+must not define equivalent wall-clock factories.
+
 ## Language
 
 Project-owned prose, Python identifiers, error messages, configuration names,
@@ -63,3 +114,8 @@ placeholders are retained only when the package boundary is documented in
 Test `__init__.py` files are import-isolation markers rather than public
 packages and are exempt from the package-docstring rule. They may still carry a
 docstring when it usefully describes shared fixtures or test scope.
+
+Every non-package test module has a concise module docstring identifying its
+test scope. Individual test functions rely on descriptive names and do not need
+docstrings that merely restate those names. Use a focused comment when a test
+needs to preserve non-obvious rationale or explain why an arrangement matters.

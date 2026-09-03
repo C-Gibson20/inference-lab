@@ -1,31 +1,29 @@
-from datetime import UTC, datetime
+"""Tests for core SQLite metadata repository operations."""
+
+import sqlite3
 from pathlib import Path
 
 import pytest
 from structlog.testing import capture_logs
 
-from inference_lab.provenance import CorpusId, DocumentId, DocumentIdentity
+from inference_lab.provenance import (
+    CorpusId,
+    CorpusMetadata,
+    DocumentId,
+    DocumentIdentity,
+)
 from inference_lab.storage import (
+    CorruptStorageError,
     RepositoryClosedError,
+    StorageConflictError,
     StorageTransactionError,
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
+from .fixtures import open_repository as _open_repository  # noqa: TID252
+
 _SHARED_UUID = "b4c4bb8a-8d23-4c20-a26f-2ca25f614b35"
 _OTHER_UUID = "af93dceb-40fc-414d-b3e9-50eb66f433ed"
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def test_core_identities_round_trip_after_restart_without_row_identity(
@@ -33,10 +31,11 @@ def test_core_identities_round_trip_after_restart_without_row_identity(
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     corpus_id = CorpusId(_SHARED_UUID)
+    corpus = CorpusMetadata(corpus_id, "Research corpus")
     document = DocumentIdentity(DocumentId(_SHARED_UUID))
     first = _open_repository(database_path)
     with first.transaction() as transaction:
-        transaction.add_corpus(corpus_id)
+        transaction.add_corpus(corpus)
         transaction.add_document(document)
     first.close()
 
@@ -45,12 +44,12 @@ def test_core_identities_round_trip_after_restart_without_row_identity(
         stored_corpus = second.get_corpus(corpus_id)
         stored_document = second.get_document(document.document_id)
 
-        assert stored_corpus == corpus_id
+        assert stored_corpus == corpus
         assert stored_document == document
-        assert isinstance(stored_corpus, CorpusId)
+        assert isinstance(stored_corpus, CorpusMetadata)
         assert stored_document is not None
         assert isinstance(stored_document.document_id, DocumentId)
-        assert stored_corpus != stored_document.document_id
+        assert stored_corpus.corpus_id != stored_document.document_id
         assert not hasattr(stored_corpus, "row_id")
         assert not hasattr(stored_document, "row_id")
     finally:
@@ -69,15 +68,16 @@ def test_missing_core_identities_return_none(tmp_path: Path) -> None:
 def test_exact_core_identity_replay_is_idempotent(tmp_path: Path) -> None:
     repository = _open_repository(tmp_path / "metadata.sqlite3")
     corpus_id = CorpusId(_SHARED_UUID)
+    corpus = CorpusMetadata(corpus_id, "Research corpus")
     document = DocumentIdentity(DocumentId(_OTHER_UUID))
     try:
         with repository.transaction() as transaction:
-            transaction.add_corpus(corpus_id)
-            transaction.add_corpus(corpus_id)
+            transaction.add_corpus(corpus)
+            transaction.add_corpus(corpus)
             transaction.add_document(document)
             transaction.add_document(document)
 
-        assert repository.get_corpus(corpus_id) == corpus_id
+        assert repository.get_corpus(corpus_id) == corpus
         assert repository.get_document(document.document_id) == document
     finally:
         repository.close()
@@ -86,12 +86,13 @@ def test_exact_core_identity_replay_is_idempotent(tmp_path: Path) -> None:
 def test_primary_failure_rolls_back_all_core_writes(tmp_path: Path) -> None:
     repository = _open_repository(tmp_path / "metadata.sqlite3")
     corpus_id = CorpusId(_SHARED_UUID)
+    corpus = CorpusMetadata(corpus_id, "Research corpus")
     document = DocumentIdentity(DocumentId(_OTHER_UUID))
     primary = RuntimeError("private-payload")
     try:
         with pytest.raises(RuntimeError) as raised:
             with repository.transaction() as transaction:
-                transaction.add_corpus(corpus_id)
+                transaction.add_corpus(corpus)
                 transaction.add_document(document)
                 raise primary
 
@@ -107,12 +108,13 @@ def test_reader_sees_only_committed_core_state(tmp_path: Path) -> None:
     writer = _open_repository(database_path)
     reader = SQLiteMetadataRepository.open(database_path)
     corpus_id = CorpusId(_SHARED_UUID)
+    corpus = CorpusMetadata(corpus_id, "Research corpus")
     try:
         with writer.transaction() as transaction:
-            transaction.add_corpus(corpus_id)
+            transaction.add_corpus(corpus)
             assert reader.get_corpus(corpus_id) is None
 
-        assert reader.get_corpus(corpus_id) == corpus_id
+        assert reader.get_corpus(corpus_id) == corpus
     finally:
         reader.close()
         writer.close()
@@ -124,7 +126,9 @@ def test_transaction_events_are_bounded_and_payload_free(tmp_path: Path) -> None
     try:
         with capture_logs() as logs:
             with repository.transaction() as transaction:
-                transaction.add_corpus(CorpusId(_SHARED_UUID))
+                transaction.add_corpus(
+                    CorpusMetadata(CorpusId(_SHARED_UUID), "Private corpus name")
+                )
             with pytest.raises(RuntimeError, match=private_payload):
                 with repository.transaction():
                     raise RuntimeError(private_payload)
@@ -143,7 +147,90 @@ def test_transaction_events_are_bounded_and_payload_free(tmp_path: Path) -> None
         ]
         assert private_payload not in repr(logs)
         assert _SHARED_UUID not in repr(logs)
+        assert "Private corpus name" not in repr(logs)
         assert "private-path" not in repr(logs)
+    finally:
+        repository.close()
+
+
+def test_corpus_names_are_mutable_nonunique_descriptions(tmp_path: Path) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    first = CorpusMetadata(CorpusId(_SHARED_UUID), "Shared name")
+    second = CorpusMetadata(CorpusId(_OTHER_UUID), "Shared name")
+    expected = CorpusMetadata(first.corpus_id, "Renamed corpus")
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_corpus(second)
+            transaction.add_corpus(first)
+            assert (
+                transaction.set_corpus_display_name(first.corpus_id, "Renamed corpus")
+                == expected
+            )
+
+        assert repository.list_corpora() == (second, expected)
+    finally:
+        repository.close()
+
+
+def test_reusing_corpus_id_with_different_name_conflicts(tmp_path: Path) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    corpus_id = CorpusId(_SHARED_UUID)
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_corpus(CorpusMetadata(corpus_id, "First name"))
+
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.add_corpus(CorpusMetadata(corpus_id, "Second name"))
+
+        assert repository.get_corpus(corpus_id) == CorpusMetadata(
+            corpus_id, "First name"
+        )
+    finally:
+        repository.close()
+
+
+def test_renaming_a_missing_corpus_rolls_back_prior_writes(tmp_path: Path) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    document = DocumentIdentity(DocumentId(_OTHER_UUID))
+    try:
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.add_document(document)
+                transaction.set_corpus_display_name(
+                    CorpusId(_SHARED_UUID), "Missing corpus"
+                )
+
+        assert repository.get_document(document.document_id) is None
+    finally:
+        repository.close()
+
+
+def test_malformed_stored_corpus_fails_closed_on_single_and_list_reads(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    corpus_id = CorpusId(_SHARED_UUID)
+    repository = _open_repository(database_path)
+    with repository.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(corpus_id, "Valid name"))
+
+    raw_connection = sqlite3.connect(database_path)
+    try:
+        raw_connection.execute("PRAGMA ignore_check_constraints = ON")
+        raw_connection.execute(
+            "UPDATE corpora SET display_name = '' WHERE corpus_id = ?",
+            (corpus_id.as_str(),),
+        )
+        raw_connection.commit()
+    finally:
+        raw_connection.close()
+
+    try:
+        with pytest.raises(CorruptStorageError):
+            repository.get_corpus(corpus_id)
+        with pytest.raises(CorruptStorageError):
+            repository.list_corpora()
     finally:
         repository.close()
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from inference_lab._validation import CANONICAL_SEMANTIC_VERSION_PATTERN
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
@@ -45,7 +46,7 @@ def _manifest(case_ids: tuple[str, ...] = ("case-001",)) -> DatasetManifest:
     return DatasetManifest.model_validate(
         {
             "dataset_id": "baseline-v1",
-            "dataset_version": "1",
+            "dataset_version": "1.0.0",
             "description": "Evaluation fixture",
             "corpus_id": CORPUS_ID,
             "corpus_version": CORPUS_VERSION,
@@ -271,6 +272,10 @@ def test_schema_can_be_written_as_json(tmp_path: Path) -> None:
         assert model_schema["properties"]["schema_version"]["const"] == (
             CURRENT_SCHEMA_VERSION
         )
+    assert (
+        definitions["DatasetManifest"]["properties"]["dataset_version"]["pattern"]
+        == CANONICAL_SEMANTIC_VERSION_PATTERN
+    )
 
     references: list[str] = []
 

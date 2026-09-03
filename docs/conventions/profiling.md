@@ -11,7 +11,7 @@ The `src/inference_lab/profiling/` package owns reusable, production-safe
 instrumentation and record contracts, including:
 
 - record schemas and validation;
-- deterministic clocks and stage timers;
+- deterministic clock injection and stage timers;
 - resource-measurement contracts;
 - failure and degraded-unit contracts;
 - structured-log emission adapters.
@@ -24,12 +24,19 @@ format.
 
 Every concrete profiling record contains `record_schema_version`. Producers use
 `CURRENT_RECORD_SCHEMA_VERSION`, and constructors reject versions not listed in
-`SUPPORTED_RECORD_SCHEMA_VERSIONS`. A newer positive integer is not assumed to
-be compatible merely because it is syntactically valid.
+`SUPPORTED_RECORD_SCHEMA_VERSIONS`. Schema versions are canonical semantic
+version strings; a newer version is not assumed to be compatible merely because
+it is syntactically valid.
 
 Every concrete record supplies its logging level. The structured-log emission
 adapter rejects records with a missing or unsupported level; it does not infer
 severity from other fields.
+
+Profiling records carry the shared nullable `document_id`, `corpus_id`, and
+`corpus_version` context fields. Instrumentation around a corpus-targeting
+operation records `corpus_id`; instrumentation around a published snapshot
+records both corpus and version. Corpus display names are not profiling
+context.
 
 Profiling records use `observed_at` for the UTC time at which the stage event,
 resource value, or failure was observed. This field survives serialisation and
@@ -111,14 +118,17 @@ requiring profiling code to know the experiment design.
 
 Runtime memory snapshots compose the canonical profiling memory categories,
 bytes unit, statuses, UTC `observed_at`, and record schema version. Their
-runtime-owned fields add component role, memory space, device identity,
+runtime-owned fields add the closed `MemoryComponentRole` accounting
+vocabulary, memory space, device identity,
 exclusive-versus-roll-up contribution semantics, and adapter/calibration
 identity without changing the generic `ResourceMeasurement` shape.
 
-Snapshot totals count only exclusive measured contributions. Unreliable values
-remain separate diagnostics and unavailable values contribute no bytes; neither
-is silently treated as free capacity. Roll-ups are never included in totals,
-and their declared coverage must remain within one memory space and device.
+Snapshot totals derive coverage from the declared expected-contribution
+inventory and count bytes only from exclusive measured contributions.
+Unreliable values remain separate diagnostics, unavailable values contribute
+no bytes, and absent expected values increment `missing_count`; none is
+silently treated as free capacity. Roll-ups are never included in totals, and
+their declared coverage must remain within one memory space and device.
 
 Memory records use `memory_component_measured` and
 `memory_budget_compared` events. Measured records are `INFO`, unavailable or

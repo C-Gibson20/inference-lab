@@ -1,5 +1,6 @@
+"""Tests for explicit SQLite schema upgrades."""
+
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -20,12 +21,9 @@ from inference_lab.storage._sqlite_inspection import (
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_upgrade import apply_pending_migrations
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
 _CORPUS_ID = "00000000-0000-0000-0000-000000000001"
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _revision_two() -> MigrationDefinition:
@@ -47,13 +45,17 @@ def _revision_three(*, failing: bool = False) -> MigrationDefinition:
     )
 
 
-def _initialise_revision_one(path: Path) -> sqlite3.Connection:
+def _initialise_baseline(path: Path) -> sqlite3.Connection:
     connection = open_sqlite_connection(path)
     initialise_empty_database(
         connection,
+        migrations=(MIGRATIONS[0],),
         applied_at_factory=_fixed_applied_at,
     )
-    connection.execute("INSERT INTO corpora (corpus_id) VALUES (?)", (_CORPUS_ID,))
+    connection.execute(
+        "INSERT INTO corpora (corpus_id, display_name) VALUES (?, 'Test corpus')",
+        (_CORPUS_ID,),
+    )
     return connection
 
 
@@ -61,7 +63,7 @@ def test_supported_forward_migration_preserves_data_and_reopens(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    connection = _initialise_revision_one(database_path)
+    connection = _initialise_baseline(database_path)
     revision_two = _revision_two()
     migrations = (MIGRATIONS[0], revision_two)
     try:
@@ -96,7 +98,7 @@ def test_supported_forward_migration_preserves_data_and_reopens(
 
 
 def test_repeated_upgrade_is_a_no_op(tmp_path: Path) -> None:
-    connection = _initialise_revision_one(tmp_path / "metadata.sqlite3")
+    connection = _initialise_baseline(tmp_path / "metadata.sqlite3")
     migrations = (MIGRATIONS[0], _revision_two())
     try:
         apply_pending_migrations(
@@ -126,7 +128,7 @@ def test_failed_later_revision_leaves_last_successful_revision_reopenable(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    connection = _initialise_revision_one(database_path)
+    connection = _initialise_baseline(database_path)
     revision_two = _revision_two()
     revision_three = _revision_three(failing=True)
     migrations = (MIGRATIONS[0], revision_two, revision_three)
@@ -178,7 +180,7 @@ def test_failed_later_revision_leaves_last_successful_revision_reopenable(
 def test_upgrade_rejects_modified_history_before_changing_schema(
     tmp_path: Path,
 ) -> None:
-    connection = _initialise_revision_one(tmp_path / "metadata.sqlite3")
+    connection = _initialise_baseline(tmp_path / "metadata.sqlite3")
     try:
         connection.execute(
             "UPDATE migration_history SET checksum = ? WHERE revision = 1",
@@ -205,7 +207,7 @@ def test_upgrade_rejects_modified_history_before_changing_schema(
 def test_invalid_application_time_rolls_back_only_pending_revision(
     tmp_path: Path,
 ) -> None:
-    connection = _initialise_revision_one(tmp_path / "metadata.sqlite3")
+    connection = _initialise_baseline(tmp_path / "metadata.sqlite3")
     try:
         with pytest.raises(StorageMigrationError):
             apply_pending_migrations(
@@ -230,7 +232,7 @@ def test_invalid_application_time_rolls_back_only_pending_revision(
 
 
 def test_upgrade_rejects_an_existing_transaction(tmp_path: Path) -> None:
-    connection = _initialise_revision_one(tmp_path / "metadata.sqlite3")
+    connection = _initialise_baseline(tmp_path / "metadata.sqlite3")
     try:
         connection.execute("BEGIN")
 
@@ -246,8 +248,33 @@ def test_upgrade_rejects_an_existing_transaction(tmp_path: Path) -> None:
         connection.close()
 
 
+def test_upgrade_rejects_invalid_boundary_values(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="connection"):
+        apply_pending_migrations(object())  # type: ignore[arg-type]
+
+    connection = _initialise_baseline(tmp_path / "metadata.sqlite3")
+    try:
+        with pytest.raises(TypeError, match="applied_at_factory"):
+            apply_pending_migrations(
+                connection,
+                applied_at_factory=None,  # type: ignore[arg-type]
+            )
+        with pytest.raises(StorageMigrationError):
+            apply_pending_migrations(
+                connection,
+                migrations=[],  # type: ignore[arg-type]
+            )
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("SELECT corpus_id FROM corpora").fetchone()[0] == (
+            _CORPUS_ID
+        )
+    finally:
+        connection.close()
+
+
 def test_migration_logs_are_structured_and_payload_free(tmp_path: Path) -> None:
-    connection = _initialise_revision_one(tmp_path / "metadata.sqlite3")
+    connection = _initialise_baseline(tmp_path / "metadata.sqlite3")
     migrations = (MIGRATIONS[0], _revision_two())
     try:
         with capture_logs() as logs:
@@ -275,7 +302,7 @@ def test_migration_logs_are_structured_and_payload_free(tmp_path: Path) -> None:
 def test_failed_migration_log_contains_only_bounded_diagnostics(
     tmp_path: Path,
 ) -> None:
-    connection = _initialise_revision_one(tmp_path / "metadata.sqlite3")
+    connection = _initialise_baseline(tmp_path / "metadata.sqlite3")
     failing = MigrationDefinition(
         revision=2,
         migration_id="test_failing_migration",
