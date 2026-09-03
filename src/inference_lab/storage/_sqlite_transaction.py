@@ -40,13 +40,15 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
 )
+from inference_lab.storage._sqlite_identifier_assertions import (
+    add_external_identifier_assertions,
+    list_external_identifier_assertions,
+)
 from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_observations import (
-    add_external_identifier_assertions,
     add_source_observation,
     advance_source_observation,
     get_source_observation,
-    list_external_identifier_assertions,
     list_source_observation_history,
 )
 from inference_lab.storage._sqlite_relationships import (

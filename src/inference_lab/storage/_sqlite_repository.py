@@ -38,6 +38,9 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
 )
+from inference_lab.storage._sqlite_identifier_assertions import (
+    list_external_identifier_assertions,
+)
 from inference_lab.storage._sqlite_inspection import (
     SchemaInspection,
     validate_database_schema,
@@ -48,7 +51,6 @@ from inference_lab.storage._sqlite_migration_execution import AppliedAtFactory
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_observations import (
     get_source_observation,
-    list_external_identifier_assertions,
     list_source_observation_history,
 )
 from inference_lab.storage._sqlite_relationships import (
