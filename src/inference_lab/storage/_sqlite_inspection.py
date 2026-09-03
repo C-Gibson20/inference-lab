@@ -3,6 +3,7 @@
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 from inference_lab.storage._sqlite_connection import (
@@ -36,6 +37,14 @@ class SchemaInspection:
     applied_migration_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class _SchemaObject:
+    object_type: str
+    name: str
+    table_name: str
+    definition: str
+
+
 def _read_pragma_integer(connection: sqlite3.Connection, name: str) -> int:
     row = connection.execute(f"PRAGMA {name}").fetchone()
     if row is None or not isinstance(row[0], int) or isinstance(row[0], bool):
@@ -53,6 +62,71 @@ def _has_schema_objects(connection: sqlite3.Connection) -> bool:
         ).fetchone()
         is not None
     )
+
+
+def _read_schema_manifest(
+    connection: sqlite3.Connection,
+) -> tuple[_SchemaObject, ...]:
+    rows = connection.execute(
+        """SELECT type, name, tbl_name, sql
+        FROM sqlite_schema
+        WHERE name NOT LIKE 'sqlite_%'
+            AND sql IS NOT NULL
+        ORDER BY type, name, tbl_name"""
+    ).fetchall()
+    manifest: list[_SchemaObject] = []
+    for row in rows:
+        object_type, name, table_name, definition = row
+        if not all(
+            isinstance(value, str)
+            for value in (object_type, name, table_name, definition)
+        ):
+            raise IncompatibleSchemaError()
+        manifest.append(
+            _SchemaObject(
+                object_type=object_type,
+                name=name,
+                table_name=table_name,
+                definition=definition,
+            )
+        )
+    return tuple(manifest)
+
+
+@lru_cache(maxsize=32)
+def _expected_schema_manifest(
+    migrations: tuple[MigrationDefinition, ...],
+    current_revision: int,
+) -> tuple[_SchemaObject, ...]:
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA trusted_schema = OFF")
+        for migration in migrations[:current_revision]:
+            for statement in migration.statements:
+                connection.execute(statement)
+        return _read_schema_manifest(connection)
+    except StorageError:
+        raise
+    except sqlite3.Error:
+        raise StorageMigrationError() from None
+    finally:
+        if connection is not None:
+            _close_preserving_primary(connection)
+
+
+def _validate_schema_manifest(
+    connection: sqlite3.Connection,
+    *,
+    migrations: tuple[MigrationDefinition, ...],
+    current_revision: int,
+) -> None:
+    if _read_schema_manifest(connection) != _expected_schema_manifest(
+        migrations,
+        current_revision,
+    ):
+        raise IncompatibleSchemaError()
 
 
 def _validate_integrity(connection: sqlite3.Connection) -> None:
@@ -161,7 +235,6 @@ def _inspect_database_schema(
         if user_version <= 0 or user_version > latest_revision:
             raise IncompatibleSchemaError()
 
-        _validate_integrity(connection)
         current_revision = _validate_schema_metadata(connection)
         if current_revision != user_version or current_revision > latest_revision:
             raise IncompatibleSchemaError()
@@ -169,6 +242,12 @@ def _inspect_database_schema(
             connection,
             current_revision=current_revision,
             migrations=migrations,
+        )
+        _validate_integrity(connection)
+        _validate_schema_manifest(
+            connection,
+            migrations=migrations,
+            current_revision=current_revision,
         )
 
         return SchemaInspection(
