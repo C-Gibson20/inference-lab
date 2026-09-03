@@ -10,6 +10,7 @@ from inference_lab.provenance import (
     ExternalIdentifier,
     HashAlgorithm,
     IdentityResolutionRequest,
+    SourceObservationId,
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
@@ -19,6 +20,7 @@ _OTHER_HASH = ContentHash(HashAlgorithm.SHA256, "b" * 64)
 _FIRST_DOCUMENT_ID = DocumentId("11111111-1111-4111-8111-111111111111")
 _SECOND_DOCUMENT_ID = DocumentId("22222222-2222-4222-8222-222222222222")
 _THIRD_DOCUMENT_ID = DocumentId("33333333-3333-4333-8333-333333333333")
+_SOURCE_OBSERVATION_ID = SourceObservationId("44444444-4444-4444-8444-444444444444")
 
 _FIRST = DocumentVersion(
     DocumentVersionId("99999999-9999-4999-8999-999999999999"),
@@ -74,8 +76,9 @@ def test_content_hash_lookup_returns_canonical_resolution_candidates(
         assert (
             IdentityResolutionRequest(
                 _SHARED_HASH,
-                candidates=candidates,
-            ).candidates
+                _SOURCE_OBSERVATION_ID,
+                content_hash_candidates=candidates,
+            ).content_hash_candidates
             == candidates
         )
         assert repository.find_document_versions_by_content_hash(_OTHER_HASH) == (
@@ -106,9 +109,10 @@ def test_external_identifier_lookup_matches_any_and_removes_duplicates(
         assert (
             IdentityResolutionRequest(
                 _OTHER_HASH,
+                _SOURCE_OBSERVATION_ID,
                 external_identifiers=supplied,
-                candidates=candidates,
-            ).candidates
+                external_identifier_candidates=candidates,
+            ).external_identifier_candidates
             == candidates
         )
     finally:

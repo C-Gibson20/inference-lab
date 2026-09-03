@@ -57,11 +57,16 @@ def _insert_version(
 def test_revision_one_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 1
+    assert len(MIGRATIONS) == 2
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "initial_metadata"
     assert MIGRATIONS[0].checksum == (
         "bd5e54ddf8a3964ae426d97c904f1d00f9a23f2307642b9538aa0cc7335016d1"
+    )
+    assert MIGRATIONS[1].revision == 2
+    assert MIGRATIONS[1].migration_id == "source_observation_identity"
+    assert MIGRATIONS[1].checksum == (
+        "2cedb3bd9dc35c6f679f500926ba37774bfb7a0b4a80420c194b76745045e2fc"
     )
 
 

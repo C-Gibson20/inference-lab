@@ -15,6 +15,7 @@ The system uses a distinct opaque identifier type for each identity domain:
 | --- | --- | --- | --- |
 | `document_id` | `DocumentId` | One logical document across source versions | Stable across file moves, renames, and unchanged re-ingest |
 | `document_version_id` | `DocumentVersionId` | One immutable source version | Changes when the source artefact changes |
+| `source_observation_id` | `SourceObservationId` | One independently observed input source | Stable across moves and renames; distinct for independently citable duplicate sources |
 | `document_family_id` | `DocumentFamilyId` | One publication or patent family independently of its member documents | Stable for the family membership represented by the record |
 | `record_id` | `RecordId` | One canonical or derived record | Stable for the lifetime of that record |
 | `corpus_id` | `CorpusId` | One persistent corpus | Stable across corpus snapshots |
@@ -41,6 +42,45 @@ Generation does not decide whether an incoming document should reuse an
 existing identity. Identity resolution belongs to ingest and storage. Content
 hashes support unchanged-ingest detection and duplicate analysis but do not
 replace primary identifiers.
+
+`SourceObservationId` supplies source-continuity evidence without making a
+filesystem path an identity. Discovery allocates one for a newly observed
+source and retains it when that source moves or is renamed. A separately
+observed source receives a distinct identifier even when its bytes match an
+existing source. The identity resolver therefore receives same-observation
+continuity candidates separately from global content-hash and external-
+identifier candidates.
+
+Persistence records source continuity as append-only `SourceObservationState`
+revisions plus one validated current-state pointer. Initial state is revision
+one. Advancement names the expected current document version and fails on a
+stale expectation or an attempt to switch logical documents; exact retry is a
+no-op. Historical states remain available for audit, while identity resolution
+uses only the current state as continuity evidence.
+
+External identifiers are evidence, not primary identity. The default
+`conservative` policy declares no namespace authoritative, so an external-
+identifier-only match is ambiguous rather than silently creating a new source
+version. A corpus may select authoritative namespaces only through an explicit
+`ExternalIdentifierResolutionPolicy` with a canonical policy name and semantic
+version. Corpus-specific authority must be supported by the corpus audit; the
+provenance layer does not build in DOI, patent, publication, or other namespace
+preferences.
+
+For every namespace shared by an observation and a candidate, the complete set
+of asserted values must agree. A match in one namespace does not override a
+conflict in another. Conflicting evidence fails closed, while a consistent
+match without an authoritative namespace remains ambiguous.
+
+When unchanged bytes carry an identifier in a previously unasserted namespace,
+the resolver returns an `ExternalIdentifierAssertion` in
+`identifier_assertions_to_add` while retaining the immutable `DocumentVersion`.
+Each assertion identifies the retained version, source observation, namespace,
+and value. Persistence stores these values append-only, treating exact replay
+as a no-op; it must not rewrite the original version record. Existing
+assertions are supplied on later resolution requests and participate in match,
+conflict, and enrichment decisions. A different value in an already asserted
+namespace is a conflict, not an enrichment.
 
 ## Stability rules
 

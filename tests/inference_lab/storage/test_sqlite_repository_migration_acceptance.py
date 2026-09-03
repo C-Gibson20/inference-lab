@@ -79,6 +79,7 @@ def _create_complete_revision_one(path: Path) -> None:
     repository = SQLiteMetadataRepository.open(
         path,
         apply_migrations=True,
+        migrations=(MIGRATIONS[0],),
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
@@ -129,6 +130,24 @@ def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
     assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == (_DUPLICATE,)
     assert repository.list_family_memberships_by_family(_FAMILY_ID) == (_MEMBERSHIP,)
+
+
+def test_production_source_observation_migration_preserves_revision_one_graph(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_complete_revision_one(database_path)
+
+    migrated = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+        applied_at_factory=_fixed_applied_at,
+    )
+    try:
+        assert migrated.schema_inspection.current_revision == 2
+        _assert_complete_graph(migrated)
+    finally:
+        migrated.close()
 
 
 def test_non_empty_repository_requires_explicit_upgrade_without_mutation(

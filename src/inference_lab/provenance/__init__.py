@@ -23,6 +23,7 @@ from inference_lab.provenance.identifiers import (
     DocumentId,
     DocumentVersionId,
     RecordId,
+    SourceObservationId,
     SourceSpanId,
 )
 from inference_lab.provenance.lineage import (
@@ -44,6 +45,7 @@ from inference_lab.provenance.operations import (
 from inference_lab.provenance.records import (
     DocumentIdentity,
     DocumentVersion,
+    SourceObservationState,
 )
 from inference_lab.provenance.relationships import (
     DocumentFamilyMembership,
@@ -51,6 +53,9 @@ from inference_lab.provenance.relationships import (
     InvalidRelationshipError,
 )
 from inference_lab.provenance.resolution import (
+    CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY,
+    ExternalIdentifierAssertion,
+    ExternalIdentifierResolutionPolicy,
     IdentityResolutionOutcome,
     IdentityResolutionRequest,
     InvalidResolutionError,
@@ -86,6 +91,7 @@ from inference_lab.provenance.versioning import (
 )
 
 __all__ = [
+    "CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY",
     "CURRENT_LINEAGE_SCHEMA_VERSION",
     "SUPPORTED_LINEAGE_SCHEMA_VERSIONS",
     "ComponentRole",
@@ -106,6 +112,8 @@ __all__ = [
     "DuplicateClass",
     "DuplicateRelationship",
     "ExternalIdentifier",
+    "ExternalIdentifierAssertion",
+    "ExternalIdentifierResolutionPolicy",
     "HashAlgorithm",
     "IdentityIdAllocator",
     "IdentityResolutionOutcome",
@@ -133,6 +141,8 @@ __all__ = [
     "ResolutionKind",
     "ResolutionReason",
     "SourceAnchor",
+    "SourceObservationId",
+    "SourceObservationState",
     "SourceSpanId",
     "UnsupportedLineageSchemaVersionError",
     "UuidIdentityIdAllocator",

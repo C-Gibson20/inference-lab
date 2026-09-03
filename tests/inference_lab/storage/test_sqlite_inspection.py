@@ -28,11 +28,16 @@ def _fixed_applied_at() -> datetime:
     return _APPLIED_AT
 
 
-def _initialise(path: Path) -> None:
+def _initialise(
+    path: Path,
+    *,
+    migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
+) -> None:
     connection = open_sqlite_connection(path)
     try:
         initialise_empty_database(
             connection,
+            migrations=migrations,
             applied_at_factory=_fixed_applied_at,
         )
     finally:
@@ -57,9 +62,9 @@ def test_current_database_inspection_is_read_only(tmp_path: Path) -> None:
         inspection = validate_database_schema(connection)
 
         assert inspection == SchemaInspection(
-            current_revision=1,
-            latest_supported_revision=1,
-            applied_migration_count=1,
+            current_revision=2,
+            latest_supported_revision=2,
+            applied_migration_count=2,
         )
         assert connection.total_changes == changes_before
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -128,7 +133,7 @@ def test_supported_pending_migration_is_reported_without_application(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _initialise(database_path)
+    _initialise(database_path, migrations=(MIGRATIONS[0],))
     migrations = (MIGRATIONS[0], _second_migration())
     connection = open_sqlite_connection(database_path)
     try:
@@ -156,11 +161,11 @@ def test_supported_pending_migration_is_reported_without_application(
 @pytest.mark.parametrize(
     "mutation",
     [
-        "PRAGMA user_version = 2",
+        "PRAGMA user_version = 3",
         "UPDATE metadata_schema SET current_revision = 0",
         "DELETE FROM migration_history",
         "UPDATE migration_history SET checksum = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
-        "UPDATE migration_history SET migration_id = 'changed_migration'",
+        "UPDATE migration_history SET migration_id = 'changed_migration' WHERE revision = 1",
         "UPDATE migration_history SET applied_at_utc = 'not-a-timestamp'",
     ],
 )

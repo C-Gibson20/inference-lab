@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from inference_lab.provenance.identifiers import (
     DocumentId,
     DocumentVersionId,
+    SourceObservationId,
 )
 from inference_lab.provenance.values import (
     ContentHash,
@@ -44,3 +45,31 @@ class DocumentVersion:
             raise TypeError("content_hash must be a ContentHash.")
 
         validate_external_identifiers(self.external_identifiers)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceObservationState:
+    """Record one append-only revision of a source-to-version association."""
+
+    source_observation_id: SourceObservationId
+    observation_revision: int
+    document_id: DocumentId
+    document_version_id: DocumentVersionId
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the fields of the SourceObservationState."""
+        if not isinstance(self.source_observation_id, SourceObservationId):
+            raise TypeError("source_observation_id must be a SourceObservationId.")
+        if not isinstance(self.observation_revision, int) or isinstance(
+            self.observation_revision, bool
+        ):
+            raise TypeError("observation_revision must be an integer.")
+        if self.observation_revision < 1:
+            raise ValueError("observation_revision must be at least one.")
+        if not isinstance(self.document_id, DocumentId):
+            raise TypeError("document_id must be a DocumentId.")
+        if not isinstance(self.document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")

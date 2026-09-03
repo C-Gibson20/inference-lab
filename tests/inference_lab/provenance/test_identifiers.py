@@ -12,6 +12,7 @@ from inference_lab.provenance import (
     DocumentId,
     DocumentVersionId,
     RecordId,
+    SourceObservationId,
     SourceSpanId,
 )
 from inference_lab.provenance import identifiers as identifiers_module
@@ -24,6 +25,7 @@ type Identifier = (
     | DocumentId
     | DocumentVersionId
     | RecordId
+    | SourceObservationId
     | SourceSpanId
     | DocumentFamilyId
 )
@@ -33,6 +35,7 @@ IDENTIFIER_TYPES: tuple[IdentifierType, ...] = (
     DocumentId,
     DocumentVersionId,
     RecordId,
+    SourceObservationId,
     CorpusId,
     CorpusVersionId,
     SourceSpanId,

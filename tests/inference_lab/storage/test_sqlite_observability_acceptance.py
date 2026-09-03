@@ -190,6 +190,7 @@ def test_configured_migration_failure_logs_exclude_sql_and_raw_errors(
     initial = SQLiteMetadataRepository.open(
         database_path,
         apply_migrations=True,
+        migrations=(MIGRATIONS[0],),
         applied_at_factory=_fixed_applied_at,
     )
     initial.close()

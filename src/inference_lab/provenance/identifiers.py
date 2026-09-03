@@ -88,6 +88,13 @@ class DocumentVersionId(_Identifier):
 
 
 @final
+class SourceObservationId(_Identifier):
+    """Identify one observed source independently of its current location."""
+
+    __slots__ = ()
+
+
+@final
 class RecordId(_Identifier):
     """Identify one canonical or derived provenance record."""
 

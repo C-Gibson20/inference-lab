@@ -12,6 +12,8 @@ from inference_lab.provenance import (
     DocumentVersionId,
     ExternalIdentifier,
     HashAlgorithm,
+    SourceObservationId,
+    SourceObservationState,
 )
 
 VALID_DIGEST = "a" * 64
@@ -167,3 +169,32 @@ def test_document_version_is_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         document_version.content_hash = _content_hash()  # type: ignore[misc]
+
+
+def test_source_observation_state_validates_revision_and_typed_identities() -> None:
+    source_observation_id = SourceObservationId.generate()
+    document_id = DocumentId.generate()
+    document_version_id = DocumentVersionId.generate()
+
+    state = SourceObservationState(
+        source_observation_id,
+        1,
+        document_id,
+        document_version_id,
+    )
+
+    assert state.observation_revision == 1
+    with pytest.raises(ValueError, match="at least one"):
+        SourceObservationState(
+            source_observation_id,
+            0,
+            document_id,
+            document_version_id,
+        )
+    with pytest.raises(TypeError, match="integer"):
+        SourceObservationState(
+            source_observation_id,
+            True,
+            document_id,
+            document_version_id,
+        )

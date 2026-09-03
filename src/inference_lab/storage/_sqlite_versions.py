@@ -171,8 +171,12 @@ def find_document_versions_by_external_identifiers(
             rows = connection.execute(
                 """SELECT document_version_id
                 FROM external_identifiers
+                WHERE namespace = ? AND identifier_value = ?
+                UNION
+                SELECT document_version_id
+                FROM external_identifier_assertions
                 WHERE namespace = ? AND identifier_value = ?""",
-                identifier.as_tuple(),
+                (*identifier.as_tuple(), *identifier.as_tuple()),
             ).fetchall()
             matched_ids.update(row["document_version_id"] for row in rows)
 
