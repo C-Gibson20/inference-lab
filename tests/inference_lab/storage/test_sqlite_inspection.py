@@ -185,6 +185,75 @@ def test_inconsistent_schema_or_history_is_rejected(
         connection.close()
 
 
+@pytest.mark.parametrize(
+    "mutations",
+    [
+        ("DROP TABLE document_family_memberships",),
+        ("DROP INDEX document_versions_content_hash_idx",),
+        ("DROP TRIGGER duplicate_relationships_hash_insert",),
+        ("ALTER TABLE corpora ADD COLUMN unexpected_value TEXT",),
+        ("CREATE TABLE incompatible_extra (value TEXT) STRICT",),
+        (
+            "DROP TABLE external_identifiers",
+            """CREATE TABLE external_identifiers (
+                storage_id INTEGER PRIMARY KEY,
+                document_version_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                namespace TEXT NOT NULL,
+                identifier_value TEXT NOT NULL
+            ) STRICT""",
+        ),
+    ],
+    ids=(
+        "missing-table",
+        "missing-index",
+        "missing-trigger",
+        "changed-column",
+        "extra-object",
+        "changed-constraints",
+    ),
+)
+def test_schema_definition_drift_is_rejected_on_reopen(
+    tmp_path: Path,
+    mutations: tuple[str, ...],
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _initialise(database_path)
+    connection = open_sqlite_connection(database_path)
+    try:
+        for mutation in mutations:
+            connection.execute(mutation)
+        schema_before = tuple(
+            tuple(row)
+            for row in connection.execute(
+                """SELECT type, name, tbl_name, sql
+                FROM sqlite_schema
+                WHERE name NOT LIKE 'sqlite_%'
+                ORDER BY type, name, tbl_name"""
+            ).fetchall()
+        )
+    finally:
+        connection.close()
+
+    with pytest.raises(IncompatibleSchemaError):
+        open_current_database(database_path)
+
+    connection = sqlite3.connect(database_path)
+    try:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        schema_after = tuple(
+            connection.execute(
+                """SELECT type, name, tbl_name, sql
+                FROM sqlite_schema
+                WHERE name NOT LIKE 'sqlite_%'
+                ORDER BY type, name, tbl_name"""
+            ).fetchall()
+        )
+        assert schema_after == schema_before
+    finally:
+        connection.close()
+
+
 def test_migration_history_must_be_contiguous_and_complete(tmp_path: Path) -> None:
     second = _second_migration()
     database_path = tmp_path / "metadata.sqlite3"
