@@ -148,17 +148,21 @@ the rendered input token count, generated token count, and their total. Stop
 sequences are buffered across token and delta boundaries and matched text is
 never emitted.
 
-Generation creates the model's native `DynamicCache` before the first model
-call, passes that same object throughout autoregressive continuation, and
-returns an asynchronous stream validated by the RUN-01 stream adapter. Legacy
-tuple cache conversion is not part of this boundary. The implementation-only
-`LocalMechanicsHarness` compares full uncached execution with cache state
-produced by executing the complete first request. For an extending, diverging,
-or shorter second request, it crops that native cache to the shared prefix and
-evaluates only the uncached suffix. It checks next-token selection and logits
-equivalence and separately records the tokens evaluated to create the first
-cache and after reuse. It records token counts, cache outcomes, and stable
-identity only; it does not expose cache handles, ownership, persistence,
+`local.py` owns artefact verification, lifecycle, and prompt preparation;
+transient stream execution belongs to `_local_generation.py`. Generation
+creates the model's native `DynamicCache` before the first model call, passes
+that same object throughout autoregressive continuation, and returns an
+asynchronous stream validated by the RUN-01 stream adapter. Legacy tuple cache
+conversion is not part of this boundary.
+
+The implementation-only mechanics types and `LocalMechanicsHarness` belong to
+`_local_mechanics.py`. The harness compares full uncached execution with cache
+state produced by executing the complete first request. For an extending,
+diverging, or shorter second request, it crops that native cache to the shared
+prefix and evaluates only the uncached suffix. It checks next-token selection
+and logits equivalence and separately records the tokens evaluated to create
+the first cache and after reuse. It records token counts, cache outcomes, and
+stable identity only; it does not expose cache handles, ownership, persistence,
 eviction, memory bytes, or a public cache protocol. Those lifecycle and
 accounting concerns remain downstream work for RUN-07 and RUN-03 respectively.
 

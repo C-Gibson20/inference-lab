@@ -91,9 +91,11 @@ UV_CACHE_DIR=/private/tmp/inference-lab-uv-cache \
 uv run python scripts/inference_lab/backends/create_local_mechanics_fixture.py
 ```
 
-The adapter and focused acceptance suite are implemented in
-`inference_lab.backends.runtime.local` and
-`tests/inference_lab/backends/runtime/test_local.py`. The suite verifies
+The adapter lifecycle and request boundary is implemented in
+`inference_lab.backends.runtime.local`; stream execution and the
+implementation-only mechanics harness live in the responsibility-named
+`_local_generation` and `_local_mechanics` modules. The focused acceptance
+suite is `tests/inference_lab/backends/runtime/test_local.py`. It verifies
 local-only loading, native cache availability, cache equivalence, and cleanup.
 Run it offline from the repository root with:
 
