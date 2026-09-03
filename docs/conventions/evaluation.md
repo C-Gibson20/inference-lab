@@ -14,9 +14,10 @@ locations, including HTTP, cloud-storage, and other remote schemes, are
 rejected. Dataset loading and dataset serialisation validate this boundary
 before reading or writing files.
 
-The boundary rejects URI schemes before and after `Path` coercion, UNC-style
-network locations, empty paths, and NUL characters. Rejected values are not
-included in errors intended for operational logs.
+The boundary uses the shared local-path syntax policy described by the
+configuration convention. It rejects URI schemes before and after `Path`
+coercion, UNC-style network locations, empty paths, and NUL characters.
+Rejected values are not included in errors intended for operational logs.
 
 Evaluation may read the selected local dataset and corpus references. It must
 not send questions, evidence, prompts, answers, model traffic, or evaluation
@@ -30,6 +31,9 @@ accepted or migrated.
 Unknown, missing, and unsupported schema versions are rejected before model
 validation. A dataset manifest identifies one immutable dataset version and
 one `CorpusId` and one immutable `CorpusVersionId` owned by that corpus.
+`dataset_version` uses canonical Semantic Versioning in `x.y.z` form, with
+optional valid pre-release and build metadata. It versions the immutable
+dataset independently of the evaluation schema version.
 
 The manifest records:
 

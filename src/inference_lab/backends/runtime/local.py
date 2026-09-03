@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, Protocol
-from urllib.parse import urlsplit
 
 import structlog
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.cache_utils import Cache, DynamicCache
 
+from inference_lab._validation import is_local_path_shape
 from inference_lab.backends.runtime._validation import validate_integer
 from inference_lab.backends.runtime.errors import (
     BackendClosedError,
@@ -194,11 +194,7 @@ def _validate_local_path(artefact_dir: str | Path) -> Path:
     """Validate and convert an explicit local artefact directory."""
     if not isinstance(artefact_dir, (str, Path)):
         raise TypeError("artefact_dir must be a local path")
-    raw_path = str(artefact_dir)
-    if not raw_path or "\x00" in raw_path:
-        raise BackendRequestError()
-    parsed = urlsplit(raw_path)
-    if parsed.scheme or parsed.netloc or raw_path.startswith(("//", "\\\\")):
+    if not is_local_path_shape(artefact_dir):
         raise BackendRequestError()
     return Path(artefact_dir)
 

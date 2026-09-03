@@ -8,7 +8,7 @@
   "corpus_version": "00000000-0000-4000-8000-000000000002",
   "created_at": "2026-08-22T00:00:00Z",
   "dataset_id": "baseline-v1",
-  "dataset_version": "1",
+  "dataset_version": "1.0.0",
   "description": "Deterministic evaluation contract fixture",
   "evaluation_policy": {
     "held_out_membership_immutable": true,

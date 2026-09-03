@@ -55,18 +55,16 @@ def test_wal_is_enabled_only_when_explicitly_requested(tmp_path: Path) -> None:
         reopened.close()
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        Path(":memory:"),
-        Path("https:/remote.example/metadata.sqlite3"),
-        Path("file:metadata.sqlite3"),
-        Path("//remote-host/share/metadata.sqlite3"),
-    ],
-)
-def test_open_rejects_nonlocal_or_nonpersistent_paths(path: Path) -> None:
+def test_open_rejects_nonlocal_paths(
+    rejected_local_path_shape: str | Path,
+) -> None:
     with pytest.raises(RepositoryUnavailableError):
-        open_sqlite_connection(path)
+        open_sqlite_connection(Path(rejected_local_path_shape))
+
+
+def test_open_rejects_nonpersistent_memory_database() -> None:
+    with pytest.raises(RepositoryUnavailableError):
+        open_sqlite_connection(Path(":memory:"))
 
 
 def test_open_rejects_a_directory_target_without_exposing_it(tmp_path: Path) -> None:

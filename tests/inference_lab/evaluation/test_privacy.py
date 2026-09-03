@@ -12,29 +12,11 @@ from inference_lab.evaluation.serialisation import atomic_write, write_json_sche
 from .fixtures import case_payload, write_dataset_fixture  # noqa: TID252
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "https://example.test/dataset.json",
-        Path("https://example.test/dataset.json"),
-        "s3://private-bucket/dataset.json",
-        "file:/tmp/dataset.json",
-        "mailto:dataset@example.test",
-        "//remote-host/share/dataset.json",
-        r"\\remote-host\share\dataset.json",
-    ],
-)
-def test_remote_shaped_paths_are_rejected_after_path_coercion(
-    path: str | Path,
+def test_non_local_path_shapes_are_rejected_after_path_coercion(
+    rejected_local_path_shape: str | Path,
 ) -> None:
     with pytest.raises(ValueError, match="local filesystem path"):
-        validate_local_path(path)
-
-
-@pytest.mark.parametrize("path", ["", "   ", "invalid\x00path"])
-def test_empty_or_invalid_local_paths_are_rejected(path: str) -> None:
-    with pytest.raises(ValueError):
-        validate_local_path(path)
+        validate_local_path(rejected_local_path_shape)
 
 
 def test_wrong_path_types_are_rejected() -> None:

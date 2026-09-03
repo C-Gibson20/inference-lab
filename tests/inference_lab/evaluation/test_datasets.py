@@ -7,7 +7,7 @@ from inference_lab.evaluation.datasets import DatasetManifest
 
 BASE: dict[str, object] = {
     "dataset_id": "baseline-v1",
-    "dataset_version": "1",
+    "dataset_version": "1.0.0",
     "description": "Evaluation fixture",
     "corpus_id": "00000000-0000-4000-8000-000000000001",
     "corpus_version": "00000000-0000-4000-8000-000000000002",
@@ -26,6 +26,37 @@ def test_manifest_accepts_explicit_disjoint_splits() -> None:
     manifest = DatasetManifest.model_validate(BASE)
 
     assert manifest.case_count == 2
+
+
+@pytest.mark.parametrize(
+    "dataset_version",
+    ["0.0.0", "1.2.3-alpha.1", "1.2.3+build.5", "1.2.3-rc.1+build.5"],
+)
+def test_manifest_accepts_canonical_dataset_versions(dataset_version: str) -> None:
+    manifest = DatasetManifest.model_validate(
+        dict(BASE, dataset_version=dataset_version)
+    )
+
+    assert manifest.dataset_version == dataset_version
+
+
+@pytest.mark.parametrize(
+    "dataset_version",
+    ["", "1", "1.0", "01.0.0", "1.01.0", "1.0.0-01", "1.0.0+", "v1.0.0"],
+)
+def test_manifest_rejects_noncanonical_dataset_versions(
+    dataset_version: str,
+) -> None:
+    with pytest.raises(ValidationError, match="canonical semantic version"):
+        DatasetManifest.model_validate(dict(BASE, dataset_version=dataset_version))
+
+
+@pytest.mark.parametrize("dataset_version", [1, True, None])
+def test_manifest_rejects_non_string_dataset_versions(
+    dataset_version: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        DatasetManifest.model_validate(dict(BASE, dataset_version=dataset_version))
 
 
 def test_manifest_rejects_duplicate_split_membership() -> None:
