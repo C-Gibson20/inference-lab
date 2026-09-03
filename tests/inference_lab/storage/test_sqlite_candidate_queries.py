@@ -1,6 +1,5 @@
 """Tests for SQLite identity-resolution candidate queries."""
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 from inference_lab.provenance import (
@@ -19,7 +18,8 @@ from inference_lab.provenance import (
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 9, 0, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
 _CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 _CORPUS = CorpusMetadata(_CORPUS_ID, "Candidate test corpus")
 _SHARED_HASH = ContentHash(HashAlgorithm.SHA256, "a" * 64)
@@ -53,10 +53,6 @@ _THIRD = DocumentVersion(
         ExternalIdentifier("doi", "10.1000/other"),
     ),
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _populated_repository(path: Path) -> SQLiteMetadataRepository:

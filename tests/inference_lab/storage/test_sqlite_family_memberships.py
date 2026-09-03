@@ -1,6 +1,5 @@
 """Tests for SQLite document-family membership."""
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,7 +20,8 @@ from inference_lab.provenance import (
 from inference_lab.storage import StorageConflictError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 10, 30, tzinfo=UTC)
+from .fixtures import open_repository as _open_repository  # noqa: TID252
+
 _CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 _CORPUS = CorpusMetadata(_CORPUS_ID, "Family test corpus")
 _FIRST_FAMILY_ID = DocumentFamilyId("11111111-1111-4111-8111-111111111111")
@@ -61,18 +61,6 @@ _SECOND_FAMILY_VERSION_MEMBERSHIP = DocumentFamilyMembership(
     _FIRST_DOCUMENT_ID,
     _FIRST_VERSION_ID,
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def _version(

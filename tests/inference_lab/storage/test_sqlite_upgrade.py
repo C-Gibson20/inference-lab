@@ -1,7 +1,6 @@
 """Tests for explicit SQLite schema upgrades."""
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -22,12 +21,9 @@ from inference_lab.storage._sqlite_inspection import (
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_upgrade import apply_pending_migrations
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
 _CORPUS_ID = "00000000-0000-0000-0000-000000000001"
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _revision_two() -> MigrationDefinition:

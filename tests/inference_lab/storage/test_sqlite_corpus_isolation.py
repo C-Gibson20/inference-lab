@@ -1,6 +1,5 @@
 """Tests for SQLite corpus isolation."""
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -25,9 +24,9 @@ from inference_lab.provenance import (
     SourceObservationState,
 )
 from inference_lab.storage import StorageConflictError
-from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 18, 0, tzinfo=UTC)
+from .fixtures import open_repository as _open  # noqa: TID252
+
 _FIRST_CORPUS = CorpusMetadata(
     CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), "First corpus"
 )
@@ -107,18 +106,6 @@ _SECOND_ASSERTION = ExternalIdentifierAssertion(
     _SHARED_VERSION_ID,
     ExternalIdentifier("observed", "second-only"),
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def test_corpus_scope_isolates_candidates_sources_and_relationships(

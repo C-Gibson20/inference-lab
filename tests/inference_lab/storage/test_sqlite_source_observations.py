@@ -1,7 +1,6 @@
 """Tests for persisted source continuity and identifier assertions."""
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -28,7 +27,8 @@ from inference_lab.provenance import (
 from inference_lab.storage import CorruptStorageError, StorageConflictError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 16, 0, tzinfo=UTC)
+from .fixtures import open_repository as _open_repository  # noqa: TID252
+
 _CORPUS_ID = CorpusId("99999999-9999-4999-8999-999999999999")
 _CORPUS = CorpusMetadata(_CORPUS_ID, "Source test corpus")
 _OTHER_CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
@@ -74,18 +74,6 @@ _INITIAL_STATE = SourceObservationState(
     _DOCUMENT_ID,
     _FIRST_VERSION_ID,
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def _populate_versions(repository: SQLiteMetadataRepository) -> None:

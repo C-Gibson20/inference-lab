@@ -1,6 +1,5 @@
 """Tests for SQLite duplicate relationships."""
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,7 +20,8 @@ from inference_lab.provenance import (
 from inference_lab.storage import StorageConflictError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
+from .fixtures import open_repository as _open_repository  # noqa: TID252
+
 _CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 _CORPUS = CorpusMetadata(_CORPUS_ID, "Duplicate test corpus")
 _DOCUMENT_ID = DocumentId("89606249-7390-4ff5-936f-0309f511924d")
@@ -38,18 +38,6 @@ _SECOND_RELATIONSHIP = DuplicateRelationship(
     _THIRD_VERSION_ID,
     DuplicateClass.BYTE_IDENTICAL,
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def _version(

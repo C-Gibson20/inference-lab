@@ -1,7 +1,6 @@
 """Tests for SQLite schema inspection."""
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -24,11 +23,7 @@ from inference_lab.storage._sqlite_migrations import (
     MigrationDefinition,
 )
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
 
 
 def _initialise(

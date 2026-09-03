@@ -1,7 +1,7 @@
 """Tests for atomic SQLite schema initialisation."""
 
 import sqlite3
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -20,11 +20,7 @@ from inference_lab.storage._sqlite_migrations import (
     MigrationDefinition,
 )
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
 
 
 def _schema_objects(connection: sqlite3.Connection) -> list[tuple[str, str]]:
