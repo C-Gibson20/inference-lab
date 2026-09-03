@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shutil
 from collections.abc import AsyncGenerator
 from io import StringIO
 from pathlib import Path
@@ -120,6 +121,56 @@ def test_local_backend_fails_closed_when_artefacts_are_unavailable(
     assert not backend.is_ready
     assert backend._model is None
     assert backend._tokeniser is None
+
+
+def test_local_backend_rejects_modified_but_loadable_model_configuration(
+    tmp_path: Path,
+) -> None:
+    artefact_dir = tmp_path / "modified-model"
+    shutil.copytree(FIXTURE_DIR, artefact_dir)
+    config_path = artefact_dir / "config.json"
+    config_path.write_bytes(config_path.read_bytes() + b"\n")
+    backend = LocalCausalBackend(artefact_dir)
+
+    with pytest.raises(BackendExecutionError) as error:
+        backend.load()
+
+    assert error.value.__cause__ is None
+    assert not backend.is_ready
+    assert backend._model is None
+    assert backend._tokeniser is None
+
+
+def test_local_backend_rejects_swapped_valid_chat_template(tmp_path: Path) -> None:
+    artefact_dir = tmp_path / "swapped-template"
+    shutil.copytree(FIXTURE_DIR, artefact_dir)
+    template_path = artefact_dir / "chat_template.jinja"
+    template = template_path.read_text(encoding="utf-8")
+    template_path.write_text(
+        template.replace("[USER]", "[CLIENT]"),
+        encoding="utf-8",
+    )
+    backend = LocalCausalBackend(artefact_dir)
+
+    with pytest.raises(BackendExecutionError) as error:
+        backend.load()
+
+    assert error.value.__cause__ is None
+    assert not backend.is_ready
+    assert backend._model is None
+    assert backend._tokeniser is None
+
+
+def test_local_backend_rejects_unpinned_loader_artefacts(tmp_path: Path) -> None:
+    artefact_dir = tmp_path / "extra-artefact"
+    shutil.copytree(FIXTURE_DIR, artefact_dir)
+    (artefact_dir / "added_tokens.json").write_text("{}", encoding="utf-8")
+    backend = LocalCausalBackend(artefact_dir)
+
+    with pytest.raises(BackendExecutionError):
+        backend.load()
+
+    assert not backend.is_ready
 
 
 def test_local_backend_renders_and_counts_the_complete_prompt() -> None:

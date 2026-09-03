@@ -124,6 +124,15 @@ directory, and never acquires model artefacts from a network or model registry.
 The fixture is for runtime mechanics and contract evidence, not answer quality,
 production sizing, or 27B-model feasibility.
 
+The backend pins the exact inventory and SHA-256 digest of every model,
+generation, tokeniser, special-token, and chat-template file used by the
+fixture. It verifies that manifest before loading and again before publishing a
+ready backend. Missing, changed, or additional files fail closed under the
+privacy-safe load error; a directory cannot load while advertising the pinned
+fixture revision unless its complete byte identity matches. Model and tokeniser
+revision strings are derived from the expected manifest rather than maintained
+as independent labels.
+
 `LocalCausalBackend` is generation-only. Its metadata advertises streaming,
 cancellation, and token usage, and does not advertise embedding, reranking, or
 batching. Loading is explicit and idempotent while ready; closing is idempotent

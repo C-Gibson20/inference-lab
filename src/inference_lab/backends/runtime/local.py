@@ -1,11 +1,12 @@
 """Local causal-model backend boundary for runtime mechanics fixtures."""
 
 import asyncio
+import hashlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Final, Protocol
 from urllib.parse import urlsplit
 
 import structlog
@@ -34,24 +35,68 @@ from inference_lab.backends.runtime.types import (
 )
 
 _LOGGER = structlog.get_logger(__name__)
-_REQUIRED_ARTEFACTS = frozenset(
-    {
+_EXPECTED_ARTEFACT_DIGESTS: Final = (
+    (
+        "chat_template.jinja",
+        "fb9aa64d5765e07f84beacb7326c5947bc7d39ab187e808dee99e2c6fa07b56d",
+    ),
+    (
         "config.json",
+        "626c98a02b75a97adbb5fe74133c45c3331e8960a459fb13f105124f8d7ab350",
+    ),
+    (
+        "generation_config.json",
+        "2a7400bd649bc65cbd19ff7e64d57bdc223077c762bc60bde7e567fb0fb42b6d",
+    ),
+    (
         "model.safetensors",
+        "b00e17e66e7913bf56c0d9d063f8c905fd124c8939c2ad7230a8741c708bd60a",
+    ),
+    (
+        "special_tokens_map.json",
+        "2d6145f8078c474ab0a72c09cbdce3a10cd02232862b75502544c0ec8d1c66ee",
+    ),
+    (
+        "tokenizer.json",
+        "6f4399da12154ba12fa4c43f689201cce5945c4b4ac544e92762d3004b35e794",
+    ),
+    (
+        "tokenizer_config.json",
+        "a928f2a7c43097e56ced8dee60a7de9963a0091bc2d785ff6d15ab83b9f72378",
+    ),
+)
+_EXPECTED_ARTEFACT_NAMES: Final = frozenset(
+    name for name, _ in _EXPECTED_ARTEFACT_DIGESTS
+)
+_TOKENISER_ARTEFACT_NAMES: Final = frozenset(
+    {
+        "chat_template.jinja",
+        "special_tokens_map.json",
         "tokenizer.json",
         "tokenizer_config.json",
-        "chat_template.jinja",
     }
 )
-_MODEL_REVISION = (
-    "fixture-20260902-"
-    "model-b00e17e66e7913bf56c0d9d063f8c905fd124c8939c2ad7230a8741c708bd60a-"
-    "tokeniser-6f4399da12154ba12fa4c43f689201cce5945c4b4ac544e92762d3004b35e794-"
-    "template-fb9aa64d5765e07f84beacb7326c5947bc7d39ab187e808dee99e2c6fa07b56d-"
+
+
+def _manifest_digest(artefacts: tuple[tuple[str, str], ...]) -> str:
+    digest = hashlib.sha256()
+    for name, expected_digest in artefacts:
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(expected_digest))
+    return digest.hexdigest()
+
+
+_MODEL_REVISION: Final = (
+    f"fixture-20260902-manifest-{_manifest_digest(_EXPECTED_ARTEFACT_DIGESTS)}-"
     "prompt-v1"
 )
-_TOKENISER_REVISION = (
-    "tokeniser-6f4399da12154ba12fa4c43f689201cce5945c4b4ac544e92762d3004b35e794"
+_TOKENISER_REVISION: Final = "tokeniser-manifest-" + _manifest_digest(
+    tuple(
+        artefact
+        for artefact in _EXPECTED_ARTEFACT_DIGESTS
+        if artefact[0] in _TOKENISER_ARTEFACT_NAMES
+    )
 )
 
 
@@ -95,6 +140,9 @@ class LocalMechanicsObservation:
     tokeniser_revision: str
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
         """Validate immutable mechanics observations."""
         for field_name in (
             "rendered_input_tokens",
@@ -153,6 +201,24 @@ def _validate_local_path(artefact_dir: str | Path) -> Path:
     return Path(artefact_dir)
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as artefact:
+        while chunk := artefact.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_local_artefacts(artefact_dir: Path) -> None:
+    present = {path.name for path in artefact_dir.iterdir()}
+    if present != _EXPECTED_ARTEFACT_NAMES:
+        raise ValueError("artefact inventory does not match the fixture")
+    for name, expected_digest in _EXPECTED_ARTEFACT_DIGESTS:
+        path = artefact_dir / name
+        if not path.is_file() or _file_sha256(path) != expected_digest:
+            raise ValueError("artefact checksum does not match the fixture")
+
+
 class LocalCausalBackend:
     """Generation-only boundary for a local causal model fixture."""
 
@@ -207,9 +273,7 @@ class LocalCausalBackend:
         try:
             if not self._artefact_dir.is_dir():
                 raise ValueError("artefact directory is unavailable")
-            present = {path.name for path in self._artefact_dir.iterdir()}
-            if not _REQUIRED_ARTEFACTS.issubset(present):
-                raise ValueError("required artefacts are unavailable")
+            _verify_local_artefacts(self._artefact_dir)
             tokeniser = AutoTokenizer.from_pretrained(
                 self._artefact_dir,
                 local_files_only=True,
@@ -229,6 +293,7 @@ class LocalCausalBackend:
                 raise ValueError("model context limit must be an integer")
             if model_context_limit <= 0:
                 raise ValueError("model context limit must be positive")
+            _verify_local_artefacts(self._artefact_dir)
         except Exception:
             self._model = None
             self._tokeniser = None
