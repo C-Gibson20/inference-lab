@@ -111,6 +111,32 @@ def test_budget_comparison_serialisation_round_trips() -> None:
 
 
 @pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    [
+        ("provisional_headroom_bytes", 1, "headroom"),
+        ("completeness", "incomplete", "completeness"),
+        ("state", "breached", "state"),
+        ("measured_count", 0, "measured contribution"),
+        ("missing_count", 1, "completeness"),
+        ("unavailable_count", -1, "must not be negative"),
+    ],
+)
+def test_budget_comparison_deserialisation_rejects_contradictory_facts(
+    field_name: str,
+    value: object,
+    message: str,
+) -> None:
+    comparison = make_snapshot().compare_budget(
+        MemoryBudget(MemorySpace.ACCELERATOR, "cuda-0", 2048)
+    )
+    payload = json.loads(serialise_budget_comparison(comparison))
+    payload[field_name] = value
+
+    with pytest.raises(ValueError, match=message):
+        deserialise_budget_comparison(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize(
     "data",
     [
         b'{"schema_version":1,"schema_version":1}',

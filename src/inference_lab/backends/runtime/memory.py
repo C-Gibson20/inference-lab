@@ -441,6 +441,97 @@ class BudgetComparison:
                 raise ValueError(f"{field_name} must not be negative")
         if not isinstance(self.completeness, Completeness):
             raise TypeError("completeness must be a Completeness value")
+        expected_headroom = self.budget.budget_bytes - self.measured_bytes
+        if self.provisional_headroom_bytes != expected_headroom:
+            raise ValueError("provisional headroom does not match budget and bytes")
+        expected_completeness = self._completeness_for_counts(
+            unreliable_count=self.unreliable_count,
+            unavailable_count=self.unavailable_count,
+            missing_count=self.missing_count,
+        )
+        if self.completeness is not expected_completeness:
+            raise ValueError("completeness does not match contribution counts")
+        if self.completeness is Completeness.COMPLETE and self.measured_count == 0:
+            raise ValueError("complete comparison requires a measured contribution")
+        if self.measured_bytes > 0 and self.measured_count == 0:
+            raise ValueError("positive measured bytes require a measured contribution")
+        expected_state = self._state_for(
+            measured_bytes=self.measured_bytes,
+            budget_bytes=self.budget.budget_bytes,
+            completeness=self.completeness,
+        )
+        if self.state is not expected_state:
+            raise ValueError("state does not match budget and completeness")
+
+    @classmethod
+    def from_accounting(
+        cls,
+        *,
+        budget: MemoryBudget,
+        measured_bytes: int,
+        measured_count: int,
+        unreliable_count: int,
+        unavailable_count: int,
+        missing_count: int,
+    ) -> "BudgetComparison":
+        """Construct a comparison from authoritative accounting inputs."""
+        if not isinstance(budget, MemoryBudget):
+            raise TypeError("budget must be a MemoryBudget")
+        for value, field_name in (
+            (measured_bytes, "measured_bytes"),
+            (measured_count, "measured_count"),
+            (unreliable_count, "unreliable_count"),
+            (unavailable_count, "unavailable_count"),
+            (missing_count, "missing_count"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{field_name} must be an integer")
+            if value < 0:
+                raise ValueError(f"{field_name} must not be negative")
+        completeness = cls._completeness_for_counts(
+            unreliable_count=unreliable_count,
+            unavailable_count=unavailable_count,
+            missing_count=missing_count,
+        )
+        return cls(
+            state=cls._state_for(
+                measured_bytes=measured_bytes,
+                budget_bytes=budget.budget_bytes,
+                completeness=completeness,
+            ),
+            budget=budget,
+            measured_bytes=measured_bytes,
+            provisional_headroom_bytes=budget.budget_bytes - measured_bytes,
+            measured_count=measured_count,
+            unreliable_count=unreliable_count,
+            unavailable_count=unavailable_count,
+            missing_count=missing_count,
+            completeness=completeness,
+        )
+
+    @staticmethod
+    def _completeness_for_counts(
+        *,
+        unreliable_count: int,
+        unavailable_count: int,
+        missing_count: int,
+    ) -> Completeness:
+        if unreliable_count == 0 and unavailable_count == 0 and missing_count == 0:
+            return Completeness.COMPLETE
+        return Completeness.INCOMPLETE
+
+    @staticmethod
+    def _state_for(
+        *,
+        measured_bytes: int,
+        budget_bytes: int,
+        completeness: Completeness,
+    ) -> BudgetState:
+        if measured_bytes > budget_bytes:
+            return BudgetState.BREACHED
+        if completeness is Completeness.INCOMPLETE:
+            return BudgetState.INDETERMINATE
+        return BudgetState.WITHIN_BUDGET
 
 
 @dataclass(frozen=True, slots=True)
@@ -795,26 +886,11 @@ class MemorySnapshot:
             unreliable_count = total.unreliable_count
             unavailable_count = total.unavailable_count
             missing_count = total.missing_count
-        completeness = (
-            Completeness.COMPLETE
-            if unreliable_count == 0 and unavailable_count == 0 and missing_count == 0
-            else Completeness.INCOMPLETE
-        )
-        headroom = budget.budget_bytes - measured_bytes
-        if measured_bytes > budget.budget_bytes:
-            state = BudgetState.BREACHED
-        elif completeness is Completeness.INCOMPLETE:
-            state = BudgetState.INDETERMINATE
-        else:
-            state = BudgetState.WITHIN_BUDGET
-        return BudgetComparison(
-            state=state,
+        return BudgetComparison.from_accounting(
             budget=budget,
             measured_bytes=measured_bytes,
-            provisional_headroom_bytes=headroom,
             measured_count=measured_count,
             unreliable_count=unreliable_count,
             unavailable_count=unavailable_count,
             missing_count=missing_count,
-            completeness=completeness,
         )
