@@ -3,9 +3,8 @@
 import sqlite3
 from pathlib import Path
 
-import structlog
-
 from inference_lab._clock import utc_now
+from inference_lab.storage._sqlite_cleanup import close_preserving_primary
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     enable_durable_wal,
@@ -16,41 +15,11 @@ from inference_lab.storage._sqlite_inspection import (
     inspect_database_schema,
     validate_database_schema,
 )
+from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_migration_execution import AppliedAtFactory
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_upgrade import apply_pending_migrations
-from inference_lab.storage.errors import (
-    MigrationRequiredError,
-    StorageError,
-)
-
-_LOGGER = structlog.get_logger(__name__)
-
-
-def _safe_log(method_name: str, event: str, **fields: object) -> None:
-    """Emit bounded lifecycle metadata without changing storage outcomes."""
-    try:
-        getattr(_LOGGER, method_name)(event, pipeline_stage="storage", **fields)
-    except Exception:
-        pass
-
-
-def _log_failure(event: str, error: StorageError) -> None:
-    _safe_log(
-        "error",
-        event,
-        error_category=error.category.value,
-        retryable=error.retryable,
-    )
-
-
-def _close_preserving_primary(connection: sqlite3.Connection | None) -> None:
-    if connection is None:
-        return
-    try:
-        connection.close()
-    except sqlite3.Error:
-        pass
+from inference_lab.storage.errors import MigrationRequiredError, StorageError
 
 
 def _initialise_with_logs(
@@ -59,7 +28,7 @@ def _initialise_with_logs(
     migrations: tuple[MigrationDefinition, ...],
     applied_at_factory: AppliedAtFactory,
 ) -> None:
-    _safe_log("info", "repository_initialisation_started")
+    safe_log("info", "repository_initialisation_started")
     try:
         initialise_empty_database(
             connection,
@@ -67,9 +36,9 @@ def _initialise_with_logs(
             applied_at_factory=applied_at_factory,
         )
     except StorageError as error:
-        _log_failure("repository_initialisation_failed", error)
+        safe_log_failure("repository_initialisation_failed", error)
         raise
-    _safe_log(
+    safe_log(
         "info",
         "repository_initialisation_completed",
         schema_revision=migrations[-1].revision,
@@ -92,7 +61,7 @@ def open_sqlite_database(
         raise TypeError("applied_at_factory must be callable.")
 
     connection: sqlite3.Connection | None = None
-    _safe_log(
+    safe_log(
         "info",
         "repository_open_started",
         schema_updates_allowed=apply_migrations,
@@ -128,11 +97,11 @@ def open_sqlite_database(
         current = validate_database_schema(connection, migrations=migrations)
         enable_durable_wal(connection)
     except StorageError as error:
-        _close_preserving_primary(connection)
-        _log_failure("repository_open_failed", error)
+        close_preserving_primary(connection)
+        safe_log_failure("repository_open_failed", error)
         raise
 
-    _safe_log(
+    safe_log(
         "info",
         "repository_open_completed",
         schema_updates_allowed=apply_migrations,

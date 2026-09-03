@@ -43,7 +43,7 @@ from inference_lab.storage._sqlite_inspection import (
     validate_database_schema,
 )
 from inference_lab.storage._sqlite_lifecycle import open_sqlite_database
-from inference_lab.storage._sqlite_logging import safe_log
+from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_migration_execution import AppliedAtFactory
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_observations import (
@@ -304,12 +304,7 @@ class SQLiteMetadataRepository:
             return
         if self._transaction_active:
             error = StorageTransactionError()
-            safe_log(
-                "error",
-                "repository_close_failed",
-                error_category=error.category.value,
-                retryable=error.retryable,
-            )
+            safe_log_failure("repository_close_failed", error)
             raise error
         self._connection = None
 
@@ -320,12 +315,7 @@ class SQLiteMetadataRepository:
                 error,
                 default=RepositoryUnavailableError,
             )
-            safe_log(
-                "error",
-                "repository_close_failed",
-                error_category=translated.category.value,
-                retryable=translated.retryable,
-            )
+            safe_log_failure("repository_close_failed", translated)
             raise translated from None
 
         safe_log("info", "repository_close_completed")

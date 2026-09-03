@@ -54,13 +54,3 @@ def execute_migration(
     if connection.execute("SELECT changes()").fetchone()[0] != 1:
         raise StorageMigrationError()
     connection.execute(f"PRAGMA user_version = {migration.revision}")
-
-
-def rollback_preserving_primary(connection: sqlite3.Connection) -> None:
-    """Roll back active work without replacing an existing primary failure."""
-    if not connection.in_transaction:
-        return
-    try:
-        connection.rollback()
-    except sqlite3.Error:
-        pass

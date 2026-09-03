@@ -2,9 +2,8 @@
 
 import sqlite3
 
-import structlog
-
 from inference_lab._clock import utc_now
+from inference_lab.storage._sqlite_cleanup import rollback_preserving_primary
 from inference_lab.storage._sqlite_connection import (
     enable_durable_wal,
     translate_sqlite_error,
@@ -15,10 +14,10 @@ from inference_lab.storage._sqlite_inspection import (
     inspect_database_schema,
     validate_database_schema,
 )
+from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_migration_execution import (
     AppliedAtFactory,
     execute_migration,
-    rollback_preserving_primary,
 )
 from inference_lab.storage._sqlite_migrations import (
     MIGRATIONS,
@@ -31,25 +30,17 @@ from inference_lab.storage.errors import (
     StorageTransactionError,
 )
 
-_LOGGER = structlog.get_logger(__name__)
 
-
-def _safe_log(method_name: str, event: str, **fields: object) -> None:
-    """Emit operational migration metadata without affecting migration state."""
-    try:
-        getattr(_LOGGER, method_name)(event, pipeline_stage="storage", **fields)
-    except Exception:
-        pass
-
-
-def _log_failure(migration: MigrationDefinition, error: StorageError) -> None:
-    _safe_log(
-        "error",
+def _log_migration_failure(
+    migration: MigrationDefinition,
+    error: StorageError,
+) -> None:
+    """Log one typed migration failure with its bounded identity."""
+    safe_log_failure(
         "migration_failed",
+        error,
         migration_revision=migration.revision,
         migration_id=migration.migration_id,
-        error_category=error.category.value,
-        retryable=error.retryable,
     )
 
 
@@ -60,7 +51,7 @@ def _apply_one_migration(
     migrations: tuple[MigrationDefinition, ...],
     applied_at_factory: AppliedAtFactory,
 ) -> SchemaInspection:
-    _safe_log(
+    safe_log(
         "info",
         "migration_started",
         migration_revision=migration.revision,
@@ -71,7 +62,7 @@ def _apply_one_migration(
         locked_state = _inspect_database_schema(connection, migrations=migrations)
         if locked_state.current_revision >= migration.revision:
             connection.rollback()
-            _safe_log(
+            safe_log(
                 "info",
                 "migration_skipped",
                 migration_revision=migration.revision,
@@ -84,7 +75,7 @@ def _apply_one_migration(
         connection.commit()
     except StorageError as error:
         rollback_preserving_primary(connection)
-        _log_failure(migration, error)
+        _log_migration_failure(migration, error)
         raise
     except sqlite3.Error as error:
         rollback_preserving_primary(connection)
@@ -93,15 +84,15 @@ def _apply_one_migration(
             default=StorageMigrationError,
             constraint=StorageMigrationError,
         )
-        _log_failure(migration, translated)
+        _log_migration_failure(migration, translated)
         raise translated from None
     except Exception:
         rollback_preserving_primary(connection)
         translated = StorageMigrationError()
-        _log_failure(migration, translated)
+        _log_migration_failure(migration, translated)
         raise translated from None
 
-    _safe_log(
+    safe_log(
         "info",
         "migration_completed",
         migration_revision=migration.revision,

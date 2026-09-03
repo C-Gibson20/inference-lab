@@ -3,11 +3,11 @@
 import sqlite3
 
 from inference_lab._clock import utc_now
+from inference_lab.storage._sqlite_cleanup import rollback_preserving_primary
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage._sqlite_migration_execution import (
     AppliedAtFactory,
     execute_migration,
-    rollback_preserving_primary,
 )
 from inference_lab.storage._sqlite_migrations import (
     MIGRATIONS,
