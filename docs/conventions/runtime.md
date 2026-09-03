@@ -235,6 +235,14 @@ expected contributions affecting that device are measured and reliable; an
 incomplete result is `indeterminate` unless the reliable measured subtotal
 already breaches the budget.
 
+Budget comparison state, provisional headroom, and completeness are derived
+facts, not independently selectable fields. New comparisons must be created
+from the budget and accounting counts through the canonical factory. Direct
+construction and deserialisation validate the same relationships: headroom is
+the budget minus measured bytes, completeness agrees with all uncertainty
+counts, positive bytes and complete results have measured coverage, and state
+agrees with breach and completeness.
+
 The PyTorch calibration adapter is deliberately limited to inspectable tensor
 backing storage. It counts each storage allocation once, including tied
 parameters and multiple tensor views. It does not claim exact allocator
