@@ -61,9 +61,21 @@ class BudgetState(StrEnum):
     INDETERMINATE = "indeterminate"
 
 
-CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION: Final[int] = 1
+CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION: Final[int] = 2
 SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset(
     {CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION}
+)
+_MEMORY_CATEGORIES = frozenset(
+    {
+        "model_weights",
+        "kv_cache",
+        "activations",
+        "embedding_reranker_memory",
+        "index_memory",
+        "framework_overhead",
+        "pinned_host_memory",
+        "storage_cache",
+    }
 )
 
 
@@ -91,6 +103,61 @@ class MemoryAdapterIdentity:
         _validate_safe_identifier(self.adapter_name, "adapter_name")
         _validate_safe_identifier(self.adapter_version, "adapter_version")
         _validate_safe_identifier(self.calibration_revision, "calibration_revision")
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryCollectorIdentity:
+    """Stable identity for the policy that assembled a memory snapshot."""
+
+    collector_name: str
+    collector_version: str
+    inventory_revision: str
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the collector identity's fields."""
+        _validate_safe_identifier(self.collector_name, "collector_name")
+        _validate_safe_identifier(self.collector_version, "collector_version")
+        _validate_safe_identifier(self.inventory_revision, "inventory_revision")
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectedMemoryContribution:
+    """One planned exclusive component/category contribution in a memory space."""
+
+    component_id: str
+    component_role: ComponentRole
+    category: ResourceCategory
+    memory_space: MemorySpace
+    device_id: str | None
+    adapter: MemoryAdapterIdentity
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate expected contribution types, units, and identity rules."""
+        _validate_safe_identifier(self.component_id, "component_id")
+        if not isinstance(self.component_role, ComponentRole):
+            raise TypeError("component_role must be a ComponentRole")
+        if not isinstance(self.category, str):
+            raise TypeError("category must be a string")
+        if self.category not in _MEMORY_CATEGORIES:
+            raise ValueError("category must be a supported memory category")
+        if not isinstance(self.memory_space, MemorySpace):
+            raise TypeError("memory_space must be a MemorySpace")
+        if self.device_id is not None:
+            _validate_safe_identifier(self.device_id, "device_id")
+        if not isinstance(self.adapter, MemoryAdapterIdentity):
+            raise TypeError("adapter must be MemoryAdapterIdentity")
+
+
+class MemoryOverlapPolicy(StrEnum):
+    """Policy for preventing exclusive contributions from double counting."""
+
+    DISALLOW = "disallow"
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,27 +431,15 @@ class BudgetComparison:
             raise TypeError("completeness must be a Completeness value")
 
 
-_MEMORY_CATEGORIES = frozenset(
-    {
-        "model_weights",
-        "kv_cache",
-        "activations",
-        "embedding_reranker_memory",
-        "index_memory",
-        "framework_overhead",
-        "pinned_host_memory",
-        "storage_cache",
-    }
-)
-
-
 @dataclass(frozen=True, slots=True)
 class MemorySnapshot:
     """Versioned, deterministic collection of component memory observations."""
 
     observed_at: datetime
-    adapter: MemoryAdapterIdentity
+    collector: MemoryCollectorIdentity
+    expected_contributions: tuple[ExpectedMemoryContribution, ...]
     measurements: tuple[MemoryMeasurement, ...]
+    overlap_policy: MemoryOverlapPolicy = MemoryOverlapPolicy.DISALLOW
     run_id: str | None = None
     request_id: str | None = None
     schema_version: int = CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION
@@ -400,16 +455,32 @@ class MemorySnapshot:
             "measurements",
             tuple(sorted(self.measurements, key=lambda m: m.measurement_id)),
         )
+        object.__setattr__(
+            self,
+            "expected_contributions",
+            tuple(
+                sorted(
+                    self.expected_contributions,
+                    key=self._expected_contribution_sort_key,
+                )
+            ),
+        )
         object.__setattr__(self, "_reconciliations", self._build_reconciliations())
 
     def _validate(self) -> None:
         if not isinstance(self.observed_at, datetime):
             raise TypeError("observed_at must be a datetime")
         validate_utc_datetime(self.observed_at, "observed_at")
-        if not isinstance(self.adapter, MemoryAdapterIdentity):
-            raise TypeError("adapter must be MemoryAdapterIdentity")
+        if not isinstance(self.collector, MemoryCollectorIdentity):
+            raise TypeError("collector must be MemoryCollectorIdentity")
+        if not isinstance(self.expected_contributions, tuple):
+            raise TypeError("expected_contributions must be a tuple")
+        if not self.expected_contributions:
+            raise ValueError("expected_contributions must not be empty")
         if not isinstance(self.measurements, tuple):
             raise TypeError("measurements must be a tuple")
+        if not isinstance(self.overlap_policy, MemoryOverlapPolicy):
+            raise TypeError("overlap_policy must be a MemoryOverlapPolicy")
         if isinstance(self.schema_version, bool) or not isinstance(
             self.schema_version, int
         ):
@@ -422,17 +493,43 @@ class MemorySnapshot:
         ):
             if correlation_id is not None:
                 _validate_safe_identifier(correlation_id, field_name)
+        expected_by_slot: dict[
+            tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None],
+            ExpectedMemoryContribution,
+        ] = {}
+        for expected in self.expected_contributions:
+            if not isinstance(expected, ExpectedMemoryContribution):
+                raise TypeError(
+                    "expected_contributions must contain "
+                    "ExpectedMemoryContribution values"
+                )
+            slot = self._expected_contribution_slot(expected)
+            if slot in expected_by_slot:
+                raise ValueError("expected contribution slots must not overlap")
+            expected_by_slot[slot] = expected
+
         measurements_by_id: dict[str, MemoryMeasurement] = {}
+        observed_exclusive_slots: set[
+            tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]
+        ] = set()
         for measurement in self.measurements:
             if not isinstance(measurement, MemoryMeasurement):
                 raise TypeError("measurements must contain MemoryMeasurement values")
             if measurement.measurement_id in measurements_by_id:
                 raise ValueError("measurement IDs must be unique")
             measurements_by_id[measurement.measurement_id] = measurement
-            if measurement.adapter != self.adapter:
-                raise ValueError("all measurements must use the snapshot adapter")
             if measurement.observed_at > self.observed_at:
                 raise ValueError("measurements must not be after snapshot observed_at")
+            if measurement.contribution_kind is ContributionKind.EXCLUSIVE:
+                slot = self._measurement_slot(measurement)
+                expected = expected_by_slot.get(slot)
+                if expected is None:
+                    raise ValueError("exclusive measurement was not expected")
+                if measurement.adapter != expected.adapter:
+                    raise ValueError("measurement does not use the expected adapter")
+                if slot in observed_exclusive_slots:
+                    raise ValueError("exclusive measurement slots must not overlap")
+                observed_exclusive_slots.add(slot)
 
         for measurement in self.measurements:
             if measurement.contribution_kind is not ContributionKind.ROLL_UP:
@@ -450,6 +547,45 @@ class MemorySnapshot:
                     )
 
         self._validate_no_rollup_cycles(measurements_by_id)
+
+    @staticmethod
+    def _expected_contribution_slot(
+        expected: ExpectedMemoryContribution,
+    ) -> tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]:
+        return (
+            expected.component_id,
+            expected.component_role,
+            expected.category,
+            expected.memory_space,
+            expected.device_id,
+        )
+
+    @staticmethod
+    def _measurement_slot(
+        measurement: MemoryMeasurement,
+    ) -> tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]:
+        return (
+            measurement.component_id,
+            measurement.component_role,
+            measurement.category,
+            measurement.memory_space,
+            measurement.device_id,
+        )
+
+    @staticmethod
+    def _expected_contribution_sort_key(
+        expected: ExpectedMemoryContribution,
+    ) -> tuple[str, str, str, str, str, str, str, str]:
+        return (
+            expected.memory_space.value,
+            expected.device_id or "",
+            expected.category,
+            expected.component_role.value,
+            expected.component_id,
+            expected.adapter.adapter_name,
+            expected.adapter.adapter_version,
+            expected.adapter.calibration_revision,
+        )
 
     @staticmethod
     def _validate_no_rollup_cycles(

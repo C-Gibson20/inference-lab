@@ -11,9 +11,12 @@ from inference_lab.backends.runtime.memory import (
     Completeness,
     ComponentRole,
     ContributionKind,
+    ExpectedMemoryContribution,
     MemoryAdapterIdentity,
     MemoryBudget,
+    MemoryCollectorIdentity,
     MemoryMeasurement,
+    MemoryOverlapPolicy,
     MemorySnapshot,
     MemorySpace,
 )
@@ -23,9 +26,11 @@ JsonValue = object
 
 _SNAPSHOT_FIELDS: Final[frozenset[str]] = frozenset(
     {
-        "adapter",
+        "collector",
+        "expected_contributions",
         "measurements",
         "observed_at",
+        "overlap_policy",
         "request_id",
         "run_id",
         "schema_version",
@@ -49,6 +54,19 @@ _MEASUREMENT_FIELDS: Final[frozenset[str]] = frozenset(
 )
 _ADAPTER_FIELDS: Final[frozenset[str]] = frozenset(
     {"adapter_name", "adapter_version", "calibration_revision"}
+)
+_COLLECTOR_FIELDS: Final[frozenset[str]] = frozenset(
+    {"collector_name", "collector_version", "inventory_revision"}
+)
+_EXPECTED_CONTRIBUTION_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "adapter",
+        "category",
+        "component_id",
+        "component_role",
+        "device_id",
+        "memory_space",
+    }
 )
 _BUDGET_FIELDS: Final[frozenset[str]] = frozenset(
     {"budget_bytes", "device_id", "memory_space"}
@@ -181,6 +199,65 @@ def _parse_adapter(value: JsonValue) -> MemoryAdapterIdentity:
     )
 
 
+def _collector_payload(collector: MemoryCollectorIdentity) -> JsonObject:
+    return {
+        "collector_name": collector.collector_name,
+        "collector_version": collector.collector_version,
+        "inventory_revision": collector.inventory_revision,
+    }
+
+
+def _parse_collector(value: JsonValue) -> MemoryCollectorIdentity:
+    if not isinstance(value, dict):
+        raise TypeError("collector must be a JSON object")
+    payload = cast(JsonObject, value)
+    _require_exact_fields(payload, _COLLECTOR_FIELDS, "collector")
+    return MemoryCollectorIdentity(
+        collector_name=_require_string(payload, "collector_name"),
+        collector_version=_require_string(payload, "collector_version"),
+        inventory_revision=_require_string(payload, "inventory_revision"),
+    )
+
+
+def _expected_contribution_payload(
+    expected: ExpectedMemoryContribution,
+) -> JsonObject:
+    return {
+        "adapter": _adapter_payload(expected.adapter),
+        "category": expected.category,
+        "component_id": expected.component_id,
+        "component_role": expected.component_role.value,
+        "device_id": expected.device_id,
+        "memory_space": expected.memory_space.value,
+    }
+
+
+def _parse_expected_contribution(value: JsonValue) -> ExpectedMemoryContribution:
+    if not isinstance(value, dict):
+        raise TypeError("expected_contributions must contain JSON objects")
+    payload = cast(JsonObject, value)
+    _require_exact_fields(
+        payload,
+        _EXPECTED_CONTRIBUTION_FIELDS,
+        "expected contribution",
+    )
+    try:
+        component_role = ComponentRole(_require_string(payload, "component_role"))
+        memory_space = MemorySpace(_require_string(payload, "memory_space"))
+    except ValueError as error:
+        raise ValueError(
+            "expected contribution contains an unsupported enum value"
+        ) from error
+    return ExpectedMemoryContribution(
+        component_id=_require_string(payload, "component_id"),
+        component_role=component_role,
+        category=_require_string(payload, "category"),  # type: ignore[arg-type]
+        memory_space=memory_space,
+        device_id=_require_optional_string(payload, "device_id"),
+        adapter=_parse_adapter(payload["adapter"]),
+    )
+
+
 def _measurement_payload(measurement: MemoryMeasurement) -> JsonObject:
     return {
         "adapter": _adapter_payload(measurement.adapter),
@@ -243,7 +320,11 @@ def serialise_memory_snapshot(snapshot: MemorySnapshot) -> bytes:
     if not isinstance(snapshot, MemorySnapshot):
         raise TypeError("snapshot must be a MemorySnapshot")
     payload: JsonObject = {
-        "adapter": _adapter_payload(snapshot.adapter),
+        "collector": _collector_payload(snapshot.collector),
+        "expected_contributions": [
+            _expected_contribution_payload(expected)
+            for expected in snapshot.expected_contributions
+        ],
         "measurements": [
             _measurement_payload(measurement)
             for measurement in sorted(
@@ -252,6 +333,7 @@ def serialise_memory_snapshot(snapshot: MemorySnapshot) -> bytes:
             )
         ],
         "observed_at": snapshot.observed_at.isoformat(),
+        "overlap_policy": snapshot.overlap_policy.value,
         "request_id": snapshot.request_id,
         "run_id": snapshot.run_id,
         "schema_version": snapshot.schema_version,
@@ -269,10 +351,21 @@ def deserialise_memory_snapshot(data: bytes) -> MemorySnapshot:
     measurements = payload["measurements"]
     if not isinstance(measurements, list):
         raise TypeError("measurements must be a JSON array")
+    expected_contributions = payload["expected_contributions"]
+    if not isinstance(expected_contributions, list):
+        raise TypeError("expected_contributions must be a JSON array")
+    try:
+        overlap_policy = MemoryOverlapPolicy(_require_string(payload, "overlap_policy"))
+    except ValueError as error:
+        raise ValueError("snapshot contains an unsupported overlap policy") from error
     return MemorySnapshot(
         observed_at=_parse_datetime(payload, "observed_at"),
-        adapter=_parse_adapter(payload["adapter"]),
+        collector=_parse_collector(payload["collector"]),
+        expected_contributions=tuple(
+            _parse_expected_contribution(item) for item in expected_contributions
+        ),
         measurements=tuple(_parse_measurement(item) for item in measurements),
+        overlap_policy=overlap_policy,
         run_id=_require_optional_string(payload, "run_id"),
         request_id=_require_optional_string(payload, "request_id"),
         schema_version=schema_version,

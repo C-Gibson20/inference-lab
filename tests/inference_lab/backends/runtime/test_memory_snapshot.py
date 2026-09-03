@@ -8,8 +8,10 @@ from inference_lab.backends.runtime import (
     Completeness,
     ComponentRole,
     ContributionKind,
+    ExpectedMemoryContribution,
     MemoryAdapterIdentity,
     MemoryBudget,
+    MemoryCollectorIdentity,
     MemoryMeasurement,
     MemorySnapshot,
     MemorySpace,
@@ -17,6 +19,8 @@ from inference_lab.backends.runtime import (
 
 OBSERVED_AT = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 ADAPTER = MemoryAdapterIdentity("fake", "1.0.0", "calibration-1")
+OTHER_ADAPTER = MemoryAdapterIdentity("process", "2.0.0", "rss-1")
+COLLECTOR = MemoryCollectorIdentity("test", "1.0.0", "inventory-1")
 
 
 def measurement(
@@ -50,10 +54,30 @@ def measurement(
     )
 
 
+def expected_contribution(
+    record: MemoryMeasurement,
+    *,
+    adapter: MemoryAdapterIdentity | None = None,
+) -> ExpectedMemoryContribution:
+    return ExpectedMemoryContribution(
+        component_id=record.component_id,
+        component_role=record.component_role,
+        category=record.category,
+        memory_space=record.memory_space,
+        device_id=record.device_id,
+        adapter=adapter or record.adapter,
+    )
+
+
 def snapshot(*measurements: MemoryMeasurement) -> MemorySnapshot:
     return MemorySnapshot(
         observed_at=OBSERVED_AT,
-        adapter=ADAPTER,
+        collector=COLLECTOR,
+        expected_contributions=tuple(
+            expected_contribution(record)
+            for record in measurements
+            if record.contribution_kind is ContributionKind.EXCLUSIVE
+        ),
         measurements=measurements,
     )
 
@@ -155,11 +179,76 @@ def test_all_memory_spaces_are_kept_separate() -> None:
     ]
 
 
+def test_snapshot_composes_distinct_measurement_adapters() -> None:
+    weights = measurement("weights", value_bytes=10)
+    framework = measurement(
+        "framework",
+        component_id="framework",
+        component_role=ComponentRole.RUNTIME_FRAMEWORK,
+        category="framework_overhead",
+        value_bytes=3,
+        adapter=OTHER_ADAPTER,
+    )
+
+    memory_snapshot = snapshot(weights, framework)
+
+    assert {item.adapter for item in memory_snapshot.measurements} == {
+        ADAPTER,
+        OTHER_ADAPTER,
+    }
+    assert space_total(memory_snapshot, MemorySpace.ACCELERATOR).measured_bytes == 13
+
+
+def test_snapshot_rejects_overlapping_or_unplanned_exclusive_contributions() -> None:
+    first = measurement("first")
+    second = measurement("second", adapter=OTHER_ADAPTER)
+    with pytest.raises(ValueError, match="expected contribution slots"):
+        MemorySnapshot(
+            observed_at=OBSERVED_AT,
+            collector=COLLECTOR,
+            expected_contributions=(
+                expected_contribution(first),
+                expected_contribution(second),
+            ),
+            measurements=(first, second),
+        )
+
+    with pytest.raises(ValueError, match="was not expected"):
+        MemorySnapshot(
+            observed_at=OBSERVED_AT,
+            collector=COLLECTOR,
+            expected_contributions=(expected_contribution(first),),
+            measurements=(
+                first,
+                measurement(
+                    "framework",
+                    component_id="framework",
+                    component_role=ComponentRole.RUNTIME_FRAMEWORK,
+                    category="framework_overhead",
+                ),
+            ),
+        )
+
+
 def test_missing_and_unreliable_values_make_totals_incomplete() -> None:
     memory_snapshot = snapshot(
         measurement("measured", value_bytes=10),
-        measurement("unreliable", status="unreliable", value_bytes=4),
-        measurement("unavailable", status="unavailable", value_bytes=None),
+        measurement(
+            "unreliable",
+            component_id="workspace",
+            component_role=ComponentRole.ACTIVATION_WORKSPACE,
+            category="activations",
+            status="unreliable",
+            value_bytes=4,
+        ),
+        measurement(
+            "unavailable",
+            component_id="cache",
+            component_role=ComponentRole.KV_CACHE,
+            category="kv_cache",
+            status="unavailable",
+            value_bytes=None,
+        ),
     )
     total = space_total(memory_snapshot, MemorySpace.ACCELERATOR)
 
@@ -230,9 +319,18 @@ def test_invalid_rollup_graph_is_rejected(
         snapshot(*measurements)
 
 
-def test_snapshot_requires_matching_adapter_and_observation_boundary() -> None:
-    with pytest.raises(ValueError, match="snapshot adapter"):
-        snapshot(measurement("other", adapter=MemoryAdapterIdentity("other", "1", "1")))
+def test_snapshot_requires_expected_adapter_and_observation_boundary() -> None:
+    other = measurement(
+        "other",
+        adapter=MemoryAdapterIdentity("other", "1", "1"),
+    )
+    with pytest.raises(ValueError, match="expected adapter"):
+        MemorySnapshot(
+            observed_at=OBSERVED_AT,
+            collector=COLLECTOR,
+            expected_contributions=(expected_contribution(other, adapter=ADAPTER),),
+            measurements=(other,),
+        )
     with pytest.raises(ValueError, match="after snapshot"):
         snapshot(measurement("future", observed_at=OBSERVED_AT + timedelta(seconds=1)))
 
@@ -259,7 +357,14 @@ def test_budget_comparison_covers_exact_fit_headroom_and_breach() -> None:
 def test_incomplete_budget_is_indeterminate_unless_measured_bytes_breach() -> None:
     memory_snapshot = snapshot(
         measurement("measured", value_bytes=100),
-        measurement("missing", status="unavailable", value_bytes=None),
+        measurement(
+            "missing",
+            component_id="cache",
+            component_role=ComponentRole.KV_CACHE,
+            category="kv_cache",
+            status="unavailable",
+            value_bytes=None,
+        ),
     )
     indeterminate = memory_snapshot.compare_budget(
         MemoryBudget(MemorySpace.ACCELERATOR, "cuda-0", 101)
