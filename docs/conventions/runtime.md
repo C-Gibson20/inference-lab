@@ -151,12 +151,15 @@ never emitted.
 Generation uses the model's native past/KV state for autoregressive
 continuation and returns an asynchronous stream validated by the RUN-01
 stream adapter. The implementation-only `LocalMechanicsHarness` compares full
-uncached execution with repeated and partial-prefix native continuation,
-including next-token selection and logits equivalence. It records token counts,
-cache outcomes, and stable identity only; it does not expose cache handles,
-ownership, persistence, eviction, memory bytes, or a public cache protocol.
-Those lifecycle and accounting concerns remain downstream work for RUN-07 and
-RUN-03 respectively.
+uncached execution with cache state produced by executing the complete first
+request. For an extending, diverging, or shorter second request, it crops that
+native cache to the shared prefix and evaluates only the uncached suffix. It
+checks next-token selection and logits equivalence and separately records the
+tokens evaluated to create the first cache and after reuse. It records token
+counts, cache outcomes, and stable identity only; it does not expose cache
+handles, ownership, persistence, eviction, memory bytes, or a public cache
+protocol. Those lifecycle and accounting concerns remain downstream work for
+RUN-07 and RUN-03 respectively.
 
 The focused offline CPU acceptance suite is:
 

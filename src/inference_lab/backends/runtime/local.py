@@ -130,6 +130,7 @@ class LocalMechanicsObservation:
     rendered_input_tokens: int
     common_prefix_tokens: int
     tokens_evaluated_without_cache: int
+    tokens_evaluated_to_create_cache: int
     tokens_evaluated_after_cache: int
     cache_outcomes: tuple[CacheObservationOutcome, ...]
     logits_equivalent: bool | None
@@ -148,6 +149,7 @@ class LocalMechanicsObservation:
             "rendered_input_tokens",
             "common_prefix_tokens",
             "tokens_evaluated_without_cache",
+            "tokens_evaluated_to_create_cache",
             "tokens_evaluated_after_cache",
         ):
             value = getattr(self, field_name)
@@ -688,10 +690,29 @@ class LocalMechanicsHarness:
         cache_outcomes: list[CacheObservationOutcome] = []
         logits_equivalent: bool | None = None
         selection_equivalent: bool | None = None
+        tokens_evaluated_to_create_cache = 0
         tokens_evaluated_after_cache = 0
 
         try:
             with torch.inference_mode():
+                cache: Cache | None = None
+                cached_logits = None
+                if can_reuse:
+                    first_outputs = model(
+                        input_ids=torch.tensor([first_token_ids], dtype=torch.long),
+                        attention_mask=torch.ones(
+                            (1, len(first_token_ids)), dtype=torch.long
+                        ),
+                        use_cache=True,
+                    )
+                    cache = DynamicCache.from_legacy_cache(
+                        first_outputs.past_key_values
+                    )
+                    self._backend._active_cache_state = cache
+                    cache_outcomes.append(CacheObservationOutcome.CREATED)
+                    tokens_evaluated_to_create_cache = len(first_token_ids)
+                    cached_logits = first_outputs.logits[:, common_prefix_tokens - 1, :]
+
                 full_outputs = model(
                     input_ids=torch.tensor([second_token_ids], dtype=torch.long),
                     attention_mask=torch.ones(
@@ -700,20 +721,11 @@ class LocalMechanicsHarness:
                     use_cache=False,
                 )
                 if can_reuse:
-                    prefix_outputs = model(
-                        input_ids=torch.tensor(
-                            [second_token_ids[:common_prefix_tokens]], dtype=torch.long
-                        ),
-                        attention_mask=torch.ones(
-                            (1, common_prefix_tokens), dtype=torch.long
-                        ),
-                        use_cache=True,
-                    )
-                    cache = DynamicCache.from_legacy_cache(
-                        prefix_outputs.past_key_values
-                    )
-                    self._backend._active_cache_state = cache
-                    cache_outcomes.append(CacheObservationOutcome.CREATED)
+                    if cache is None or cached_logits is None:
+                        raise BackendExecutionError()
+                    cache.crop(common_prefix_tokens)
+                    if cache.get_seq_length() != common_prefix_tokens:
+                        raise BackendExecutionError()
                     suffix = second_token_ids[common_prefix_tokens:]
                     tokens_evaluated_after_cache = len(suffix)
                     if suffix:
@@ -725,11 +737,9 @@ class LocalMechanicsHarness:
                             past_key_values=cache,
                             use_cache=True,
                         )
-                    else:
-                        cached_outputs = prefix_outputs
+                        cached_logits = cached_outputs.logits[:, -1, :]
                     cache_outcomes.append(CacheObservationOutcome.REUSED)
                     full_logits = full_outputs.logits[:, -1, :]
-                    cached_logits = cached_outputs.logits[:, -1, :]
                     logits_equivalent = bool(
                         torch.allclose(full_logits, cached_logits, rtol=0, atol=1e-6)
                     )
@@ -759,6 +769,7 @@ class LocalMechanicsHarness:
             rendered_input_tokens=rendered_input_tokens,
             common_prefix_tokens=common_prefix_tokens,
             tokens_evaluated_without_cache=len(second_token_ids),
+            tokens_evaluated_to_create_cache=tokens_evaluated_to_create_cache,
             tokens_evaluated_after_cache=tokens_evaluated_after_cache,
             cache_outcome=cache_outcomes[-2].value,
         )
@@ -766,6 +777,7 @@ class LocalMechanicsHarness:
             rendered_input_tokens=rendered_input_tokens,
             common_prefix_tokens=common_prefix_tokens,
             tokens_evaluated_without_cache=len(second_token_ids),
+            tokens_evaluated_to_create_cache=tokens_evaluated_to_create_cache,
             tokens_evaluated_after_cache=tokens_evaluated_after_cache,
             cache_outcomes=tuple(cache_outcomes),
             logits_equivalent=logits_equivalent,

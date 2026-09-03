@@ -446,6 +446,7 @@ def test_mechanics_harness_proves_exact_repeated_prefix_equivalence() -> None:
     assert observation.rendered_input_tokens == 4
     assert observation.common_prefix_tokens == 4
     assert observation.tokens_evaluated_without_cache == 4
+    assert observation.tokens_evaluated_to_create_cache == 4
     assert observation.tokens_evaluated_after_cache == 0
     assert observation.cache_outcomes == (
         CacheObservationOutcome.CREATED,
@@ -466,7 +467,43 @@ def test_mechanics_harness_proves_partial_prefix_equivalence() -> None:
 
     assert observation.common_prefix_tokens == 3
     assert observation.tokens_evaluated_without_cache == 5
+    assert observation.tokens_evaluated_to_create_cache == 4
     assert observation.tokens_evaluated_after_cache == 2
+    assert observation.logits_equivalent is True
+    assert observation.selection_equivalent is True
+
+
+@pytest.mark.parametrize(
+    ("first_token_ids", "second_token_ids", "expected_after_cache"),
+    [
+        ((1, 2, 3), (1, 2, 3, 4), 1),
+        ((1, 2, 3, 4), (1, 2), 0),
+    ],
+    ids=("extending", "shorter"),
+)
+def test_mechanics_harness_reuses_cache_created_by_the_complete_first_request(
+    first_token_ids: tuple[int, ...],
+    second_token_ids: tuple[int, ...],
+    expected_after_cache: int,
+) -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+
+    observation = LocalMechanicsHarness(backend).observe_token_prefixes(
+        first_token_ids,
+        second_token_ids,
+    )
+
+    assert observation.common_prefix_tokens == min(
+        len(first_token_ids), len(second_token_ids)
+    )
+    assert observation.tokens_evaluated_to_create_cache == len(first_token_ids)
+    assert observation.tokens_evaluated_after_cache == expected_after_cache
+    assert observation.cache_outcomes == (
+        CacheObservationOutcome.CREATED,
+        CacheObservationOutcome.REUSED,
+        CacheObservationOutcome.CLEARED,
+    )
     assert observation.logits_equivalent is True
     assert observation.selection_equivalent is True
 
@@ -501,6 +538,7 @@ def test_mechanics_harness_records_one_token_difference_and_no_prefix(
         assert observation.tokens_evaluated_after_cache == (
             len(second_token_ids) - expected_common
         )
+        assert observation.tokens_evaluated_to_create_cache == len(first_token_ids)
         assert observation.logits_equivalent is True
         assert observation.selection_equivalent is True
     else:
@@ -509,6 +547,7 @@ def test_mechanics_harness_records_one_token_difference_and_no_prefix(
             CacheObservationOutcome.CLEARED,
         )
         assert observation.tokens_evaluated_after_cache == 0
+        assert observation.tokens_evaluated_to_create_cache == 0
         assert observation.logits_equivalent is None
         assert observation.selection_equivalent is None
 
@@ -529,6 +568,7 @@ def test_mechanics_harness_rejects_incompatible_cache_identity() -> None:
         CacheObservationOutcome.CLEARED,
     )
     assert observation.tokens_evaluated_after_cache == 0
+    assert observation.tokens_evaluated_to_create_cache == 0
     assert observation.logits_equivalent is None
     assert observation.selection_equivalent is None
 
