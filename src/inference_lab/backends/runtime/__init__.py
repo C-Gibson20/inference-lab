@@ -1,5 +1,29 @@
 """Model runtime, residency, memory accounting, and workload scheduling."""
 
+from inference_lab.backends.runtime._memory_accounting import (
+    BudgetComparison,
+    BudgetState,
+    Completeness,
+    MemoryBudget,
+    MemoryTotal,
+)
+from inference_lab.backends.runtime._memory_snapshot import (
+    CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION,
+    SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS,
+    MemorySnapshot,
+    RollupReconciliation,
+)
+from inference_lab.backends.runtime._memory_values import (
+    ContributionKind,
+    ExpectedMemoryContribution,
+    MemoryAccountingAdapter,
+    MemoryAdapterIdentity,
+    MemoryCollectorIdentity,
+    MemoryComponentRole,
+    MemoryMeasurement,
+    MemoryOverlapPolicy,
+    MemorySpace,
+)
 from inference_lab.backends.runtime.errors import (
     BackendCancelledError,
     BackendClosedError,
@@ -16,26 +40,6 @@ from inference_lab.backends.runtime.fake import (
     FakeFailureMode,
 )
 from inference_lab.backends.runtime.local import LocalCausalBackend
-from inference_lab.backends.runtime.memory import (
-    CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION,
-    SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS,
-    BudgetComparison,
-    BudgetState,
-    Completeness,
-    ContributionKind,
-    ExpectedMemoryContribution,
-    MemoryAccountingAdapter,
-    MemoryAdapterIdentity,
-    MemoryBudget,
-    MemoryCollectorIdentity,
-    MemoryComponentRole,
-    MemoryMeasurement,
-    MemoryOverlapPolicy,
-    MemorySnapshot,
-    MemorySpace,
-    MemoryTotal,
-    RollupReconciliation,
-)
 from inference_lab.backends.runtime.memory_fake import FakeMemoryAccountingAdapter
 from inference_lab.backends.runtime.memory_pytorch import (
     PyTorchMemoryCalibrationAdapter,

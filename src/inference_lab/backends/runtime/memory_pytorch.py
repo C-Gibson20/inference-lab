@@ -5,7 +5,7 @@ from datetime import datetime
 
 import torch
 
-from inference_lab.backends.runtime.memory import (
+from inference_lab.backends.runtime._memory_values import (
     MemoryAccountingAdapter,
     MemoryAdapterIdentity,
     MemoryComponentRole,

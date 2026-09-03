@@ -231,11 +231,13 @@ coverage, cross-space or cross-device coverage, and cycles. Adapters and the
 collector remain responsible for the physical non-overlap invariant: distinct
 exclusive slots must refer to disjoint allocations.
 
-Memory totals are derived from the expected inventory, not merely from the
-measurements that happened to arrive. An absent expected contribution is
-reported separately as `missing`; unreliable, unavailable, and missing counts
-all make the affected total incomplete. Memory totals are never combined
-across accelerator, ordinary host, pinned-host, and storage-cache spaces.
+Memory totals are derived once when the immutable snapshot is constructed,
+from the expected inventory rather than merely from the measurements that
+happened to arrive. Repeated reads and budget comparisons reuse that
+precomputed tuple. An absent expected contribution is reported separately as
+`missing`; unreliable, unavailable, and missing counts all make the affected
+total incomplete. Memory totals are never combined across accelerator,
+ordinary host, pinned-host, and storage-cache spaces.
 Accelerator contributions without a resolved device make every concrete
 device budget in that snapshot incomplete, and a measured accelerator value
 must identify its device. A budget comparison is `within_budget` only when all

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 
-from inference_lab.backends.runtime.memory import (
+from inference_lab.backends.runtime._memory_values import (
     MemoryAccountingAdapter,
     MemoryMeasurement,
 )

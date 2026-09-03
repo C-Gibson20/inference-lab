@@ -4,20 +4,24 @@ import json
 from datetime import datetime
 from typing import Final, cast
 
-from inference_lab.backends.runtime.memory import (
-    SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS,
+from inference_lab.backends.runtime._memory_accounting import (
     BudgetComparison,
     BudgetState,
     Completeness,
+    MemoryBudget,
+)
+from inference_lab.backends.runtime._memory_snapshot import (
+    SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS,
+    MemorySnapshot,
+)
+from inference_lab.backends.runtime._memory_values import (
     ContributionKind,
     ExpectedMemoryContribution,
     MemoryAdapterIdentity,
-    MemoryBudget,
     MemoryCollectorIdentity,
     MemoryComponentRole,
     MemoryMeasurement,
     MemoryOverlapPolicy,
-    MemorySnapshot,
     MemorySpace,
 )
 from inference_lab.profiling.resources import (

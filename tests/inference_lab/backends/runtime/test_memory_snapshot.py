@@ -138,6 +138,20 @@ def test_totals_include_category_and_component_role_subtotals() -> None:
     )
 
 
+def test_snapshot_precomputes_immutable_totals_once() -> None:
+    memory_snapshot = snapshot(measurement("weights", value_bytes=10))
+
+    first = memory_snapshot.totals
+
+    assert first is memory_snapshot.totals
+    assert (
+        memory_snapshot.compare_budget(
+            MemoryBudget(MemorySpace.ACCELERATOR, "cuda-0", 20)
+        ).measured_bytes
+        == 10
+    )
+
+
 def test_all_memory_spaces_are_kept_separate() -> None:
     accelerator = measurement("accelerator", value_bytes=10)
     host = measurement(

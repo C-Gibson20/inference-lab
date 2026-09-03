@@ -3,10 +3,12 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from inference_lab.backends.runtime.memory import (
+from inference_lab.backends.runtime._memory_accounting import (
     BudgetComparison,
     BudgetState,
     Completeness,
+)
+from inference_lab.backends.runtime._memory_values import (
     MemoryMeasurement,
 )
 from inference_lab.profiling import ProfilingLogger, emit_record
