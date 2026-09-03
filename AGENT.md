@@ -72,6 +72,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pyright
 uv run pytest --cov
+uv run coverage report --include='src/inference_lab/storage/*' --fail-under=85
 ```
 
 For changes affecting retrieval or answering, also update or run the relevant

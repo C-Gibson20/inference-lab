@@ -185,6 +185,29 @@ def test_initialisation_rejects_an_existing_transaction(tmp_path: Path) -> None:
         connection.close()
 
 
+def test_initialisation_rejects_invalid_boundary_values(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="connection"):
+        initialise_empty_database(object())  # type: ignore[arg-type]
+
+    connection = open_sqlite_connection(tmp_path / "metadata.sqlite3")
+    try:
+        with pytest.raises(TypeError, match="applied_at_factory"):
+            initialise_empty_database(
+                connection,
+                applied_at_factory=None,  # type: ignore[arg-type]
+            )
+        with pytest.raises(StorageMigrationError):
+            initialise_empty_database(
+                connection,
+                migrations=[],  # type: ignore[arg-type]
+            )
+
+        assert connection.in_transaction is False
+        assert _schema_objects(connection) == []
+    finally:
+        connection.close()
+
+
 def test_initialisation_lock_timeout_is_typed_and_retryable(tmp_path: Path) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     writer = open_sqlite_connection(database_path, busy_timeout_ms=1)
