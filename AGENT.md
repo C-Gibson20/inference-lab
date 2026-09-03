@@ -71,7 +71,7 @@ From the repository root, run:
 uv run ruff check .
 uv run ruff format --check .
 uv run pyright
-uv run pytest
+uv run pytest --cov
 ```
 
 For changes affecting retrieval or answering, also update or run the relevant

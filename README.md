@@ -53,10 +53,10 @@ different configuration-loading mechanism in the future.
 ## Checks
 
 ```sh
-uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 uv run pyright
+uv run pytest --cov
 ```
 
 Release versioning is derived from committed headers. Preview or apply the next

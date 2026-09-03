@@ -30,7 +30,7 @@ jobs:
       - run: uv run pyright
 
   test:
-    name: Test
+    name: Test and coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,7 +39,7 @@ jobs:
           enable-cache: true
       - run: uv python install
       - run: uv sync --dev --locked
-      - run: uv run pytest -v --cov=src/inference_lab --cov-report=term-missing --cov-fail-under=80
+      - run: uv run pytest --cov
 
   commit-lint:
     name: Validate commit messages
