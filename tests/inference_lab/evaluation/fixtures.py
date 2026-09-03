@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from inference_lab.evaluation.cases import EvaluationCase, QuestionType
-from inference_lab.evaluation.utils import SplitName
+from inference_lab.evaluation.contracts import SplitName
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 
 CORPUS_ID = "00000000-0000-4000-8000-000000000001"

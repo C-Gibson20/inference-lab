@@ -42,6 +42,18 @@ Validation logic used by only one domain belongs in that domain's
 `_validation.py` or responsibility-named implementation module. Do not put
 validation predicates in a generic `utils.py` module.
 
+Pure domain transformations belong in a responsibility-named module such as
+`normalisation.py`. Public annotated aliases and their constants belong in a
+domain `contracts.py` or `types.py` module. A generic `utils.py` must not mix
+these responsibilities or act as a miscellaneous helper home.
+
+## Shared clock
+
+Production code obtains the current timezone-aware UTC time from
+`inference_lab._clock.utc_now`. Callers that require deterministic timestamps
+accept a clock callable and use `utc_now` only as its default. Domain modules
+must not define equivalent wall-clock factories.
+
 ## Language
 
 Project-owned prose, Python identifiers, error messages, configuration names,

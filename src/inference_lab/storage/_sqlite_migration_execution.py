@@ -10,11 +10,6 @@ from inference_lab.storage.errors import StorageMigrationError
 AppliedAtFactory = Callable[[], datetime]
 
 
-def utc_now() -> datetime:
-    """Return the current timezone-aware UTC migration time."""
-    return datetime.now(UTC)
-
-
 def _format_applied_at(factory: AppliedAtFactory) -> str:
     try:
         value = factory()

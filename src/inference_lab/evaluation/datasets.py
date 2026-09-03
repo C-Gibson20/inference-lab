@@ -18,15 +18,15 @@ from inference_lab._validation import (
     CANONICAL_SEMANTIC_VERSION_PATTERN,
     is_canonical_semantic_version,
 )
-from inference_lab.evaluation.schemas import EvaluationPolicy
-from inference_lab.evaluation.utils import (
+from inference_lab.evaluation._validation import is_sha256_checksum
+from inference_lab.evaluation.contracts import (
     HELD_OUT_SPLIT,
     CaseId,
     DatasetId,
     SchemaVersion,
     SplitName,
-    is_sha256_pattern,
 )
+from inference_lab.evaluation.schemas import EvaluationPolicy
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
 from inference_lab.provenance import CorpusId, CorpusVersionId
 
@@ -94,7 +94,7 @@ class DatasetManifest(BaseModel):
         if self.checksums:
             if set(self.checksums) != {self.case_file}:
                 raise ValueError("checksums must contain only the case file")
-            if not is_sha256_pattern(self.checksums[self.case_file]):
+            if not is_sha256_checksum(self.checksums[self.case_file]):
                 raise ValueError("Case-file checksum must use SHA256 format")
 
         object.__setattr__(self, "splits", MappingProxyType(dict(self.splits)))

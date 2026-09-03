@@ -11,7 +11,7 @@ The `src/inference_lab/profiling/` package owns reusable, production-safe
 instrumentation and record contracts, including:
 
 - record schemas and validation;
-- deterministic clocks and stage timers;
+- deterministic clock injection and stage timers;
 - resource-measurement contracts;
 - failure and degraded-unit contracts;
 - structured-log emission adapters.

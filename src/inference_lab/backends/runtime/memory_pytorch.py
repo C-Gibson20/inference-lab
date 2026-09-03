@@ -5,6 +5,7 @@ from datetime import datetime
 
 import torch
 
+from inference_lab._clock import utc_now
 from inference_lab.backends.runtime._memory_values import (
     MemoryAccountingAdapter,
     MemoryAdapterIdentity,
@@ -13,7 +14,6 @@ from inference_lab.backends.runtime._memory_values import (
     MemorySpace,
 )
 from inference_lab.profiling.resources import MemoryResourceCategory
-from inference_lab.profiling.utils import utc_now
 
 
 def _device_identity(device: torch.device) -> tuple[MemorySpace, str]:

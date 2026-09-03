@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
+from inference_lab._clock import utc_now
 from inference_lab._validation import is_canonical_semantic_version
 from inference_lab.backends.runtime._validation import (
     validate_non_empty_string,
@@ -17,7 +18,6 @@ from inference_lab.profiling.resources import (
     MeasurementStatus,
     MemoryResourceCategory,
 )
-from inference_lab.profiling.utils import utc_now
 
 
 class MemoryComponentRole(StrEnum):

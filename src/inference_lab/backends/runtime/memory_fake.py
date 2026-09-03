@@ -4,11 +4,11 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 
+from inference_lab._clock import utc_now
 from inference_lab.backends.runtime._memory_values import (
     MemoryAccountingAdapter,
     MemoryMeasurement,
 )
-from inference_lab.profiling.utils import utc_now
 
 
 class FakeMemoryAccountingAdapter(MemoryAccountingAdapter):

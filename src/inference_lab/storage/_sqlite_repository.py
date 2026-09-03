@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Self
 
+from inference_lab._clock import utc_now
 from inference_lab.provenance import (
     ContentHash,
     CorpusDocumentVersionMembership,
@@ -43,10 +44,7 @@ from inference_lab.storage._sqlite_inspection import (
 )
 from inference_lab.storage._sqlite_lifecycle import open_sqlite_database
 from inference_lab.storage._sqlite_logging import safe_log
-from inference_lab.storage._sqlite_migration_execution import (
-    AppliedAtFactory,
-    utc_now,
-)
+from inference_lab.storage._sqlite_migration_execution import AppliedAtFactory
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_observations import (
     get_source_observation,

@@ -8,6 +8,7 @@ from inference_lab.ingest.errors import (
     ParserFailureStage,
     ParserFailureUnitKind,
 )
+from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
 from inference_lab.ingest.parser import (
     NormalisedText,
@@ -29,7 +30,6 @@ from inference_lab.ingest.sources import (
     StructuralBlockKind,
 )
 from inference_lab.ingest.text_native import TextNativeParser
-from inference_lab.ingest.utils import normalise_source_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,

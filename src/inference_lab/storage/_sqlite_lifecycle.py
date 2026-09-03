@@ -5,6 +5,7 @@ from pathlib import Path
 
 import structlog
 
+from inference_lab._clock import utc_now
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     enable_durable_wal,
@@ -15,10 +16,7 @@ from inference_lab.storage._sqlite_inspection import (
     inspect_database_schema,
     validate_database_schema,
 )
-from inference_lab.storage._sqlite_migration_execution import (
-    AppliedAtFactory,
-    utc_now,
-)
+from inference_lab.storage._sqlite_migration_execution import AppliedAtFactory
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_upgrade import apply_pending_migrations
 from inference_lab.storage.errors import (

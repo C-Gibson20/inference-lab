@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final, Literal, get_args
 
+from inference_lab._clock import utc_now
 from inference_lab.profiling._validation import validate_utc_datetime
 from inference_lab.profiling.types import LogLevel
-from inference_lab.profiling.utils import utc_now
 from inference_lab.profiling.versioning import (
     CURRENT_RECORD_SCHEMA_VERSION,
     validate_record_schema_version,

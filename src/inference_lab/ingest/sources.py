@@ -4,7 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Final, Literal, get_args
 
-from inference_lab.ingest.utils import is_strict_integer
+from inference_lab._validation import is_strict_integer
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
 
 StructuralBlockKind = Literal[

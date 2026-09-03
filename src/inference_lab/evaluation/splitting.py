@@ -7,10 +7,8 @@ from dataclasses import dataclass
 from typing import Final, Iterable, get_args
 
 from inference_lab.evaluation.cases import EvaluationCase
-from inference_lab.evaluation.utils import (
-    SplitName,
-    normalise_for_duplicate_detection,
-)
+from inference_lab.evaluation.contracts import SplitName
+from inference_lab.evaluation.normalisation import normalise_for_duplicate_detection
 from inference_lab.evaluation.versioning import (
     CURRENT_SPLIT_ALGORITHM_VERSION,
     validate_split_algorithm_version,

@@ -4,8 +4,7 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from inference_lab._validation import is_canonical_semantic_version
-from inference_lab.ingest.utils import is_strict_integer
+from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
 
 _IMPLEMENTATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")

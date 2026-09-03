@@ -4,6 +4,7 @@ from typing import Protocol
 
 import structlog
 
+from inference_lab.provenance._validation import is_lowercase_slug
 from inference_lab.provenance.identifiers import DocumentId, DocumentVersionId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship
@@ -14,7 +15,6 @@ from inference_lab.provenance.resolution import (
     InvalidResolutionError,
     ResolutionReason,
 )
-from inference_lab.provenance.utils import is_lowercase_slug
 from inference_lab.provenance.values import (
     DuplicateClass,
     ExternalIdentifier,
