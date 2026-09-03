@@ -248,6 +248,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "StorageErrorCategory",
         "StorageMigrationError",
         "StorageTransactionError",
+        "open_metadata_repository",
     }
 
     assert set(storage.__all__) == expected_exports
