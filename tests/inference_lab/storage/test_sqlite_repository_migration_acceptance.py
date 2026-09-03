@@ -1,3 +1,5 @@
+"""Acceptance tests for SQLite repository migration."""
+
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path

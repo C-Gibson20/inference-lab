@@ -45,7 +45,6 @@ def candidate(source: EvidenceSource) -> RetrievalCandidate:
 def test_result_validates_order_identity_and_statuses(
     candidate: RetrievalCandidate,
 ) -> None:
-    """Accept complete, empty, partial, and failed result states precisely."""
     version = CorpusVersionId.generate()
     hit = EvidenceHit(candidate, (ChannelScore(RetrievalChannel.LEXICAL, 1),), 1)
     failure = RetrievalFailure(
@@ -78,7 +77,6 @@ def test_result_validates_order_identity_and_statuses(
 def test_result_ranks_are_contiguous_and_candidate_ids_unique(
     source: EvidenceSource,
 ) -> None:
-    """Prevent ambiguous result order and duplicate candidate identities."""
     version = CorpusVersionId.generate()
     first = RetrievalCandidate(
         RecordId.generate(), CandidateKind.ORIGINAL_PASSAGE, "one", (source,)
@@ -114,7 +112,6 @@ def test_result_ranks_are_contiguous_and_candidate_ids_unique(
 def test_from_query_fails_closed_on_corpus_version_mismatch(
     candidate: RetrievalCandidate,
 ) -> None:
-    """Never mix hits observed from a different immutable corpus snapshot."""
     requested = CorpusVersionId.generate()
     observed = CorpusVersionId.generate()
     query = RetrievalQuery("question", requested, RetrievalLimit(5))
@@ -139,7 +136,6 @@ def test_result_enforces_requested_limit_at_query_and_value_boundaries(
     candidate: RetrievalCandidate,
     source: EvidenceSource,
 ) -> None:
-    """Reject oversized producer output and retain the originating limit."""
     version = CorpusVersionId.generate()
     query = RetrievalQuery("question", version, RetrievalLimit(1))
     first = EvidenceHit(
@@ -181,7 +177,6 @@ def test_result_enforces_requested_limit_at_query_and_value_boundaries(
 def test_corpus_mismatch_failures_exclude_only_affected_channel_hits(
     candidate: RetrievalCandidate,
 ) -> None:
-    """Permit compatible partial aggregation but reject mismatched contributions."""
     version = CorpusVersionId.generate()
     hit = EvidenceHit(
         candidate,

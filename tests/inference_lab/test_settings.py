@@ -1,3 +1,5 @@
+"""Tests for application settings resolution and validation."""
+
 from collections.abc import Iterator
 from pathlib import Path
 

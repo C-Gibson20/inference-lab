@@ -1,3 +1,5 @@
+"""Tests for SQLite duplicate relationships."""
+
 from datetime import UTC, datetime
 from pathlib import Path
 

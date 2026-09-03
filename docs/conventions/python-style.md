@@ -114,3 +114,8 @@ placeholders are retained only when the package boundary is documented in
 Test `__init__.py` files are import-isolation markers rather than public
 packages and are exempt from the package-docstring rule. They may still carry a
 docstring when it usefully describes shared fixtures or test scope.
+
+Every non-package test module has a concise module docstring identifying its
+test scope. Individual test functions rely on descriptive names and do not need
+docstrings that merely restate those names. Use a focused comment when a test
+needs to preserve non-obvious rationale or explain why an arrangement matters.

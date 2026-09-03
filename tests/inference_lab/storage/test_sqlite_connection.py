@@ -1,3 +1,5 @@
+"""Tests for SQLite connection policy and error translation."""
+
 import sqlite3
 from pathlib import Path
 

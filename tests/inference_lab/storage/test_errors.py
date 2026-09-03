@@ -1,3 +1,5 @@
+"""Tests for storage error contracts."""
+
 import pytest
 
 from inference_lab.storage import (

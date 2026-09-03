@@ -1,3 +1,5 @@
+"""Tests for SQLite repository ownership and closure."""
+
 from datetime import UTC, datetime
 from pathlib import Path
 

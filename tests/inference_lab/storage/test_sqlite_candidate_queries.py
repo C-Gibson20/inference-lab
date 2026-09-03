@@ -1,3 +1,5 @@
+"""Tests for SQLite identity-resolution candidate queries."""
+
 from datetime import UTC, datetime
 from pathlib import Path
 

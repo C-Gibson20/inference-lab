@@ -1,3 +1,5 @@
+"""Tests for runtime memory-accounting values."""
+
 from datetime import UTC, datetime
 
 import pytest

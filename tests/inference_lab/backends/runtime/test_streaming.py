@@ -1,3 +1,5 @@
+"""Tests for runtime generation streams."""
+
 import asyncio
 import traceback
 

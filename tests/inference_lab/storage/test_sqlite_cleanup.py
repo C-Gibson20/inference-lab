@@ -1,3 +1,5 @@
+"""Tests for SQLite best-effort cleanup."""
+
 import sqlite3
 from collections.abc import Callable
 

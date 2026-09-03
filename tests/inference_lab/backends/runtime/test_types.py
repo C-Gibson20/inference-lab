@@ -1,3 +1,5 @@
+"""Tests for runtime request and result contracts."""
+
 from collections.abc import Callable
 
 import pytest

@@ -1,3 +1,5 @@
+"""Tests for atomic SQLite schema initialisation."""
+
 import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path

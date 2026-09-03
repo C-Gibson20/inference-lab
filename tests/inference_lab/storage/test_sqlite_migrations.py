@@ -1,3 +1,5 @@
+"""Tests for the SQLite migration registry and schema."""
+
 import sqlite3
 from collections.abc import Generator
 

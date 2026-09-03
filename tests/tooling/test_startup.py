@@ -1,3 +1,5 @@
+"""Tests for application startup."""
+
 import json
 import logging
 from collections.abc import Iterator

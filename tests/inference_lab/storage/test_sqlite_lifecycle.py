@@ -1,3 +1,5 @@
+"""Tests for SQLite database opening and schema lifecycle."""
+
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path

@@ -1,3 +1,5 @@
+"""Tests for SQLite corpus isolation."""
+
 from datetime import UTC, datetime
 from pathlib import Path
 

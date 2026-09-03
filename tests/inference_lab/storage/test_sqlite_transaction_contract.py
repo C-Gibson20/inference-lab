@@ -1,3 +1,5 @@
+"""Tests for SQLite metadata transaction contracts."""
+
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path

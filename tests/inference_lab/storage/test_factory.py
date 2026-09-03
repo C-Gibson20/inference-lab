@@ -1,3 +1,5 @@
+"""Tests for metadata repository construction."""
+
 import sqlite3
 from pathlib import Path
 

@@ -1,3 +1,5 @@
+"""Tests for SQLite document-family identities."""
+
 from datetime import UTC, datetime
 from pathlib import Path
 

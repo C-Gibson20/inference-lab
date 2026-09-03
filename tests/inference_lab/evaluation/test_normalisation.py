@@ -1,3 +1,5 @@
+"""Tests for evaluation duplicate-detection normalisation."""
+
 from inference_lab.evaluation.normalisation import normalise_for_duplicate_detection
 
 

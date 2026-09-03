@@ -1,3 +1,5 @@
+"""Tests for PyTorch runtime memory measurement."""
+
 from datetime import UTC, datetime
 
 import pytest

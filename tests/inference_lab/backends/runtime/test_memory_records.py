@@ -1,3 +1,5 @@
+"""Tests for runtime memory profiling records."""
+
 import json
 from datetime import UTC, datetime
 from io import StringIO
