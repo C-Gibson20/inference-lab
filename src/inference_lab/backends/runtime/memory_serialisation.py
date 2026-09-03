@@ -1,9 +1,24 @@
 """Strict deterministic serialisation for runtime memory accounting values."""
 
-import json
 from datetime import datetime
 from typing import Final, cast
 
+from inference_lab._json import (
+    JsonDecodingError,
+    JsonDecodingFailure,
+    JsonFieldsError,
+    JsonObject,
+    JsonStructureError,
+    JsonValue,
+    canonical_json_bytes,
+    load_json_object,
+    require_exact_json_fields,
+    require_json_array,
+    require_json_integer,
+    require_json_object,
+    require_json_string,
+    require_optional_json_string,
+)
 from inference_lab.backends.runtime._memory_accounting import (
     BudgetComparison,
     BudgetState,
@@ -30,9 +45,6 @@ from inference_lab.profiling.resources import (
     MeasurementStatus,
     MemoryResourceCategory,
 )
-
-JsonObject = dict[str, object]
-JsonValue = object
 
 _SNAPSHOT_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -96,30 +108,18 @@ _COMPARISON_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
-def _json_bytes(payload: JsonObject) -> bytes:
-    """Encode a JSON object with the project canonical JSON policy."""
-    return (
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def _object_pairs_without_duplicates(
-    pairs: list[tuple[str, JsonValue]],
-) -> JsonObject:
-    """Reject duplicate object keys before JSON values are interpreted."""
-    result: JsonObject = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("JSON object keys must be unique")
-        result[key] = value
-    return result
+_DECODING_MESSAGES = {
+    JsonDecodingFailure.INVALID_DATA: (
+        "serialised memory data must be valid UTF-8 JSON"
+    ),
+    JsonDecodingFailure.DUPLICATE_KEY: "JSON object keys must be unique",
+    JsonDecodingFailure.NON_FINITE_VALUE: (
+        "serialised memory data must not contain non-finite values"
+    ),
+    JsonDecodingFailure.ROOT_NOT_OBJECT: (
+        "serialised memory data must contain a JSON object"
+    ),
+}
 
 
 def _parse_json(data: bytes) -> JsonObject:
@@ -127,18 +127,9 @@ def _parse_json(data: bytes) -> JsonObject:
     if not isinstance(data, bytes):
         raise TypeError("serialised memory data must be bytes")
     try:
-        value = json.loads(
-            data.decode("utf-8"),
-            object_pairs_hook=_object_pairs_without_duplicates,
-            parse_constant=lambda constant: (_ for _ in ()).throw(
-                ValueError(f"non-finite JSON constant {constant} is not permitted")
-            ),
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("serialised memory data must be valid UTF-8 JSON") from error
-    if not isinstance(value, dict):
-        raise ValueError("serialised memory data must contain a JSON object")
-    return cast(JsonObject, value)
+        return load_json_object(data)
+    except JsonDecodingError as error:
+        raise ValueError(_DECODING_MESSAGES[error.failure]) from None
 
 
 def _require_exact_fields(
@@ -147,39 +138,48 @@ def _require_exact_fields(
     field_name: str,
 ) -> None:
     """Reject missing and unknown fields in one JSON object."""
-    actual = frozenset(payload)
-    if actual != expected:
-        missing = expected - actual
-        detail = "missing fields" if missing else "unknown fields"
-        raise ValueError(f"{field_name} contains {detail}")
+    try:
+        require_exact_json_fields(payload, expected)
+    except JsonFieldsError as error:
+        detail = "missing fields" if error.missing else "unknown fields"
+        raise ValueError(f"{field_name} contains {detail}") from None
+
+
+def _require_object(value: JsonValue, error_message: str) -> JsonObject:
+    """Require a JSON object and translate the structural error."""
+    try:
+        return require_json_object(value)
+    except JsonStructureError:
+        raise TypeError(error_message) from None
+
+
+def _require_array(value: JsonValue, error_message: str) -> list[JsonValue]:
+    """Require a JSON array and translate the structural error."""
+    try:
+        return require_json_array(value)
+    except JsonStructureError:
+        raise TypeError(error_message) from None
 
 
 def _require_string(payload: JsonObject, field_name: str) -> str:
-    value = payload[field_name]
-    if not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string")
-    return value
+    try:
+        return require_json_string(payload[field_name])
+    except JsonStructureError:
+        raise TypeError(f"{field_name} must be a string") from None
 
 
 def _require_optional_string(payload: JsonObject, field_name: str) -> str | None:
-    value = payload[field_name]
-    if value is not None and not isinstance(value, str):
-        raise TypeError(f"{field_name} must be a string or null")
-    return value
+    try:
+        return require_optional_json_string(payload[field_name])
+    except JsonStructureError:
+        raise TypeError(f"{field_name} must be a string or null") from None
 
 
 def _require_integer(payload: JsonObject, field_name: str) -> int:
-    value = payload[field_name]
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field_name} must be an integer")
-    return value
-
-
-def _require_boolean(payload: JsonObject, field_name: str) -> bool:
-    value = payload[field_name]
-    if not isinstance(value, bool):
-        raise TypeError(f"{field_name} must be a boolean")
-    return value
+    try:
+        return require_json_integer(payload[field_name])
+    except JsonStructureError:
+        raise TypeError(f"{field_name} must be an integer") from None
 
 
 def _require_memory_category(
@@ -219,9 +219,7 @@ def _adapter_payload(adapter: MemoryAdapterIdentity) -> JsonObject:
 
 
 def _parse_adapter(value: JsonValue) -> MemoryAdapterIdentity:
-    if not isinstance(value, dict):
-        raise TypeError("adapter must be a JSON object")
-    payload = cast(JsonObject, value)
+    payload = _require_object(value, "adapter must be a JSON object")
     _require_exact_fields(payload, _ADAPTER_FIELDS, "adapter")
     return MemoryAdapterIdentity(
         adapter_name=_require_string(payload, "adapter_name"),
@@ -239,9 +237,7 @@ def _collector_payload(collector: MemoryCollectorIdentity) -> JsonObject:
 
 
 def _parse_collector(value: JsonValue) -> MemoryCollectorIdentity:
-    if not isinstance(value, dict):
-        raise TypeError("collector must be a JSON object")
-    payload = cast(JsonObject, value)
+    payload = _require_object(value, "collector must be a JSON object")
     _require_exact_fields(payload, _COLLECTOR_FIELDS, "collector")
     return MemoryCollectorIdentity(
         collector_name=_require_string(payload, "collector_name"),
@@ -264,9 +260,10 @@ def _expected_contribution_payload(
 
 
 def _parse_expected_contribution(value: JsonValue) -> ExpectedMemoryContribution:
-    if not isinstance(value, dict):
-        raise TypeError("expected_contributions must contain JSON objects")
-    payload = cast(JsonObject, value)
+    payload = _require_object(
+        value,
+        "expected_contributions must contain JSON objects",
+    )
     _require_exact_fields(
         payload,
         _EXPECTED_CONTRIBUTION_FIELDS,
@@ -307,13 +304,12 @@ def _measurement_payload(measurement: MemoryMeasurement) -> JsonObject:
 
 
 def _parse_measurement(value: JsonValue) -> MemoryMeasurement:
-    if not isinstance(value, dict):
-        raise TypeError("measurements must contain JSON objects")
-    payload = cast(JsonObject, value)
+    payload = _require_object(value, "measurements must contain JSON objects")
     _require_exact_fields(payload, _MEASUREMENT_FIELDS, "measurement")
-    coverage = payload["covers_measurement_ids"]
-    if not isinstance(coverage, list):
-        raise TypeError("covers_measurement_ids must be a JSON array")
+    coverage = _require_array(
+        payload["covers_measurement_ids"],
+        "covers_measurement_ids must be a JSON array",
+    )
     if not all(isinstance(item, str) for item in coverage):
         raise TypeError("covers_measurement_ids must contain strings")
     try:
@@ -369,7 +365,7 @@ def serialise_memory_snapshot(snapshot: MemorySnapshot) -> bytes:
         "run_id": snapshot.run_id,
         "schema_version": snapshot.schema_version,
     }
-    return _json_bytes(payload)
+    return canonical_json_bytes(payload)
 
 
 def deserialise_memory_snapshot(data: bytes) -> MemorySnapshot:
@@ -379,12 +375,14 @@ def deserialise_memory_snapshot(data: bytes) -> MemorySnapshot:
     schema_version = _require_string(payload, "schema_version")
     if schema_version not in SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS:
         raise ValueError("unsupported memory snapshot schema version")
-    measurements = payload["measurements"]
-    if not isinstance(measurements, list):
-        raise TypeError("measurements must be a JSON array")
-    expected_contributions = payload["expected_contributions"]
-    if not isinstance(expected_contributions, list):
-        raise TypeError("expected_contributions must be a JSON array")
+    measurements = _require_array(
+        payload["measurements"],
+        "measurements must be a JSON array",
+    )
+    expected_contributions = _require_array(
+        payload["expected_contributions"],
+        "expected_contributions must be a JSON array",
+    )
     try:
         overlap_policy = MemoryOverlapPolicy(_require_string(payload, "overlap_policy"))
     except ValueError as error:
@@ -412,9 +410,7 @@ def _budget_payload(budget: MemoryBudget) -> JsonObject:
 
 
 def _parse_budget(value: JsonValue) -> MemoryBudget:
-    if not isinstance(value, dict):
-        raise TypeError("budget must be a JSON object")
-    payload = cast(JsonObject, value)
+    payload = _require_object(value, "budget must be a JSON object")
     _require_exact_fields(payload, _BUDGET_FIELDS, "budget")
     try:
         memory_space = MemorySpace(_require_string(payload, "memory_space"))
@@ -431,7 +427,7 @@ def serialise_budget_comparison(comparison: BudgetComparison) -> bytes:
     """Serialise a validated budget comparison as canonical UTF-8 JSON."""
     if not isinstance(comparison, BudgetComparison):
         raise TypeError("comparison must be a BudgetComparison")
-    return _json_bytes(
+    return canonical_json_bytes(
         {
             "budget": _budget_payload(comparison.budget),
             "completeness": comparison.completeness.value,

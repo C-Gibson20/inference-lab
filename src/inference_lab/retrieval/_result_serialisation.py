@@ -3,7 +3,7 @@
 import math
 from typing import cast
 
-from inference_lab.json_types import JsonObject, JsonValue
+from inference_lab._json import JsonObject, JsonValue, canonical_json_bytes
 from inference_lab.provenance import (
     CorpusVersionId,
     DocumentId,
@@ -12,7 +12,6 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 from inference_lab.retrieval._serialisation_json import (
-    canonical_json_bytes,
     load_json,
     parse_enum,
     parse_identifier,

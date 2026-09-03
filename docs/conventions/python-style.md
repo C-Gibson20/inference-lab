@@ -61,6 +61,19 @@ Semantic and schema version validators at plain Python boundaries raise
 shared predicates remain exception-neutral. Framework-owned model boundaries
 may expose their normal validation wrapper instead.
 
+## Shared JSON mechanics
+
+`inference_lab._json` owns the recursive JSON types, compact canonical encoder,
+strict UTF-8 object decoder, duplicate-key and non-finite-value rejection, and
+primitive structural checks shared across domains. Domain serialisation modules
+own their schema field sets, compatibility checks, and translation into
+domain-specific, payload-private errors.
+
+Human-readable formats, such as indented evaluation manifests, retain a local
+encoder that makes that presentation policy explicit. JSON used as input to a
+semantic identity or fingerprint also remains with the identity owner because
+changing its byte policy would change persisted identities.
+
 ## Shared clock
 
 Production code obtains the current timezone-aware UTC time from

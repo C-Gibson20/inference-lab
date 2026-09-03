@@ -11,13 +11,13 @@ from typing import cast
 
 from pydantic import BaseModel
 
+from inference_lab._json import JsonObject, JsonValue, canonical_json_text
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.datasets import DatasetManifest
 from inference_lab.evaluation.loader import _validate_dataset_consistency, load_dataset
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.splitting import validate_no_leakage
 from inference_lab.evaluation.versioning import CURRENT_SCHEMA_VERSION
-from inference_lab.json_types import JsonObject, JsonValue
 
 
 def _canonical_payload(model: BaseModel) -> JsonObject:
@@ -33,14 +33,13 @@ def _canonical_payload(model: BaseModel) -> JsonObject:
     return payload
 
 
-def _json_bytes(payload: JsonObject, *, indent: int | None) -> bytes:
-    """Encode a payload using deterministic UTF-8 JSON."""
+def _human_readable_json_bytes(payload: JsonObject) -> bytes:
+    """Encode a payload as deterministic human-readable UTF-8 JSON."""
     text = json.dumps(
         payload,
         ensure_ascii=False,
-        indent=indent,
+        indent=2,
         sort_keys=True,
-        separators=None if indent is not None else (",", ":"),
     )
     return f"{text}\n".encode("utf-8")
 
@@ -51,21 +50,13 @@ def serialise_cases(cases: Iterable[EvaluationCase]) -> bytes:
     if not ordered_cases:
         raise ValueError("Evaluation datasets must contain at least one case")
 
-    lines = [
-        json.dumps(
-            _canonical_payload(case),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        for case in ordered_cases
-    ]
+    lines = [canonical_json_text(_canonical_payload(case)) for case in ordered_cases]
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
 def serialise_manifest(manifest: DatasetManifest) -> bytes:
     """Serialise a manifest as human-reviewable deterministic JSON."""
-    return _json_bytes(_canonical_payload(manifest), indent=2)
+    return _human_readable_json_bytes(_canonical_payload(manifest))
 
 
 def _fsync_directory(path: Path) -> None:
@@ -236,4 +227,4 @@ def evaluation_json_schema() -> JsonObject:
 
 def write_json_schema(path: str | Path) -> None:
     """Write the published evaluation contract schema atomically."""
-    atomic_write(path, _json_bytes(evaluation_json_schema(), indent=2))
+    atomic_write(path, _human_readable_json_bytes(evaluation_json_schema()))

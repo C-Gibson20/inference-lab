@@ -1,6 +1,6 @@
 """Domain reconstruction from strict lineage JSON payloads."""
 
-from inference_lab.json_types import JsonValue
+from inference_lab._json import JsonValue
 from inference_lab.provenance._json_validation import (
     load_json,
     parse_identifier,
@@ -286,9 +286,8 @@ _RECORD_KEYS = frozenset(
 
 def _parse_record_payload(value: JsonValue) -> DerivedRecordMetadata:
     """Parse one complete derived-record payload."""
-    if not isinstance(value, dict):
-        raise InvalidLineageSerialisationError("record must be an object.")
-    schema_version = require_schema_version(value)
+    unvalidated_payload = require_object(value, field_name="record")
+    schema_version = require_schema_version(unvalidated_payload)
     payload = require_object(value, field_name="record", keys=_RECORD_KEYS)
     try:
         record_kind = DerivedRecordKind.from_str(
