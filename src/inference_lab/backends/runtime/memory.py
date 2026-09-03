@@ -61,9 +61,21 @@ class BudgetState(StrEnum):
     INDETERMINATE = "indeterminate"
 
 
-CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION: Final[int] = 1
+CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION: Final[int] = 2
 SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset(
     {CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION}
+)
+_MEMORY_CATEGORIES = frozenset(
+    {
+        "model_weights",
+        "kv_cache",
+        "activations",
+        "embedding_reranker_memory",
+        "index_memory",
+        "framework_overhead",
+        "pinned_host_memory",
+        "storage_cache",
+    }
 )
 
 
@@ -91,6 +103,61 @@ class MemoryAdapterIdentity:
         _validate_safe_identifier(self.adapter_name, "adapter_name")
         _validate_safe_identifier(self.adapter_version, "adapter_version")
         _validate_safe_identifier(self.calibration_revision, "calibration_revision")
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryCollectorIdentity:
+    """Stable identity for the policy that assembled a memory snapshot."""
+
+    collector_name: str
+    collector_version: str
+    inventory_revision: str
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the collector identity's fields."""
+        _validate_safe_identifier(self.collector_name, "collector_name")
+        _validate_safe_identifier(self.collector_version, "collector_version")
+        _validate_safe_identifier(self.inventory_revision, "inventory_revision")
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectedMemoryContribution:
+    """One planned exclusive component/category contribution in a memory space."""
+
+    component_id: str
+    component_role: ComponentRole
+    category: ResourceCategory
+    memory_space: MemorySpace
+    device_id: str | None
+    adapter: MemoryAdapterIdentity
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate expected contribution types, units, and identity rules."""
+        _validate_safe_identifier(self.component_id, "component_id")
+        if not isinstance(self.component_role, ComponentRole):
+            raise TypeError("component_role must be a ComponentRole")
+        if not isinstance(self.category, str):
+            raise TypeError("category must be a string")
+        if self.category not in _MEMORY_CATEGORIES:
+            raise ValueError("category must be a supported memory category")
+        if not isinstance(self.memory_space, MemorySpace):
+            raise TypeError("memory_space must be a MemorySpace")
+        if self.device_id is not None:
+            _validate_safe_identifier(self.device_id, "device_id")
+        if not isinstance(self.adapter, MemoryAdapterIdentity):
+            raise TypeError("adapter must be MemoryAdapterIdentity")
+
+
+class MemoryOverlapPolicy(StrEnum):
+    """Policy for preventing exclusive contributions from double counting."""
+
+    DISALLOW = "disallow"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +224,12 @@ class MemoryMeasurement:
             raise ValueError("measured memory must have a value")
         if self.status == "unavailable" and self.value_bytes is not None:
             raise ValueError("unavailable memory must not have a value")
+        if (
+            self.memory_space is MemorySpace.ACCELERATOR
+            and self.device_id is None
+            and self.status == "measured"
+        ):
+            raise ValueError("measured accelerator memory must identify its device")
         if not isinstance(self.adapter, MemoryAdapterIdentity):
             raise TypeError("adapter must be MemoryAdapterIdentity")
         if not isinstance(self.contribution_kind, ContributionKind):
@@ -231,6 +304,7 @@ class MemoryTotal:
     measured_count: int
     unreliable_count: int
     unavailable_count: int
+    missing_count: int
     completeness: Completeness
 
     def __post_init__(self) -> None:
@@ -258,6 +332,7 @@ class MemoryTotal:
             (self.measured_count, "measured_count"),
             (self.unreliable_count, "unreliable_count"),
             (self.unavailable_count, "unavailable_count"),
+            (self.missing_count, "missing_count"),
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{field_name} must be an integer")
@@ -267,7 +342,9 @@ class MemoryTotal:
             raise TypeError("completeness must be a Completeness value")
         expected = (
             Completeness.COMPLETE
-            if self.unreliable_count == 0 and self.unavailable_count == 0
+            if self.unreliable_count == 0
+            and self.unavailable_count == 0
+            and self.missing_count == 0
             else Completeness.INCOMPLETE
         )
         if self.completeness is not expected:
@@ -338,6 +415,7 @@ class BudgetComparison:
     measured_count: int
     unreliable_count: int
     unavailable_count: int
+    missing_count: int
     completeness: Completeness
 
     def __post_init__(self) -> None:
@@ -355,6 +433,7 @@ class BudgetComparison:
             (self.measured_count, "measured_count"),
             (self.unreliable_count, "unreliable_count"),
             (self.unavailable_count, "unavailable_count"),
+            (self.missing_count, "missing_count"),
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{field_name} must be an integer")
@@ -364,27 +443,15 @@ class BudgetComparison:
             raise TypeError("completeness must be a Completeness value")
 
 
-_MEMORY_CATEGORIES = frozenset(
-    {
-        "model_weights",
-        "kv_cache",
-        "activations",
-        "embedding_reranker_memory",
-        "index_memory",
-        "framework_overhead",
-        "pinned_host_memory",
-        "storage_cache",
-    }
-)
-
-
 @dataclass(frozen=True, slots=True)
 class MemorySnapshot:
     """Versioned, deterministic collection of component memory observations."""
 
     observed_at: datetime
-    adapter: MemoryAdapterIdentity
+    collector: MemoryCollectorIdentity
+    expected_contributions: tuple[ExpectedMemoryContribution, ...]
     measurements: tuple[MemoryMeasurement, ...]
+    overlap_policy: MemoryOverlapPolicy = MemoryOverlapPolicy.DISALLOW
     run_id: str | None = None
     request_id: str | None = None
     schema_version: int = CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION
@@ -400,16 +467,32 @@ class MemorySnapshot:
             "measurements",
             tuple(sorted(self.measurements, key=lambda m: m.measurement_id)),
         )
+        object.__setattr__(
+            self,
+            "expected_contributions",
+            tuple(
+                sorted(
+                    self.expected_contributions,
+                    key=self._expected_contribution_sort_key,
+                )
+            ),
+        )
         object.__setattr__(self, "_reconciliations", self._build_reconciliations())
 
     def _validate(self) -> None:
         if not isinstance(self.observed_at, datetime):
             raise TypeError("observed_at must be a datetime")
         validate_utc_datetime(self.observed_at, "observed_at")
-        if not isinstance(self.adapter, MemoryAdapterIdentity):
-            raise TypeError("adapter must be MemoryAdapterIdentity")
+        if not isinstance(self.collector, MemoryCollectorIdentity):
+            raise TypeError("collector must be MemoryCollectorIdentity")
+        if not isinstance(self.expected_contributions, tuple):
+            raise TypeError("expected_contributions must be a tuple")
+        if not self.expected_contributions:
+            raise ValueError("expected_contributions must not be empty")
         if not isinstance(self.measurements, tuple):
             raise TypeError("measurements must be a tuple")
+        if not isinstance(self.overlap_policy, MemoryOverlapPolicy):
+            raise TypeError("overlap_policy must be a MemoryOverlapPolicy")
         if isinstance(self.schema_version, bool) or not isinstance(
             self.schema_version, int
         ):
@@ -422,17 +505,43 @@ class MemorySnapshot:
         ):
             if correlation_id is not None:
                 _validate_safe_identifier(correlation_id, field_name)
+        expected_by_slot: dict[
+            tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None],
+            ExpectedMemoryContribution,
+        ] = {}
+        for expected in self.expected_contributions:
+            if not isinstance(expected, ExpectedMemoryContribution):
+                raise TypeError(
+                    "expected_contributions must contain "
+                    "ExpectedMemoryContribution values"
+                )
+            slot = self._expected_contribution_slot(expected)
+            if slot in expected_by_slot:
+                raise ValueError("expected contribution slots must not overlap")
+            expected_by_slot[slot] = expected
+
         measurements_by_id: dict[str, MemoryMeasurement] = {}
+        observed_exclusive_slots: set[
+            tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]
+        ] = set()
         for measurement in self.measurements:
             if not isinstance(measurement, MemoryMeasurement):
                 raise TypeError("measurements must contain MemoryMeasurement values")
             if measurement.measurement_id in measurements_by_id:
                 raise ValueError("measurement IDs must be unique")
             measurements_by_id[measurement.measurement_id] = measurement
-            if measurement.adapter != self.adapter:
-                raise ValueError("all measurements must use the snapshot adapter")
             if measurement.observed_at > self.observed_at:
                 raise ValueError("measurements must not be after snapshot observed_at")
+            if measurement.contribution_kind is ContributionKind.EXCLUSIVE:
+                slot = self._measurement_slot(measurement)
+                expected = expected_by_slot.get(slot)
+                if expected is None:
+                    raise ValueError("exclusive measurement was not expected")
+                if measurement.adapter != expected.adapter:
+                    raise ValueError("measurement does not use the expected adapter")
+                if slot in observed_exclusive_slots:
+                    raise ValueError("exclusive measurement slots must not overlap")
+                observed_exclusive_slots.add(slot)
 
         for measurement in self.measurements:
             if measurement.contribution_kind is not ContributionKind.ROLL_UP:
@@ -450,6 +559,45 @@ class MemorySnapshot:
                     )
 
         self._validate_no_rollup_cycles(measurements_by_id)
+
+    @staticmethod
+    def _expected_contribution_slot(
+        expected: ExpectedMemoryContribution,
+    ) -> tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]:
+        return (
+            expected.component_id,
+            expected.component_role,
+            expected.category,
+            expected.memory_space,
+            expected.device_id,
+        )
+
+    @staticmethod
+    def _measurement_slot(
+        measurement: MemoryMeasurement,
+    ) -> tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]:
+        return (
+            measurement.component_id,
+            measurement.component_role,
+            measurement.category,
+            measurement.memory_space,
+            measurement.device_id,
+        )
+
+    @staticmethod
+    def _expected_contribution_sort_key(
+        expected: ExpectedMemoryContribution,
+    ) -> tuple[str, str, str, str, str, str, str, str]:
+        return (
+            expected.memory_space.value,
+            expected.device_id or "",
+            expected.category,
+            expected.component_role.value,
+            expected.component_id,
+            expected.adapter.adapter_name,
+            expected.adapter.adapter_version,
+            expected.adapter.calibration_revision,
+        )
 
     @staticmethod
     def _validate_no_rollup_cycles(
@@ -511,41 +659,53 @@ class MemorySnapshot:
     @property
     def totals(self) -> tuple[MemoryTotal, ...]:
         """Return per-space, category, and component-role counted totals."""
-        counted = tuple(
-            measurement
+        counted_by_slot = {
+            self._measurement_slot(measurement): measurement
             for measurement in self.measurements
             if measurement.contribution_kind is ContributionKind.EXCLUSIVE
-        )
+        }
         keys: set[
             tuple[
                 MemorySpace, str | None, ResourceCategory | None, ComponentRole | None
             ]
         ] = set()
-        for measurement in counted:
+        for expected in self.expected_contributions:
             base = (
-                measurement.memory_space,
-                measurement.device_id,
+                expected.memory_space,
+                expected.device_id,
             )
             keys.add((*base, None, None))
-            keys.add((*base, measurement.category, None))
-            keys.add((*base, measurement.category, measurement.component_role))
+            keys.add((*base, expected.category, None))
+            keys.add((*base, expected.category, expected.component_role))
 
         totals: list[MemoryTotal] = []
         for memory_space, device_id, category, component_role in keys:
-            selected = tuple(
-                measurement
-                for measurement in counted
-                if measurement.memory_space is memory_space
-                and measurement.device_id == device_id
-                and (category is None or measurement.category == category)
+            selected_expected = tuple(
+                expected
+                for expected in self.expected_contributions
+                if expected.memory_space is memory_space
                 and (
-                    component_role is None
-                    or measurement.component_role is component_role
+                    expected.device_id == device_id
+                    or (
+                        memory_space is MemorySpace.ACCELERATOR
+                        and device_id is not None
+                        and expected.device_id is None
+                    )
                 )
+                and (category is None or expected.category == category)
+                and (
+                    component_role is None or expected.component_role is component_role
+                )
+            )
+            selected = tuple(
+                counted_by_slot[self._expected_contribution_slot(expected)]
+                for expected in selected_expected
+                if self._expected_contribution_slot(expected) in counted_by_slot
             )
             measured = tuple(item for item in selected if item.status == "measured")
             unreliable = tuple(item for item in selected if item.status == "unreliable")
             unavailable_count = sum(item.status == "unavailable" for item in selected)
+            missing_count = len(selected_expected) - len(selected)
             totals.append(
                 MemoryTotal(
                     memory_space=memory_space,
@@ -557,9 +717,12 @@ class MemorySnapshot:
                     measured_count=len(measured),
                     unreliable_count=len(unreliable),
                     unavailable_count=unavailable_count,
+                    missing_count=missing_count,
                     completeness=(
                         Completeness.COMPLETE
-                        if not unreliable and unavailable_count == 0
+                        if not unreliable
+                        and unavailable_count == 0
+                        and missing_count == 0
                         else Completeness.INCOMPLETE
                     ),
                 )
@@ -580,22 +743,33 @@ class MemorySnapshot:
         """Compare one budget with its matching per-space subtotal."""
         if not isinstance(budget, MemoryBudget):
             raise TypeError("budget must be a MemoryBudget")
+        totals = self.totals
         matching = tuple(
             total
-            for total in self.totals
+            for total in totals
             if total.memory_space is budget.memory_space
             and total.device_id == budget.device_id
+            and total.category is None
+            and total.component_role is None
+        )
+        unresolved = tuple(
+            total
+            for total in totals
+            if budget.memory_space is MemorySpace.ACCELERATOR
+            and budget.device_id is not None
+            and total.memory_space is MemorySpace.ACCELERATOR
+            and total.device_id is None
             and total.category is None
             and total.component_role is None
         )
         if not matching:
             available_spaces = {
                 (total.memory_space, total.device_id)
-                for total in self.totals
+                for total in totals
                 if total.category is None and total.component_role is None
             }
             if (
-                available_spaces
+                not unresolved
                 and (
                     budget.memory_space,
                     budget.device_id,
@@ -605,16 +779,27 @@ class MemorySnapshot:
                 raise ValueError("budget has no matching memory space/device subtotal")
             measured_bytes = 0
             measured_count = 0
-            unreliable_count = 0
-            unavailable_count = 0
-            completeness = Completeness.COMPLETE
+            if unresolved:
+                unresolved_total = unresolved[0]
+                unreliable_count = unresolved_total.unreliable_count
+                unavailable_count = unresolved_total.unavailable_count
+                missing_count = unresolved_total.missing_count
+            else:
+                unreliable_count = 0
+                unavailable_count = 0
+                missing_count = 0
         else:
             total = matching[0]
             measured_bytes = total.measured_bytes
             measured_count = total.measured_count
             unreliable_count = total.unreliable_count
             unavailable_count = total.unavailable_count
-            completeness = total.completeness
+            missing_count = total.missing_count
+        completeness = (
+            Completeness.COMPLETE
+            if unreliable_count == 0 and unavailable_count == 0 and missing_count == 0
+            else Completeness.INCOMPLETE
+        )
         headroom = budget.budget_bytes - measured_bytes
         if measured_bytes > budget.budget_bytes:
             state = BudgetState.BREACHED
@@ -630,5 +815,6 @@ class MemorySnapshot:
             measured_count=measured_count,
             unreliable_count=unreliable_count,
             unavailable_count=unavailable_count,
+            missing_count=missing_count,
             completeness=completeness,
         )

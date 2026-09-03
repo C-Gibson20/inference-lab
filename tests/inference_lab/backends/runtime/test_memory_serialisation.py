@@ -7,8 +7,10 @@ from inference_lab.backends.runtime import (
     BudgetState,
     Completeness,
     ComponentRole,
+    ExpectedMemoryContribution,
     MemoryAdapterIdentity,
     MemoryBudget,
+    MemoryCollectorIdentity,
     MemoryMeasurement,
     MemorySnapshot,
     MemorySpace,
@@ -20,19 +22,23 @@ from inference_lab.backends.runtime import (
 
 OBSERVED_AT = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 ADAPTER = MemoryAdapterIdentity("fake", "1.0.0", "calibration-1")
+COLLECTOR = MemoryCollectorIdentity("test", "1.0.0", "inventory-1")
 
 
 def make_measurement(
     measurement_id: str = "weights",
     *,
+    component_id: str = "generator",
+    component_role: ComponentRole = ComponentRole.GENERATOR,
+    category: str = "model_weights",
     status: str = "measured",
     value_bytes: int | None = 1024,
 ) -> MemoryMeasurement:
     return MemoryMeasurement(
         measurement_id=measurement_id,
-        component_id="generator",
-        component_role=ComponentRole.GENERATOR,
-        category="model_weights",
+        component_id=component_id,
+        component_role=component_role,
+        category=category,  # type: ignore[arg-type]
         memory_space=MemorySpace.ACCELERATOR,
         device_id="cuda-0",
         status=status,  # type: ignore[arg-type]
@@ -43,10 +49,30 @@ def make_measurement(
 
 
 def make_snapshot() -> MemorySnapshot:
+    measurements = (
+        make_measurement("z-last"),
+        make_measurement(
+            "a-first",
+            component_id="framework",
+            component_role=ComponentRole.RUNTIME_FRAMEWORK,
+            category="framework_overhead",
+        ),
+    )
     return MemorySnapshot(
         observed_at=OBSERVED_AT,
-        adapter=ADAPTER,
-        measurements=(make_measurement("z-last"), make_measurement("a-first")),
+        collector=COLLECTOR,
+        expected_contributions=tuple(
+            ExpectedMemoryContribution(
+                component_id=measurement.component_id,
+                component_role=measurement.component_role,
+                category=measurement.category,
+                memory_space=measurement.memory_space,
+                device_id=measurement.device_id,
+                adapter=measurement.adapter,
+            )
+            for measurement in measurements
+        ),
+        measurements=measurements,
         run_id="run-1",
         request_id="request-1",
     )
@@ -63,6 +89,11 @@ def test_snapshot_serialisation_is_canonical_and_round_trips() -> None:
     assert serialised.endswith(b"\n")
     assert serialised.index(b'"a-first"') < serialised.index(b'"z-last"')
     assert b" " not in serialised
+    payload = json.loads(serialised)
+    assert payload["schema_version"] == 2
+    assert payload["collector"]["collector_name"] == "test"
+    assert payload["overlap_policy"] == "disallow"
+    assert len(payload["expected_contributions"]) == 2
 
 
 def test_budget_comparison_serialisation_round_trips() -> None:
@@ -74,6 +105,7 @@ def test_budget_comparison_serialisation_round_trips() -> None:
     restored = deserialise_budget_comparison(serialise_budget_comparison(comparison))
 
     assert restored == comparison
+    assert json.loads(serialise_budget_comparison(comparison))["missing_count"] == 0
     assert restored.state is BudgetState.WITHIN_BUDGET
     assert restored.completeness is Completeness.COMPLETE
 
@@ -102,7 +134,7 @@ def test_snapshot_deserialisation_rejects_unknown_and_unsupported_fields() -> No
         deserialise_memory_snapshot(json.dumps(payload).encode())
 
     payload = json.loads(serialise_memory_snapshot(make_snapshot()))
-    payload["schema_version"] = 2
+    payload["schema_version"] = 3
     with pytest.raises(ValueError, match="unsupported"):
         deserialise_memory_snapshot(json.dumps(payload).encode())
 

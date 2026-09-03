@@ -207,17 +207,33 @@ non-negative integers. Component role and memory category are independent: for
 example, generator weights are `model_weights`, while an explicitly coarse
 embedder total may use `embedding_reranker_memory`.
 
-Exclusive contributions are counted once. Informational roll-ups declare the
-measurement IDs they cover and are excluded from totals. Snapshot validation
-rejects missing coverage, cross-space or cross-device coverage, and cycles.
-Adapters remain responsible for the physical non-overlap invariant: distinct
-exclusive IDs must refer to disjoint allocations.
+Memory snapshot schema version 2 separates the identity of the collector that
+assembles the snapshot from the identity of each adapter that supplies a
+measurement. Every snapshot declares a non-empty expected-contribution
+inventory. Each entry binds one component, role, category, memory space and
+device slot to its responsible adapter, so one snapshot may compose multiple
+adapters without weakening attribution. Schema version 1 snapshots are not
+accepted as version 2 data.
 
-Memory totals are never combined across accelerator, ordinary host, pinned
-host, and storage-cache spaces. A budget comparison is `within_budget` only
-when all counted contributions are measured and reliable; an incomplete result
-is `indeterminate` unless the reliable measured subtotal already breaches the
-budget.
+Exclusive contributions are counted once. The `disallow` overlap policy
+rejects duplicate expected slots and duplicate or unplanned exclusive
+measurements. Informational roll-ups declare the measurement IDs they cover
+and are excluded from totals. Snapshot validation rejects missing roll-up
+coverage, cross-space or cross-device coverage, and cycles. Adapters and the
+collector remain responsible for the physical non-overlap invariant: distinct
+exclusive slots must refer to disjoint allocations.
+
+Memory totals are derived from the expected inventory, not merely from the
+measurements that happened to arrive. An absent expected contribution is
+reported separately as `missing`; unreliable, unavailable, and missing counts
+all make the affected total incomplete. Memory totals are never combined
+across accelerator, ordinary host, pinned-host, and storage-cache spaces.
+Accelerator contributions without a resolved device make every concrete
+device budget in that snapshot incomplete, and a measured accelerator value
+must identify its device. A budget comparison is `within_budget` only when all
+expected contributions affecting that device are measured and reliable; an
+incomplete result is `indeterminate` unless the reliable measured subtotal
+already breaches the budget.
 
 The PyTorch calibration adapter is deliberately limited to inspectable tensor
 backing storage. It counts each storage allocation once, including tied

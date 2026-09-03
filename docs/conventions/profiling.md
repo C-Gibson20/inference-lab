@@ -121,10 +121,12 @@ runtime-owned fields add component role, memory space, device identity,
 exclusive-versus-roll-up contribution semantics, and adapter/calibration
 identity without changing the generic `ResourceMeasurement` shape.
 
-Snapshot totals count only exclusive measured contributions. Unreliable values
-remain separate diagnostics and unavailable values contribute no bytes; neither
-is silently treated as free capacity. Roll-ups are never included in totals,
-and their declared coverage must remain within one memory space and device.
+Snapshot totals derive coverage from the declared expected-contribution
+inventory and count bytes only from exclusive measured contributions.
+Unreliable values remain separate diagnostics, unavailable values contribute
+no bytes, and absent expected values increment `missing_count`; none is
+silently treated as free capacity. Roll-ups are never included in totals, and
+their declared coverage must remain within one memory space and device.
 
 Memory records use `memory_component_measured` and
 `memory_budget_compared` events. Measured records are `INFO`, unavailable or
