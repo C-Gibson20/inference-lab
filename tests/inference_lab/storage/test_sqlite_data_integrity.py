@@ -38,7 +38,7 @@ _FIRST_VERSION = DocumentVersion(
 _SECOND_VERSION = DocumentVersion(
     _SECOND_VERSION_ID,
     _SECOND_DOCUMENT_ID,
-    ContentHash(HashAlgorithm.SHA256, "b" * 64),
+    ContentHash(HashAlgorithm.SHA256, "a" * 64),
 )
 
 
@@ -144,6 +144,25 @@ def test_reopen_rejects_rows_violating_schema_checks(tmp_path: Path) -> None:
             """UPDATE duplicate_relationships
             SET first_version_id = '22222222-2222-4222-8222-222222222222',
                 second_version_id = '11111111-1111-4111-8111-111111111111'""",
+        ),
+    )
+
+    with pytest.raises(CorruptStorageError):
+        SQLiteMetadataRepository.open(database_path)
+
+
+def test_reopen_rejects_tampered_byte_identical_hashes(tmp_path: Path) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_populated_database(database_path)
+    _mutate_database(
+        database_path,
+        (
+            "DROP TRIGGER document_versions_duplicate_hash_update",
+            """UPDATE document_versions
+            SET content_hash_digest =
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            WHERE document_version_id =
+                '22222222-2222-4222-8222-222222222222'""",
         ),
     )
 

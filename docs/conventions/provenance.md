@@ -117,6 +117,11 @@ version. A changed source creates a new immutable version while retaining the
 same logical document identity when the system determines that it is the same
 document.
 
+A `byte_identical` duplicate relationship is valid only when both immutable
+source versions have the same content-hash algorithm and digest. Persistence
+enforces this on relationship writes and rejects stored mismatches during
+upgrade or reopen; downstream retrieval and evaluation may rely on the class.
+
 Corpus versions are immutable consistency boundaries. Metadata and persistent
 indexes participating in a corpus snapshot must identify the same
 `corpus_version`. Backup and restore operations must preserve this boundary.

@@ -42,6 +42,7 @@ def _insert_version(
     *,
     version_id: str,
     document_id: str,
+    digest: str = _DIGEST,
 ) -> None:
     connection.execute(
         """INSERT INTO document_versions (
@@ -50,14 +51,14 @@ def _insert_version(
             content_hash_algorithm,
             content_hash_digest
         ) VALUES (?, ?, 'sha256', ?)""",
-        (version_id, document_id, _DIGEST),
+        (version_id, document_id, digest),
     )
 
 
 def test_revision_one_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 2
+    assert len(MIGRATIONS) == 3
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "initial_metadata"
     assert MIGRATIONS[0].checksum == (
@@ -67,6 +68,11 @@ def test_revision_one_is_stable_and_registry_is_valid() -> None:
     assert MIGRATIONS[1].migration_id == "source_observation_identity"
     assert MIGRATIONS[1].checksum == (
         "2cedb3bd9dc35c6f679f500926ba37774bfb7a0b4a80420c194b76745045e2fc"
+    )
+    assert MIGRATIONS[2].revision == 3
+    assert MIGRATIONS[2].migration_id == "duplicate_hash_integrity"
+    assert MIGRATIONS[2].checksum == (
+        "5341fdcb642e8868be679df0930f8fe0604b9eca67e71333847eaba94f63b95b"
     )
 
 
@@ -210,6 +216,105 @@ def test_duplicate_relationships_require_canonical_distinct_endpoints(
             ) VALUES ('byte_identical', ?, ?)""",
             (_OTHER_VERSION_ID, _VERSION_ID),
         )
+
+
+def test_duplicate_hash_triggers_reject_mismatched_writes() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS:
+        for statement in migration.statements:
+            connection.execute(statement)
+    _insert_document(connection, _DOCUMENT_ID)
+    _insert_version(
+        connection,
+        version_id=_VERSION_ID,
+        document_id=_DOCUMENT_ID,
+    )
+    _insert_version(
+        connection,
+        version_id=_OTHER_VERSION_ID,
+        document_id=_DOCUMENT_ID,
+        digest="b" * 64,
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            """INSERT INTO duplicate_relationships (
+                duplicate_class, first_version_id, second_version_id
+            ) VALUES ('byte_identical', ?, ?)""",
+            (_VERSION_ID, _OTHER_VERSION_ID),
+        )
+
+    connection.execute(
+        """UPDATE document_versions
+        SET content_hash_digest = ?
+        WHERE document_version_id = ?""",
+        (_DIGEST, _OTHER_VERSION_ID),
+    )
+    connection.execute(
+        """INSERT INTO duplicate_relationships (
+            duplicate_class, first_version_id, second_version_id
+        ) VALUES ('byte_identical', ?, ?)""",
+        (_VERSION_ID, _OTHER_VERSION_ID),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            """UPDATE document_versions
+            SET content_hash_digest = ?
+            WHERE document_version_id = ?""",
+            ("b" * 64, _OTHER_VERSION_ID),
+        )
+
+    assert connection.execute(
+        """SELECT content_hash_digest
+        FROM document_versions
+        WHERE document_version_id = ?""",
+        (_OTHER_VERSION_ID,),
+    ).fetchone() == (_DIGEST,)
+    connection.close()
+
+
+def test_revision_three_rejects_preexisting_mismatched_relationships() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys = ON")
+    for migration in MIGRATIONS[:2]:
+        for statement in migration.statements:
+            connection.execute(statement)
+    _insert_document(connection, _DOCUMENT_ID)
+    _insert_version(
+        connection,
+        version_id=_VERSION_ID,
+        document_id=_DOCUMENT_ID,
+    )
+    _insert_version(
+        connection,
+        version_id=_OTHER_VERSION_ID,
+        document_id=_DOCUMENT_ID,
+        digest="b" * 64,
+    )
+    connection.execute(
+        """INSERT INTO duplicate_relationships (
+            duplicate_class, first_version_id, second_version_id
+        ) VALUES ('byte_identical', ?, ?)""",
+        (_VERSION_ID, _OTHER_VERSION_ID),
+    )
+    connection.commit()
+
+    connection.execute("BEGIN IMMEDIATE")
+    with pytest.raises(sqlite3.IntegrityError):
+        for statement in MIGRATIONS[2].statements:
+            connection.execute(statement)
+    connection.rollback()
+
+    assert (
+        connection.execute(
+            """SELECT name
+        FROM sqlite_schema
+        WHERE type = 'trigger' AND name LIKE '%duplicate_hash%'"""
+        ).fetchall()
+        == []
+    )
+    connection.close()
 
 
 def test_version_membership_must_belong_to_the_same_document(
