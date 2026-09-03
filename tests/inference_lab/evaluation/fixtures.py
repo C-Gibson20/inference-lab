@@ -86,7 +86,7 @@ def write_dataset_fixture(
     manifest: dict[str, Any] = {
         "schema_version": CURRENT_SCHEMA_VERSION,
         "dataset_id": "baseline-v1",
-        "dataset_version": "1",
+        "dataset_version": "1.0.0",
         "description": "Evaluation fixture",
         "corpus_id": CORPUS_ID,
         "corpus_version": CORPUS_VERSION,

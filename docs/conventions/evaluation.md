@@ -31,6 +31,9 @@ accepted or migrated.
 Unknown, missing, and unsupported schema versions are rejected before model
 validation. A dataset manifest identifies one immutable dataset version and
 one `CorpusId` and one immutable `CorpusVersionId` owned by that corpus.
+`dataset_version` uses canonical Semantic Versioning in `x.y.z` form, with
+optional valid pre-release and build metadata. It versions the immutable
+dataset independently of the evaluation schema version.
 
 The manifest records:
 

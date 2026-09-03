@@ -7,12 +7,13 @@ from typing import Final
 
 _URI_SCHEME_PATTERN: Final = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _WINDOWS_DRIVE_PATTERN: Final = re.compile(r"^[A-Za-z]:[\\/]")
-_SEMANTIC_VERSION_PATTERN: Final = re.compile(
-    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+CANONICAL_SEMANTIC_VERSION_PATTERN: Final = (
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
     r"(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
+_SEMANTIC_VERSION_PATTERN: Final = re.compile(CANONICAL_SEMANTIC_VERSION_PATTERN)
 
 
 def is_local_path_shape(value: object) -> bool:

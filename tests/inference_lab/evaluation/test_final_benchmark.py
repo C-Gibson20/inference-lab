@@ -54,7 +54,7 @@ def test_documented_validator_accepts_complete_benchmark(tmp_path: Path) -> None
     manifest = DatasetManifest.model_validate(
         {
             "dataset_id": "accepted-benchmark",
-            "dataset_version": "1",
+            "dataset_version": "1.0.0",
             "description": "Complete final benchmark fixture",
             "corpus_id": CORPUS_ID,
             "corpus_version": CORPUS_VERSION,
