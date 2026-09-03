@@ -75,6 +75,13 @@ The loader rejects missing required values and invalid types. Paths are
 validated as `Path` values; loading configuration does not require the target
 paths to exist.
 
+All path trust boundaries use the shared local-path syntax policy. Empty and
+NUL-containing paths, URI schemes before or after `Path` coercion, and
+UNC-shaped network locations are rejected. POSIX and relative paths are local;
+Windows drive paths are local only on a Windows host. The shared check does not
+resolve paths or touch the filesystem. Each consuming domain owns those later
+actions and translates rejection into its own public error contract.
+
 Required values are:
 
 - `models.embedder_path`

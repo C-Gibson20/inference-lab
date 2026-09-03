@@ -30,6 +30,18 @@ Use `TYPE_CHECKING` imports or postponed annotation evaluation only when they
 resolve a genuine runtime cycle or optional typing dependency. Do not add them
 pre-emptively.
 
+## Shared validation
+
+Side-effect-free predicates for formats used across domain boundaries belong
+in `inference_lab/_validation.py`. They classify values without raising a
+domain exception, resolving paths, or touching external state. Each owning
+boundary remains responsible for runtime type errors, domain-specific value
+errors, and any filesystem or lifecycle action that follows validation.
+
+Validation logic used by only one domain belongs in that domain's
+`_validation.py` or responsibility-named implementation module. Do not put
+validation predicates in a generic `utils.py` module.
+
 ## Language
 
 Project-owned prose, Python identifiers, error messages, configuration names,

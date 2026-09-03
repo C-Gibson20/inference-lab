@@ -14,9 +14,10 @@ locations, including HTTP, cloud-storage, and other remote schemes, are
 rejected. Dataset loading and dataset serialisation validate this boundary
 before reading or writing files.
 
-The boundary rejects URI schemes before and after `Path` coercion, UNC-style
-network locations, empty paths, and NUL characters. Rejected values are not
-included in errors intended for operational logs.
+The boundary uses the shared local-path syntax policy described by the
+configuration convention. It rejects URI schemes before and after `Path`
+coercion, UNC-style network locations, empty paths, and NUL characters.
+Rejected values are not included in errors intended for operational logs.
 
 Evaluation may read the selected local dataset and corpus references. It must
 not send questions, evidence, prompts, answers, model traffic, or evaluation

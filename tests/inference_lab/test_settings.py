@@ -164,14 +164,12 @@ def test_empty_path_is_rejected(section: str, field: str) -> None:
         Settings(**{section: {field: ""}})  # pyright: ignore
 
 
-@pytest.mark.parametrize(
-    "path",
-    ["https://example.com/model", "s3://bucket/model", "hf://org/model"],
-)
-def test_uri_shaped_model_path_is_rejected(path: str) -> None:
+def test_non_local_model_path_shapes_are_rejected(
+    rejected_local_path_shape: str | Path,
+) -> None:
     with pytest.raises(ValidationError):
         Settings(  # pyright: ignore[reportCallIssue]
-            models={"generator_path": path}
+            models={"generator_path": rejected_local_path_shape}
         )
 
 

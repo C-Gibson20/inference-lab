@@ -1,10 +1,10 @@
 """Internal SQLite connection policy and exception translation."""
 
-import re
 import sqlite3
 from pathlib import Path
 from typing import Final
 
+from inference_lab._validation import is_local_path_shape
 from inference_lab.storage.errors import (
     CorruptStorageError,
     RepositoryUnavailableError,
@@ -14,7 +14,6 @@ from inference_lab.storage.errors import (
 )
 
 DEFAULT_BUSY_TIMEOUT_MS: Final = 5_000
-_REMOTE_SCHEME: Final = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _SQLITE_PRIMARY_CODE_MASK: Final = 0xFF
 
 
@@ -54,13 +53,7 @@ def _validated_database_path(path: Path) -> Path:
         raise TypeError("path must be a Path.")
 
     raw_path = str(path)
-    if (
-        not raw_path
-        or "\x00" in raw_path
-        or raw_path == ":memory:"
-        or raw_path.startswith(("//", "\\\\"))
-        or _REMOTE_SCHEME.match(raw_path) is not None
-    ):
+    if not is_local_path_shape(path) or raw_path == ":memory:":
         raise RepositoryUnavailableError()
 
     try:

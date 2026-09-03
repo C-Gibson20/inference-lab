@@ -49,13 +49,11 @@ def test_local_backend_exposes_generation_only_metadata() -> None:
     assert "prompt-v1" in backend.metadata.model_revision
 
 
-@pytest.mark.parametrize(
-    "artefact_dir",
-    ["https://example.invalid/model", "s3://bucket/model", "//server/model"],
-)
-def test_local_backend_rejects_non_local_paths(artefact_dir: str) -> None:
+def test_local_backend_rejects_non_local_paths(
+    rejected_local_path_shape: str | Path,
+) -> None:
     with pytest.raises(BackendRequestError):
-        LocalCausalBackend(artefact_dir)
+        LocalCausalBackend(rejected_local_path_shape)
 
 
 def test_local_backend_rejects_invalid_path_types() -> None:
