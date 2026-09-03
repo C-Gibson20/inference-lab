@@ -105,6 +105,7 @@ def test_budget_comparison_serialisation_round_trips() -> None:
     restored = deserialise_budget_comparison(serialise_budget_comparison(comparison))
 
     assert restored == comparison
+    assert json.loads(serialise_budget_comparison(comparison))["missing_count"] == 0
     assert restored.state is BudgetState.WITHIN_BUDGET
     assert restored.completeness is Completeness.COMPLETE
 

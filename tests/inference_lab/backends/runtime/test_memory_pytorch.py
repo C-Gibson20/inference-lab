@@ -93,6 +93,14 @@ def test_unsupported_or_missing_storage_is_unavailable() -> None:
     no_model_measurements = no_model.measure_memory()
     meta_measurements = meta_model.measure_memory()
 
+    assert {item.category for item in no_model_measurements} == {
+        "kv_cache",
+        "model_weights",
+    }
+    assert {item.category for item in meta_measurements} == {
+        "kv_cache",
+        "model_weights",
+    }
     assert all(item.status == "unavailable" for item in no_model_measurements)
     assert all(item.status == "unavailable" for item in meta_measurements)
 

@@ -95,6 +95,7 @@ class MemoryBudgetRecord:
             "measured_count": comparison.measured_count,
             "unreliable_count": comparison.unreliable_count,
             "unavailable_count": comparison.unavailable_count,
+            "missing_count": comparison.missing_count,
             "observed_at": self.observed_at.isoformat(),
             "record_schema_version": CURRENT_RECORD_SCHEMA_VERSION,
         }

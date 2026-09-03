@@ -102,6 +102,7 @@ def test_emission_uses_safe_runtime_records_and_required_fields() -> None:
     assert lines[0]["level"] == "info"
     assert lines[1]["event"] == "memory_budget_compared"
     assert lines[1]["level"] == "info"
+    assert lines[1]["missing_count"] == 0
     for line in lines:
         assert line["module"] == "runtime"
         assert line["pipeline_stage"] == "memory_accounting"

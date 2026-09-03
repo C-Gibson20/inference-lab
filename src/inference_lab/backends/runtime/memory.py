@@ -224,6 +224,12 @@ class MemoryMeasurement:
             raise ValueError("measured memory must have a value")
         if self.status == "unavailable" and self.value_bytes is not None:
             raise ValueError("unavailable memory must not have a value")
+        if (
+            self.memory_space is MemorySpace.ACCELERATOR
+            and self.device_id is None
+            and self.status == "measured"
+        ):
+            raise ValueError("measured accelerator memory must identify its device")
         if not isinstance(self.adapter, MemoryAdapterIdentity):
             raise TypeError("adapter must be MemoryAdapterIdentity")
         if not isinstance(self.contribution_kind, ContributionKind):
@@ -298,6 +304,7 @@ class MemoryTotal:
     measured_count: int
     unreliable_count: int
     unavailable_count: int
+    missing_count: int
     completeness: Completeness
 
     def __post_init__(self) -> None:
@@ -325,6 +332,7 @@ class MemoryTotal:
             (self.measured_count, "measured_count"),
             (self.unreliable_count, "unreliable_count"),
             (self.unavailable_count, "unavailable_count"),
+            (self.missing_count, "missing_count"),
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{field_name} must be an integer")
@@ -334,7 +342,9 @@ class MemoryTotal:
             raise TypeError("completeness must be a Completeness value")
         expected = (
             Completeness.COMPLETE
-            if self.unreliable_count == 0 and self.unavailable_count == 0
+            if self.unreliable_count == 0
+            and self.unavailable_count == 0
+            and self.missing_count == 0
             else Completeness.INCOMPLETE
         )
         if self.completeness is not expected:
@@ -405,6 +415,7 @@ class BudgetComparison:
     measured_count: int
     unreliable_count: int
     unavailable_count: int
+    missing_count: int
     completeness: Completeness
 
     def __post_init__(self) -> None:
@@ -422,6 +433,7 @@ class BudgetComparison:
             (self.measured_count, "measured_count"),
             (self.unreliable_count, "unreliable_count"),
             (self.unavailable_count, "unavailable_count"),
+            (self.missing_count, "missing_count"),
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{field_name} must be an integer")
@@ -647,41 +659,53 @@ class MemorySnapshot:
     @property
     def totals(self) -> tuple[MemoryTotal, ...]:
         """Return per-space, category, and component-role counted totals."""
-        counted = tuple(
-            measurement
+        counted_by_slot = {
+            self._measurement_slot(measurement): measurement
             for measurement in self.measurements
             if measurement.contribution_kind is ContributionKind.EXCLUSIVE
-        )
+        }
         keys: set[
             tuple[
                 MemorySpace, str | None, ResourceCategory | None, ComponentRole | None
             ]
         ] = set()
-        for measurement in counted:
+        for expected in self.expected_contributions:
             base = (
-                measurement.memory_space,
-                measurement.device_id,
+                expected.memory_space,
+                expected.device_id,
             )
             keys.add((*base, None, None))
-            keys.add((*base, measurement.category, None))
-            keys.add((*base, measurement.category, measurement.component_role))
+            keys.add((*base, expected.category, None))
+            keys.add((*base, expected.category, expected.component_role))
 
         totals: list[MemoryTotal] = []
         for memory_space, device_id, category, component_role in keys:
-            selected = tuple(
-                measurement
-                for measurement in counted
-                if measurement.memory_space is memory_space
-                and measurement.device_id == device_id
-                and (category is None or measurement.category == category)
+            selected_expected = tuple(
+                expected
+                for expected in self.expected_contributions
+                if expected.memory_space is memory_space
                 and (
-                    component_role is None
-                    or measurement.component_role is component_role
+                    expected.device_id == device_id
+                    or (
+                        memory_space is MemorySpace.ACCELERATOR
+                        and device_id is not None
+                        and expected.device_id is None
+                    )
                 )
+                and (category is None or expected.category == category)
+                and (
+                    component_role is None or expected.component_role is component_role
+                )
+            )
+            selected = tuple(
+                counted_by_slot[self._expected_contribution_slot(expected)]
+                for expected in selected_expected
+                if self._expected_contribution_slot(expected) in counted_by_slot
             )
             measured = tuple(item for item in selected if item.status == "measured")
             unreliable = tuple(item for item in selected if item.status == "unreliable")
             unavailable_count = sum(item.status == "unavailable" for item in selected)
+            missing_count = len(selected_expected) - len(selected)
             totals.append(
                 MemoryTotal(
                     memory_space=memory_space,
@@ -693,9 +717,12 @@ class MemorySnapshot:
                     measured_count=len(measured),
                     unreliable_count=len(unreliable),
                     unavailable_count=unavailable_count,
+                    missing_count=missing_count,
                     completeness=(
                         Completeness.COMPLETE
-                        if not unreliable and unavailable_count == 0
+                        if not unreliable
+                        and unavailable_count == 0
+                        and missing_count == 0
                         else Completeness.INCOMPLETE
                     ),
                 )
@@ -716,22 +743,33 @@ class MemorySnapshot:
         """Compare one budget with its matching per-space subtotal."""
         if not isinstance(budget, MemoryBudget):
             raise TypeError("budget must be a MemoryBudget")
+        totals = self.totals
         matching = tuple(
             total
-            for total in self.totals
+            for total in totals
             if total.memory_space is budget.memory_space
             and total.device_id == budget.device_id
+            and total.category is None
+            and total.component_role is None
+        )
+        unresolved = tuple(
+            total
+            for total in totals
+            if budget.memory_space is MemorySpace.ACCELERATOR
+            and budget.device_id is not None
+            and total.memory_space is MemorySpace.ACCELERATOR
+            and total.device_id is None
             and total.category is None
             and total.component_role is None
         )
         if not matching:
             available_spaces = {
                 (total.memory_space, total.device_id)
-                for total in self.totals
+                for total in totals
                 if total.category is None and total.component_role is None
             }
             if (
-                available_spaces
+                not unresolved
                 and (
                     budget.memory_space,
                     budget.device_id,
@@ -741,16 +779,27 @@ class MemorySnapshot:
                 raise ValueError("budget has no matching memory space/device subtotal")
             measured_bytes = 0
             measured_count = 0
-            unreliable_count = 0
-            unavailable_count = 0
-            completeness = Completeness.COMPLETE
+            if unresolved:
+                unresolved_total = unresolved[0]
+                unreliable_count = unresolved_total.unreliable_count
+                unavailable_count = unresolved_total.unavailable_count
+                missing_count = unresolved_total.missing_count
+            else:
+                unreliable_count = 0
+                unavailable_count = 0
+                missing_count = 0
         else:
             total = matching[0]
             measured_bytes = total.measured_bytes
             measured_count = total.measured_count
             unreliable_count = total.unreliable_count
             unavailable_count = total.unavailable_count
-            completeness = total.completeness
+            missing_count = total.missing_count
+        completeness = (
+            Completeness.COMPLETE
+            if unreliable_count == 0 and unavailable_count == 0 and missing_count == 0
+            else Completeness.INCOMPLETE
+        )
         headroom = budget.budget_bytes - measured_bytes
         if measured_bytes > budget.budget_bytes:
             state = BudgetState.BREACHED
@@ -766,5 +815,6 @@ class MemorySnapshot:
             measured_count=measured_count,
             unreliable_count=unreliable_count,
             unavailable_count=unavailable_count,
+            missing_count=missing_count,
             completeness=completeness,
         )

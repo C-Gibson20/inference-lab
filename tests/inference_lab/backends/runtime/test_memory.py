@@ -67,6 +67,16 @@ def test_status_presence_rules_are_strict() -> None:
     assert measurement(status="unreliable", value_bytes=1).status == "unreliable"
 
 
+def test_measured_accelerator_memory_requires_a_device() -> None:
+    with pytest.raises(ValueError, match="must identify its device"):
+        measurement(device_id=None)
+
+    assert (
+        measurement(status="unavailable", value_bytes=None, device_id=None).device_id
+        is None
+    )
+
+
 def test_roll_up_requires_unique_non_self_coverage() -> None:
     with pytest.raises(ValueError, match="must cover contributions"):
         measurement(contribution_kind=ContributionKind.ROLL_UP)

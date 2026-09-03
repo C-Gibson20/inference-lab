@@ -77,6 +77,7 @@ _COMPARISON_FIELDS: Final[frozenset[str]] = frozenset(
         "completeness",
         "measured_bytes",
         "measured_count",
+        "missing_count",
         "provisional_headroom_bytes",
         "state",
         "unavailable_count",
@@ -406,6 +407,7 @@ def serialise_budget_comparison(comparison: BudgetComparison) -> bytes:
             "completeness": comparison.completeness.value,
             "measured_bytes": comparison.measured_bytes,
             "measured_count": comparison.measured_count,
+            "missing_count": comparison.missing_count,
             "provisional_headroom_bytes": comparison.provisional_headroom_bytes,
             "state": comparison.state.value,
             "unavailable_count": comparison.unavailable_count,
@@ -436,5 +438,6 @@ def deserialise_budget_comparison(data: bytes) -> BudgetComparison:
         measured_count=_require_integer(payload, "measured_count"),
         unreliable_count=_require_integer(payload, "unreliable_count"),
         unavailable_count=_require_integer(payload, "unavailable_count"),
+        missing_count=_require_integer(payload, "missing_count"),
         completeness=completeness,
     )

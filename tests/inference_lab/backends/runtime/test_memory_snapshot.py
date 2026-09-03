@@ -256,7 +256,71 @@ def test_missing_and_unreliable_values_make_totals_incomplete() -> None:
     assert total.unreliable_bytes == 4
     assert total.unreliable_count == 1
     assert total.unavailable_count == 1
+    assert total.missing_count == 0
     assert total.completeness is Completeness.INCOMPLETE
+
+
+def test_absent_expected_contribution_is_counted_and_never_safe() -> None:
+    promised = measurement(
+        "workspace",
+        component_id="workspace",
+        component_role=ComponentRole.ACTIVATION_WORKSPACE,
+        category="activations",
+    )
+    memory_snapshot = MemorySnapshot(
+        observed_at=OBSERVED_AT,
+        collector=COLLECTOR,
+        expected_contributions=(expected_contribution(promised),),
+        measurements=(),
+    )
+
+    total = space_total(memory_snapshot, MemorySpace.ACCELERATOR)
+    comparison = memory_snapshot.compare_budget(
+        MemoryBudget(MemorySpace.ACCELERATOR, "cuda-0", 24_000_000_000)
+    )
+
+    assert total.measured_bytes == 0
+    assert total.missing_count == 1
+    assert total.completeness is Completeness.INCOMPLETE
+    assert comparison.state is BudgetState.INDETERMINATE
+    assert comparison.missing_count == 1
+
+
+def test_unknown_accelerator_device_contaminates_each_device_budget() -> None:
+    weights = measurement("weights", value_bytes=23_000_000_000)
+    unknown_cache = measurement(
+        "cache",
+        component_id="cache",
+        component_role=ComponentRole.KV_CACHE,
+        category="kv_cache",
+        device_id=None,
+        status="unavailable",
+        value_bytes=None,
+    )
+    memory_snapshot = snapshot(weights, unknown_cache)
+
+    cuda_0 = memory_snapshot.compare_budget(
+        MemoryBudget(MemorySpace.ACCELERATOR, "cuda-0", 24_000_000_000)
+    )
+    cuda_1 = memory_snapshot.compare_budget(
+        MemoryBudget(MemorySpace.ACCELERATOR, "cuda-1", 24_000_000_000)
+    )
+    cuda_0_total = next(
+        total
+        for total in memory_snapshot.totals
+        if total.memory_space is MemorySpace.ACCELERATOR
+        and total.device_id == "cuda-0"
+        and total.category is None
+    )
+
+    assert cuda_0_total.completeness is Completeness.INCOMPLETE
+    assert cuda_0_total.unavailable_count == 1
+    assert cuda_0.measured_bytes == 23_000_000_000
+    assert cuda_0.unavailable_count == 1
+    assert cuda_0.state is BudgetState.INDETERMINATE
+    assert cuda_1.measured_bytes == 0
+    assert cuda_1.unavailable_count == 1
+    assert cuda_1.state is BudgetState.INDETERMINATE
 
 
 def test_mismatched_measured_rollup_is_retained_as_unreconciled_diagnostic() -> None:
