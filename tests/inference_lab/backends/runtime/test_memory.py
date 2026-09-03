@@ -7,6 +7,7 @@ from inference_lab.backends.runtime import (
     ContributionKind,
     MemoryAccountingAdapter,
     MemoryAdapterIdentity,
+    MemoryCollectorIdentity,
     MemoryMeasurement,
     MemorySpace,
 )
@@ -49,6 +50,29 @@ def test_measurement_is_immutable_and_requires_tuple_coverage() -> None:
         record.value_bytes = 2  # type: ignore[misc]
     with pytest.raises(TypeError, match="must be a tuple"):
         measurement(covers_measurement_ids=["child"])  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("version", ["1", "1.0", "01.0.0", "1.0.0-01"])
+def test_memory_identity_versions_require_canonical_semantic_versions(
+    version: str,
+) -> None:
+    with pytest.raises(ValueError, match="adapter_version"):
+        MemoryAdapterIdentity("fake", version, "calibration-1")
+    with pytest.raises(ValueError, match="collector_version"):
+        MemoryCollectorIdentity("runtime", version, "inventory-1")
+
+
+def test_memory_identity_versions_accept_semantic_version_extensions() -> None:
+    version = "1.2.0-rc.1+local"
+
+    assert (
+        MemoryAdapterIdentity("fake", version, "calibration-1").adapter_version
+        == version
+    )
+    assert (
+        MemoryCollectorIdentity("runtime", version, "inventory-1").collector_version
+        == version
+    )
 
 
 @pytest.mark.parametrize("value", [-1, 1.5, True])

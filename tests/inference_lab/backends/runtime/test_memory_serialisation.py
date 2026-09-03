@@ -90,7 +90,7 @@ def test_snapshot_serialisation_is_canonical_and_round_trips() -> None:
     assert serialised.index(b'"a-first"') < serialised.index(b'"z-last"')
     assert b" " not in serialised
     payload = json.loads(serialised)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == "2.0.0"
     assert payload["collector"]["collector_name"] == "test"
     assert payload["overlap_policy"] == "disallow"
     assert len(payload["expected_contributions"]) == 2
@@ -139,8 +139,8 @@ def test_budget_comparison_deserialisation_rejects_contradictory_facts(
 @pytest.mark.parametrize(
     "data",
     [
-        b'{"schema_version":1,"schema_version":1}',
-        b'{"schema_version":1}',
+        b'{"schema_version":"1.0.0","schema_version":"1.0.0"}',
+        b'{"schema_version":"1.0.0"}',
         b'{"schema_version":true}',
         b"not-json",
         b"\xff",
@@ -160,7 +160,7 @@ def test_snapshot_deserialisation_rejects_unknown_and_unsupported_fields() -> No
         deserialise_memory_snapshot(json.dumps(payload).encode())
 
     payload = json.loads(serialise_memory_snapshot(make_snapshot()))
-    payload["schema_version"] = 3
+    payload["schema_version"] = "3.0.0"
     with pytest.raises(ValueError, match="unsupported"):
         deserialise_memory_snapshot(json.dumps(payload).encode())
 

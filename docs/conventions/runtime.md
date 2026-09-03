@@ -207,13 +207,15 @@ non-negative integers. Component role and memory category are independent: for
 example, generator weights are `model_weights`, while an explicitly coarse
 embedder total may use `embedding_reranker_memory`.
 
-Memory snapshot schema version 2 separates the identity of the collector that
-assembles the snapshot from the identity of each adapter that supplies a
+Memory snapshot schema version `2.0.0` separates the identity of the collector
+that assembles the snapshot from the identity of each adapter that supplies a
 measurement. Every snapshot declares a non-empty expected-contribution
 inventory. Each entry binds one component, role, category, memory space and
 device slot to its responsible adapter, so one snapshot may compose multiple
-adapters without weakening attribution. Schema version 1 snapshots are not
-accepted as version 2 data.
+adapters without weakening attribution. Schema version `1.0.0` snapshots are
+not accepted as `2.0.0` data. Snapshot, adapter, and collector versions use
+canonical semantic-version strings; calibration and inventory revisions remain
+opaque revision identifiers.
 
 Exclusive contributions are counted once. The `disallow` overlap policy
 rejects duplicate expected slots and duplicate or unplanned exclusive

@@ -43,7 +43,7 @@ def test_measured_resource_serialises_all_fields() -> None:
         "document_id": None,
         "corpus_id": None,
         "corpus_version": None,
-        "record_schema_version": 3,
+        "record_schema_version": "3.0.0",
     }
 
 
@@ -251,5 +251,5 @@ def test_resource_measurement_rejects_invalid_schema_version() -> None:
         ResourceMeasurement(
             category="power",
             value=100,
-            record_schema_version=0,
+            record_schema_version="2.0.0",
         )
