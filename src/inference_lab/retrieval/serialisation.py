@@ -204,6 +204,7 @@ def _result_payload(result: EvidenceResult) -> JsonObject:
     return {
         "retrieval_schema_version": CURRENT_RETRIEVAL_SCHEMA_VERSION,
         "corpus_version": result.corpus_version.as_str(),
+        "requested_limit": result.requested_limit.value,
         "hits": [_hit_payload(hit) for hit in result.hits],
         "status": result.status.value,
         "failures": [_failure_payload(failure) for failure in result.failures],
@@ -594,7 +595,14 @@ def deserialise_evidence_result(data: bytes) -> EvidenceResult:
         payload,
         name="result",
         keys=frozenset(
-            {"retrieval_schema_version", "corpus_version", "hits", "status", "failures"}
+            {
+                "retrieval_schema_version",
+                "corpus_version",
+                "requested_limit",
+                "hits",
+                "status",
+                "failures",
+            }
         ),
     )
     try:
@@ -606,6 +614,9 @@ def deserialise_evidence_result(data: bytes) -> EvidenceResult:
                     name="result.corpus_version",
                     constructor=CorpusVersionId.from_str,
                 ),
+            ),
+            RetrievalLimit(
+                _integer(payload["requested_limit"], name="result.requested_limit")
             ),
             tuple(_hit(item) for item in _array(payload["hits"], name="result.hits")),
             cast(

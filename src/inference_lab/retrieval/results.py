@@ -9,7 +9,7 @@ from inference_lab.retrieval.errors import (
 )
 from inference_lab.retrieval.evidence import EvidenceHit
 from inference_lab.retrieval.query import RetrievalQuery
-from inference_lab.retrieval.values import RetrievalChannel
+from inference_lab.retrieval.values import RetrievalChannel, RetrievalLimit
 
 
 class ResultStatus(StrEnum):
@@ -55,6 +55,7 @@ class EvidenceResult:
     """A version-scoped ordered result, including successful empty output."""
 
     corpus_version: CorpusVersionId
+    requested_limit: RetrievalLimit
     hits: tuple[EvidenceHit, ...]
     status: ResultStatus
     failures: tuple[RetrievalFailure, ...]
@@ -66,6 +67,8 @@ class EvidenceResult:
         """Validate the result's fields."""
         if not isinstance(self.corpus_version, CorpusVersionId):
             raise TypeError("corpus_version must be a CorpusVersionId.")
+        if not isinstance(self.requested_limit, RetrievalLimit):
+            raise TypeError("requested_limit must be a RetrievalLimit.")
         if not isinstance(self.hits, tuple):
             raise TypeError("hits must be a tuple.")
         if any(not isinstance(hit, EvidenceHit) for hit in self.hits):
@@ -87,6 +90,10 @@ class EvidenceResult:
             raise InvalidRetrievalResultError(
                 "hits must not contain duplicate candidate identities."
             )
+        if len(self.hits) > self.requested_limit.value:
+            raise InvalidRetrievalResultError(
+                "hits must not exceed the requested retrieval limit."
+            )
 
         if self.status is ResultStatus.COMPLETED and self.failures:
             raise InvalidRetrievalResultError(
@@ -99,6 +106,30 @@ class EvidenceResult:
         if self.status is ResultStatus.FAILED and (self.hits or not self.failures):
             raise InvalidRetrievalResultError(
                 "a failed result requires failures and no hits."
+            )
+
+        mismatch_failures = tuple(
+            failure
+            for failure in self.failures
+            if failure.category is FailureCategory.CORPUS_VERSION_MISMATCH
+        )
+        if any(failure.channel is None for failure in mismatch_failures):
+            if self.status is not ResultStatus.FAILED or self.hits:
+                raise InvalidRetrievalResultError(
+                    "an unscoped corpus mismatch requires a failed result with no hits."
+                )
+        mismatched_channels = {
+            failure.channel
+            for failure in mismatch_failures
+            if failure.channel is not None
+        }
+        if any(
+            contribution.channel in mismatched_channels
+            for hit in self.hits
+            for contribution in hit.contributions
+        ):
+            raise InvalidRetrievalResultError(
+                "hits must not contain contributions from a mismatched channel."
             )
 
     @classmethod
@@ -119,6 +150,7 @@ class EvidenceResult:
         if observed_corpus_version != query.corpus_version:
             return cls(
                 corpus_version=query.corpus_version,
+                requested_limit=query.limit,
                 hits=(),
                 status=ResultStatus.FAILED,
                 failures=(
@@ -130,6 +162,7 @@ class EvidenceResult:
             )
         return cls(
             corpus_version=query.corpus_version,
+            requested_limit=query.limit,
             hits=hits,
             status=status,
             failures=failures,
