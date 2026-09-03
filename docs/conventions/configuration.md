@@ -90,6 +90,12 @@ Required values are:
 Changes to `config.toml` or the environment take effect after a process
 restart. Tests and other controlled callers may clear the cache explicitly.
 
+Application composition opens metadata through
+`inference_lab.storage.open_metadata_repository()`, passing the validated
+`settings.storage.metadata_db_path`. Schema creation and supported forward
+migrations occur only when the caller explicitly sets `apply_migrations=True`;
+the default open policy is non-mutating and rejects a missing or older schema.
+
 Configuration errors must fail startup clearly. They must not be replaced with
 guessed model paths, storage paths, or runtime values.
 
