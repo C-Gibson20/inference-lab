@@ -82,6 +82,26 @@ assertions are supplied on later resolution requests and participate in match,
 conflict, and enrichment decisions. A different value in an already asserted
 namespace is a conflict, not an enrichment.
 
+## Identity-record compatibility
+
+PROV-02's document identity, source version, source observation, duplicate,
+family, and identity-resolution values are versioned domain entities; they are
+not independently schema-versioned wire records. They therefore do not carry a
+record schema version or define a public canonical byte round trip. Their
+in-memory constructors and invariants are the domain contract.
+
+`IdentityResolutionRequest.as_dict()` and
+`IdentityResolutionOutcome.as_dict()` provide deterministic JSON-compatible
+projections for in-process inspection and tests. They are not a persistence,
+interchange, or recovery format, have no compatible reader contract, and must
+not be stored as durable identity records.
+
+SQLite schema migrations own compatibility for the current metadata store.
+STOR-08 owns any future portable backup/export record schema after corpus
+generations and the complete persistent-state shape exist. The lineage
+serialisation contract below remains independently versioned because PROV-03
+explicitly exposes lineage records at a canonical byte boundary.
+
 ## Stability rules
 
 Document identity is distinct from document-version identity:
