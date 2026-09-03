@@ -1,7 +1,6 @@
 """Acceptance tests for SQLite repository migration."""
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -26,7 +25,8 @@ from inference_lab.storage import MigrationRequiredError, StorageMigrationError
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 14, 0, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
 _CORPUS_ID = CorpusId("01014415-1989-449f-8824-cb13e418d92f")
 _FAMILY_ID = DocumentFamilyId("6a5a72ce-e82f-4168-adb4-36c090dd19f0")
 _FIRST_DOCUMENT_ID = DocumentId("056b503e-e15d-4ed2-87db-d352ff97dcf2")
@@ -54,10 +54,6 @@ _MEMBERSHIP = DocumentFamilyMembership(
     _FIRST_DOCUMENT_ID,
     _FIRST_VERSION_ID,
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _revision_two() -> MigrationDefinition:

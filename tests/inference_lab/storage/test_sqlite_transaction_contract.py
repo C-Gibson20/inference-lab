@@ -1,7 +1,6 @@
 """Tests for SQLite metadata transaction contracts."""
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -9,7 +8,6 @@ from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
     ContentHash,
-    CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
     DocumentFamilyId,
@@ -33,7 +31,14 @@ from inference_lab.storage import _sqlite_logging as logging_module
 from inference_lab.storage._sqlite_migrations import MIGRATIONS
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 11, 0, tzinfo=UTC)
+from .fixtures import (  # noqa: TID252
+    CompleteMetadataGraph,
+    add_complete_graph,
+)
+from .fixtures import (  # noqa: TID252
+    open_repository as _open_repository,
+)
+
 _CORPUS_ID = CorpusId("62738887-ac02-4c50-98d3-637658880de5")
 _CORPUS = CorpusMetadata(_CORPUS_ID, "Test corpus")
 _FAMILY_ID = DocumentFamilyId("66f40173-12bb-4054-a427-0bb08f79aa34")
@@ -64,35 +69,13 @@ _MEMBERSHIP = DocumentFamilyMembership(
 )
 
 
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
-
-
-def _add_complete_graph(transaction: MetadataTransaction) -> None:
-    transaction.add_corpus(_CORPUS)
-    transaction.add_document_family(_FAMILY_ID)
-    transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
-    transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
-    transaction.add_document_version(_FIRST_VERSION)
-    transaction.add_document_version(_SECOND_VERSION)
-    for version in (_FIRST_VERSION, _SECOND_VERSION):
-        transaction.add_corpus_document_version_membership(
-            CorpusDocumentVersionMembership(
-                _CORPUS_ID,
-                version.document_id,
-                version.document_version_id,
-            )
-        )
-    transaction.add_duplicate_relationship(_DUPLICATE)
-    transaction.add_family_membership(_MEMBERSHIP)
+_COMPLETE_GRAPH = CompleteMetadataGraph(
+    corpus=_CORPUS,
+    family_id=_FAMILY_ID,
+    versions=(_FIRST_VERSION, _SECOND_VERSION),
+    duplicate_relationships=(_DUPLICATE,),
+    family_memberships=(_MEMBERSHIP,),
+)
 
 
 def test_concrete_repository_and_transaction_satisfy_public_protocols(
@@ -118,7 +101,7 @@ def test_complete_metadata_graph_commits_atomically(tmp_path: Path) -> None:
     repository = _open_repository(tmp_path / "metadata.sqlite3")
     try:
         with repository.transaction() as transaction:
-            _add_complete_graph(transaction)
+            add_complete_graph(transaction, _COMPLETE_GRAPH)
 
         assert repository.get_corpus(_CORPUS_ID) == _CORPUS
         assert repository.get_document_family(_FAMILY_ID) == _FAMILY_ID
@@ -148,7 +131,7 @@ def test_failure_at_final_relationship_step_rolls_back_complete_graph(
     try:
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
-                _add_complete_graph(transaction)
+                add_complete_graph(transaction, _COMPLETE_GRAPH)
                 transaction.add_family_membership(invalid_membership)
 
         assert repository.get_corpus(_CORPUS_ID) is None

@@ -1,7 +1,6 @@
 """Tests for explicit SQLite schema upgrades."""
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -22,12 +21,9 @@ from inference_lab.storage._sqlite_inspection import (
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_upgrade import apply_pending_migrations
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
 _CORPUS_ID = "00000000-0000-0000-0000-000000000001"
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _revision_two() -> MigrationDefinition:
@@ -248,6 +244,31 @@ def test_upgrade_rejects_an_existing_transaction(tmp_path: Path) -> None:
 
         assert connection.in_transaction is True
         connection.rollback()
+    finally:
+        connection.close()
+
+
+def test_upgrade_rejects_invalid_boundary_values(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="connection"):
+        apply_pending_migrations(object())  # type: ignore[arg-type]
+
+    connection = _initialise_baseline(tmp_path / "metadata.sqlite3")
+    try:
+        with pytest.raises(TypeError, match="applied_at_factory"):
+            apply_pending_migrations(
+                connection,
+                applied_at_factory=None,  # type: ignore[arg-type]
+            )
+        with pytest.raises(StorageMigrationError):
+            apply_pending_migrations(
+                connection,
+                migrations=[],  # type: ignore[arg-type]
+            )
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("SELECT corpus_id FROM corpora").fetchone()[0] == (
+            _CORPUS_ID
+        )
     finally:
         connection.close()
 

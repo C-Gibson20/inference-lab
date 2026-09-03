@@ -1,7 +1,7 @@
 """Tests for atomic SQLite schema initialisation."""
 
 import sqlite3
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -20,11 +20,7 @@ from inference_lab.storage._sqlite_migrations import (
     MigrationDefinition,
 )
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
 
 
 def _schema_objects(connection: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -185,6 +181,29 @@ def test_initialisation_rejects_an_existing_transaction(tmp_path: Path) -> None:
         assert connection.in_transaction is True
         assert _schema_objects(connection) == []
         connection.rollback()
+    finally:
+        connection.close()
+
+
+def test_initialisation_rejects_invalid_boundary_values(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="connection"):
+        initialise_empty_database(object())  # type: ignore[arg-type]
+
+    connection = open_sqlite_connection(tmp_path / "metadata.sqlite3")
+    try:
+        with pytest.raises(TypeError, match="applied_at_factory"):
+            initialise_empty_database(
+                connection,
+                applied_at_factory=None,  # type: ignore[arg-type]
+            )
+        with pytest.raises(StorageMigrationError):
+            initialise_empty_database(
+                connection,
+                migrations=[],  # type: ignore[arg-type]
+            )
+
+        assert connection.in_transaction is False
+        assert _schema_objects(connection) == []
     finally:
         connection.close()
 

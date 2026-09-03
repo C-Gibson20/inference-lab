@@ -5,10 +5,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from inference_lab.provenance.derived import (
-    DerivedRecordKind,
     DerivedRecordMetadata,
-    OutputDigest,
-    build_derivation_fingerprint,
 )
 from inference_lab.provenance.errors import InvalidLineageGraphError
 from inference_lab.provenance.identifiers import (
@@ -19,21 +16,21 @@ from inference_lab.provenance.identifiers import (
 from inference_lab.provenance.lineage import (
     LineageEdge,
     LineageInputs,
-    ParentRecordReference,
-    SourceAnchor,
-)
-from inference_lab.provenance.operations import (
-    ConfigurationIdentity,
-    DigestAlgorithm,
-    OperationKind,
-    ProducingOperation,
 )
 from inference_lab.provenance.validation import (
     KnownSourceSpan,
     LineageBundle,
     validate_lineage_bundle,
 )
-from inference_lab.provenance.versioning import CURRENT_LINEAGE_SCHEMA_VERSION
+
+from .fixtures import (  # noqa: TID252
+    derived_record,
+    producing_operation,
+    source_inputs,
+)
+from .fixtures import (  # noqa: TID252
+    parent_inputs as _parent_inputs,
+)
 
 _DOCUMENT_A = DocumentVersionId.from_str("11111111-1111-4111-8111-111111111111")
 _DOCUMENT_B = DocumentVersionId.from_str("22222222-2222-4222-8222-222222222222")
@@ -59,34 +56,15 @@ def _source_inputs(
     document_version_id: DocumentVersionId = _DOCUMENT_A,
     source_span_id: SourceSpanId = _SPAN_A,
 ) -> LineageInputs:
-    return LineageInputs(
-        source_anchors=(
-            SourceAnchor(
-                document_version_id=document_version_id,
-                source_span_id=source_span_id,
-            ),
-        )
-    )
+    return source_inputs(document_version_id, source_span_id)
 
 
-def _parent_inputs(*record_ids: RecordId) -> LineageInputs:
-    return LineageInputs(
-        parent_records=tuple(
-            ParentRecordReference(record_id=record_id) for record_id in record_ids
-        )
-    )
-
-
-def _operation() -> ProducingOperation:
-    return ProducingOperation(
-        kind=OperationKind("summarisation"),
-        implementation="traceable-summariser",
-        contract_version="1.0.0",
-        configuration_identity=ConfigurationIdentity(
-            algorithm=DigestAlgorithm.SHA256,
-            digest="c" * 64,
-        ),
-    )
+_OPERATION = producing_operation(
+    kind="summarisation",
+    implementation="traceable-summariser",
+    contract_version="1.0.0",
+    configuration_digest="c" * 64,
+)
 
 
 def _record(
@@ -97,24 +75,12 @@ def _record(
     output_digest: str = "d" * 64,
     supersedes_record_id: RecordId | None = None,
 ) -> DerivedRecordMetadata:
-    record_kind = DerivedRecordKind(kind)
-    operation = _operation()
-    digest = OutputDigest(DigestAlgorithm.SHA256, output_digest)
-    fingerprint = build_derivation_fingerprint(
-        record_kind=record_kind,
-        lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
+    return derived_record(
+        record_id,
+        record_kind=kind,
         inputs=inputs,
-        operation=operation,
-        output_digest=digest,
-    )
-    return DerivedRecordMetadata(
-        record_id=record_id,
-        record_kind=record_kind,
-        lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
-        inputs=inputs,
-        operation=operation,
-        output_digest=digest,
-        derivation_fingerprint=fingerprint,
+        operation=_OPERATION,
+        output_digest=output_digest,
         supersedes_record_id=supersedes_record_id,
     )
 

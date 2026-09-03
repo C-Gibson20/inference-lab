@@ -74,6 +74,36 @@ def test_result_validates_order_identity_and_statuses(
         EvidenceResult(version, limit, (hit,), ResultStatus.FAILED, (failure,))
 
 
+def test_failure_and_result_reject_wrong_contract_types(
+    candidate: RetrievalCandidate,
+) -> None:
+    version = CorpusVersionId.generate()
+    limit = RetrievalLimit(1)
+    hit = EvidenceHit(candidate, (ChannelScore(RetrievalChannel.LEXICAL, 1),), 1)
+    failure = RetrievalFailure(FailureCategory.CHANNEL_UNAVAILABLE, True)
+
+    with pytest.raises(TypeError, match="category"):
+        RetrievalFailure("channel_unavailable", True)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="channel"):
+        RetrievalFailure(FailureCategory.CHANNEL_UNAVAILABLE, True, "dense")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="retryable"):
+        RetrievalFailure(FailureCategory.CHANNEL_UNAVAILABLE, 1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="corpus_version"):
+        EvidenceResult(limit, limit, (), ResultStatus.COMPLETED, ())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="requested_limit"):
+        EvidenceResult(version, 1, (), ResultStatus.COMPLETED, ())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="hits must be a tuple"):
+        EvidenceResult(version, limit, [hit], ResultStatus.COMPLETED, ())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="EvidenceHit"):
+        EvidenceResult(version, limit, (candidate,), ResultStatus.COMPLETED, ())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="status"):
+        EvidenceResult(version, limit, (), "completed", ())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="failures must be a tuple"):
+        EvidenceResult(version, limit, (), ResultStatus.COMPLETED, [failure])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="RetrievalFailure"):
+        EvidenceResult(version, limit, (), ResultStatus.COMPLETED, (hit,))  # type: ignore[arg-type]
+
+
 def test_result_ranks_are_contiguous_and_candidate_ids_unique(
     source: EvidenceSource,
 ) -> None:
@@ -108,6 +138,20 @@ def test_result_ranks_are_contiguous_and_candidate_ids_unique(
             (),
         )
 
+    duplicate_identity = EvidenceHit(
+        first,
+        (ChannelScore(RetrievalChannel.DENSE, 2),),
+        2,
+    )
+    with pytest.raises(InvalidRetrievalResultError, match="duplicate candidate"):
+        EvidenceResult(
+            version,
+            RetrievalLimit(2),
+            (first_hit, duplicate_identity),
+            ResultStatus.COMPLETED,
+            (),
+        )
+
 
 def test_from_query_fails_closed_on_corpus_version_mismatch(
     candidate: RetrievalCandidate,
@@ -130,6 +174,28 @@ def test_from_query_fails_closed_on_corpus_version_mismatch(
     assert result.status is ResultStatus.FAILED
     assert result.failures[0].category is FailureCategory.CORPUS_VERSION_MISMATCH
     assert result.failures[0].channel is None
+
+
+def test_from_query_rejects_wrong_boundary_types() -> None:
+    version = CorpusVersionId.generate()
+    query = RetrievalQuery("question", version, RetrievalLimit(1))
+
+    with pytest.raises(TypeError, match="query"):
+        EvidenceResult.from_query(
+            "question",  # type: ignore[arg-type]
+            observed_corpus_version=version,
+            hits=(),
+            status=ResultStatus.COMPLETED,
+            failures=(),
+        )
+    with pytest.raises(TypeError, match="observed_corpus_version"):
+        EvidenceResult.from_query(
+            query,
+            observed_corpus_version="version",  # type: ignore[arg-type]
+            hits=(),
+            status=ResultStatus.COMPLETED,
+            failures=(),
+        )
 
 
 def test_result_enforces_requested_limit_at_query_and_value_boundaries(

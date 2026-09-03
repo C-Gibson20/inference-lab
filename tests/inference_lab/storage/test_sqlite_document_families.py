@@ -1,6 +1,5 @@
 """Tests for SQLite document-family identities."""
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -9,20 +8,9 @@ from inference_lab.provenance import DocumentFamilyId
 from inference_lab.storage import RepositoryClosedError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 9, 30, tzinfo=UTC)
+from .fixtures import open_repository as _open_repository  # noqa: TID252
+
 _FAMILY_ID = DocumentFamilyId("4a020bbc-5e41-46f8-8442-37a4aef86552")
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def test_document_family_round_trips_after_restart_without_row_identity(

@@ -80,6 +80,32 @@ def make_snapshot() -> MemorySnapshot:
     )
 
 
+def _snapshot_payload() -> dict[str, object]:
+    """Return a mutable JSON snapshot payload."""
+    return json.loads(serialise_memory_snapshot(make_snapshot()))
+
+
+def _comparison_payload() -> dict[str, object]:
+    """Return a mutable JSON budget-comparison payload."""
+    comparison = make_snapshot().compare_budget(
+        MemoryBudget(MemorySpace.ACCELERATOR, "cuda-0", 2048)
+    )
+    return json.loads(serialise_budget_comparison(comparison))
+
+
+def _replace_path(
+    payload: dict[str, object],
+    path: tuple[str | int, ...],
+    value: object,
+) -> bytes:
+    """Replace one nested JSON value and encode the resulting payload."""
+    target: object = payload
+    for key in path[:-1]:
+        target = target[key]  # type: ignore[index]
+    target[path[-1]] = value  # type: ignore[index]
+    return json.dumps(payload).encode()
+
+
 def test_snapshot_serialisation_is_canonical_and_round_trips() -> None:
     snapshot = make_snapshot()
 
@@ -173,3 +199,104 @@ def test_nested_scalar_coercion_is_rejected() -> None:
 
     with pytest.raises(TypeError, match="value_bytes"):
         deserialise_memory_snapshot(json.dumps(payload).encode())
+
+
+def test_memory_serialisers_reject_wrong_envelope_types() -> None:
+    with pytest.raises(TypeError, match="MemorySnapshot"):
+        serialise_memory_snapshot("snapshot")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="BudgetComparison"):
+        serialise_budget_comparison("comparison")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="bytes"):
+        deserialise_memory_snapshot("snapshot")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="bytes"):
+        deserialise_budget_comparison("comparison")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "error_type", "message"),
+    [
+        (("measurements",), {}, TypeError, "measurements"),
+        (("expected_contributions",), {}, TypeError, "expected_contributions"),
+        (("collector",), [], TypeError, "collector"),
+        (("collector", "collector_name"), 1, TypeError, "collector_name"),
+        (("run_id",), 1, TypeError, "run_id"),
+        (("observed_at",), "not-a-date", ValueError, "ISO datetime"),
+        (("overlap_policy",), "unknown", ValueError, "overlap policy"),
+        (("expected_contributions", 0), [], TypeError, "JSON objects"),
+        (
+            ("expected_contributions", 0, "component_role"),
+            "unknown",
+            ValueError,
+            "unsupported enum",
+        ),
+        (
+            ("expected_contributions", 0, "memory_space"),
+            "unknown",
+            ValueError,
+            "unsupported enum",
+        ),
+        (
+            ("expected_contributions", 0, "category"),
+            "unknown",
+            ValueError,
+            "supported memory category",
+        ),
+        (("expected_contributions", 0, "device_id"), 1, TypeError, "device_id"),
+        (("expected_contributions", 0, "adapter"), [], TypeError, "adapter"),
+        (("measurements", 0), [], TypeError, "JSON objects"),
+        (
+            ("measurements", 0, "covers_measurement_ids"),
+            {},
+            TypeError,
+            "JSON array",
+        ),
+        (
+            ("measurements", 0, "covers_measurement_ids"),
+            [1],
+            TypeError,
+            "contain strings",
+        ),
+        (
+            ("measurements", 0, "contribution_kind"),
+            "unknown",
+            ValueError,
+            "unsupported enum",
+        ),
+        (("measurements", 0, "status"), "unknown", ValueError, "status"),
+        (("measurements", 0, "observed_at"), "invalid", ValueError, "ISO datetime"),
+    ],
+)
+def test_snapshot_deserialisation_rejects_invalid_nested_contracts(
+    path: tuple[str | int, ...],
+    value: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    data = _replace_path(_snapshot_payload(), path, value)
+
+    with pytest.raises(error_type, match=message):
+        deserialise_memory_snapshot(data)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "error_type", "message"),
+    [
+        (("budget",), [], TypeError, "budget"),
+        (("budget", "memory_space"), "unknown", ValueError, "memory space"),
+        (("budget", "device_id"), 1, TypeError, "device_id"),
+        (("budget", "budget_bytes"), True, TypeError, "budget_bytes"),
+        (("state",), "unknown", ValueError, "unsupported enum"),
+        (("completeness",), "unknown", ValueError, "unsupported enum"),
+        (("measured_bytes",), True, TypeError, "measured_bytes"),
+    ],
+)
+def test_budget_deserialisation_rejects_invalid_nested_contracts(
+    path: tuple[str | int, ...],
+    value: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    data = _replace_path(_comparison_payload(), path, value)
+
+    with pytest.raises(error_type, match=message):
+        deserialise_budget_comparison(data)

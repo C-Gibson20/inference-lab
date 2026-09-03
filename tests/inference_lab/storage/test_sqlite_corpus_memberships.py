@@ -1,6 +1,5 @@
 """Tests for SQLite corpus catalogue membership."""
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,8 @@ from inference_lab.provenance import (
 from inference_lab.storage import StorageConflictError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 16, 0, tzinfo=UTC)
+from .fixtures import open_repository as _open  # noqa: TID252
+
 _FIRST_CORPUS = CorpusMetadata(
     CorpusId("11111111-1111-4111-8111-111111111111"), "First corpus"
 )
@@ -40,18 +40,6 @@ _FIRST_MEMBERSHIP = CorpusDocumentVersionMembership(
 _SECOND_MEMBERSHIP = CorpusDocumentVersionMembership(
     _SECOND_CORPUS.corpus_id, _DOCUMENT_ID, _VERSION_ID
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def _add_shared_version(repository: SQLiteMetadataRepository) -> None:

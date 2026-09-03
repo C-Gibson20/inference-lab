@@ -3,27 +3,24 @@
 import pytest
 
 from inference_lab.provenance import (
-    CURRENT_LINEAGE_SCHEMA_VERSION,
-    ConfigurationIdentity,
-    DerivedRecordKind,
     DerivedRecordMetadata,
-    DigestAlgorithm,
     DocumentVersionId,
     InvalidLineageReferenceError,
     KnownSourceSpan,
     LineageBundle,
     LineageInputs,
-    OperationKind,
-    OutputDigest,
-    ParentRecordReference,
-    ProducingOperation,
     RecordId,
-    SourceAnchor,
     SourceSpanId,
-    build_derivation_fingerprint,
     deserialise_lineage_bundle,
     serialise_lineage_bundle,
     validate_lineage_bundle,
+)
+
+from .fixtures import (  # noqa: TID252
+    derived_record,
+    parent_inputs,
+    producing_operation,
+    source_inputs,
 )
 
 _DOCUMENT_A = DocumentVersionId.from_str("11111111-1111-4111-8111-111111111111")
@@ -38,28 +35,6 @@ _TOPIC_SUMMARY = RecordId.from_str("99999999-9999-4999-8999-999999999999")
 _CORPUS_SUMMARY = RecordId.from_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
 
-def _source_inputs(
-    document_version_id: DocumentVersionId,
-    source_span_id: SourceSpanId,
-) -> LineageInputs:
-    return LineageInputs(
-        source_anchors=(
-            SourceAnchor(
-                document_version_id=document_version_id,
-                source_span_id=source_span_id,
-            ),
-        )
-    )
-
-
-def _parent_inputs(*record_ids: RecordId) -> LineageInputs:
-    return LineageInputs(
-        parent_records=tuple(
-            ParentRecordReference(record_id=record_id) for record_id in record_ids
-        )
-    )
-
-
 def _record(
     record_id: RecordId,
     *,
@@ -67,39 +42,23 @@ def _record(
     inputs: LineageInputs,
     digest_character: str,
 ) -> DerivedRecordMetadata:
-    record_kind = DerivedRecordKind(kind)
-    operation = ProducingOperation(
-        kind=OperationKind(f"{kind}-production"),
+    operation = producing_operation(
+        kind=f"{kind}-production",
         implementation=f"canonical-{kind}-producer",
         contract_version="1.0.0",
-        configuration_identity=ConfigurationIdentity(
-            algorithm=DigestAlgorithm.SHA256,
-            digest=digest_character * 64,
-        ),
+        configuration_digest=digest_character * 64,
     )
-    output_digest = OutputDigest(
-        algorithm=DigestAlgorithm.SHA256,
-        digest=digest_character * 64,
-    )
-    return DerivedRecordMetadata(
-        record_id=record_id,
-        record_kind=record_kind,
-        lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
+    return derived_record(
+        record_id,
+        record_kind=kind,
         inputs=inputs,
         operation=operation,
-        output_digest=output_digest,
-        derivation_fingerprint=build_derivation_fingerprint(
-            record_kind=record_kind,
-            lineage_schema_version=CURRENT_LINEAGE_SCHEMA_VERSION,
-            inputs=inputs,
-            operation=operation,
-            output_digest=output_digest,
-        ),
+        output_digest=digest_character * 64,
     )
 
 
 def test_original_source_directly_supports_chunk_and_fact_records() -> None:
-    inputs = _source_inputs(_DOCUMENT_A, _SPAN_A)
+    inputs = source_inputs(_DOCUMENT_A, _SPAN_A)
     chunk = _record(_CHUNK, kind="chunk", inputs=inputs, digest_character="1")
     fact = _record(_FACT, kind="fact", inputs=inputs, digest_character="2")
     bundle = LineageBundle.from_records(
@@ -122,25 +81,25 @@ def test_summary_chain_round_trips_to_original_source_evidence() -> None:
     document_a = _record(
         _DOCUMENT_SUMMARY_A,
         kind="document-summary",
-        inputs=_source_inputs(_DOCUMENT_A, _SPAN_A),
+        inputs=source_inputs(_DOCUMENT_A, _SPAN_A),
         digest_character="3",
     )
     document_b = _record(
         _DOCUMENT_SUMMARY_B,
         kind="document-summary",
-        inputs=_source_inputs(_DOCUMENT_B, _SPAN_B),
+        inputs=source_inputs(_DOCUMENT_B, _SPAN_B),
         digest_character="4",
     )
     topic = _record(
         _TOPIC_SUMMARY,
         kind="topic-summary",
-        inputs=_parent_inputs(_DOCUMENT_SUMMARY_A, _DOCUMENT_SUMMARY_B),
+        inputs=parent_inputs(_DOCUMENT_SUMMARY_A, _DOCUMENT_SUMMARY_B),
         digest_character="5",
     )
     corpus = _record(
         _CORPUS_SUMMARY,
         kind="corpus-summary",
-        inputs=_parent_inputs(_TOPIC_SUMMARY),
+        inputs=parent_inputs(_TOPIC_SUMMARY),
         digest_character="6",
     )
     bundle = LineageBundle.from_records(

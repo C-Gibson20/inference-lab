@@ -1,7 +1,6 @@
 """Tests for SQLite repository concurrency."""
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 
@@ -17,16 +16,13 @@ from inference_lab.provenance import (
 from inference_lab.storage import StorageConcurrencyError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 13, 0, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
 _BASELINE_CORPUS_ID = CorpusId("08b00c09-b9c0-44b7-a3a4-1acb526162ab")
 _BASELINE_CORPUS = CorpusMetadata(_BASELINE_CORPUS_ID, "Baseline corpus")
 _UNCOMMITTED_DOCUMENT_ID = DocumentId("ce118577-f665-419f-9b4a-c9f875a59718")
 _AFTER_LOCK_CORPUS_ID = CorpusId("c2a62ed4-de89-4b4c-a5e2-a8e6340e2d81")
 _AFTER_LOCK_CORPUS = CorpusMetadata(_AFTER_LOCK_CORPUS_ID, "After-lock corpus")
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _initialise_repository(path: Path) -> SQLiteMetadataRepository:

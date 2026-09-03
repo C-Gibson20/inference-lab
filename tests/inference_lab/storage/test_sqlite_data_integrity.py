@@ -1,7 +1,6 @@
 """Tests for persisted SQLite metadata integrity."""
 
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,8 @@ from inference_lab.provenance import (
 from inference_lab.storage import CorruptStorageError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+
 _CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 _CORPUS = CorpusMetadata(_CORPUS_ID, "Integrity test corpus")
 _FAMILY_ID = DocumentFamilyId("ae06e397-6433-481d-bbe4-1d80250e8891")
@@ -47,10 +47,6 @@ _SECOND_VERSION = DocumentVersion(
     _SECOND_DOCUMENT_ID,
     ContentHash(HashAlgorithm.SHA256, "a" * 64),
 )
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
 
 
 def _create_populated_database(path: Path) -> None:

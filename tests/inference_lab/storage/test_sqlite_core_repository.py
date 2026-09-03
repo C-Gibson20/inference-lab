@@ -1,6 +1,6 @@
 """Tests for core SQLite metadata repository operations."""
 
-from datetime import UTC, datetime
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -13,27 +13,17 @@ from inference_lab.provenance import (
     DocumentIdentity,
 )
 from inference_lab.storage import (
+    CorruptStorageError,
     RepositoryClosedError,
     StorageConflictError,
     StorageTransactionError,
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
-_APPLIED_AT = datetime(2026, 9, 1, 12, 30, tzinfo=UTC)
+from .fixtures import open_repository as _open_repository  # noqa: TID252
+
 _SHARED_UUID = "b4c4bb8a-8d23-4c20-a26f-2ca25f614b35"
 _OTHER_UUID = "af93dceb-40fc-414d-b3e9-50eb66f433ed"
-
-
-def _fixed_applied_at() -> datetime:
-    return _APPLIED_AT
-
-
-def _open_repository(path: Path) -> SQLiteMetadataRepository:
-    return SQLiteMetadataRepository.open(
-        path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
 
 
 def test_core_identities_round_trip_after_restart_without_row_identity(
@@ -196,6 +186,51 @@ def test_reusing_corpus_id_with_different_name_conflicts(tmp_path: Path) -> None
         assert repository.get_corpus(corpus_id) == CorpusMetadata(
             corpus_id, "First name"
         )
+    finally:
+        repository.close()
+
+
+def test_renaming_a_missing_corpus_rolls_back_prior_writes(tmp_path: Path) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    document = DocumentIdentity(DocumentId(_OTHER_UUID))
+    try:
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.add_document(document)
+                transaction.set_corpus_display_name(
+                    CorpusId(_SHARED_UUID), "Missing corpus"
+                )
+
+        assert repository.get_document(document.document_id) is None
+    finally:
+        repository.close()
+
+
+def test_malformed_stored_corpus_fails_closed_on_single_and_list_reads(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    corpus_id = CorpusId(_SHARED_UUID)
+    repository = _open_repository(database_path)
+    with repository.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(corpus_id, "Valid name"))
+
+    raw_connection = sqlite3.connect(database_path)
+    try:
+        raw_connection.execute("PRAGMA ignore_check_constraints = ON")
+        raw_connection.execute(
+            "UPDATE corpora SET display_name = '' WHERE corpus_id = ?",
+            (corpus_id.as_str(),),
+        )
+        raw_connection.commit()
+    finally:
+        raw_connection.close()
+
+    try:
+        with pytest.raises(CorruptStorageError):
+            repository.get_corpus(corpus_id)
+        with pytest.raises(CorruptStorageError):
+            repository.list_corpora()
     finally:
         repository.close()
 
