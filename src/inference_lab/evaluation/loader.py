@@ -76,7 +76,7 @@ def _load_cases(case_bytes: bytes) -> tuple[EvaluationCase, ...]:
 
         try:
             case = EvaluationCase.model_validate(validate_case_payload_version(payload))
-        except (ValidationError, ValueError):
+        except (TypeError, ValidationError, ValueError):
             raise ValueError(f"Invalid evaluation case at line {line_number}") from None
 
         cases.append(case)
@@ -142,7 +142,7 @@ def load_dataset(manifest_path: str | Path) -> LoadedDataset:
         manifest = DatasetManifest.model_validate(
             validate_manifest_payload_version(manifest_payload)
         )
-    except (ValidationError, ValueError):
+    except (TypeError, ValidationError, ValueError):
         raise ValueError("Invalid dataset manifest") from None
 
     case_path = _resolve_case_file(manifest_path, manifest.case_file)

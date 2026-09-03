@@ -147,6 +147,9 @@ class FailureEvent:
     corpus_id: str | None = None
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
         """Validate failure identity, severity, status, and privacy fields."""
         _validate_identity_and_context(
             event=self.event,

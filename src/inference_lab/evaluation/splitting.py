@@ -18,6 +18,17 @@ _SPLIT_ORDER: Final[tuple[SplitName, ...]] = get_args(SplitName)
 _DEFAULT_SPLIT_SEED = "inference-lab-default-split"
 
 
+def _validate_unit_interval(name: str, value: object) -> None:
+    """Require a finite numeric value in the closed unit interval."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0.0 <= value <= 1.0
+    ):
+        raise ValueError(f"{name} must be finite and between 0.0 and 1.0")
+
+
 @dataclass(frozen=True, slots=True)
 class SplitPolicy:
     """Deterministic policy for assigning evaluation cases."""
@@ -30,35 +41,34 @@ class SplitPolicy:
     near_duplicate_threshold: float = 0.9
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
         """Validate policy values and version compatibility."""
+        self._validate_fractions()
+        self._validate_seed()
+        _validate_unit_interval(
+            "near_duplicate_threshold",
+            self.near_duplicate_threshold,
+        )
+        validate_split_algorithm_version(self.algorithm_version)
+
+    def _validate_fractions(self) -> None:
+        """Validate individual fractions and their combined total."""
         for name, fraction in self.fractions.items():
-            if (
-                isinstance(fraction, bool)
-                or not isinstance(fraction, (int, float))
-                or not math.isfinite(fraction)
-                or not 0.0 <= fraction <= 1.0
-            ):
-                raise ValueError(f"{name} must be finite and between 0.0 and 1.0")
+            _validate_unit_interval(name, fraction)
 
         if not math.isclose(
             sum(self.fractions.values()), 1.0, rel_tol=0.0, abs_tol=1e-12
         ):
             raise ValueError("Split fractions must sum to 1.0")
 
+    def _validate_seed(self) -> None:
+        """Require a non-empty string seed."""
+        if not isinstance(self.seed, str):
+            raise TypeError("seed must be a string")
         if not self.seed:
             raise ValueError("seed must not be empty")
-
-        if (
-            isinstance(self.near_duplicate_threshold, bool)
-            or not isinstance(self.near_duplicate_threshold, (int, float))
-            or not math.isfinite(self.near_duplicate_threshold)
-            or not 0.0 <= self.near_duplicate_threshold <= 1.0
-        ):
-            raise ValueError(
-                "near_duplicate_threshold must be finite and between 0.0 and 1.0"
-            )
-
-        validate_split_algorithm_version(self.algorithm_version)
 
     @property
     def fractions(self) -> dict[SplitName, float]:
@@ -165,15 +175,7 @@ def _validate_leakage_group_inputs(
     """Validate leakage-group inputs before building indexes."""
     if not cases:
         raise ValueError("At least one case is required")
-    if (
-        isinstance(near_duplicate_threshold, bool)
-        or not isinstance(near_duplicate_threshold, (int, float))
-        or not math.isfinite(near_duplicate_threshold)
-        or not 0.0 <= near_duplicate_threshold <= 1.0
-    ):
-        raise ValueError(
-            "near_duplicate_threshold must be finite and between 0.0 and 1.0"
-        )
+    _validate_unit_interval("near_duplicate_threshold", near_duplicate_threshold)
 
     case_ids = [case.case_id for case in cases]
     if len(case_ids) != len(set(case_ids)):

@@ -47,6 +47,20 @@ Pure domain transformations belong in a responsibility-named module such as
 domain `contracts.py` or `types.py` module. A generic `utils.py` must not mix
 these responsibilities or act as a miscellaneous helper home.
 
+## Constructor validation
+
+Immutable dataclass constructors enforce their invariants in `__post_init__`
+so an invalid instance cannot escape construction. Multi-step validation uses
+a concise `__post_init__` that delegates to `_validate()` and, where useful,
+responsibility-named helpers. A trivial one- or two-field check may remain
+inline when delegation would obscure rather than clarify the invariant.
+
+Semantic and schema version validators at plain Python boundaries raise
+`TypeError` for a wrong runtime type and `ValueError`, or the owning domain's
+`ValueError` subclass, when a string violates the contract. Side-effect-free
+shared predicates remain exception-neutral. Framework-owned model boundaries
+may expose their normal validation wrapper instead.
+
 ## Shared clock
 
 Production code obtains the current timezone-aware UTC time from

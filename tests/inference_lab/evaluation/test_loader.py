@@ -42,6 +42,27 @@ def test_malformed_manifest_json_is_rejected(tmp_path: Path) -> None:
         load_dataset(manifest_path)
 
 
+def test_wrong_type_manifest_version_is_reported_as_invalid_input(
+    tmp_path: Path,
+) -> None:
+    manifest_path = write_dataset_fixture(
+        tmp_path,
+        manifest_overrides={"schema_version": None},
+    )
+
+    with pytest.raises(ValueError, match="Invalid dataset manifest"):
+        load_dataset(manifest_path)
+
+
+def test_wrong_type_case_version_is_reported_as_invalid_input(tmp_path: Path) -> None:
+    invalid_case = case_payload()
+    invalid_case["schema_version"] = None
+    manifest_path = write_dataset_fixture(tmp_path, cases=[invalid_case])
+
+    with pytest.raises(ValueError, match="Invalid evaluation case"):
+        load_dataset(manifest_path)
+
+
 @pytest.mark.parametrize(
     ("case_file", "message"),
     [

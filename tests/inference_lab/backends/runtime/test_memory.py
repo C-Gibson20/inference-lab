@@ -88,6 +88,18 @@ def test_memory_identity_versions_accept_semantic_version_extensions() -> None:
     )
 
 
+@pytest.mark.parametrize("version", [1, True, None])
+def test_memory_identity_versions_require_strings(version: object) -> None:
+    with pytest.raises(TypeError, match="adapter_version must be a string"):
+        MemoryAdapterIdentity("fake", version, "calibration-1")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="collector_version must be a string"):
+        MemoryCollectorIdentity(
+            "runtime",
+            version,  # type: ignore[arg-type]
+            "inventory-1",
+        )
+
+
 @pytest.mark.parametrize("value", [-1, 1.5, True])
 def test_byte_values_are_non_negative_integers(value: object) -> None:
     expected = "must not be negative" if value == -1 else "must be an integer"

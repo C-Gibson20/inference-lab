@@ -75,7 +75,16 @@ class CoveragePolicy:
     )
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
         """Reject invalid or internally impossible threshold combinations."""
+        self._validate_counts()
+        self._freeze_question_type_minima()
+        self._validate_feasibility()
+
+    def _validate_counts(self) -> None:
+        """Validate scalar case-count thresholds."""
         _validate_count("minimum_cases", self.minimum_cases, positive=True)
         _validate_count("maximum_cases", self.maximum_cases, positive=True)
         for name in (
@@ -87,6 +96,8 @@ class CoveragePolicy:
         ):
             _validate_count(name, getattr(self, name))
 
+    def _freeze_question_type_minima(self) -> None:
+        """Validate and defensively freeze question-type thresholds."""
         minimum_question_types = _validate_question_type_minima(
             "minimum_question_types",
             self.minimum_question_types,
@@ -106,6 +117,8 @@ class CoveragePolicy:
             minimum_held_out_question_types,
         )
 
+    def _validate_feasibility(self) -> None:
+        """Reject combinations that cannot fit within the maximum case count."""
         if self.minimum_cases > self.maximum_cases:
             raise ValueError("minimum_cases cannot exceed maximum_cases")
 
@@ -113,14 +126,14 @@ class CoveragePolicy:
             "answerability minima": (
                 self.minimum_answerable_cases + self.minimum_abstention_cases
             ),
-            "question-type minima": sum(minimum_question_types.values()),
+            "question-type minima": sum(self.minimum_question_types.values()),
             "held-out case minimum": self.minimum_held_out_cases,
             "held-out answerability minima": (
                 self.minimum_held_out_answerable_cases
                 + self.minimum_held_out_abstention_cases
             ),
             "held-out question-type minima": sum(
-                minimum_held_out_question_types.values()
+                self.minimum_held_out_question_types.values()
             ),
         }
         impossible = [

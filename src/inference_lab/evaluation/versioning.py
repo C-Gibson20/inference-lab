@@ -13,7 +13,9 @@ SUPPORTED_SPLIT_ALGORITHM_VERSIONS: Final[frozenset[str]] = frozenset(
 
 def validate_schema_version(value: object) -> str:
     """Return the current schema version or reject it."""
-    if not isinstance(value, str) or value not in SUPPORTED_SCHEMA_VERSIONS:
+    if not isinstance(value, str):
+        raise TypeError("evaluation schema version must be a string")
+    if value not in SUPPORTED_SCHEMA_VERSIONS:
         supported = ", ".join(sorted(SUPPORTED_SCHEMA_VERSIONS))
         raise ValueError(
             f"Unsupported evaluation schema version {value!r}; "
@@ -24,7 +26,9 @@ def validate_schema_version(value: object) -> str:
 
 def validate_split_algorithm_version(value: object) -> str:
     """Return a supported deterministic split-algorithm version."""
-    if not isinstance(value, str) or value not in SUPPORTED_SPLIT_ALGORITHM_VERSIONS:
+    if not isinstance(value, str):
+        raise TypeError("split algorithm version must be a string")
+    if value not in SUPPORTED_SPLIT_ALGORITHM_VERSIONS:
         supported = ", ".join(sorted(SUPPORTED_SPLIT_ALGORITHM_VERSIONS))
         raise ValueError(
             f"Unsupported split algorithm version {value!r}; "

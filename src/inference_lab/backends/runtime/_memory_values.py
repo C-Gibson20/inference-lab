@@ -6,10 +6,10 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from inference_lab._clock import utc_now
-from inference_lab._validation import is_canonical_semantic_version
 from inference_lab.backends.runtime._validation import (
     validate_non_empty_string,
     validate_non_negative_integer,
+    validate_semantic_version,
 )
 from inference_lab.profiling._validation import validate_utc_datetime
 from inference_lab.profiling.resources import (
@@ -86,8 +86,7 @@ class MemoryAdapterIdentity:
     def _validate(self) -> None:
         """Validate the adapter identity's fields."""
         _validate_safe_identifier(self.adapter_name, "adapter_name")
-        if not is_canonical_semantic_version(self.adapter_version):
-            raise ValueError("adapter_version must be a canonical semantic version")
+        validate_semantic_version(self.adapter_version, "adapter_version")
         _validate_safe_identifier(self.calibration_revision, "calibration_revision")
 
 
@@ -105,8 +104,7 @@ class MemoryCollectorIdentity:
     def _validate(self) -> None:
         """Validate the collector identity's fields."""
         _validate_safe_identifier(self.collector_name, "collector_name")
-        if not is_canonical_semantic_version(self.collector_version):
-            raise ValueError("collector_version must be a canonical semantic version")
+        validate_semantic_version(self.collector_version, "collector_version")
         _validate_safe_identifier(self.inventory_revision, "inventory_revision")
 
 

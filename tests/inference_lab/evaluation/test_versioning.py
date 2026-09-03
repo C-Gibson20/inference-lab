@@ -31,18 +31,32 @@ def test_current_payload_versions_are_accepted_unchanged() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {},
         {"schema_version": "9.0.0"},
         {"schema_version": "1.0.0"},
         {"schema_version": "2.0.0"},
-        {"schema_version": [CURRENT_SCHEMA_VERSION]},
     ],
 )
-def test_missing_malformed_or_unsupported_schema_versions_are_rejected(
+def test_unsupported_schema_versions_are_rejected(
     validate,
     payload: object,
 ) -> None:
     with pytest.raises(ValueError, match="Unsupported evaluation schema version"):
+        validate(payload)
+
+
+@pytest.mark.parametrize(
+    "validate",
+    [validate_case_payload_version, validate_manifest_payload_version],
+)
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"schema_version": [CURRENT_SCHEMA_VERSION]}],
+)
+def test_missing_or_wrong_type_schema_versions_raise_type_error(
+    validate,
+    payload: object,
+) -> None:
+    with pytest.raises(TypeError, match="evaluation schema version must be a string"):
         validate(payload)
 
 
@@ -64,5 +78,10 @@ def test_split_algorithm_versions_are_explicit() -> None:
     with pytest.raises(ValueError, match="Unsupported split algorithm version"):
         validate_split_algorithm_version("9.0.0")
 
-    with pytest.raises(ValueError, match="Unsupported split algorithm version"):
+    with pytest.raises(TypeError, match="split algorithm version must be a string"):
         validate_split_algorithm_version([CURRENT_SPLIT_ALGORITHM_VERSION])
+
+
+def test_evaluation_schema_version_requires_a_string() -> None:
+    with pytest.raises(TypeError, match="evaluation schema version must be a string"):
+        validate_schema_version(3)
