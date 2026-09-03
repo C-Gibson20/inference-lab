@@ -6,7 +6,9 @@ import pytest
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -83,7 +85,6 @@ def _create_complete_revision_one(path: Path) -> None:
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
-        transaction.add_corpus(_CORPUS_ID)
         transaction.add_document_family(_FAMILY_ID)
         transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
         transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
@@ -92,6 +93,14 @@ def _create_complete_revision_one(path: Path) -> None:
         transaction.add_duplicate_relationship(_DUPLICATE)
         transaction.add_family_membership(_MEMBERSHIP)
     repository.close()
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "INSERT INTO corpora (corpus_id) VALUES (?)", (_CORPUS_ID.as_str(),)
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _database_snapshot(path: Path) -> tuple[object, ...]:
@@ -121,15 +130,12 @@ def _database_snapshot(path: Path) -> tuple[object, ...]:
 
 
 def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
-    assert repository.get_corpus(_CORPUS_ID) == _CORPUS_ID
     assert repository.get_document_family(_FAMILY_ID) == _FAMILY_ID
     assert repository.get_document(_FIRST_DOCUMENT_ID) == DocumentIdentity(
         _FIRST_DOCUMENT_ID
     )
     assert repository.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
-    assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == (_DUPLICATE,)
-    assert repository.list_family_memberships_by_family(_FAMILY_ID) == (_MEMBERSHIP,)
 
 
 def test_production_migrations_preserve_revision_one_graph(
@@ -144,7 +150,24 @@ def test_production_migrations_preserve_revision_one_graph(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert migrated.schema_inspection.current_revision == 3
+        assert migrated.schema_inspection.current_revision == 5
+        assert migrated.get_corpus(_CORPUS_ID) == CorpusMetadata(
+            _CORPUS_ID, _CORPUS_ID.as_str()
+        )
+        assert migrated.list_corpus_document_version_memberships(_CORPUS_ID) == (
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID
+            ),
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID
+            ),
+        )
+        assert migrated.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
+            _DUPLICATE,
+        )
+        assert migrated.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
+            _MEMBERSHIP,
+        )
         _assert_complete_graph(migrated)
     finally:
         migrated.close()

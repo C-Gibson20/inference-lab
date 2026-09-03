@@ -6,6 +6,9 @@ import pytest
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
+    CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -21,6 +24,8 @@ from inference_lab.storage import CorruptStorageError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 _APPLIED_AT = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+_CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+_CORPUS = CorpusMetadata(_CORPUS_ID, "Integrity test corpus")
 _FAMILY_ID = DocumentFamilyId("ae06e397-6433-481d-bbe4-1d80250e8891")
 _FIRST_DOCUMENT_ID = DocumentId("488759cb-869f-4790-bf9d-1504f9d30fb8")
 _SECOND_DOCUMENT_ID = DocumentId("9bc9d26c-0408-4c8b-ab88-a93718847a16")
@@ -53,11 +58,20 @@ def _create_populated_database(path: Path) -> None:
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
+        transaction.add_corpus(_CORPUS)
         transaction.add_document_family(_FAMILY_ID)
         transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
         transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
         transaction.add_document_version(_FIRST_VERSION)
         transaction.add_document_version(_SECOND_VERSION)
+        for version in (_FIRST_VERSION, _SECOND_VERSION):
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(
+                    _CORPUS_ID,
+                    version.document_id,
+                    version.document_version_id,
+                )
+            )
         transaction.add_duplicate_relationship(
             DuplicateRelationship(
                 _FIRST_VERSION_ID,
@@ -190,7 +204,7 @@ def test_noncanonical_stored_identifier_order_fails_on_reconstruction(
             repository.get_document_version(_FIRST_VERSION_ID)
         with pytest.raises(CorruptStorageError):
             repository.find_document_versions_by_content_hash(
-                _FIRST_VERSION.content_hash
+                _CORPUS_ID, _FIRST_VERSION.content_hash
             )
     finally:
         repository.close()

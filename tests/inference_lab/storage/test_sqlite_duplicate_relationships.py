@@ -5,6 +5,9 @@ import pytest
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
+    CorpusId,
+    CorpusMetadata,
     DocumentId,
     DocumentIdentity,
     DocumentVersion,
@@ -17,6 +20,8 @@ from inference_lab.storage import StorageConflictError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 _APPLIED_AT = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
+_CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+_CORPUS = CorpusMetadata(_CORPUS_ID, "Duplicate test corpus")
 _DOCUMENT_ID = DocumentId("89606249-7390-4ff5-936f-0309f511924d")
 _FIRST_VERSION_ID = DocumentVersionId("11111111-1111-4111-8111-111111111111")
 _SECOND_VERSION_ID = DocumentVersionId("22222222-2222-4222-8222-222222222222")
@@ -61,9 +66,13 @@ def _add_versions(
     version_ids: tuple[DocumentVersionId, ...],
 ) -> None:
     with repository.transaction() as transaction:
+        transaction.add_corpus(_CORPUS)
         transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
         for version_id in version_ids:
             transaction.add_document_version(_version(version_id))
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(_CORPUS_ID, _DOCUMENT_ID, version_id)
+            )
 
 
 def test_duplicate_relationships_round_trip_and_list_by_either_endpoint(
@@ -82,13 +91,13 @@ def test_duplicate_relationships_round_trip_and_list_by_either_endpoint(
 
     second = SQLiteMetadataRepository.open(database_path)
     try:
-        stored = second.list_duplicate_relationships(_FIRST_VERSION_ID)
+        stored = second.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID)
 
         assert stored == (_FIRST_RELATIONSHIP, _SECOND_RELATIONSHIP)
-        assert second.list_duplicate_relationships(_SECOND_VERSION_ID) == (
+        assert second.list_duplicate_relationships(_CORPUS_ID, _SECOND_VERSION_ID) == (
             _FIRST_RELATIONSHIP,
         )
-        assert second.list_duplicate_relationships(_THIRD_VERSION_ID) == (
+        assert second.list_duplicate_relationships(_CORPUS_ID, _THIRD_VERSION_ID) == (
             _SECOND_RELATIONSHIP,
         )
         assert not hasattr(stored[0], "row_id")
@@ -104,13 +113,13 @@ def test_duplicate_relationship_exact_replay_is_idempotent(tmp_path: Path) -> No
         with repository.transaction() as transaction:
             transaction.add_duplicate_relationship(_FIRST_RELATIONSHIP)
             transaction.add_duplicate_relationship(_FIRST_RELATIONSHIP)
-            assert transaction.list_duplicate_relationships(_FIRST_VERSION_ID) == (
-                _FIRST_RELATIONSHIP,
-            )
+            assert transaction.list_duplicate_relationships(
+                _CORPUS_ID, _FIRST_VERSION_ID
+            ) == (_FIRST_RELATIONSHIP,)
 
-        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == (
-            _FIRST_RELATIONSHIP,
-        )
+        assert repository.list_duplicate_relationships(
+            _CORPUS_ID, _FIRST_VERSION_ID
+        ) == (_FIRST_RELATIONSHIP,)
     finally:
         repository.close()
 
@@ -128,7 +137,9 @@ def test_missing_duplicate_endpoint_rolls_back_the_composite_write(
 
         assert repository.get_document(_DOCUMENT_ID) is None
         assert repository.get_document_version(_FIRST_VERSION_ID) is None
-        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == ()
+        assert (
+            repository.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == ()
+        )
     finally:
         repository.close()
 
@@ -147,7 +158,9 @@ def test_byte_identical_relationship_rejects_mismatched_content_hashes(
             with repository.transaction() as transaction:
                 transaction.add_duplicate_relationship(_FIRST_RELATIONSHIP)
 
-        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == ()
+        assert (
+            repository.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == ()
+        )
     finally:
         repository.close()
 
@@ -155,6 +168,8 @@ def test_byte_identical_relationship_rejects_mismatched_content_hashes(
 def test_unknown_version_has_no_duplicate_relationships(tmp_path: Path) -> None:
     repository = _open_repository(tmp_path / "metadata.sqlite3")
     try:
-        assert repository.list_duplicate_relationships(_FIRST_VERSION_ID) == ()
+        assert (
+            repository.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == ()
+        )
     finally:
         repository.close()

@@ -29,6 +29,11 @@ The current sections are:
 
 Run the application from the directory containing `config.toml`.
 
+Storage paths configure one local deployment, not one corpus. The metadata
+database and index root may contain multiple named corpora. Corpus creation and
+selection are runtime domain operations using `CorpusId`; they are not achieved
+by swapping configuration files or assigning one database path per corpus.
+
 There is no generic `[feature_flags]` section. Feature flags are introduced
 only alongside the feature they control, in the relevant typed settings model.
 The owning feature must document each flag's TOML field, environment override,

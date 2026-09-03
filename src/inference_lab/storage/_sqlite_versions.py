@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusId,
     DocumentId,
     DocumentVersion,
     DocumentVersionId,
@@ -131,20 +132,30 @@ def list_document_versions(
 
 def find_document_versions_by_content_hash(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     content_hash: ContentHash,
 ) -> tuple[DocumentVersion, ...]:
     """Return exact-hash candidates in resolution-request order."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(content_hash, ContentHash):
         raise TypeError("content_hash must be a ContentHash.")
 
     try:
         rows = connection.execute(
-            """SELECT document_version_id, document_id,
-                content_hash_algorithm, content_hash_digest
-            FROM document_versions
-            WHERE content_hash_algorithm = ? AND content_hash_digest = ?
-            ORDER BY document_id, document_version_id""",
-            (content_hash.algorithm.value, content_hash.digest),
+            """SELECT versions.document_version_id, versions.document_id,
+                versions.content_hash_algorithm, versions.content_hash_digest
+            FROM document_versions AS versions
+            JOIN corpus_document_version_memberships AS membership
+                ON membership.document_version_id = versions.document_version_id
+            WHERE membership.corpus_id = ?
+                AND content_hash_algorithm = ? AND content_hash_digest = ?
+            ORDER BY versions.document_id, versions.document_version_id""",
+            (
+                corpus_id.as_str(),
+                content_hash.algorithm.value,
+                content_hash.digest,
+            ),
         ).fetchall()
         return _reconstruct_document_versions(connection, rows)
     except CorruptStorageError:
@@ -158,9 +169,12 @@ def find_document_versions_by_content_hash(
 
 def find_document_versions_by_external_identifiers(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     external_identifiers: tuple[ExternalIdentifier, ...],
 ) -> tuple[DocumentVersion, ...]:
     """Return unique versions matching any supplied external identifier."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     validate_external_identifiers(external_identifiers)
     if not external_identifiers:
         return ()
@@ -169,14 +183,23 @@ def find_document_versions_by_external_identifiers(
         matched_ids: set[str] = set()
         for identifier in external_identifiers:
             rows = connection.execute(
-                """SELECT document_version_id
-                FROM external_identifiers
-                WHERE namespace = ? AND identifier_value = ?
+                """SELECT identifiers.document_version_id
+                FROM external_identifiers AS identifiers
+                JOIN corpus_document_version_memberships AS membership
+                    ON membership.document_version_id = identifiers.document_version_id
+                WHERE membership.corpus_id = ?
+                    AND namespace = ? AND identifier_value = ?
                 UNION
                 SELECT document_version_id
                 FROM external_identifier_assertions
-                WHERE namespace = ? AND identifier_value = ?""",
-                (*identifier.as_tuple(), *identifier.as_tuple()),
+                WHERE corpus_id = ?
+                    AND namespace = ? AND identifier_value = ?""",
+                (
+                    corpus_id.as_str(),
+                    *identifier.as_tuple(),
+                    corpus_id.as_str(),
+                    *identifier.as_tuple(),
+                ),
             ).fetchall()
             matched_ids.update(row["document_version_id"] for row in rows)
 

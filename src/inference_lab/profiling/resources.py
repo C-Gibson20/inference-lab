@@ -183,6 +183,7 @@ class ResourceMeasurement:
     document_id: str | None = None
     corpus_version: str | None = None
     record_schema_version: int = CURRENT_RECORD_SCHEMA_VERSION
+    corpus_id: str | None = None
 
     def __post_init__(self) -> None:
         self._validate()
@@ -221,6 +222,7 @@ class ResourceMeasurement:
             "run_id": self.run_id,
             "request_id": self.request_id,
             "document_id": self.document_id,
+            "corpus_id": self.corpus_id,
             "corpus_version": self.corpus_version,
             "record_schema_version": self.record_schema_version,
         }

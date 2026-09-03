@@ -9,7 +9,9 @@ import pytest
 from inference_lab.logging.logging_config import configure_logging
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -33,6 +35,7 @@ from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 _APPLIED_AT = datetime(2026, 9, 2, 15, 0, tzinfo=UTC)
 _CORPUS_ID = CorpusId("ea304c92-db98-4112-9976-38d2d67a28d4")
+_CORPUS = CorpusMetadata(_CORPUS_ID, "Private test corpus")
 _FAMILY_ID = DocumentFamilyId("815236bc-44b7-4784-84cc-f56bf72bb6d2")
 _FIRST_DOCUMENT_ID = DocumentId("0d64c130-cea0-4c1d-8a44-298941893072")
 _SECOND_DOCUMENT_ID = DocumentId("354c3b10-9a1a-47f2-91c9-76640ea573c2")
@@ -68,6 +71,7 @@ _REQUIRED_LOG_FIELDS = {
     "module",
     "pipeline_stage",
     "document_id",
+    "corpus_id",
     "corpus_version",
 }
 
@@ -86,6 +90,7 @@ def _assert_storage_log_shape(records: list[dict[str, object]]) -> None:
         assert _REQUIRED_LOG_FIELDS <= record.keys()
         assert record["pipeline_stage"] == "storage"
         assert record["document_id"] is None
+        assert record["corpus_id"] is None
         assert record["corpus_version"] is None
         assert isinstance(record["module"], str)
         assert record["module"].startswith("inference_lab.storage.")
@@ -96,12 +101,20 @@ def _assert_storage_log_shape(records: list[dict[str, object]]) -> None:
 
 
 def _add_complete_graph(transaction: MetadataTransaction) -> None:
-    transaction.add_corpus(_CORPUS_ID)
+    transaction.add_corpus(_CORPUS)
     transaction.add_document_family(_FAMILY_ID)
     transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
     transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
     transaction.add_document_version(_FIRST_VERSION)
     transaction.add_document_version(_SECOND_VERSION)
+    for version in (_FIRST_VERSION, _SECOND_VERSION):
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID,
+                version.document_id,
+                version.document_version_id,
+            )
+        )
     transaction.add_duplicate_relationship(_DUPLICATE)
     transaction.add_family_membership(_MEMBERSHIP)
 
@@ -141,8 +154,12 @@ def test_configured_logs_are_complete_and_payload_free_across_restart(
     reopened = SQLiteMetadataRepository.open(database_path)
     try:
         assert reopened.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
-        assert reopened.list_duplicate_relationships(_FIRST_VERSION_ID) == (_DUPLICATE,)
-        assert reopened.list_family_memberships_by_family(_FAMILY_ID) == (_MEMBERSHIP,)
+        assert reopened.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
+            _DUPLICATE,
+        )
+        assert reopened.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
+            _MEMBERSHIP,
+        )
     finally:
         reopened.close()
 

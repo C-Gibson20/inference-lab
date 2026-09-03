@@ -1,9 +1,11 @@
 # Instructions for AI coding agents
 
 Read [docs/spec.md](docs/spec.md) before changing architecture. This project is
-a local, persistent corpus tool for papers and patents—not a small uploaded-file
-session app. Evidence and source-span provenance come before answer fluency;
-unsupported answers should abstain.
+a local, persistent multi-corpus tool for papers and patents—not a small
+uploaded-file session app. Every first-build operation targets exactly one
+corpus; federated cross-corpus querying is out of scope. Evidence and
+source-span provenance come before answer fluency; unsupported answers should
+abstain.
 
 ## Agent role in this repo
 
@@ -36,6 +38,11 @@ Keep batch ingestion separate from interactive serving. Preserve links from
 every derived record to source documents and spans. Prefer measurable baselines
 and deterministic fixtures over speculative abstractions. Keep the 24GB
 single-GPU constraint visible in runtime decisions.
+
+Treat document and document-version IDs as deployment-global immutable
+identities, with visibility controlled by explicit corpus membership. Require a
+target corpus for ingest, retrieval, evaluation, sessions, and version
+operations, and test that shared storage never leaks records between corpora.
 
 ## Conventions and boundaries
 

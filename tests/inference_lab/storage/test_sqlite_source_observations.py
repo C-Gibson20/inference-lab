@@ -8,6 +8,9 @@ import pytest
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
+    CorpusId,
+    CorpusMetadata,
     DocumentId,
     DocumentIdentity,
     DocumentVersion,
@@ -26,6 +29,10 @@ from inference_lab.storage import CorruptStorageError, StorageConflictError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 _APPLIED_AT = datetime(2026, 9, 2, 16, 0, tzinfo=UTC)
+_CORPUS_ID = CorpusId("99999999-9999-4999-8999-999999999999")
+_CORPUS = CorpusMetadata(_CORPUS_ID, "Source test corpus")
+_OTHER_CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+_OTHER_CORPUS = CorpusMetadata(_OTHER_CORPUS_ID, "Other source test corpus")
 _DOCUMENT_ID = DocumentId("11111111-1111-4111-8111-111111111111")
 _OTHER_DOCUMENT_ID = DocumentId("22222222-2222-4222-8222-222222222222")
 _FIRST_VERSION_ID = DocumentVersionId("33333333-3333-4333-8333-333333333333")
@@ -61,6 +68,7 @@ _CONFLICTING_VERSION = DocumentVersion(
     (ExternalIdentifier("doi", "10.1000/different"),),
 )
 _INITIAL_STATE = SourceObservationState(
+    _CORPUS_ID,
     _SOURCE_OBSERVATION_ID,
     1,
     _DOCUMENT_ID,
@@ -82,12 +90,27 @@ def _open_repository(path: Path) -> SQLiteMetadataRepository:
 
 def _populate_versions(repository: SQLiteMetadataRepository) -> None:
     with repository.transaction() as transaction:
+        transaction.add_corpus(_CORPUS)
+        transaction.add_corpus(_OTHER_CORPUS)
         transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
         transaction.add_document(DocumentIdentity(_OTHER_DOCUMENT_ID))
         transaction.add_document_version(_FIRST_VERSION)
         transaction.add_document_version(_SECOND_VERSION)
         transaction.add_document_version(_OTHER_VERSION)
         transaction.add_document_version(_CONFLICTING_VERSION)
+        for version in (
+            _FIRST_VERSION,
+            _SECOND_VERSION,
+            _OTHER_VERSION,
+            _CONFLICTING_VERSION,
+        ):
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(
+                    _CORPUS_ID,
+                    version.document_id,
+                    version.document_version_id,
+                )
+            )
 
 
 def test_source_observation_and_history_round_trip_after_restart(
@@ -103,13 +126,22 @@ def test_source_observation_and_history_round_trip_after_restart(
 
     second = SQLiteMetadataRepository.open(database_path)
     try:
-        assert second.get_source_observation(_SOURCE_OBSERVATION_ID) == _INITIAL_STATE
-        assert second.list_source_observation_history(_SOURCE_OBSERVATION_ID) == (
-            _INITIAL_STATE,
-        )
-        assert second.get_source_observation(_OTHER_SOURCE_OBSERVATION_ID) is None
         assert (
-            second.list_source_observation_history(_OTHER_SOURCE_OBSERVATION_ID) == ()
+            second.get_source_observation(_CORPUS_ID, _SOURCE_OBSERVATION_ID)
+            == _INITIAL_STATE
+        )
+        assert second.list_source_observation_history(
+            _CORPUS_ID, _SOURCE_OBSERVATION_ID
+        ) == (_INITIAL_STATE,)
+        assert (
+            second.get_source_observation(_CORPUS_ID, _OTHER_SOURCE_OBSERVATION_ID)
+            is None
+        )
+        assert (
+            second.list_source_observation_history(
+                _CORPUS_ID, _OTHER_SOURCE_OBSERVATION_ID
+            )
+            == ()
         )
     finally:
         second.close()
@@ -138,7 +170,7 @@ def test_source_observation_read_rejects_current_pointer_history_divergence(
     reopened = SQLiteMetadataRepository.open(database_path)
     try:
         with pytest.raises(CorruptStorageError):
-            reopened.get_source_observation(_SOURCE_OBSERVATION_ID)
+            reopened.get_source_observation(_CORPUS_ID, _SOURCE_OBSERVATION_ID)
     finally:
         reopened.close()
 
@@ -152,17 +184,20 @@ def test_source_observation_advance_is_atomic_and_idempotent(tmp_path: Path) -> 
         with repository.transaction() as transaction:
             transaction.add_source_observation(_INITIAL_STATE)
             advanced = transaction.advance_source_observation(
+                _CORPUS_ID,
                 _SOURCE_OBSERVATION_ID,
                 expected_version_id=_FIRST_VERSION_ID,
                 new_version_id=_SECOND_VERSION_ID,
             )
             replayed = transaction.advance_source_observation(
+                _CORPUS_ID,
                 _SOURCE_OBSERVATION_ID,
                 expected_version_id=_FIRST_VERSION_ID,
                 new_version_id=_SECOND_VERSION_ID,
             )
 
         expected = SourceObservationState(
+            _CORPUS_ID,
             _SOURCE_OBSERVATION_ID,
             2,
             _DOCUMENT_ID,
@@ -172,8 +207,13 @@ def test_source_observation_advance_is_atomic_and_idempotent(tmp_path: Path) -> 
         assert replayed is not None
         assert advanced == expected
         assert replayed == expected
-        assert repository.get_source_observation(_SOURCE_OBSERVATION_ID) == expected
-        assert repository.list_source_observation_history(_SOURCE_OBSERVATION_ID) == (
+        assert (
+            repository.get_source_observation(_CORPUS_ID, _SOURCE_OBSERVATION_ID)
+            == expected
+        )
+        assert repository.list_source_observation_history(
+            _CORPUS_ID, _SOURCE_OBSERVATION_ID
+        ) == (
             _INITIAL_STATE,
             expected,
         )
@@ -193,6 +233,7 @@ def test_source_observation_advance_rejects_stale_or_cross_document_version(
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
                 transaction.advance_source_observation(
+                    _CORPUS_ID,
                     _SOURCE_OBSERVATION_ID,
                     expected_version_id=_SECOND_VERSION_ID,
                     new_version_id=_FIRST_VERSION_ID,
@@ -201,6 +242,7 @@ def test_source_observation_advance_rejects_stale_or_cross_document_version(
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
                 transaction.advance_source_observation(
+                    _CORPUS_ID,
                     _SOURCE_OBSERVATION_ID,
                     expected_version_id=_FIRST_VERSION_ID,
                     new_version_id=_OTHER_VERSION_ID,
@@ -209,17 +251,18 @@ def test_source_observation_advance_rejects_stale_or_cross_document_version(
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
                 transaction.advance_source_observation(
+                    _CORPUS_ID,
                     _SOURCE_OBSERVATION_ID,
                     expected_version_id=_FIRST_VERSION_ID,
                     new_version_id=_CONFLICTING_VERSION_ID,
                 )
 
-        assert repository.get_source_observation(_SOURCE_OBSERVATION_ID) == (
-            _INITIAL_STATE
-        )
-        assert repository.list_source_observation_history(_SOURCE_OBSERVATION_ID) == (
-            _INITIAL_STATE,
-        )
+        assert repository.get_source_observation(
+            _CORPUS_ID, _SOURCE_OBSERVATION_ID
+        ) == (_INITIAL_STATE)
+        assert repository.list_source_observation_history(
+            _CORPUS_ID, _SOURCE_OBSERVATION_ID
+        ) == (_INITIAL_STATE,)
     finally:
         repository.close()
 
@@ -237,15 +280,15 @@ def test_identifier_assertion_round_trips_and_participates_in_lookup(
     try:
         with repository.transaction() as transaction:
             transaction.add_source_observation(_INITIAL_STATE)
-            transaction.add_external_identifier_assertions((assertion,))
-            transaction.add_external_identifier_assertions((assertion,))
+            transaction.add_external_identifier_assertions(_CORPUS_ID, (assertion,))
+            transaction.add_external_identifier_assertions(_CORPUS_ID, (assertion,))
 
-        assert repository.list_external_identifier_assertions(_FIRST_VERSION_ID) == (
-            assertion,
-        )
-        assert repository.find_document_versions_by_external_identifiers((_PMID,)) == (
-            _FIRST_VERSION,
-        )
+        assert repository.list_external_identifier_assertions(
+            _CORPUS_ID, _FIRST_VERSION_ID
+        ) == (assertion,)
+        assert repository.find_document_versions_by_external_identifiers(
+            _CORPUS_ID, (_PMID,)
+        ) == (_FIRST_VERSION,)
     finally:
         repository.close()
 
@@ -270,15 +313,17 @@ def test_identifier_assertion_batch_preserves_complete_namespace_value_set(
     try:
         with repository.transaction() as transaction:
             transaction.add_source_observation(_INITIAL_STATE)
-            transaction.add_external_identifier_assertions(assertions)
-            transaction.add_external_identifier_assertions(assertions)
+            transaction.add_external_identifier_assertions(_CORPUS_ID, assertions)
+            transaction.add_external_identifier_assertions(_CORPUS_ID, assertions)
 
         assert (
-            repository.list_external_identifier_assertions(_FIRST_VERSION_ID)
+            repository.list_external_identifier_assertions(
+                _CORPUS_ID, _FIRST_VERSION_ID
+            )
             == assertions
         )
         assert repository.find_document_versions_by_external_identifiers(
-            (ExternalIdentifier("publication", "EP2"),)
+            _CORPUS_ID, (ExternalIdentifier("publication", "EP2"),)
         ) == (_FIRST_VERSION,)
     finally:
         repository.close()
@@ -297,7 +342,7 @@ def test_identifier_assertion_rejects_conflict_and_unobserved_version(
     try:
         with repository.transaction() as transaction:
             transaction.add_source_observation(_INITIAL_STATE)
-            transaction.add_external_identifier_assertions((assertion,))
+            transaction.add_external_identifier_assertions(_CORPUS_ID, (assertion,))
 
         conflicting = ExternalIdentifierAssertion(
             _SOURCE_OBSERVATION_ID,
@@ -306,7 +351,9 @@ def test_identifier_assertion_rejects_conflict_and_unobserved_version(
         )
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
-                transaction.add_external_identifier_assertions((conflicting,))
+                transaction.add_external_identifier_assertions(
+                    _CORPUS_ID, (conflicting,)
+                )
 
         unobserved = ExternalIdentifierAssertion(
             _SOURCE_OBSERVATION_ID,
@@ -315,11 +362,13 @@ def test_identifier_assertion_rejects_conflict_and_unobserved_version(
         )
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
-                transaction.add_external_identifier_assertions((unobserved,))
+                transaction.add_external_identifier_assertions(
+                    _CORPUS_ID, (unobserved,)
+                )
 
-        assert repository.list_external_identifier_assertions(_FIRST_VERSION_ID) == (
-            assertion,
-        )
+        assert repository.list_external_identifier_assertions(
+            _CORPUS_ID, _FIRST_VERSION_ID
+        ) == (assertion,)
     finally:
         repository.close()
 
@@ -333,7 +382,7 @@ def test_repository_values_compose_into_idempotent_resolution_request(
         with repository.transaction() as transaction:
             transaction.add_source_observation(_INITIAL_STATE)
 
-        current = repository.get_source_observation(_SOURCE_OBSERVATION_ID)
+        current = repository.get_source_observation(_CORPUS_ID, _SOURCE_OBSERVATION_ID)
         assert current is not None
         candidate = repository.get_document_version(current.document_version_id)
         assert candidate is not None
@@ -354,11 +403,11 @@ def test_repository_values_compose_into_idempotent_resolution_request(
 
         with repository.transaction() as transaction:
             transaction.add_external_identifier_assertions(
-                first_outcome.identifier_assertions_to_add
+                _CORPUS_ID, first_outcome.identifier_assertions_to_add
             )
 
         assertions = repository.list_external_identifier_assertions(
-            current.document_version_id
+            _CORPUS_ID, current.document_version_id
         )
         second_outcome = resolve_identity(
             IdentityResolutionRequest(

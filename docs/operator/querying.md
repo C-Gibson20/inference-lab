@@ -3,8 +3,9 @@
 ## Current status
 
 The `inference-lab` command is currently a skeleton; no operator query command
-or API is available yet. The first executable workflow is planned to ingest a
-corpus and return lexical passages with precise source locations.
+or API is available yet. The first executable workflow is planned to select a
+named corpus, ingest sources, and return lexical passages with precise source
+locations.
 
 Do not infer that an application startup message means that a corpus has been
 ingested or that queries are available.
@@ -15,10 +16,16 @@ When that workflow is implemented, this page will document the concrete command
 or API request, required arguments, query text, corpus/index selection, output
 format, and source-location fields. The baseline workflow is:
 
-1. ingest or open a persistent corpus;
-2. issue a query through the documented local CLI/API;
-3. inspect the returned document IDs, passages, pages, and source spans; and
+1. create, ingest, or open a named persistent corpus;
+2. select that corpus and issue a query through the documented local CLI/API;
+3. inspect the resolved corpus version plus the returned document IDs,
+   passages, pages, and source spans; and
 4. open the cited source location before relying on a result.
+
+Every query targets one corpus. Results from different corpora are not fused,
+and shared document storage must not make a document visible outside explicit
+membership. Cross-corpus comparison requires separate queries until a future
+federated-query contract is added.
 
 The baseline is lexical search. It is not yet a generated answer and should
 not be described as supporting citation verification, abstention, sessions, or

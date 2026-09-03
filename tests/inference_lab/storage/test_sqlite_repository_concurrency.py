@@ -6,14 +6,21 @@ from time import perf_counter
 import pytest
 from structlog.testing import capture_logs
 
-from inference_lab.provenance import CorpusId, DocumentId, DocumentIdentity
+from inference_lab.provenance import (
+    CorpusId,
+    CorpusMetadata,
+    DocumentId,
+    DocumentIdentity,
+)
 from inference_lab.storage import StorageConcurrencyError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 _APPLIED_AT = datetime(2026, 9, 2, 13, 0, tzinfo=UTC)
 _BASELINE_CORPUS_ID = CorpusId("08b00c09-b9c0-44b7-a3a4-1acb526162ab")
+_BASELINE_CORPUS = CorpusMetadata(_BASELINE_CORPUS_ID, "Baseline corpus")
 _UNCOMMITTED_DOCUMENT_ID = DocumentId("ce118577-f665-419f-9b4a-c9f875a59718")
 _AFTER_LOCK_CORPUS_ID = CorpusId("c2a62ed4-de89-4b4c-a5e2-a8e6340e2d81")
+_AFTER_LOCK_CORPUS = CorpusMetadata(_AFTER_LOCK_CORPUS_ID, "After-lock corpus")
 
 
 def _fixed_applied_at() -> datetime:
@@ -57,14 +64,14 @@ def test_reader_continues_with_committed_state_during_write(tmp_path: Path) -> N
     database_path = tmp_path / "metadata.sqlite3"
     writer = _initialise_repository(database_path)
     with writer.transaction() as transaction:
-        transaction.add_corpus(_BASELINE_CORPUS_ID)
+        transaction.add_corpus(_BASELINE_CORPUS)
     reader = SQLiteMetadataRepository.open(database_path)
     try:
         with writer.transaction() as transaction:
             transaction.add_document(DocumentIdentity(_UNCOMMITTED_DOCUMENT_ID))
 
             started_at = perf_counter()
-            assert reader.get_corpus(_BASELINE_CORPUS_ID) == _BASELINE_CORPUS_ID
+            assert reader.get_corpus(_BASELINE_CORPUS_ID) == _BASELINE_CORPUS
             assert reader.get_document(_UNCOMMITTED_DOCUMENT_ID) is None
             assert perf_counter() - started_at < 0.5
 
@@ -85,7 +92,7 @@ def test_second_writer_times_out_safely_and_recovers_after_commit(
     contender = SQLiteMetadataRepository.open(database_path, busy_timeout_ms=25)
     try:
         with writer.transaction() as transaction:
-            transaction.add_corpus(_BASELINE_CORPUS_ID)
+            transaction.add_corpus(_BASELINE_CORPUS)
 
             with capture_logs() as logs:
                 started_at = perf_counter()
@@ -110,10 +117,10 @@ def test_second_writer_times_out_safely_and_recovers_after_commit(
             assert private_marker not in repr(logs)
 
         with contender.transaction() as transaction:
-            transaction.add_corpus(_AFTER_LOCK_CORPUS_ID)
+            transaction.add_corpus(_AFTER_LOCK_CORPUS)
 
-        assert contender.get_corpus(_BASELINE_CORPUS_ID) == _BASELINE_CORPUS_ID
-        assert contender.get_corpus(_AFTER_LOCK_CORPUS_ID) == _AFTER_LOCK_CORPUS_ID
+        assert contender.get_corpus(_BASELINE_CORPUS_ID) == _BASELINE_CORPUS
+        assert contender.get_corpus(_AFTER_LOCK_CORPUS_ID) == _AFTER_LOCK_CORPUS
     finally:
         contender.close()
         writer.close()

@@ -30,6 +30,10 @@ Settings are validated before startup continues. Paths are parsed as `Path`
 values, but their targets do not need to exist during loading. Operations that
 cannot create or access a required path must report a clear error.
 
+The storage paths describe one deployment capable of holding multiple named
+corpora. Corpus creation and selection use application identities and controls;
+operators do not select a corpus by changing the database or index path.
+
 `get_settings()` caches settings for the process lifetime. Changes to the TOML
 file or environment take effect after a process restart.
 

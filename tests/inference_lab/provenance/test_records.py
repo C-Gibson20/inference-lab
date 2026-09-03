@@ -6,6 +6,8 @@ import pytest
 
 from inference_lab.provenance import (
     ContentHash,
+    CorpusId,
+    CorpusMetadata,
     DocumentId,
     DocumentIdentity,
     DocumentVersion,
@@ -17,6 +19,29 @@ from inference_lab.provenance import (
 )
 
 VALID_DIGEST = "a" * 64
+
+
+def test_corpus_metadata_keeps_stable_identity_separate_from_display_name() -> None:
+    corpus_id = CorpusId.generate()
+    corpus = CorpusMetadata(corpus_id, "Research corpus")
+
+    assert corpus.corpus_id == corpus_id
+    assert corpus.display_name == "Research corpus"
+    with pytest.raises(FrozenInstanceError):
+        corpus.display_name = "Changed"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("display_name", ["", " ", "\t\n", "bad\x00name"])
+def test_corpus_metadata_rejects_invalid_display_name(display_name: str) -> None:
+    with pytest.raises(ValueError, match="display_name"):
+        CorpusMetadata(CorpusId.generate(), display_name)
+
+
+def test_corpus_metadata_rejects_wrong_field_types() -> None:
+    with pytest.raises(TypeError, match="corpus_id"):
+        CorpusMetadata(DocumentId.generate(), "Corpus")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="display_name"):
+        CorpusMetadata(CorpusId.generate(), 1)  # type: ignore[arg-type]
 
 
 def _content_hash() -> ContentHash:
@@ -172,11 +197,13 @@ def test_document_version_is_immutable() -> None:
 
 
 def test_source_observation_state_validates_revision_and_typed_identities() -> None:
+    corpus_id = CorpusId.generate()
     source_observation_id = SourceObservationId.generate()
     document_id = DocumentId.generate()
     document_version_id = DocumentVersionId.generate()
 
     state = SourceObservationState(
+        corpus_id,
         source_observation_id,
         1,
         document_id,
@@ -186,6 +213,7 @@ def test_source_observation_state_validates_revision_and_typed_identities() -> N
     assert state.observation_revision == 1
     with pytest.raises(ValueError, match="at least one"):
         SourceObservationState(
+            corpus_id,
             source_observation_id,
             0,
             document_id,
@@ -193,6 +221,7 @@ def test_source_observation_state_validates_revision_and_typed_identities() -> N
         )
     with pytest.raises(TypeError, match="integer"):
         SourceObservationState(
+            corpus_id,
             source_observation_id,
             True,
             document_id,

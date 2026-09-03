@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Sequence
 
 from inference_lab.provenance import (
+    CorpusId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -19,16 +20,56 @@ from inference_lab.storage.errors import (
 )
 
 _MEMBERSHIPS_BY_FAMILY = """SELECT family_id, document_id, document_version_id
-FROM document_family_memberships
-WHERE family_id = ?
+FROM document_family_memberships AS family_membership
+WHERE family_id = ? AND (
+    (
+        document_version_id IS NOT NULL
+        AND EXISTS (
+            SELECT 1 FROM corpus_document_version_memberships AS corpus_membership
+            WHERE corpus_membership.corpus_id = ?
+                AND corpus_membership.document_version_id =
+                    family_membership.document_version_id
+        )
+    ) OR (
+        document_version_id IS NULL
+        AND EXISTS (
+            SELECT 1 FROM corpus_document_version_memberships AS corpus_membership
+            WHERE corpus_membership.corpus_id = ?
+                AND corpus_membership.document_id = family_membership.document_id
+        )
+    )
+)
 ORDER BY family_id, document_id, document_version_id"""
 _MEMBERSHIPS_BY_DOCUMENT = """SELECT family_id, document_id, document_version_id
-FROM document_family_memberships
-WHERE document_id = ?
+FROM document_family_memberships AS family_membership
+WHERE document_id = ? AND (
+    (
+        document_version_id IS NOT NULL
+        AND EXISTS (
+            SELECT 1 FROM corpus_document_version_memberships AS corpus_membership
+            WHERE corpus_membership.corpus_id = ?
+                AND corpus_membership.document_version_id =
+                    family_membership.document_version_id
+        )
+    ) OR (
+        document_version_id IS NULL
+        AND EXISTS (
+            SELECT 1 FROM corpus_document_version_memberships AS corpus_membership
+            WHERE corpus_membership.corpus_id = ?
+                AND corpus_membership.document_id = family_membership.document_id
+        )
+    )
+)
 ORDER BY family_id, document_id, document_version_id"""
 _MEMBERSHIPS_BY_VERSION = """SELECT family_id, document_id, document_version_id
-FROM document_family_memberships
+FROM document_family_memberships AS family_membership
 WHERE document_version_id = ?
+    AND EXISTS (
+        SELECT 1 FROM corpus_document_version_memberships AS corpus_membership
+        WHERE corpus_membership.corpus_id = ?
+            AND corpus_membership.document_version_id =
+                family_membership.document_version_id
+    )
 ORDER BY family_id, document_id, document_version_id"""
 
 
@@ -50,19 +91,44 @@ def _reconstruct_duplicate_relationships(
 
 def list_duplicate_relationships(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     document_version_id: DocumentVersionId,
 ) -> tuple[DuplicateRelationship, ...]:
     """Return relationships involving a version in canonical key order."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(document_version_id, DocumentVersionId):
         raise TypeError("document_version_id must be a DocumentVersionId.")
 
     try:
         rows = connection.execute(
             """SELECT duplicate_class, first_version_id, second_version_id
-            FROM duplicate_relationships
-            WHERE first_version_id = ? OR second_version_id = ?
-            ORDER BY duplicate_class, first_version_id, second_version_id""",
-            (document_version_id.as_str(), document_version_id.as_str()),
+            FROM duplicate_relationships AS relationship
+            WHERE (
+                relationship.first_version_id = ?
+                OR relationship.second_version_id = ?
+            )
+                AND EXISTS (
+                    SELECT 1 FROM corpus_document_version_memberships AS first
+                    WHERE first.corpus_id = ?
+                        AND first.document_version_id =
+                            relationship.first_version_id
+                )
+                AND EXISTS (
+                    SELECT 1 FROM corpus_document_version_memberships AS second
+                    WHERE second.corpus_id = ?
+                        AND second.document_version_id =
+                            relationship.second_version_id
+                )
+            ORDER BY relationship.duplicate_class,
+                relationship.first_version_id,
+                relationship.second_version_id""",
+            (
+                document_version_id.as_str(),
+                document_version_id.as_str(),
+                corpus_id.as_str(),
+                corpus_id.as_str(),
+            ),
         ).fetchall()
         return _reconstruct_duplicate_relationships(rows)
     except CorruptStorageError:
@@ -162,11 +228,14 @@ def _reconstruct_family_memberships(
 
 def _list_family_memberships(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     statement: str,
     parameter: str,
+    corpus_parameter_count: int,
 ) -> tuple[DocumentFamilyMembership, ...]:
     try:
-        rows = connection.execute(statement, (parameter,)).fetchall()
+        parameters = (parameter,) + (corpus_id.as_str(),) * corpus_parameter_count
+        rows = connection.execute(statement, parameters).fetchall()
         return _reconstruct_family_memberships(rows)
     except CorruptStorageError:
         raise
@@ -179,43 +248,58 @@ def _list_family_memberships(
 
 def list_family_memberships_by_family(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     family_id: DocumentFamilyId,
 ) -> tuple[DocumentFamilyMembership, ...]:
     """Return a family's memberships in canonical key order."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(family_id, DocumentFamilyId):
         raise TypeError("family_id must be a DocumentFamilyId.")
     return _list_family_memberships(
         connection,
+        corpus_id,
         _MEMBERSHIPS_BY_FAMILY,
         family_id.as_str(),
+        2,
     )
 
 
 def list_family_memberships_by_document(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     document_id: DocumentId,
 ) -> tuple[DocumentFamilyMembership, ...]:
     """Return a document's memberships in canonical key order."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(document_id, DocumentId):
         raise TypeError("document_id must be a DocumentId.")
     return _list_family_memberships(
         connection,
+        corpus_id,
         _MEMBERSHIPS_BY_DOCUMENT,
         document_id.as_str(),
+        2,
     )
 
 
 def list_family_memberships_by_document_version(
     connection: sqlite3.Connection,
+    corpus_id: CorpusId,
     document_version_id: DocumentVersionId,
 ) -> tuple[DocumentFamilyMembership, ...]:
     """Return a version's memberships in canonical key order."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(document_version_id, DocumentVersionId):
         raise TypeError("document_version_id must be a DocumentVersionId.")
     return _list_family_memberships(
         connection,
+        corpus_id,
         _MEMBERSHIPS_BY_VERSION,
         document_version_id.as_str(),
+        1,
     )
 
 

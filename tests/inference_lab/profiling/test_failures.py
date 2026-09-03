@@ -38,6 +38,7 @@ def test_failed_event_serialises_operational_fields() -> None:
         "run_id": None,
         "request_id": None,
         "document_id": None,
+        "corpus_id": None,
         "corpus_version": None,
         "status": "failed",
         "level": "error",
@@ -46,7 +47,7 @@ def test_failed_event_serialises_operational_fields() -> None:
         "partial": True,
         "exception_type": "ValueError",
         "observed_at": "2026-08-21T12:00:00+00:00",
-        "record_schema_version": 2,
+        "record_schema_version": 3,
     }
 
 

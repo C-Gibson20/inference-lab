@@ -357,6 +357,7 @@ def test_local_backend_logs_are_structured_and_payload_free() -> None:
             "module",
             "pipeline_stage",
             "document_id",
+            "corpus_id",
             "corpus_version",
         } <= record.keys()
         rendered_record = json.dumps(record)
