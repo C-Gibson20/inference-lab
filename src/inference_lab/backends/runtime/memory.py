@@ -7,13 +7,22 @@ from enum import StrEnum
 from typing import Final, Protocol, runtime_checkable
 
 from inference_lab._validation import is_canonical_semantic_version
-from inference_lab.backends.runtime._validation import validate_non_empty_string
+from inference_lab.backends.runtime._validation import (
+    validate_integer,
+    validate_non_empty_string,
+    validate_non_negative_integer,
+)
 from inference_lab.profiling._validation import validate_utc_datetime
-from inference_lab.profiling.resources import MeasurementStatus, ResourceCategory
+from inference_lab.profiling.resources import (
+    MEASUREMENT_STATUSES,
+    MEMORY_RESOURCE_CATEGORIES,
+    MeasurementStatus,
+    MemoryResourceCategory,
+)
 from inference_lab.profiling.utils import utc_now
 
 
-class ComponentRole(StrEnum):
+class MemoryComponentRole(StrEnum):
     """Bounded role identifying the owner of a memory contribution."""
 
     GENERATOR = "generator"
@@ -65,18 +74,6 @@ class BudgetState(StrEnum):
 CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION: Final[str] = "2.0.0"
 SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS: Final[frozenset[str]] = frozenset(
     {CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION}
-)
-_MEMORY_CATEGORIES = frozenset(
-    {
-        "model_weights",
-        "kv_cache",
-        "activations",
-        "embedding_reranker_memory",
-        "index_memory",
-        "framework_overhead",
-        "pinned_host_memory",
-        "storage_cache",
-    }
 )
 
 
@@ -135,8 +132,8 @@ class ExpectedMemoryContribution:
     """One planned exclusive component/category contribution in a memory space."""
 
     component_id: str
-    component_role: ComponentRole
-    category: ResourceCategory
+    component_role: MemoryComponentRole
+    category: MemoryResourceCategory
     memory_space: MemorySpace
     device_id: str | None
     adapter: MemoryAdapterIdentity
@@ -147,11 +144,11 @@ class ExpectedMemoryContribution:
     def _validate(self) -> None:
         """Validate expected contribution types, units, and identity rules."""
         _validate_safe_identifier(self.component_id, "component_id")
-        if not isinstance(self.component_role, ComponentRole):
-            raise TypeError("component_role must be a ComponentRole")
+        if not isinstance(self.component_role, MemoryComponentRole):
+            raise TypeError("component_role must be a MemoryComponentRole")
         if not isinstance(self.category, str):
             raise TypeError("category must be a string")
-        if self.category not in _MEMORY_CATEGORIES:
+        if self.category not in MEMORY_RESOURCE_CATEGORIES:
             raise ValueError("category must be a supported memory category")
         if not isinstance(self.memory_space, MemorySpace):
             raise TypeError("memory_space must be a MemorySpace")
@@ -179,8 +176,8 @@ class MemoryMeasurement:
 
     measurement_id: str
     component_id: str
-    component_role: ComponentRole
-    category: ResourceCategory
+    component_role: MemoryComponentRole
+    category: MemoryResourceCategory
     memory_space: MemorySpace
     device_id: str | None
     status: MeasurementStatus
@@ -197,20 +194,11 @@ class MemoryMeasurement:
         """Validate measurement types, units, identity, and status rules."""
         _validate_safe_identifier(self.measurement_id, "measurement_id")
         _validate_safe_identifier(self.component_id, "component_id")
-        if not isinstance(self.component_role, ComponentRole):
-            raise TypeError("component_role must be a ComponentRole")
+        if not isinstance(self.component_role, MemoryComponentRole):
+            raise TypeError("component_role must be a MemoryComponentRole")
         if not isinstance(self.category, str):
             raise TypeError("category must be a string")
-        if self.category not in {
-            "model_weights",
-            "kv_cache",
-            "activations",
-            "embedding_reranker_memory",
-            "index_memory",
-            "framework_overhead",
-            "pinned_host_memory",
-            "storage_cache",
-        }:
+        if self.category not in MEMORY_RESOURCE_CATEGORIES:
             raise ValueError("category must be a supported memory category")
         if not isinstance(self.memory_space, MemorySpace):
             raise TypeError("memory_space must be a MemorySpace")
@@ -218,15 +206,10 @@ class MemoryMeasurement:
             _validate_safe_identifier(self.device_id, "device_id")
         if not isinstance(self.status, str):
             raise TypeError("status must be a string")
-        if self.status not in {"measured", "unavailable", "unreliable"}:
+        if self.status not in MEASUREMENT_STATUSES:
             raise ValueError("status must be a supported measurement status")
         if self.value_bytes is not None:
-            if isinstance(self.value_bytes, bool) or not isinstance(
-                self.value_bytes, int
-            ):
-                raise TypeError("value_bytes must be an integer or None")
-            if self.value_bytes < 0:
-                raise ValueError("value_bytes must not be negative")
+            validate_non_negative_integer(self.value_bytes, "value_bytes")
         if self.status == "measured" and self.value_bytes is None:
             raise ValueError("measured memory must have a value")
         if self.status == "unavailable" and self.value_bytes is not None:
@@ -290,10 +273,7 @@ class RollupReconciliation:
             (self.rollup_value_bytes, "rollup_value_bytes"),
             (self.covered_value_bytes, "covered_value_bytes"),
         ):
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise TypeError(f"{field_name} must be an integer")
-            if value < 0:
-                raise ValueError(f"{field_name} must not be negative")
+            validate_non_negative_integer(value, field_name)
         if not isinstance(self.reconciled, bool):
             raise TypeError("reconciled must be a boolean")
 
@@ -304,8 +284,8 @@ class MemoryTotal:
 
     memory_space: MemorySpace
     device_id: str | None
-    category: ResourceCategory | None
-    component_role: ComponentRole | None
+    category: MemoryResourceCategory | None
+    component_role: MemoryComponentRole | None
     measured_bytes: int
     unreliable_bytes: int
     measured_count: int
@@ -326,12 +306,15 @@ class MemoryTotal:
         if self.category is not None and not isinstance(self.category, str):
             raise TypeError("category must be a string or None")
         if self.component_role is not None and not isinstance(
-            self.component_role, ComponentRole
+            self.component_role, MemoryComponentRole
         ):
-            raise TypeError("component_role must be a ComponentRole or None")
+            raise TypeError("component_role must be a MemoryComponentRole or None")
         if self.category is None and self.component_role is not None:
             raise ValueError("component role subtotals require a category")
-        if self.category is not None and self.category not in _MEMORY_CATEGORIES:
+        if (
+            self.category is not None
+            and self.category not in MEMORY_RESOURCE_CATEGORIES
+        ):
             raise ValueError("category must be a supported memory category")
         for value, field_name in (
             (self.measured_bytes, "measured_bytes"),
@@ -341,10 +324,7 @@ class MemoryTotal:
             (self.unavailable_count, "unavailable_count"),
             (self.missing_count, "missing_count"),
         ):
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise TypeError(f"{field_name} must be an integer")
-            if value < 0:
-                raise ValueError(f"{field_name} must not be negative")
+            validate_non_negative_integer(value, field_name)
         if not isinstance(self.completeness, Completeness):
             raise TypeError("completeness must be a Completeness value")
         expected = (
@@ -375,12 +355,7 @@ class MemoryBudget:
             raise TypeError("memory_space must be a MemorySpace")
         if self.device_id is not None:
             _validate_safe_identifier(self.device_id, "device_id")
-        if isinstance(self.budget_bytes, bool) or not isinstance(
-            self.budget_bytes, int
-        ):
-            raise TypeError("budget_bytes must be an integer")
-        if self.budget_bytes < 0:
-            raise ValueError("budget_bytes must not be negative")
+        validate_non_negative_integer(self.budget_bytes, "budget_bytes")
 
     @classmethod
     def from_decimal_gigabytes(
@@ -442,10 +417,10 @@ class BudgetComparison:
             (self.unavailable_count, "unavailable_count"),
             (self.missing_count, "missing_count"),
         ):
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise TypeError(f"{field_name} must be an integer")
-            if field_name != "provisional_headroom_bytes" and value < 0:
-                raise ValueError(f"{field_name} must not be negative")
+            if field_name == "provisional_headroom_bytes":
+                validate_integer(value, field_name)
+            else:
+                validate_non_negative_integer(value, field_name)
         if not isinstance(self.completeness, Completeness):
             raise TypeError("completeness must be a Completeness value")
         expected_headroom = self.budget.budget_bytes - self.measured_bytes
@@ -491,10 +466,7 @@ class BudgetComparison:
             (unavailable_count, "unavailable_count"),
             (missing_count, "missing_count"),
         ):
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise TypeError(f"{field_name} must be an integer")
-            if value < 0:
-                raise ValueError(f"{field_name} must not be negative")
+            validate_non_negative_integer(value, field_name)
         completeness = cls._completeness_for_counts(
             unreliable_count=unreliable_count,
             unavailable_count=unavailable_count,
@@ -602,7 +574,13 @@ class MemorySnapshot:
             if correlation_id is not None:
                 _validate_safe_identifier(correlation_id, field_name)
         expected_by_slot: dict[
-            tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None],
+            tuple[
+                str,
+                MemoryComponentRole,
+                MemoryResourceCategory,
+                MemorySpace,
+                str | None,
+            ],
             ExpectedMemoryContribution,
         ] = {}
         for expected in self.expected_contributions:
@@ -618,7 +596,13 @@ class MemorySnapshot:
 
         measurements_by_id: dict[str, MemoryMeasurement] = {}
         observed_exclusive_slots: set[
-            tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]
+            tuple[
+                str,
+                MemoryComponentRole,
+                MemoryResourceCategory,
+                MemorySpace,
+                str | None,
+            ]
         ] = set()
         for measurement in self.measurements:
             if not isinstance(measurement, MemoryMeasurement):
@@ -659,7 +643,9 @@ class MemorySnapshot:
     @staticmethod
     def _expected_contribution_slot(
         expected: ExpectedMemoryContribution,
-    ) -> tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]:
+    ) -> tuple[
+        str, MemoryComponentRole, MemoryResourceCategory, MemorySpace, str | None
+    ]:
         return (
             expected.component_id,
             expected.component_role,
@@ -671,7 +657,9 @@ class MemorySnapshot:
     @staticmethod
     def _measurement_slot(
         measurement: MemoryMeasurement,
-    ) -> tuple[str, ComponentRole, ResourceCategory, MemorySpace, str | None]:
+    ) -> tuple[
+        str, MemoryComponentRole, MemoryResourceCategory, MemorySpace, str | None
+    ]:
         return (
             measurement.component_id,
             measurement.component_role,
@@ -762,7 +750,10 @@ class MemorySnapshot:
         }
         keys: set[
             tuple[
-                MemorySpace, str | None, ResourceCategory | None, ComponentRole | None
+                MemorySpace,
+                str | None,
+                MemoryResourceCategory | None,
+                MemoryComponentRole | None,
             ]
         ] = set()
         for expected in self.expected_contributions:

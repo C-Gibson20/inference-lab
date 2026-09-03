@@ -4,12 +4,34 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from inference_lab.profiling import ResourceMeasurement
+from inference_lab.profiling import (
+    MEASUREMENT_STATUSES,
+    MEMORY_RESOURCE_CATEGORIES,
+    RESOURCE_CATEGORIES,
+    ResourceMeasurement,
+)
 
 
 def fixed_timestamp() -> datetime:
     """Return a deterministic UTC timestamp for record tests."""
     return datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
+
+
+def test_resource_vocabularies_are_published_from_one_canonical_definition() -> None:
+    assert MEMORY_RESOURCE_CATEGORIES == frozenset(
+        {
+            "model_weights",
+            "kv_cache",
+            "activations",
+            "embedding_reranker_memory",
+            "index_memory",
+            "framework_overhead",
+            "pinned_host_memory",
+            "storage_cache",
+        }
+    )
+    assert MEMORY_RESOURCE_CATEGORIES < RESOURCE_CATEGORIES
+    assert MEASUREMENT_STATUSES == frozenset({"measured", "unavailable", "unreliable"})
 
 
 def test_measured_resource_serialises_all_fields() -> None:

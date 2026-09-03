@@ -6,12 +6,12 @@ import pytest
 from inference_lab.backends.runtime import (
     BudgetState,
     Completeness,
-    ComponentRole,
     ContributionKind,
     ExpectedMemoryContribution,
     MemoryAdapterIdentity,
     MemoryBudget,
     MemoryCollectorIdentity,
+    MemoryComponentRole,
     MemoryMeasurement,
     MemorySnapshot,
     MemorySpace,
@@ -27,7 +27,7 @@ def measurement(
     measurement_id: str,
     *,
     component_id: str = "generator",
-    component_role: ComponentRole = ComponentRole.GENERATOR,
+    component_role: MemoryComponentRole = MemoryComponentRole.GENERATOR,
     category: str = "model_weights",
     memory_space: MemorySpace = MemorySpace.ACCELERATOR,
     device_id: str | None = "cuda-0",
@@ -97,14 +97,14 @@ def test_snapshot_totals_are_order_independent_and_exclude_rollups() -> None:
     framework = measurement(
         "framework",
         component_id="framework",
-        component_role=ComponentRole.RUNTIME_FRAMEWORK,
+        component_role=MemoryComponentRole.RUNTIME_FRAMEWORK,
         category="framework_overhead",
         value_bytes=3,
     )
     rollup = measurement(
         "accelerator-total",
         component_id="runtime",
-        component_role=ComponentRole.RUNTIME_FRAMEWORK,
+        component_role=MemoryComponentRole.RUNTIME_FRAMEWORK,
         contribution_kind=ContributionKind.ROLL_UP,
         covers_measurement_ids=("generator-weights", "framework"),
         value_bytes=13,
@@ -132,7 +132,7 @@ def test_totals_include_category_and_component_role_subtotals() -> None:
     )
     assert any(
         total.category == "model_weights"
-        and total.component_role is ComponentRole.GENERATOR
+        and total.component_role is MemoryComponentRole.GENERATOR
         and total.measured_bytes == 10
         for total in memory_snapshot.totals
     )
@@ -143,7 +143,7 @@ def test_all_memory_spaces_are_kept_separate() -> None:
     host = measurement(
         "host",
         component_id="index",
-        component_role=ComponentRole.LEXICAL_INDEX,
+        component_role=MemoryComponentRole.LEXICAL_INDEX,
         category="index_memory",
         memory_space=MemorySpace.HOST,
         device_id=None,
@@ -152,7 +152,7 @@ def test_all_memory_spaces_are_kept_separate() -> None:
     pinned = measurement(
         "pinned",
         component_id="pinned",
-        component_role=ComponentRole.PINNED_HOST_ALLOCATION,
+        component_role=MemoryComponentRole.PINNED_HOST_ALLOCATION,
         category="pinned_host_memory",
         memory_space=MemorySpace.PINNED_HOST,
         device_id=None,
@@ -161,7 +161,7 @@ def test_all_memory_spaces_are_kept_separate() -> None:
     storage = measurement(
         "storage",
         component_id="storage",
-        component_role=ComponentRole.STORAGE_CACHE,
+        component_role=MemoryComponentRole.STORAGE_CACHE,
         category="storage_cache",
         memory_space=MemorySpace.STORAGE_CACHE,
         device_id=None,
@@ -184,7 +184,7 @@ def test_snapshot_composes_distinct_measurement_adapters() -> None:
     framework = measurement(
         "framework",
         component_id="framework",
-        component_role=ComponentRole.RUNTIME_FRAMEWORK,
+        component_role=MemoryComponentRole.RUNTIME_FRAMEWORK,
         category="framework_overhead",
         value_bytes=3,
         adapter=OTHER_ADAPTER,
@@ -223,7 +223,7 @@ def test_snapshot_rejects_overlapping_or_unplanned_exclusive_contributions() -> 
                 measurement(
                     "framework",
                     component_id="framework",
-                    component_role=ComponentRole.RUNTIME_FRAMEWORK,
+                    component_role=MemoryComponentRole.RUNTIME_FRAMEWORK,
                     category="framework_overhead",
                 ),
             ),
@@ -236,7 +236,7 @@ def test_missing_and_unreliable_values_make_totals_incomplete() -> None:
         measurement(
             "unreliable",
             component_id="workspace",
-            component_role=ComponentRole.ACTIVATION_WORKSPACE,
+            component_role=MemoryComponentRole.ACTIVATION_WORKSPACE,
             category="activations",
             status="unreliable",
             value_bytes=4,
@@ -244,7 +244,7 @@ def test_missing_and_unreliable_values_make_totals_incomplete() -> None:
         measurement(
             "unavailable",
             component_id="cache",
-            component_role=ComponentRole.KV_CACHE,
+            component_role=MemoryComponentRole.KV_CACHE,
             category="kv_cache",
             status="unavailable",
             value_bytes=None,
@@ -264,7 +264,7 @@ def test_absent_expected_contribution_is_counted_and_never_safe() -> None:
     promised = measurement(
         "workspace",
         component_id="workspace",
-        component_role=ComponentRole.ACTIVATION_WORKSPACE,
+        component_role=MemoryComponentRole.ACTIVATION_WORKSPACE,
         category="activations",
     )
     memory_snapshot = MemorySnapshot(
@@ -291,7 +291,7 @@ def test_unknown_accelerator_device_contaminates_each_device_budget() -> None:
     unknown_cache = measurement(
         "cache",
         component_id="cache",
-        component_role=ComponentRole.KV_CACHE,
+        component_role=MemoryComponentRole.KV_CACHE,
         category="kv_cache",
         device_id=None,
         status="unavailable",
@@ -329,7 +329,7 @@ def test_mismatched_measured_rollup_is_retained_as_unreconciled_diagnostic() -> 
         measurement(
             "rollup",
             component_id="runtime",
-            component_role=ComponentRole.RUNTIME_FRAMEWORK,
+            component_role=MemoryComponentRole.RUNTIME_FRAMEWORK,
             contribution_kind=ContributionKind.ROLL_UP,
             covers_measurement_ids=("child",),
             value_bytes=11,
@@ -424,7 +424,7 @@ def test_incomplete_budget_is_indeterminate_unless_measured_bytes_breach() -> No
         measurement(
             "missing",
             component_id="cache",
-            component_role=ComponentRole.KV_CACHE,
+            component_role=MemoryComponentRole.KV_CACHE,
             category="kv_cache",
             status="unavailable",
             value_bytes=None,

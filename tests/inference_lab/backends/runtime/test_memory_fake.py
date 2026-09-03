@@ -3,9 +3,9 @@ from datetime import UTC, datetime
 import pytest
 
 from inference_lab.backends.runtime import (
-    ComponentRole,
     FakeMemoryAccountingAdapter,
     MemoryAdapterIdentity,
+    MemoryComponentRole,
     MemoryMeasurement,
     MemorySpace,
 )
@@ -19,7 +19,7 @@ def make_measurement() -> MemoryMeasurement:
     return MemoryMeasurement(
         measurement_id="weights",
         component_id="generator",
-        component_role=ComponentRole.GENERATOR,
+        component_role=MemoryComponentRole.GENERATOR,
         category="model_weights",
         memory_space=MemorySpace.ACCELERATOR,
         device_id="cuda-0",

@@ -203,11 +203,15 @@ component-attributed observations through the runtime memory contract. It is
 not part of the lifecycle, embedding, reranking, or generation protocols, so
 backends that do not implement memory reporting remain valid.
 
-Memory measurements use the profiling memory categories and
-`measured`/`unavailable`/`unreliable` statuses. Byte values are canonical
-non-negative integers. Component role and memory category are independent: for
-example, generator weights are `model_weights`, while an explicitly coarse
-embedder total may use `embedding_reranker_memory`.
+Memory measurements use the profiling `MemoryResourceCategory` vocabulary and
+`MeasurementStatus` values; profiling owns the corresponding immutable
+membership sets. Byte values are canonical non-negative integers. The closed
+runtime `MemoryComponentRole` identifies accounting ownership and is distinct
+from provenance's extensible `ComponentRole`, which describes a component's
+role in a producing operation. Integrations must map the two explicitly rather
+than interchange their values. Memory component role and category are also
+independent: for example, generator weights are `model_weights`, while an
+explicitly coarse embedder total may use `embedding_reranker_memory`.
 
 Memory snapshot schema version `2.0.0` separates the identity of the collector
 that assembles the snapshot from the identity of each adapter that supplies a

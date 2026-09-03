@@ -17,6 +17,14 @@ def validate_integer(value: object, field_name: str) -> None:
         raise TypeError(f"{field_name} must be an integer")
 
 
+def validate_non_negative_integer(value: object, field_name: str) -> None:
+    """Require a non-negative integer while excluding booleans."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if value < 0:
+        raise ValueError(f"{field_name} must not be negative")
+
+
 def validate_finite_number(value: object, field_name: str) -> None:
     """Require a finite integer or floating-point number, excluding booleans."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):

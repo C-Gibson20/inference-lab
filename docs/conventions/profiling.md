@@ -118,7 +118,8 @@ requiring profiling code to know the experiment design.
 
 Runtime memory snapshots compose the canonical profiling memory categories,
 bytes unit, statuses, UTC `observed_at`, and record schema version. Their
-runtime-owned fields add component role, memory space, device identity,
+runtime-owned fields add the closed `MemoryComponentRole` accounting
+vocabulary, memory space, device identity,
 exclusive-versus-roll-up contribution semantics, and adapter/calibration
 identity without changing the generic `ResourceMeasurement` shape.
 

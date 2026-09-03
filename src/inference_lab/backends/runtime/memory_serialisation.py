@@ -9,16 +9,22 @@ from inference_lab.backends.runtime.memory import (
     BudgetComparison,
     BudgetState,
     Completeness,
-    ComponentRole,
     ContributionKind,
     ExpectedMemoryContribution,
     MemoryAdapterIdentity,
     MemoryBudget,
     MemoryCollectorIdentity,
+    MemoryComponentRole,
     MemoryMeasurement,
     MemoryOverlapPolicy,
     MemorySnapshot,
     MemorySpace,
+)
+from inference_lab.profiling.resources import (
+    MEASUREMENT_STATUSES,
+    MEMORY_RESOURCE_CATEGORIES,
+    MeasurementStatus,
+    MemoryResourceCategory,
 )
 
 JsonObject = dict[str, object]
@@ -172,6 +178,26 @@ def _require_boolean(payload: JsonObject, field_name: str) -> bool:
     return value
 
 
+def _require_memory_category(
+    payload: JsonObject,
+    field_name: str,
+) -> MemoryResourceCategory:
+    value = _require_string(payload, field_name)
+    if value not in MEMORY_RESOURCE_CATEGORIES:
+        raise ValueError(f"{field_name} must be a supported memory category")
+    return cast(MemoryResourceCategory, value)
+
+
+def _require_measurement_status(
+    payload: JsonObject,
+    field_name: str,
+) -> MeasurementStatus:
+    value = _require_string(payload, field_name)
+    if value not in MEASUREMENT_STATUSES:
+        raise ValueError(f"{field_name} must be a supported measurement status")
+    return cast(MeasurementStatus, value)
+
+
 def _parse_datetime(payload: JsonObject, field_name: str) -> datetime:
     value = _require_string(payload, field_name)
     try:
@@ -243,7 +269,7 @@ def _parse_expected_contribution(value: JsonValue) -> ExpectedMemoryContribution
         "expected contribution",
     )
     try:
-        component_role = ComponentRole(_require_string(payload, "component_role"))
+        component_role = MemoryComponentRole(_require_string(payload, "component_role"))
         memory_space = MemorySpace(_require_string(payload, "memory_space"))
     except ValueError as error:
         raise ValueError(
@@ -252,7 +278,7 @@ def _parse_expected_contribution(value: JsonValue) -> ExpectedMemoryContribution
     return ExpectedMemoryContribution(
         component_id=_require_string(payload, "component_id"),
         component_role=component_role,
-        category=_require_string(payload, "category"),  # type: ignore[arg-type]
+        category=_require_memory_category(payload, "category"),
         memory_space=memory_space,
         device_id=_require_optional_string(payload, "device_id"),
         adapter=_parse_adapter(payload["adapter"]),
@@ -287,7 +313,7 @@ def _parse_measurement(value: JsonValue) -> MemoryMeasurement:
     if not all(isinstance(item, str) for item in coverage):
         raise TypeError("covers_measurement_ids must contain strings")
     try:
-        component_role = ComponentRole(_require_string(payload, "component_role"))
+        component_role = MemoryComponentRole(_require_string(payload, "component_role"))
         contribution_kind = ContributionKind(
             _require_string(payload, "contribution_kind")
         )
@@ -299,15 +325,15 @@ def _parse_measurement(value: JsonValue) -> MemoryMeasurement:
         isinstance(value_bytes, bool) or not isinstance(value_bytes, int)
     ):
         raise TypeError("value_bytes must be an integer or null")
-    status = _require_string(payload, "status")
+    status = _require_measurement_status(payload, "status")
     return MemoryMeasurement(
         measurement_id=_require_string(payload, "measurement_id"),
         component_id=_require_string(payload, "component_id"),
         component_role=component_role,
-        category=_require_string(payload, "category"),  # type: ignore[arg-type]
+        category=_require_memory_category(payload, "category"),
         memory_space=memory_space,
         device_id=_require_optional_string(payload, "device_id"),
-        status=status,  # type: ignore[arg-type]
+        status=status,
         value_bytes=value_bytes,
         adapter=_parse_adapter(payload["adapter"]),
         contribution_kind=contribution_kind,

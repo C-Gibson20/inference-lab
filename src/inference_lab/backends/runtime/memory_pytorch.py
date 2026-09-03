@@ -6,12 +6,13 @@ from datetime import datetime
 import torch
 
 from inference_lab.backends.runtime.memory import (
-    ComponentRole,
     MemoryAccountingAdapter,
     MemoryAdapterIdentity,
+    MemoryComponentRole,
     MemoryMeasurement,
     MemorySpace,
 )
+from inference_lab.profiling.resources import MemoryResourceCategory
 from inference_lab.profiling.utils import utc_now
 
 
@@ -70,7 +71,7 @@ class PyTorchMemoryCalibrationAdapter(MemoryAccountingAdapter):
         model: torch.nn.Module | None,
         *,
         component_id: str = "generator",
-        component_role: ComponentRole = ComponentRole.GENERATOR,
+        component_role: MemoryComponentRole = MemoryComponentRole.GENERATOR,
         kv_cache: object | None = None,
         adapter: MemoryAdapterIdentity | None = None,
         observed_at_factory: Callable[[], datetime] = utc_now,
@@ -80,8 +81,8 @@ class PyTorchMemoryCalibrationAdapter(MemoryAccountingAdapter):
             raise TypeError("model must be a torch.nn.Module or None")
         if not isinstance(component_id, str):
             raise TypeError("component_id must be a string")
-        if not isinstance(component_role, ComponentRole):
-            raise TypeError("component_role must be a ComponentRole")
+        if not isinstance(component_role, MemoryComponentRole):
+            raise TypeError("component_role must be a MemoryComponentRole")
         if adapter is not None and not isinstance(adapter, MemoryAdapterIdentity):
             raise TypeError("adapter must be a MemoryAdapterIdentity or None")
         if not callable(observed_at_factory):
@@ -153,7 +154,7 @@ class PyTorchMemoryCalibrationAdapter(MemoryAccountingAdapter):
             self._measured(
                 measurement_id=f"kv-cache-{device.replace(':', '-')}",
                 category="kv_cache",
-                component_role=ComponentRole.KV_CACHE,
+                component_role=MemoryComponentRole.KV_CACHE,
                 memory_space=_device_identity(torch.device(device))[0],
                 device_id=_device_identity(torch.device(device))[1],
                 value_bytes=value,
@@ -166,8 +167,8 @@ class PyTorchMemoryCalibrationAdapter(MemoryAccountingAdapter):
         self,
         *,
         measurement_id: str,
-        category: str,
-        component_role: ComponentRole,
+        category: MemoryResourceCategory,
+        component_role: MemoryComponentRole,
         memory_space: MemorySpace,
         device_id: str,
         value_bytes: int,
@@ -177,7 +178,7 @@ class PyTorchMemoryCalibrationAdapter(MemoryAccountingAdapter):
             measurement_id=measurement_id,
             component_id=self._component_id,
             component_role=component_role,
-            category=category,  # type: ignore[arg-type]
+            category=category,
             memory_space=memory_space,
             device_id=device_id,
             status="measured",
@@ -189,19 +190,19 @@ class PyTorchMemoryCalibrationAdapter(MemoryAccountingAdapter):
     def _unavailable(
         self,
         measurement_id: str,
-        category: str,
+        category: MemoryResourceCategory,
         observed_at: datetime,
     ) -> MemoryMeasurement:
         role = (
             self._component_role
             if category == "model_weights"
-            else ComponentRole.KV_CACHE
+            else MemoryComponentRole.KV_CACHE
         )
         return MemoryMeasurement(
             measurement_id=measurement_id,
             component_id=self._component_id,
             component_role=role,
-            category=category,  # type: ignore[arg-type]
+            category=category,
             memory_space=MemorySpace.ACCELERATOR,
             device_id=None,
             status="unavailable",
