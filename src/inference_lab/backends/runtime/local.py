@@ -375,13 +375,12 @@ class LocalCausalBackend:
         try:
             with torch.inference_mode():
                 await asyncio.sleep(0)
+                past_key_values = DynamicCache()
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
+                    past_key_values=past_key_values,
                     use_cache=True,
-                )
-                past_key_values = DynamicCache.from_legacy_cache(
-                    outputs.past_key_values
                 )
                 for _ in range(prepared.available_output_tokens):
                     self._ensure_available()
@@ -432,7 +431,6 @@ class LocalCausalBackend:
                         past_key_values=past_key_values,
                         use_cache=True,
                     )
-                    past_key_values = outputs.past_key_values
 
                 if finish_reason == "length":
                     decoded = self._decode(tokeniser, generated_ids)
@@ -691,18 +689,17 @@ class LocalMechanicsHarness:
 
         try:
             with torch.inference_mode():
-                cache: Cache | None = None
+                cache: DynamicCache | None = None
                 cached_logits = None
                 if can_reuse:
+                    cache = DynamicCache()
                     first_outputs = model(
                         input_ids=torch.tensor([first_token_ids], dtype=torch.long),
                         attention_mask=torch.ones(
                             (1, len(first_token_ids)), dtype=torch.long
                         ),
+                        past_key_values=cache,
                         use_cache=True,
-                    )
-                    cache = DynamicCache.from_legacy_cache(
-                        first_outputs.past_key_values
                     )
                     self._backend._active_cache_state = cache
                     cache_outcomes.append(CacheObservationOutcome.CREATED)
