@@ -113,6 +113,16 @@ def _result_fixture() -> EvidenceResult:
     )
 
 
+def _replace_result_path(path: tuple[str | int, ...], value: object) -> bytes:
+    """Replace one nested result value and encode the resulting payload."""
+    payload = json.loads(serialise_evidence_result(_result_fixture()))
+    target: object = payload
+    for key in path[:-1]:
+        target = target[key]  # type: ignore[index]
+    target[path[-1]] = value  # type: ignore[index]
+    return json.dumps(payload).encode()
+
+
 def test_evidence_result_round_trips_full_provenance_and_failures() -> None:
     result = _result_fixture()
     encoded = serialise_evidence_result(result)
@@ -122,6 +132,60 @@ def test_evidence_result_round_trips_full_provenance_and_failures() -> None:
     assert b'"source_span_id"' in encoded
     assert json.loads(encoded)["requested_limit"] == result.requested_limit.value
     assert deserialise_evidence_result(encoded) == result
+
+
+def test_evidence_result_serialisation_rejects_wrong_envelope_type() -> None:
+    with pytest.raises(TypeError, match="EvidenceResult"):
+        serialise_evidence_result("result")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("hits", 0, "candidate", "kind"), "unknown", "candidate.kind"),
+        (("hits", 0, "candidate", "content"), 1, "candidate.content"),
+        (("hits", 0, "candidate", "sources"), {}, "candidate.sources"),
+        (("hits", 0, "contributions", 0, "channel"), "unknown", "score.channel"),
+        (("hits", 0, "contributions", 0, "raw_score"), True, "raw_score"),
+        (("hits", 0, "contributions", 0, "raw_score"), "4.25", "raw_score"),
+        (("hits", 0, "contributions", 0, "score_label"), 1, "score_label"),
+        (("hits", 0, "contributions"), {}, "hit.contributions"),
+        (("failures", 0, "category"), "unknown", "failure.category"),
+        (("failures", 0, "channel"), 1, "failure.channel"),
+        (("failures", 0, "retryable"), 1, "failure.retryable"),
+        (("hits",), {}, "result.hits"),
+        (("failures",), {}, "result.failures"),
+        (("status",), "unknown", "result.status"),
+    ],
+)
+def test_result_deserialisation_rejects_invalid_nested_values(
+    path: tuple[str | int, ...],
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(InvalidRetrievalSerialisationError, match=message):
+        deserialise_evidence_result(_replace_result_path(path, value))
+
+
+@pytest.mark.parametrize(
+    ("identifier_path", "value"),
+    [
+        (("corpus_version",), "not-an-id"),
+        (("hits", 0, "candidate", "record_id"), "not-an-id"),
+        (("hits", 0, "candidate", "sources", 0, "document_id"), "not-an-id"),
+        (
+            ("hits", 0, "candidate", "sources", 0, "document_version_id"),
+            "not-an-id",
+        ),
+        (("hits", 0, "candidate", "sources", 0, "source_span_id"), "not-an-id"),
+    ],
+)
+def test_result_deserialisation_rejects_noncanonical_identifiers(
+    identifier_path: tuple[str | int, ...],
+    value: str,
+) -> None:
+    with pytest.raises(InvalidRetrievalSerialisationError, match="identifier"):
+        deserialise_evidence_result(_replace_result_path(identifier_path, value))
 
 
 def test_result_deserialisation_rejects_limit_and_mismatch_contradictions() -> None:

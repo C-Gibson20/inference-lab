@@ -56,6 +56,43 @@ def test_source_and_candidate_require_typed_provenance_and_sources(
         )
 
 
+def test_source_rejects_wrong_provenance_identifier_types() -> None:
+    document_id = DocumentId.generate()
+    document_version_id = DocumentVersionId.generate()
+    source_span_id = SourceSpanId.generate()
+
+    with pytest.raises(TypeError, match="document_id"):
+        EvidenceSource(document_version_id, document_version_id, source_span_id)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="document_version_id"):
+        EvidenceSource(document_id, document_id, source_span_id)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="source_span_id"):
+        EvidenceSource(document_id, document_version_id, document_id)  # type: ignore[arg-type]
+
+
+def test_candidate_rejects_wrong_types_and_blank_content(
+    source: EvidenceSource,
+) -> None:
+    record_id = RecordId.generate()
+
+    with pytest.raises(TypeError, match="record_id"):
+        RetrievalCandidate(
+            source.source_span_id,  # type: ignore[arg-type]
+            CandidateKind.ORIGINAL_PASSAGE,
+            "x",
+            (source,),
+        )
+    with pytest.raises(TypeError, match="kind"):
+        RetrievalCandidate(record_id, "original_passage", "x", (source,))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="content"):
+        RetrievalCandidate(record_id, CandidateKind.ORIGINAL_PASSAGE, 1, (source,))  # type: ignore[arg-type]
+    with pytest.raises(InvalidRetrievalContractError, match="blank"):
+        RetrievalCandidate(record_id, CandidateKind.ORIGINAL_PASSAGE, " \t", (source,))
+    with pytest.raises(TypeError, match="sources must be a tuple"):
+        RetrievalCandidate(record_id, CandidateKind.ORIGINAL_PASSAGE, "x", [source])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="EvidenceSource"):
+        RetrievalCandidate(record_id, CandidateKind.ORIGINAL_PASSAGE, "x", (record_id,))  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize("score", [None, 1, 1.5])
 def test_channel_scores_allow_ranked_only_or_labelled_finite_scores(
     score: int | float | None,
@@ -69,6 +106,27 @@ def test_channel_scores_allow_ranked_only_or_labelled_finite_scores(
         ChannelScore(RetrievalChannel.LEXICAL, 1, float("nan"), "score")
 
 
+def test_channel_score_rejects_wrong_types_and_invalid_values() -> None:
+    with pytest.raises(TypeError, match="channel"):
+        ChannelScore("lexical", 1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="rank"):
+        ChannelScore(RetrievalChannel.LEXICAL, True)
+    with pytest.raises(InvalidRetrievalContractError, match="positive"):
+        ChannelScore(RetrievalChannel.LEXICAL, 0)
+    with pytest.raises(TypeError, match="raw_score"):
+        ChannelScore(RetrievalChannel.LEXICAL, 1, True, "score")
+    with pytest.raises(TypeError, match="raw_score"):
+        ChannelScore(RetrievalChannel.LEXICAL, 1, "1", "score")  # type: ignore[arg-type]
+    with pytest.raises(InvalidRetrievalContractError, match="finite"):
+        ChannelScore(RetrievalChannel.LEXICAL, 1, float("inf"), "score")
+    with pytest.raises(TypeError, match="score_label"):
+        ChannelScore(RetrievalChannel.LEXICAL, 1, 1.0, None)
+    with pytest.raises(TypeError, match="score_label"):
+        ChannelScore(RetrievalChannel.LEXICAL, 1, 1.0, 1)  # type: ignore[arg-type]
+    with pytest.raises(InvalidRetrievalContractError, match="blank"):
+        ChannelScore(RetrievalChannel.LEXICAL, 1, 1.0, " ")
+
+
 def test_hit_requires_unique_channel_contributions(
     candidate: RetrievalCandidate,
 ) -> None:
@@ -78,3 +136,22 @@ def test_hit_requires_unique_channel_contributions(
     assert hit.contributions == (lexical, dense)
     with pytest.raises(InvalidRetrievalContractError):
         EvidenceHit(candidate, (lexical, lexical), 1)
+
+
+def test_hit_rejects_wrong_types_empty_contributions_and_invalid_rank(
+    candidate: RetrievalCandidate,
+) -> None:
+    contribution = ChannelScore(RetrievalChannel.LEXICAL, 1)
+
+    with pytest.raises(TypeError, match="candidate"):
+        EvidenceHit(candidate.record_id, (contribution,), 1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="contributions must be a tuple"):
+        EvidenceHit(candidate, [contribution], 1)  # type: ignore[arg-type]
+    with pytest.raises(InvalidRetrievalContractError, match="empty"):
+        EvidenceHit(candidate, (), 1)
+    with pytest.raises(TypeError, match="ChannelScore"):
+        EvidenceHit(candidate, (candidate,), 1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="rank"):
+        EvidenceHit(candidate, (contribution,), True)
+    with pytest.raises(InvalidRetrievalContractError, match="positive"):
+        EvidenceHit(candidate, (contribution,), 0)
