@@ -7,7 +7,9 @@ patents. Documents are processed once at ingest; questions are answered in
 seconds with verifiable citations. In deployment, no document, query, or
 telemetry leaves the machine.
 
-The engineering focus is the boundary between batch throughput and interactive serving: efficient ingestion, evidence-grounded retrieval, context management, and hardware-aware scheduling on one GPU.
+The engineering focus is the boundary between batch throughput and interactive
+serving: efficient ingestion, evidence-grounded retrieval, context management,
+and hardware-aware scheduling on one GPU.
 
 ## Product decision
 
@@ -26,15 +28,23 @@ Federated or cross-corpus retrieval, answers, sessions, summaries, and
 aggregations are outside the first build. Comparing corpora uses separate
 single-corpus runs until a later cross-corpus contract is deliberately added.
 
-A session tool for a handful of uploaded files is a separate product. It may be added later using the same indexing infrastructure, but it is not part of the first build.
+A session tool for a handful of uploaded files is a separate product. It may be
+added later using the same indexing infrastructure, but it is not part of the
+first build.
 
 ## Design principles
 
-1. **Evidence before fluency.** Answers must be grounded in source passages, not merely plausible retrieved text.
-2. **Hybrid retrieval.** Exact terms, semantic similarity, metadata, summaries, and structured data each solve different classes of question.
-3. **Derived knowledge remains traceable.** Every summary, extraction, and aggregate links back to source documents and spans.
-4. **Measure before optimising.** The project’s question set is the primary test suite.
-5. **Keep the deployed system local.** Development and benchmarking may use public models and public corpora; confidential deployment data may not leave the machine.
+1. **Evidence before fluency.** Answers must be grounded in source passages,
+   not merely plausible retrieved text.
+2. **Hybrid retrieval.** Exact terms, semantic similarity, metadata, summaries,
+   and structured data each solve different classes of question.
+3. **Derived knowledge remains traceable.** Every summary, extraction, and
+   aggregate links back to source documents and spans.
+4. **Measure before optimising.** The project’s question set is the primary
+   test suite.
+5. **Keep the deployed system local.** Development and benchmarking may use
+   public models and public corpora; confidential deployment data may not leave
+   the machine.
 
 ## Supported questions
 
@@ -44,18 +54,26 @@ A session tool for a handful of uploaded files is a separate product. It may be 
 - **Aggregation:** “How many patents mention Y after 2018?”
 - **Follow-up:** “What about the second compound?”
 
-The system should support more than one retrieval mode for a question. Routing selects and budgets retrieval channels; it does not make them mutually exclusive.
+The system should support more than one retrieval mode for a question. Routing
+selects and budgets retrieval channels; it does not make them mutually
+exclusive.
 
 ## Risk posture
 
-This is an experimental first system, not a claim that the initial ingest and retrieval design is universally optimal. The project should prefer measurement and observation over speculative complexity:
+This is an experimental first system, not a claim that the initial ingest and
+retrieval design is universally optimal. The project should prefer measurement
+and observation over speculative complexity:
 
 - establish a baseline;
 - instrument quality, latency, throughput, memory, and failure modes;
 - test against real questions and documents;
-- change the design when evidence shows that the current approach is insufficient.
+- change the design when evidence shows that the current approach is
+  insufficient.
 
-The document types, ingest strategy, summaries, extraction schema, and routing policy are therefore hypotheses to be tested. They should not be treated as permanent architecture until the evaluation set and real use expose their limits.
+The document types, ingest strategy, summaries, extraction schema, and routing
+policy are therefore hypotheses to be tested. They should not be treated as
+permanent architecture until the evaluation set and real use expose their
+limits.
 
 ## System architecture
 
@@ -88,7 +106,8 @@ For every document, retain:
 - parser and OCR versions;
 - links from every derived record to its source span.
 
-The system must distinguish document identity from document version. Re-ingesting an unchanged document should be a no-op.
+The system must distinguish document identity from document version.
+Re-ingesting an unchanged document should be a no-op.
 
 Ingest always names its target corpus. Reusing an existing immutable document
 record in another corpus adds explicit membership; it does not copy or mutate
@@ -105,11 +124,14 @@ The corpus audit must record:
 - duplicate and family-member rates;
 - tables, figures, claims, examples, references, and other important structure.
 
-OCR is enabled only for documents that need it. OCR quality is evaluated by its effect on retrieval and citations, not only by character-level accuracy.
+OCR is enabled only for documents that need it. OCR quality is evaluated by its
+effect on retrieval and citations, not only by character-level accuracy.
 
 ### Chunking and indexing
 
-The baseline uses 256–512-token chunks with approximately 15% overlap, but chunk boundaries should respect sections, paragraphs, claims, tables, and figure captions where possible.
+The baseline uses 256–512-token chunks with approximately 15% overlap, but chunk
+boundaries should respect sections, paragraphs, claims, tables, and figure
+captions where possible.
 
 Build these indexes:
 
@@ -119,7 +141,8 @@ Build these indexes:
 - structured database indexes for extracted entities and facts;
 - summary indexes for corpus navigation.
 
-The system must support incremental updates and persistent indexes without rebuilding unchanged documents.
+The system must support incremental updates and persistent indexes without
+rebuilding unchanged documents.
 
 ### Summaries
 
@@ -129,7 +152,9 @@ Generate summaries at multiple levels:
 2. topic or cluster;
 3. corpus.
 
-Summaries are retrieval and navigation aids, not authoritative evidence. Each material claim in a summary should retain links to the supporting document and source span. Summaries are versioned and invalidated when their inputs change.
+Summaries are retrieval and navigation aids, not authoritative evidence. Each
+material claim in a summary should retain links to the supporting document and
+source span. Summaries are versioned and invalidated when their inputs change.
 
 ### Structured extraction
 
@@ -143,9 +168,12 @@ Initial fields include:
 - publication and priority identifiers;
 - methods, outcomes, and relevant measurements.
 
-Each extraction stores the normalised value, original mention, source span, model version, and confidence. Aggregations must be reproducible from stored records and must expose uncertainty where normalisation is ambiguous.
+Each extraction stores the normalised value, original mention, source span,
+model version, and confidence. Aggregations must be reproducible from stored
+records and must expose uncertainty where normalisation is ambiguous.
 
-Entity graphs are out of scope until retrieval, structured extraction, and simpler relationship queries have been shown to be insufficient.
+Entity graphs are out of scope until retrieval, structured extraction, and
+simpler relationship queries have been shown to be insufficient.
 
 ## Query and serving
 
@@ -167,7 +195,9 @@ For each question, the planner may combine:
 - summary retrieval;
 - query rewriting and synonym expansion.
 
-Results are fused, reranked, deduplicated, and reduced to a small evidence set. The final answer should cite original passages wherever possible, rather than citing only a generated summary.
+Results are fused, reranked, deduplicated, and reduced to a small evidence set.
+The final answer should cite original passages wherever possible, rather than
+citing only a generated summary.
 
 ### Answering
 
@@ -179,7 +209,8 @@ Answers must:
 - avoid implying that an unobserved result is a negative result;
 - provide a route to open the cited source location.
 
-Citation verification should check that each citation actually supports the associated claim.
+Citation verification should check that each citation actually supports the
+associated claim.
 
 ### Sessions and caching
 
@@ -197,7 +228,9 @@ Changing corpus is an explicit new-session or reset operation; conversation
 history, evidence ledgers, and caches are never carried implicitly between
 corpora.
 
-The target is sub-second time to first token and stable latency across a ten-turn session. Measure first-token latency, total answer latency, tokens per second, cache hit rate, and context size separately.
+The target is sub-second time to first token and stable latency across a
+ten-turn session. Measure first-token latency, total answer latency, tokens per
+second, cache hit rate, and context size separately.
 
 ## Models and runtime
 
@@ -210,9 +243,19 @@ The initial model plan is:
 | Generator | Qwen3.8-27B-class model at Q4 | Deliberately optimised for a 24GB single-GPU constraint |
 | OCR | Ingest-only OCR model or system | Run only for scanned pages |
 
-The 27B generator is a deliberate project constraint, not merely a default model choice. Its quality and broad capability reduce the risk of ruling out useful corpus-level behaviour too early. The 24GB limit creates the central systems challenge: model residency, KV-cache use, batching, scheduling, quantisation, memory bandwidth, and thermal behaviour must be engineered carefully.
+The 27B generator is a deliberate project constraint, not merely a default
+model choice. Its quality and broad capability reduce the risk of ruling out
+useful corpus-level behaviour too early. The 24GB limit creates the central
+systems challenge: model residency, KV-cache use, batching, scheduling,
+quantisation, memory bandwidth, and thermal behaviour must be engineered
+carefully.
 
-The same generator may be used for ingest initially. This creates a known shared-resource risk: summarisation, extraction, and answering may bottleneck one another or expose different quality requirements. The first implementation should measure that risk before introducing additional model complexity. Smaller or specialised models remain fallback options if observation shows that they are necessary for throughput, latency, or reliability.
+The same generator may be used for ingest initially. This creates a known
+shared-resource risk: summarisation, extraction, and answering may bottleneck
+one another or expose different quality requirements. The first implementation
+should measure that risk before introducing additional model complexity.
+Smaller or specialised models remain fallback options if observation shows
+that they are necessary for throughput, latency, or reliability.
 
 The runtime must support a scheduler for:
 
@@ -222,7 +265,9 @@ The runtime must support a scheduler for:
 - reranking;
 - CPU parsing, OCR, storage, and index updates.
 
-Benchmark model residency, model swapping, microbatching, concurrent workloads, quantisation, power limits, and thermal behaviour. Report quality together with throughput and memory use.
+Benchmark model residency, model swapping, microbatching, concurrent workloads,
+quantisation, power limits, and thermal behaviour. Report quality together with
+throughput and memory use.
 
 ## Memory and storage accounting
 
@@ -237,15 +282,22 @@ Track separately:
 - pinned host memory;
 - storage cache.
 
-The initial 27B Q4 design is expected to require roughly 24GB of VRAM after runtime overhead, but this must be measured rather than assumed. The embedder and reranker do not necessarily need to remain resident during interactive generation. Working within this limit is a primary engineering objective, not a reason to remove the 27B model from scope.
+The initial 27B Q4 design is expected to require roughly 24GB of VRAM after
+runtime overhead, but this must be measured rather than assumed. The embedder
+and reranker do not necessarily need to remain resident during interactive
+generation. Working within this limit is a primary engineering objective, not
+a reason to remove the 27B model from scope.
 
-Also measure cold and warm retrieval, index build time, restart-to-serve time, incremental update time, and concurrent reads during ingest.
+Also measure cold and warm retrieval, index build time, restart-to-serve time,
+incremental update time, and concurrent reads during ingest.
 
 ## Evaluation
 
 ### Question set
 
-Before implementation, create 30–50 real questions with known supporting evidence. Include lookups, comparisons, thematic questions, aggregations, follow-ups, and deliberately difficult terminology.
+Before implementation, create 30–50 real questions with known supporting
+evidence. Include lookups, comparisons, thematic questions, aggregations,
+follow-ups, and deliberately difficult terminology.
 
 Each evaluation dataset targets exactly one corpus and corpus version. A
 comparison between corpora is represented by separate evaluation runs, not by
@@ -290,39 +342,48 @@ Systems:
 - storage throughput;
 - power and thermal behaviour where measurable.
 
-The system is not considered improved if Recall@10 rises while citation correctness or answer faithfulness falls.
+The system is not considered improved if Recall@10 rises while citation
+correctness or answer faithfulness falls.
 
 ## Development phases
 
 ### Phase 1 — Corpus and questions
 
-Audit the corpus and write the evaluation set. Establish scanned-page rates, duplicates, document families, and expected source evidence.
+Audit the corpus and write the evaluation set. Establish scanned-page rates,
+duplicates, document families, and expected source evidence.
 
 **Gate:** corpus characteristics and evaluation questions are documented.
 
 ### Phase 2 — Reproducible baseline retrieval
 
-Implement parsing, provenance-preserving chunking, lexical search, dense search, metadata filtering, reranking, and Recall@10 evaluation.
+Implement parsing, provenance-preserving chunking, lexical search, dense search,
+metadata filtering, reranking, and Recall@10 evaluation.
 
-**Gate:** the correct passages are reliably retrievable before adding summaries or extraction.
+**Gate:** the correct passages are reliably retrievable before adding summaries
+or extraction.
 
 ### Phase 3 — Evidence-grounded answers
 
-Add answer generation, citations, citation verification, abstention, source navigation, and held-out answer evaluation.
+Add answer generation, citations, citation verification, abstention, source
+navigation, and held-out answer evaluation.
 
 **Gate:** answers are useful and verifiably supported.
 
 ### Phase 4 — Ingest knowledge layer
 
-Add structured extraction, normalisation, document summaries, topic summaries, aggregation queries, versioning, and invalidation.
+Add structured extraction, normalisation, document summaries, topic summaries,
+aggregation queries, versioning, and invalidation.
 
-**Gate:** derived records remain traceable and incremental ingest does not recompute unchanged work.
+**Gate:** derived records remain traceable and incremental ingest does not
+recompute unchanged work.
 
 ### Phase 5 — Hardware-aware serving
 
-Add the scheduler, persistent caches, session handling, batching, model residency experiments, and full profiling.
+Add the scheduler, persistent caches, session handling, batching, model
+residency experiments, and full profiling.
 
-**Gate:** the best configuration is selected using quality, latency, throughput, memory, and power together.
+**Gate:** the best configuration is selected using quality, latency, throughput,
+memory, and power together.
 
 ### Phase 6 — Interface and hardening
 
@@ -336,26 +397,34 @@ Most development should run locally. Build these components early:
 
 - a fake backend with configurable delay and streaming;
 - a memory accountant calibrated against real measurements;
-- a small local model for tokenization and cache mechanics;
+- a small local model for tokenisation and cache mechanics;
 - deterministic pipeline fixtures and evaluation runs;
 - profiling output that records each ingest and query stage.
 
-Use rented GPUs only for focused measurements: generator quality, absolute latency, memory ceilings, throughput, and model comparisons. Batch those experiments into planned sessions. The deployed system must self-host its models and data; documents, queries, project data, and operational data must not be sent through third-party model or data APIs.
+Use rented GPUs only for focused measurements: generator quality, absolute
+latency, memory ceilings, throughput, and model comparisons. Batch those
+experiments into planned sessions. The deployed system must self-host its
+models and data; documents, queries, project data, and operational data must not
+be sent through third-party model or data APIs.
 
-If a failure can be reproduced without a GPU, it should be reproduced without a GPU.
+If a failure can be reproduced without a GPU, it should be reproduced without
+a GPU.
 
 ## Success criteria
 
 The project succeeds when:
 
 1. Answers cite sufficient, correct source passages.
-2. Unsupported questions produce uncertainty or abstention rather than invention.
-3. Hybrid retrieval outperforms each individual retrieval method on the held-out set.
+2. Unsupported questions produce uncertainty or abstention rather than
+   invention.
+3. Hybrid retrieval outperforms each individual retrieval method on the
+   held-out set.
 4. Structured aggregations match manually verified results.
 5. Incremental ingest avoids recomputing unchanged derived data.
 6. Query latency remains stable across ten-turn sessions.
 7. Every configured corpus can be served after restart without reconstruction,
    and no query returns evidence outside its selected corpus.
 8. Ingest speedups are documented with stage-level profiles.
-9. Memory, throughput, quality, power, and thermal results are recorded together.
+9. Memory, throughput, quality, power, and thermal results are recorded
+   together.
 10. You use the tool every week without thinking about its internals.

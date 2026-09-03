@@ -346,7 +346,7 @@ def deserialise_memory_snapshot(data: bytes) -> MemorySnapshot:
     """Strictly deserialise one canonical memory snapshot."""
     payload = _parse_json(data)
     _require_exact_fields(payload, _SNAPSHOT_FIELDS, "snapshot")
-    schema_version = _require_integer(payload, "schema_version")
+    schema_version = _require_string(payload, "schema_version")
     if schema_version not in SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS:
         raise ValueError("unsupported memory snapshot schema version")
     measurements = payload["measurements"]

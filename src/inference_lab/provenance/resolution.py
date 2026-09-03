@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
+from inference_lab._validation import is_canonical_semantic_version
 from inference_lab.provenance.identifiers import DocumentVersionId, SourceObservationId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship
@@ -16,12 +17,6 @@ from inference_lab.provenance.values import (
     validate_external_identifiers,
 )
 
-_SEMANTIC_VERSION: Final = re.compile(
-    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
-    r"(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-)
 _IDENTIFIER_NAMESPACE: Final = re.compile(r"[a-z][a-z0-9_-]*")
 
 
@@ -61,7 +56,7 @@ class ExternalIdentifierResolutionPolicy:
             raise ValueError("policy_name must be a lowercase policy name.")
         if not isinstance(self.policy_version, str):
             raise TypeError("policy_version must be a string.")
-        if _SEMANTIC_VERSION.fullmatch(self.policy_version) is None:
+        if not is_canonical_semantic_version(self.policy_version):
             raise ValueError("policy_version must be a canonical semantic version.")
         if not isinstance(self.authoritative_namespaces, tuple):
             raise TypeError("authoritative_namespaces must be a tuple.")

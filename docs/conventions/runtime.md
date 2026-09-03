@@ -189,10 +189,12 @@ sensitive paths.
 
 ## Scope boundary
 
-The runtime contract layer does not include a tokenizer or local model, real
-embedding, reranking, or generation integrations, cache lifecycle operations,
-scheduling, residency, or microbatching. Those capabilities build on these
-contracts without changing the fake into a production model backend.
+The runtime contract layer includes the checked-in, CPU-only local mechanics
+fixture described above, but it does not yet include production model
+selection, real embedding or reranking integrations, cache lifecycle
+operations, scheduling, residency, or microbatching. Those capabilities build
+on these contracts without turning either the fake or mechanics fixture into a
+production model backend.
 
 ## Component memory accounting
 
@@ -207,13 +209,15 @@ non-negative integers. Component role and memory category are independent: for
 example, generator weights are `model_weights`, while an explicitly coarse
 embedder total may use `embedding_reranker_memory`.
 
-Memory snapshot schema version 2 separates the identity of the collector that
-assembles the snapshot from the identity of each adapter that supplies a
+Memory snapshot schema version `2.0.0` separates the identity of the collector
+that assembles the snapshot from the identity of each adapter that supplies a
 measurement. Every snapshot declares a non-empty expected-contribution
 inventory. Each entry binds one component, role, category, memory space and
 device slot to its responsible adapter, so one snapshot may compose multiple
-adapters without weakening attribution. Schema version 1 snapshots are not
-accepted as version 2 data.
+adapters without weakening attribution. Schema version `1.0.0` snapshots are
+not accepted as `2.0.0` data. Snapshot, adapter, and collector versions use
+canonical semantic-version strings; calibration and inventory revisions remain
+opaque revision identifiers.
 
 Exclusive contributions are counted once. The `disallow` overlap policy
 rejects duplicate expected slots and duplicate or unplanned exclusive

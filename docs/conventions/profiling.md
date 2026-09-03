@@ -24,8 +24,9 @@ format.
 
 Every concrete profiling record contains `record_schema_version`. Producers use
 `CURRENT_RECORD_SCHEMA_VERSION`, and constructors reject versions not listed in
-`SUPPORTED_RECORD_SCHEMA_VERSIONS`. A newer positive integer is not assumed to
-be compatible merely because it is syntactically valid.
+`SUPPORTED_RECORD_SCHEMA_VERSIONS`. Schema versions are canonical semantic
+version strings; a newer version is not assumed to be compatible merely because
+it is syntactically valid.
 
 Every concrete record supplies its logging level. The structured-log emission
 adapter rejects records with a missing or unsupported level; it does not infer

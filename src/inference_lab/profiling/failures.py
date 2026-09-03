@@ -143,7 +143,7 @@ class FailureEvent:
     partial: bool = False
     exception_type: str | None = None
     observed_at: datetime = field(default_factory=utc_now)
-    record_schema_version: int = CURRENT_RECORD_SCHEMA_VERSION
+    record_schema_version: str = CURRENT_RECORD_SCHEMA_VERSION
     corpus_id: str | None = None
 
     def __post_init__(self) -> None:

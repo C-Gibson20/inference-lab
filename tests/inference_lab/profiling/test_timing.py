@@ -195,7 +195,7 @@ def test_timing_record_serialises_nullable_fields() -> None:
     assert payload["records_emitted"] is None
     assert payload["observed_at"] == "2026-08-21T12:00:00+00:00"
     assert payload["corpus_id"] is None
-    assert payload["record_schema_version"] == 3
+    assert payload["record_schema_version"] == "3.0.0"
 
 
 def test_stage_timer_preserves_corpus_context() -> None:
@@ -245,5 +245,5 @@ def test_timing_record_rejects_invalid_schema_version() -> None:
             stage_id="parse-1",
             duration_ms=1.0,
             status="completed",
-            record_schema_version=0,
+            record_schema_version="2.0.0",
         )

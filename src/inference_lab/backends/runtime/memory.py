@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Final, Protocol, runtime_checkable
 
+from inference_lab._validation import is_canonical_semantic_version
 from inference_lab.backends.runtime._validation import validate_non_empty_string
 from inference_lab.profiling._validation import validate_utc_datetime
 from inference_lab.profiling.resources import MeasurementStatus, ResourceCategory
@@ -61,8 +62,8 @@ class BudgetState(StrEnum):
     INDETERMINATE = "indeterminate"
 
 
-CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION: Final[int] = 2
-SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS: Final[frozenset[int]] = frozenset(
+CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION: Final[str] = "2.0.0"
+SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS: Final[frozenset[str]] = frozenset(
     {CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION}
 )
 _MEMORY_CATEGORIES = frozenset(
@@ -100,8 +101,13 @@ class MemoryAdapterIdentity:
     calibration_revision: str
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the adapter identity's fields."""
         _validate_safe_identifier(self.adapter_name, "adapter_name")
-        _validate_safe_identifier(self.adapter_version, "adapter_version")
+        if not is_canonical_semantic_version(self.adapter_version):
+            raise ValueError("adapter_version must be a canonical semantic version")
         _validate_safe_identifier(self.calibration_revision, "calibration_revision")
 
 
@@ -119,7 +125,8 @@ class MemoryCollectorIdentity:
     def _validate(self) -> None:
         """Validate the collector identity's fields."""
         _validate_safe_identifier(self.collector_name, "collector_name")
-        _validate_safe_identifier(self.collector_version, "collector_version")
+        if not is_canonical_semantic_version(self.collector_version):
+            raise ValueError("collector_version must be a canonical semantic version")
         _validate_safe_identifier(self.inventory_revision, "inventory_revision")
 
 
@@ -545,7 +552,7 @@ class MemorySnapshot:
     overlap_policy: MemoryOverlapPolicy = MemoryOverlapPolicy.DISALLOW
     run_id: str | None = None
     request_id: str | None = None
-    schema_version: int = CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION
+    schema_version: str = CURRENT_MEMORY_SNAPSHOT_SCHEMA_VERSION
     _reconciliations: tuple[RollupReconciliation, ...] = field(
         init=False,
         repr=False,
@@ -584,10 +591,8 @@ class MemorySnapshot:
             raise TypeError("measurements must be a tuple")
         if not isinstance(self.overlap_policy, MemoryOverlapPolicy):
             raise TypeError("overlap_policy must be a MemoryOverlapPolicy")
-        if isinstance(self.schema_version, bool) or not isinstance(
-            self.schema_version, int
-        ):
-            raise TypeError("schema_version must be an integer")
+        if not isinstance(self.schema_version, str):
+            raise TypeError("schema_version must be a string")
         if self.schema_version not in SUPPORTED_MEMORY_SNAPSHOT_SCHEMA_VERSIONS:
             raise ValueError("unsupported memory snapshot schema version")
         for correlation_id, field_name in (
@@ -698,7 +703,7 @@ class MemorySnapshot:
         visiting: set[str] = set()
         visited: set[str] = set()
 
-        def visit(measurement_id: str) -> None:
+        def _visit(measurement_id: str) -> None:
             if measurement_id in visiting:
                 raise ValueError("roll-up coverage must be acyclic")
             if measurement_id in visited:
@@ -706,12 +711,12 @@ class MemorySnapshot:
             visiting.add(measurement_id)
             measurement = measurements_by_id[measurement_id]
             for covered_id in measurement.covers_measurement_ids:
-                visit(covered_id)
+                _visit(covered_id)
             visiting.remove(measurement_id)
             visited.add(measurement_id)
 
         for measurement_id in measurements_by_id:
-            visit(measurement_id)
+            _visit(measurement_id)
 
     def _build_reconciliations(self) -> tuple[RollupReconciliation, ...]:
         measurements_by_id = {

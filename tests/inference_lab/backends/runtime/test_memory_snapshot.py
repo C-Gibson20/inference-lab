@@ -386,7 +386,7 @@ def test_invalid_rollup_graph_is_rejected(
 def test_snapshot_requires_expected_adapter_and_observation_boundary() -> None:
     other = measurement(
         "other",
-        adapter=MemoryAdapterIdentity("other", "1", "1"),
+        adapter=MemoryAdapterIdentity("other", "1.0.0", "1"),
     )
     with pytest.raises(ValueError, match="expected adapter"):
         MemorySnapshot(

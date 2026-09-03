@@ -232,19 +232,19 @@ def _validate_parent_cycles(
     completed: set[RecordId] = set()
     active: set[RecordId] = set()
 
-    def visit(record_id: RecordId) -> None:
+    def _visit(record_id: RecordId) -> None:
         if record_id in active:
             raise InvalidLineageGraphError("derived-record lineage contains a cycle.")
         if record_id in completed:
             return
         active.add(record_id)
         for parent in records_by_id[record_id].inputs.parent_records:
-            visit(parent.record_id)
+            _visit(parent.record_id)
         active.remove(record_id)
         completed.add(record_id)
 
     for record in records:
-        visit(record.record_id)
+        _visit(record.record_id)
 
 
 def _validate_supersession(
@@ -275,7 +275,7 @@ def _validate_supersession(
     completed: set[RecordId] = set()
     active: set[RecordId] = set()
 
-    def visit(record_id: RecordId) -> None:
+    def _visit(record_id: RecordId) -> None:
         if record_id in active:
             raise InvalidLineageGraphError("supersession lineage contains a cycle.")
         if record_id in completed:
@@ -283,12 +283,12 @@ def _validate_supersession(
         active.add(record_id)
         successor_id = successors.get(record_id)
         if successor_id is not None:
-            visit(successor_id)
+            _visit(successor_id)
         active.remove(record_id)
         completed.add(record_id)
 
     for record in records:
-        visit(record.record_id)
+        _visit(record.record_id)
 
 
 def _validate_source_termination(
@@ -298,21 +298,21 @@ def _validate_source_termination(
     """Require every parent branch to terminate at original source evidence."""
     terminated: dict[RecordId, bool] = {}
 
-    def terminates(record_id: RecordId) -> bool:
+    def _terminates(record_id: RecordId) -> bool:
         cached = terminated.get(record_id)
         if cached is not None:
             return cached
         record = records_by_id[record_id]
         if record.inputs.parent_records:
             result = all(
-                terminates(parent.record_id) for parent in record.inputs.parent_records
+                _terminates(parent.record_id) for parent in record.inputs.parent_records
             )
         else:
             result = bool(record.inputs.source_anchors)
         terminated[record_id] = result
         return result
 
-    if any(not terminates(record.record_id) for record in records):
+    if any(not _terminates(record.record_id) for record in records):
         raise InvalidLineageGraphError(
             "derived-record lineage does not terminate at original source evidence."
         )

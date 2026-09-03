@@ -27,7 +27,7 @@ from inference_lab.storage import (
     StorageConflictError,
     StorageTransactionError,
 )
-from inference_lab.storage import _sqlite_repository as repository_module
+from inference_lab.storage import _sqlite_logging as logging_module
 from inference_lab.storage._sqlite_migrations import MIGRATIONS
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
@@ -228,7 +228,7 @@ def test_logging_failure_does_not_replace_primary_transaction_exception(
             raise RuntimeError("logging failed")
 
     repository = _open_repository(tmp_path / "metadata.sqlite3")
-    monkeypatch.setattr(repository_module, "_LOGGER", FailingLogger())
+    monkeypatch.setattr(logging_module, "_LOGGER", FailingLogger())
     primary = RuntimeError("private-primary")
     try:
         with pytest.raises(RuntimeError) as raised:
