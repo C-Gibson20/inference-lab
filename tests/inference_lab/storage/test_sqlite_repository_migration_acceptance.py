@@ -77,7 +77,7 @@ def _failing_revision_three() -> MigrationDefinition:
     )
 
 
-def _create_complete_revision_one(path: Path) -> None:
+def _create_complete_baseline(path: Path) -> None:
     repository = SQLiteMetadataRepository.open(
         path,
         apply_migrations=True,
@@ -85,22 +85,29 @@ def _create_complete_revision_one(path: Path) -> None:
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Primary corpus"))
         transaction.add_document_family(_FAMILY_ID)
         transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
         transaction.add_document(DocumentIdentity(_SECOND_DOCUMENT_ID))
         transaction.add_document_version(_FIRST_VERSION)
         transaction.add_document_version(_SECOND_VERSION)
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID,
+                _FIRST_DOCUMENT_ID,
+                _FIRST_VERSION_ID,
+            )
+        )
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID,
+                _SECOND_DOCUMENT_ID,
+                _SECOND_VERSION_ID,
+            )
+        )
         transaction.add_duplicate_relationship(_DUPLICATE)
         transaction.add_family_membership(_MEMBERSHIP)
     repository.close()
-    connection = sqlite3.connect(path)
-    try:
-        connection.execute(
-            "INSERT INTO corpora (corpus_id) VALUES (?)", (_CORPUS_ID.as_str(),)
-        )
-        connection.commit()
-    finally:
-        connection.close()
 
 
 def _database_snapshot(path: Path) -> tuple[object, ...]:
@@ -138,23 +145,19 @@ def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
 
 
-def test_production_migrations_preserve_revision_one_graph(
+def test_current_baseline_persists_complete_multi_corpus_graph(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_revision_one(database_path)
+    _create_complete_baseline(database_path)
 
-    migrated = SQLiteMetadataRepository.open(
-        database_path,
-        apply_migrations=True,
-        applied_at_factory=_fixed_applied_at,
-    )
+    reopened = SQLiteMetadataRepository.open(database_path)
     try:
-        assert migrated.schema_inspection.current_revision == 5
-        assert migrated.get_corpus(_CORPUS_ID) == CorpusMetadata(
-            _CORPUS_ID, _CORPUS_ID.as_str()
+        assert reopened.schema_inspection.current_revision == 1
+        assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
+            _CORPUS_ID, "Primary corpus"
         )
-        assert migrated.list_corpus_document_version_memberships(_CORPUS_ID) == (
+        assert reopened.list_corpus_document_version_memberships(_CORPUS_ID) == (
             CorpusDocumentVersionMembership(
                 _CORPUS_ID, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID
             ),
@@ -162,22 +165,22 @@ def test_production_migrations_preserve_revision_one_graph(
                 _CORPUS_ID, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID
             ),
         )
-        assert migrated.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
+        assert reopened.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
             _DUPLICATE,
         )
-        assert migrated.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
+        assert reopened.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
             _MEMBERSHIP,
         )
-        _assert_complete_graph(migrated)
+        _assert_complete_graph(reopened)
     finally:
-        migrated.close()
+        reopened.close()
 
 
 def test_non_empty_repository_requires_explicit_upgrade_without_mutation(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_revision_one(database_path)
+    _create_complete_baseline(database_path)
     migrations = (MIGRATIONS[0], _revision_two())
     before = _database_snapshot(database_path)
 
@@ -191,7 +194,7 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_revision_one(database_path)
+    _create_complete_baseline(database_path)
     migrations = (MIGRATIONS[0], _revision_two())
 
     migrated = SQLiteMetadataRepository.open(
@@ -232,7 +235,7 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_revision_one(database_path)
+    _create_complete_baseline(database_path)
     revision_two = _revision_two()
 
     with pytest.raises(StorageMigrationError):

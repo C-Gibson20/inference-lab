@@ -48,11 +48,11 @@ def test_initialisation_atomically_publishes_current_revision(tmp_path: Path) ->
         assert connection.execute("PRAGMA application_id").fetchone()[0] == (
             SQLITE_APPLICATION_ID
         )
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         schema_row = connection.execute(
             "SELECT schema_name, current_revision FROM metadata_schema"
         ).fetchone()
-        assert tuple(schema_row) == ("inference_lab_metadata", 5)
+        assert tuple(schema_row) == ("inference_lab_metadata", 1)
         history_rows = connection.execute(
             """SELECT revision, migration_id, checksum, applied_at_utc
             FROM migration_history ORDER BY revision"""
@@ -60,32 +60,8 @@ def test_initialisation_atomically_publishes_current_revision(tmp_path: Path) ->
         assert [tuple(row) for row in history_rows] == [
             (
                 1,
-                "initial_metadata",
+                "multi_corpus_metadata_baseline",
                 MIGRATIONS[0].checksum,
-                "2026-09-01T12:30:00.000000+00:00",
-            ),
-            (
-                2,
-                "source_observation_identity",
-                MIGRATIONS[1].checksum,
-                "2026-09-01T12:30:00.000000+00:00",
-            ),
-            (
-                3,
-                "duplicate_hash_integrity",
-                MIGRATIONS[2].checksum,
-                "2026-09-01T12:30:00.000000+00:00",
-            ),
-            (
-                4,
-                "corpus_catalogue_membership",
-                MIGRATIONS[3].checksum,
-                "2026-09-01T12:30:00.000000+00:00",
-            ),
-            (
-                5,
-                "corpus_owned_source_observations",
-                MIGRATIONS[4].checksum,
                 "2026-09-01T12:30:00.000000+00:00",
             ),
         ]
@@ -97,12 +73,12 @@ def test_initialisation_atomically_publishes_current_revision(tmp_path: Path) ->
         assert reopened.execute("PRAGMA application_id").fetchone()[0] == (
             SQLITE_APPLICATION_ID
         )
-        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 1
         assert (
             reopened.execute("SELECT current_revision FROM metadata_schema").fetchone()[
                 0
             ]
-            == 5
+            == 1
         )
     finally:
         reopened.close()
@@ -144,7 +120,7 @@ def test_initialisation_rejects_unrelated_schema_without_modifying_it(
         connection.close()
 
 
-def test_failed_later_migration_rolls_back_revision_one(tmp_path: Path) -> None:
+def test_failed_later_migration_rolls_back_baseline(tmp_path: Path) -> None:
     failing_migration = MigrationDefinition(
         revision=2,
         migration_id="failing_test_migration",
