@@ -1,3 +1,5 @@
+"""Tests for runtime memory profiling records."""
+
 import json
 from datetime import UTC, datetime
 from io import StringIO
@@ -5,11 +7,11 @@ from io import StringIO
 import structlog
 
 from inference_lab.backends.runtime import (
-    ComponentRole,
     ExpectedMemoryContribution,
     MemoryAdapterIdentity,
     MemoryBudget,
     MemoryCollectorIdentity,
+    MemoryComponentRole,
     MemoryMeasurement,
     MemorySnapshot,
     MemorySpace,
@@ -28,7 +30,7 @@ def make_measurement(
     measurement_id: str = "weights",
     *,
     component_id: str = "generator",
-    component_role: ComponentRole = ComponentRole.GENERATOR,
+    component_role: MemoryComponentRole = MemoryComponentRole.GENERATOR,
     category: str = "model_weights",
     status: str = "measured",
     value_bytes: int | None = 1024,
@@ -66,7 +68,7 @@ def make_snapshot() -> MemorySnapshot:
         make_measurement(
             "a-first",
             component_id="framework",
-            component_role=ComponentRole.RUNTIME_FRAMEWORK,
+            component_role=MemoryComponentRole.RUNTIME_FRAMEWORK,
             category="framework_overhead",
         ),
     )

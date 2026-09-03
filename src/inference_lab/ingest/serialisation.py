@@ -1,10 +1,8 @@
 """Canonical serialisation for parser output."""
 
-import json
-
+from inference_lab._json import JsonObject, canonical_json_bytes
 from inference_lab.ingest.parser import ParsedDocument
 from inference_lab.ingest.sources import SourceSpan, StructuralBlock
-from inference_lab.json_types import JsonObject
 
 
 def _source_span_payload(span: SourceSpan) -> JsonObject:
@@ -77,12 +75,4 @@ def parsed_document_payload(document: ParsedDocument) -> JsonObject:
 
 def serialise_parsed_document(document: ParsedDocument) -> bytes:
     """Serialise parser output as canonical UTF-8 JSON with a trailing newline."""
-    payload = parsed_document_payload(document)
-    text = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-    return f"{text}\n".encode("utf-8")
+    return canonical_json_bytes(parsed_document_payload(document))

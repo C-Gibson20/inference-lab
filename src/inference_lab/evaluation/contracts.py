@@ -1,7 +1,5 @@
-"""Shared validation types for evaluation contracts."""
+"""Annotated scalar types and constants for evaluation contracts."""
 
-import re
-import unicodedata
 from typing import Annotated, Final, Literal
 
 from pydantic import AfterValidator, Field
@@ -49,17 +47,3 @@ SchemaVersion = Annotated[
     ),
     AfterValidator(validate_schema_version),
 ]
-
-_SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
-_WHITESPACE = re.compile(r"\s+")
-
-
-def is_sha256_pattern(s: str) -> bool:
-    """Return True if the string matches the SHA256 pattern, False otherwise."""
-    return bool(_SHA256_PATTERN.fullmatch(s))
-
-
-def normalise_for_duplicate_detection(value: str) -> str:
-    """Normalise text only for deterministic duplicate detection."""
-    normalised = unicodedata.normalize("NFKC", value).casefold()
-    return _WHITESPACE.sub(" ", normalised).strip()

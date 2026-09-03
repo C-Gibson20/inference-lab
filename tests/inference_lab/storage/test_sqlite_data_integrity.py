@@ -1,3 +1,5 @@
+"""Tests for persisted SQLite metadata integrity."""
+
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path

@@ -1,3 +1,5 @@
+"""Tests for SQLite document-version persistence."""
+
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path

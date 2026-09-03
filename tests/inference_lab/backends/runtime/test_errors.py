@@ -1,3 +1,5 @@
+"""Tests for runtime backend error contracts."""
+
 import pytest
 
 from inference_lab.backends.runtime import (

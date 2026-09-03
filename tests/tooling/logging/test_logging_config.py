@@ -1,3 +1,5 @@
+"""Tests for application logging configuration."""
+
 import json
 import logging
 from io import StringIO

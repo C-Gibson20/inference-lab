@@ -5,6 +5,7 @@ import re
 import structlog
 
 from inference_lab.ingest.errors import ParserDecodeError, ParserFailure
+from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.ingest.parser import (
     NormalisedText,
@@ -14,7 +15,6 @@ from inference_lab.ingest.parser import (
     prepare_text,
 )
 from inference_lab.ingest.sources import SourceSpan, StructuralBlock
-from inference_lab.ingest.utils import normalise_source_text
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     generate_source_span_id,

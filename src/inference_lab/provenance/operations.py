@@ -6,11 +6,11 @@ from enum import StrEnum
 from typing import Final, Self
 
 from inference_lab._validation import is_canonical_semantic_version
-from inference_lab.provenance.errors import InvalidLineageMetadataError
-from inference_lab.provenance.utils import (
+from inference_lab.provenance._validation import (
     is_lowercase_slug,
     is_sha256_hex_digest,
 )
+from inference_lab.provenance.errors import InvalidLineageMetadataError
 
 _REVISION_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 

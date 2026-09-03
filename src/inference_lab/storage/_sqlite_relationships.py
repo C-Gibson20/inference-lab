@@ -140,6 +140,69 @@ def list_duplicate_relationships(
         ) from None
 
 
+def _ensure_duplicate_endpoints_are_byte_identical(
+    connection: sqlite3.Connection,
+    relationship: DuplicateRelationship,
+) -> None:
+    """Require two existing version endpoints with the same content hash."""
+    endpoints = connection.execute(
+        """SELECT
+            first.content_hash_algorithm AS first_algorithm,
+            first.content_hash_digest AS first_digest,
+            second.content_hash_algorithm AS second_algorithm,
+            second.content_hash_digest AS second_digest
+        FROM document_versions AS first
+        JOIN document_versions AS second
+            ON second.document_version_id = ?
+        WHERE first.document_version_id = ?""",
+        (
+            relationship.second_version_id.as_str(),
+            relationship.first_version_id.as_str(),
+        ),
+    ).fetchone()
+    if endpoints is None or (
+        endpoints["first_algorithm"],
+        endpoints["first_digest"],
+    ) != (
+        endpoints["second_algorithm"],
+        endpoints["second_digest"],
+    ):
+        raise StorageConflictError()
+
+
+def _stored_duplicate_relationship(
+    connection: sqlite3.Connection,
+    relationship: DuplicateRelationship,
+) -> DuplicateRelationship | None:
+    """Return an existing relationship stored under the requested key."""
+    row = connection.execute(
+        """SELECT duplicate_class, first_version_id, second_version_id
+        FROM duplicate_relationships
+        WHERE duplicate_class = ?
+            AND first_version_id = ?
+            AND second_version_id = ?""",
+        relationship.key(),
+    ).fetchone()
+    if row is None:
+        return None
+    return _reconstruct_duplicate_relationships((row,))[0]
+
+
+def _write_duplicate_relationship(
+    connection: sqlite3.Connection,
+    relationship: DuplicateRelationship,
+) -> None:
+    """Insert one relationship within the caller's transaction."""
+    connection.execute(
+        """INSERT INTO duplicate_relationships (
+            duplicate_class,
+            first_version_id,
+            second_version_id
+        ) VALUES (?, ?, ?)""",
+        relationship.key(),
+    )
+
+
 def add_duplicate_relationship(
     connection: sqlite3.Connection,
     relationship: DuplicateRelationship,
@@ -149,56 +212,13 @@ def add_duplicate_relationship(
         raise TypeError("relationship must be a DuplicateRelationship.")
 
     try:
-        endpoints = connection.execute(
-            """SELECT
-                first.content_hash_algorithm AS first_algorithm,
-                first.content_hash_digest AS first_digest,
-                second.content_hash_algorithm AS second_algorithm,
-                second.content_hash_digest AS second_digest
-            FROM document_versions AS first
-            JOIN document_versions AS second
-                ON second.document_version_id = ?
-            WHERE first.document_version_id = ?""",
-            (
-                relationship.second_version_id.as_str(),
-                relationship.first_version_id.as_str(),
-            ),
-        ).fetchone()
-        if endpoints is None:
-            raise StorageConflictError()
-        if (
-            endpoints["first_algorithm"],
-            endpoints["first_digest"],
-        ) != (
-            endpoints["second_algorithm"],
-            endpoints["second_digest"],
-        ):
-            raise StorageConflictError()
-
-        row = connection.execute(
-            """SELECT duplicate_class, first_version_id, second_version_id
-            FROM duplicate_relationships
-            WHERE duplicate_class = ?
-                AND first_version_id = ?
-                AND second_version_id = ?""",
-            relationship.key(),
-        ).fetchone()
-        if row is not None:
-            stored = _reconstruct_duplicate_relationships((row,))[0]
+        _ensure_duplicate_endpoints_are_byte_identical(connection, relationship)
+        stored = _stored_duplicate_relationship(connection, relationship)
+        if stored is not None:
             if stored == relationship:
                 return
             raise CorruptStorageError()
-
-        connection.execute(
-            """INSERT INTO duplicate_relationships (
-                duplicate_class,
-                first_version_id,
-                second_version_id
-            ) VALUES (?, ?, ?)""",
-            relationship.key(),
-        )
-    except (CorruptStorageError, StorageConflictError):
-        raise
+        _write_duplicate_relationship(connection, relationship)
     except sqlite3.Error as error:
         raise translate_sqlite_error(
             error,

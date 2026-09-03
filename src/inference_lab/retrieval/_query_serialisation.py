@@ -4,10 +4,9 @@ import math
 from datetime import date
 from typing import cast
 
-from inference_lab.json_types import JsonObject, JsonValue
+from inference_lab._json import JsonObject, JsonValue, canonical_json_bytes
 from inference_lab.provenance import CorpusVersionId
 from inference_lab.retrieval._serialisation_json import (
-    canonical_json_bytes,
     load_json,
     parse_identifier,
     require_array,
@@ -158,9 +157,7 @@ def _scalar(value: JsonValue) -> FilterScalar:
 
 def _filter(value: JsonValue) -> FilterExpression:
     """Decode one tagged filter expression and reuse value validation."""
-    if not isinstance(value, dict):
-        raise InvalidRetrievalSerialisationError("filter must be an object.")
-    payload = cast(JsonObject, value)
+    payload = require_object(value, name="filter")
     if "kind" not in payload:
         raise InvalidRetrievalSerialisationError("filter requires a kind.")
     kind = require_string(payload["kind"], name="filter.kind")

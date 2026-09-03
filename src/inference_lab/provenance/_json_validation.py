@@ -1,10 +1,22 @@
-"""Strict JSON validation primitives for lineage serialisation."""
+"""Lineage-specific adapters for shared strict JSON primitives."""
 
-import json
 from collections.abc import Callable
-from typing import TypeVar, cast
+from typing import TypeVar
 
-from inference_lab.json_types import JsonObject, JsonValue
+from inference_lab._json import (
+    JsonDecodingError,
+    JsonDecodingFailure,
+    JsonObject,
+    JsonStructureError,
+    JsonValue,
+    load_json_object,
+    require_exact_json_fields,
+    require_json_array,
+    require_json_object,
+    require_json_string,
+    require_optional_json_integer,
+    require_optional_json_string,
+)
 from inference_lab.provenance.errors import InvalidLineageSerialisationError
 from inference_lab.provenance.identifiers import (
     DocumentVersionId,
@@ -15,24 +27,16 @@ from inference_lab.provenance.versioning import validate_lineage_schema_version
 
 _IdentifierT = TypeVar("_IdentifierT", DocumentVersionId, RecordId, SourceSpanId)
 
-
-def reject_json_constant(_: str) -> JsonValue:
-    """Reject non-finite constants accepted by Python's JSON extension."""
-    raise InvalidLineageSerialisationError(
+_DECODING_MESSAGES = {
+    JsonDecodingFailure.INVALID_DATA: "lineage data must be valid UTF-8 JSON.",
+    JsonDecodingFailure.DUPLICATE_KEY: (
+        "lineage JSON must not contain duplicate object keys."
+    ),
+    JsonDecodingFailure.NON_FINITE_VALUE: (
         "lineage JSON must not contain non-finite values."
-    )
-
-
-def unique_object(pairs: list[tuple[str, JsonValue]]) -> JsonObject:
-    """Build one JSON object while rejecting duplicate member names."""
-    result: JsonObject = {}
-    for key, value in pairs:
-        if key in result:
-            raise InvalidLineageSerialisationError(
-                "lineage JSON must not contain duplicate object keys."
-            )
-        result[key] = value
-    return result
+    ),
+    JsonDecodingFailure.ROOT_NOT_OBJECT: ("lineage JSON payload must be an object."),
+}
 
 
 def load_json(data: bytes) -> JsonObject:
@@ -40,69 +44,75 @@ def load_json(data: bytes) -> JsonObject:
     if not isinstance(data, bytes):
         raise TypeError("data must be bytes.")
     try:
-        text = data.decode("utf-8", errors="strict")
-        payload = json.loads(
-            text,
-            object_pairs_hook=unique_object,
-            parse_constant=reject_json_constant,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        return load_json_object(data)
+    except JsonDecodingError as error:
         raise InvalidLineageSerialisationError(
-            "lineage data must be valid UTF-8 JSON."
+            _DECODING_MESSAGES[error.failure]
         ) from None
-    if not isinstance(payload, dict):
-        raise InvalidLineageSerialisationError(
-            "lineage JSON payload must be an object."
-        )
-    return cast(JsonObject, payload)
 
 
 def require_object(
     value: JsonValue,
     *,
     field_name: str,
-    keys: frozenset[str],
+    keys: frozenset[str] | None = None,
 ) -> JsonObject:
-    """Require one object containing exactly the canonical fields."""
-    if not isinstance(value, dict):
-        raise InvalidLineageSerialisationError(f"{field_name} must be an object.")
-    if frozenset(value) != keys:
+    """Require an object and, when supplied, its exact canonical fields."""
+    try:
+        payload = require_json_object(value)
+    except JsonStructureError:
+        raise InvalidLineageSerialisationError(
+            f"{field_name} must be an object."
+        ) from None
+    if keys is None:
+        return payload
+    try:
+        require_exact_json_fields(payload, keys)
+    except JsonStructureError:
         raise InvalidLineageSerialisationError(
             f"{field_name} must contain exactly the canonical fields."
-        )
-    return cast(JsonObject, value)
+        ) from None
+    return payload
 
 
 def require_array(value: JsonValue, *, field_name: str) -> list[JsonValue]:
     """Require one JSON array without implicit container coercion."""
-    if not isinstance(value, list):
-        raise InvalidLineageSerialisationError(f"{field_name} must be an array.")
-    return value
+    try:
+        return require_json_array(value)
+    except JsonStructureError:
+        raise InvalidLineageSerialisationError(
+            f"{field_name} must be an array."
+        ) from None
 
 
 def require_string(value: JsonValue, *, field_name: str) -> str:
     """Require one JSON string without implicit scalar coercion."""
-    if not isinstance(value, str):
-        raise InvalidLineageSerialisationError(f"{field_name} must be a string.")
-    return value
+    try:
+        return require_json_string(value)
+    except JsonStructureError:
+        raise InvalidLineageSerialisationError(
+            f"{field_name} must be a string."
+        ) from None
 
 
 def require_optional_string(value: JsonValue, *, field_name: str) -> str | None:
     """Require a JSON string or null."""
-    if value is not None and not isinstance(value, str):
+    try:
+        return require_optional_json_string(value)
+    except JsonStructureError:
         raise InvalidLineageSerialisationError(
             f"{field_name} must be a string or null."
-        )
-    return value
+        ) from None
 
 
 def require_optional_integer(value: JsonValue, *, field_name: str) -> int | None:
     """Require a strict JSON integer or null."""
-    if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+    try:
+        return require_optional_json_integer(value)
+    except JsonStructureError:
         raise InvalidLineageSerialisationError(
             f"{field_name} must be an integer or null."
-        )
-    return value
+        ) from None
 
 
 def require_schema_version(payload: JsonObject) -> str:

@@ -1,45 +1,34 @@
-"""Shared strict JSON primitives for retrieval serialisation."""
+"""Retrieval-specific adapters for shared strict JSON primitives."""
 
-import json
 from collections.abc import Callable
-from typing import cast
 
-from inference_lab.json_types import JsonObject, JsonValue
+from inference_lab._json import (
+    JsonDecodingError,
+    JsonDecodingFailure,
+    JsonObject,
+    JsonStructureError,
+    JsonValue,
+    load_json_object,
+    require_exact_json_fields,
+    require_json_array,
+    require_json_boolean,
+    require_json_integer,
+    require_json_object,
+    require_json_string,
+)
 from inference_lab.retrieval.errors import InvalidRetrievalSerialisationError
 from inference_lab.retrieval.versioning import validate_retrieval_schema_version
 
-
-def canonical_json_bytes(payload: JsonObject) -> bytes:
-    """Encode one canonical newline-terminated JSON object."""
-    return (
-        json.dumps(
-            payload,
-            allow_nan=False,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def _unique_object(pairs: list[tuple[str, JsonValue]]) -> JsonObject:
-    """Build one JSON object while rejecting duplicate keys."""
-    result: JsonObject = {}
-    for key, value in pairs:
-        if key in result:
-            raise InvalidRetrievalSerialisationError(
-                "retrieval JSON must not contain duplicate object keys."
-            )
-        result[key] = value
-    return result
-
-
-def _reject_constant(_: str) -> JsonValue:
-    """Reject non-finite JSON constants."""
-    raise InvalidRetrievalSerialisationError(
+_DECODING_MESSAGES = {
+    JsonDecodingFailure.INVALID_DATA: "retrieval data must be valid UTF-8 JSON.",
+    JsonDecodingFailure.DUPLICATE_KEY: (
+        "retrieval JSON must not contain duplicate object keys."
+    ),
+    JsonDecodingFailure.NON_FINITE_VALUE: (
         "retrieval JSON must not contain non-finite values."
-    )
+    ),
+    JsonDecodingFailure.ROOT_NOT_OBJECT: ("retrieval JSON payload must be an object."),
+}
 
 
 def load_json(data: bytes) -> JsonObject:
@@ -47,64 +36,67 @@ def load_json(data: bytes) -> JsonObject:
     if not isinstance(data, bytes):
         raise TypeError("data must be bytes.")
     try:
-        payload = json.loads(
-            data.decode("utf-8"),
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_constant,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        return load_json_object(data)
+    except JsonDecodingError as error:
         raise InvalidRetrievalSerialisationError(
-            "retrieval data must be valid UTF-8 JSON."
+            _DECODING_MESSAGES[error.failure]
         ) from None
-    if not isinstance(payload, dict):
-        raise InvalidRetrievalSerialisationError(
-            "retrieval JSON payload must be an object."
-        )
-    return cast(JsonObject, payload)
 
 
 def require_object(
     value: JsonValue,
     *,
     name: str,
-    keys: frozenset[str],
+    keys: frozenset[str] | None = None,
 ) -> JsonObject:
-    """Require exactly the fields belonging to one decoded object."""
-    if not isinstance(value, dict):
-        raise InvalidRetrievalSerialisationError(f"{name} must be an object.")
-    if frozenset(value) != keys:
+    """Require an object and, when supplied, its exact fields."""
+    try:
+        payload = require_json_object(value)
+    except JsonStructureError:
+        raise InvalidRetrievalSerialisationError(f"{name} must be an object.") from None
+    if keys is None:
+        return payload
+    try:
+        require_exact_json_fields(payload, keys)
+    except JsonStructureError:
         raise InvalidRetrievalSerialisationError(
             f"{name} must contain exactly the canonical fields."
-        )
-    return cast(JsonObject, value)
+        ) from None
+    return payload
 
 
 def require_array(value: JsonValue, *, name: str) -> list[JsonValue]:
     """Require one JSON array."""
-    if not isinstance(value, list):
-        raise InvalidRetrievalSerialisationError(f"{name} must be an array.")
-    return value
+    try:
+        return require_json_array(value)
+    except JsonStructureError:
+        raise InvalidRetrievalSerialisationError(f"{name} must be an array.") from None
 
 
 def require_string(value: JsonValue, *, name: str) -> str:
     """Require one JSON string."""
-    if not isinstance(value, str):
-        raise InvalidRetrievalSerialisationError(f"{name} must be a string.")
-    return value
+    try:
+        return require_json_string(value)
+    except JsonStructureError:
+        raise InvalidRetrievalSerialisationError(f"{name} must be a string.") from None
 
 
 def require_boolean(value: JsonValue, *, name: str) -> bool:
     """Require one JSON boolean."""
-    if not isinstance(value, bool):
-        raise InvalidRetrievalSerialisationError(f"{name} must be a boolean.")
-    return value
+    try:
+        return require_json_boolean(value)
+    except JsonStructureError:
+        raise InvalidRetrievalSerialisationError(f"{name} must be a boolean.") from None
 
 
 def require_integer(value: JsonValue, *, name: str) -> int:
     """Require one strict JSON integer."""
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise InvalidRetrievalSerialisationError(f"{name} must be an integer.")
-    return value
+    try:
+        return require_json_integer(value)
+    except JsonStructureError:
+        raise InvalidRetrievalSerialisationError(
+            f"{name} must be an integer."
+        ) from None
 
 
 def parse_enum(value: JsonValue, *, name: str, enum_type: type[object]) -> object:

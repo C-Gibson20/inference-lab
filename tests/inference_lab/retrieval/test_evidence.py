@@ -38,7 +38,6 @@ def candidate(source: EvidenceSource) -> RetrievalCandidate:
 def test_source_and_candidate_require_typed_provenance_and_sources(
     source: EvidenceSource,
 ) -> None:
-    """Retain all identity domains and reject missing or duplicate spans."""
     assert source.document_id != DocumentId.generate()
     second = EvidenceSource(
         source.document_id, source.document_version_id, SourceSpanId.generate()
@@ -61,7 +60,6 @@ def test_source_and_candidate_require_typed_provenance_and_sources(
 def test_channel_scores_allow_ranked_only_or_labelled_finite_scores(
     score: int | float | None,
 ) -> None:
-    """Keep score semantics explicit while always requiring channel rank."""
     label = None if score is None else "engine-score"
     value = ChannelScore(RetrievalChannel.LEXICAL, 1, score, label)
     assert value.raw_score == score
@@ -74,7 +72,6 @@ def test_channel_scores_allow_ranked_only_or_labelled_finite_scores(
 def test_hit_requires_unique_channel_contributions(
     candidate: RetrievalCandidate,
 ) -> None:
-    """Require one contribution per channel and preserve distinct labels."""
     lexical = ChannelScore(RetrievalChannel.LEXICAL, 1, 3.2, "bm25")
     dense = ChannelScore(RetrievalChannel.DENSE, 4, 0.8, "cosine-similarity")
     hit = EvidenceHit(candidate, (lexical, dense), 1)

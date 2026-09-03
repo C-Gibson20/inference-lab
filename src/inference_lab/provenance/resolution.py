@@ -6,10 +6,10 @@ from enum import StrEnum
 from typing import Final
 
 from inference_lab._validation import is_canonical_semantic_version
+from inference_lab.provenance._validation import is_lowercase_slug
 from inference_lab.provenance.identifiers import DocumentVersionId, SourceObservationId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship
-from inference_lab.provenance.utils import is_lowercase_slug
 from inference_lab.provenance.values import (
     ContentHash,
     ExternalIdentifier,
@@ -366,106 +366,129 @@ class IdentityResolutionOutcome:
                     "document and version must identify the same document."
                 )
 
-        if self.kind is ResolutionKind.UNCHANGED:
-            _, version = self._require_assigned()
-            self._require_reason(ResolutionReason.EXACT_HASH_MATCH)
-            if self.matched_version_ids != (version.document_version_id,):
-                raise InvalidResolutionError(
-                    "unchanged resolution must match exactly one retained version."
-                )
-            self._require_no_relationship()
-            if any(
-                assertion.document_version_id != version.document_version_id
-                for assertion in self.identifier_assertions_to_add
-            ):
-                raise InvalidResolutionError(
-                    "identifier assertions must target the retained version."
-                )
-            existing_namespaces = {
-                identifier.namespace for identifier in version.external_identifiers
-            }
-            if any(
-                assertion.external_identifier.namespace in existing_namespaces
-                for assertion in self.identifier_assertions_to_add
-            ):
-                raise InvalidResolutionError(
-                    "identifier assertions must add previously unasserted namespaces."
-                )
-        elif self.kind is ResolutionKind.NEW_VERSION:
-            self._require_assigned()
-            if self.reason not in {
-                ResolutionReason.SOURCE_CONTINUITY_MATCH,
-                ResolutionReason.EXTERNAL_IDENTIFIER_MATCH,
-            }:
-                raise InvalidResolutionError(
-                    "new_version resolution requires source continuity or "
-                    "external-identifier evidence."
-                )
-            if not self.matched_version_ids:
-                raise InvalidResolutionError(
-                    "new-version resolution requires a matching candidate."
-                )
-            self._require_no_relationship()
-            self._require_no_assertions()
-        elif self.kind is ResolutionKind.NEW_DOCUMENT:
-            self._require_assigned()
-            self._require_reason(ResolutionReason.NO_MATCH)
-            if self.matched_version_ids:
-                raise InvalidResolutionError(
-                    "new-document resolution cannot have matching candidates."
-                )
-            self._require_no_relationship()
-            self._require_no_assertions()
-        elif self.kind is ResolutionKind.DUPLICATE:
-            _, version = self._require_assigned()
-            self._require_reason(ResolutionReason.DUPLICATE_HASH_MATCH)
-            relationships = self.duplicate_relationships
-            if not self.matched_version_ids or not relationships:
-                raise InvalidResolutionError(
-                    "duplicate resolution requires candidates and relationships."
-                )
-            relationship_keys = tuple(
-                relationship.key() for relationship in relationships
+        match self.kind:
+            case ResolutionKind.UNCHANGED:
+                self._validate_unchanged()
+            case ResolutionKind.NEW_VERSION:
+                self._validate_new_version()
+            case ResolutionKind.NEW_DOCUMENT:
+                self._validate_new_document()
+            case ResolutionKind.DUPLICATE:
+                self._validate_duplicate()
+            case ResolutionKind.AMBIGUOUS:
+                self._validate_ambiguous()
+            case ResolutionKind.CONFLICT:
+                self._validate_conflict()
+            case _:
+                raise InvalidResolutionError("unsupported resolution kind.")
+
+    def _validate_unchanged(self) -> None:
+        """Validate an outcome that retains an existing immutable version."""
+        _, version = self._require_assigned()
+        self._require_reason(ResolutionReason.EXACT_HASH_MATCH)
+        if self.matched_version_ids != (version.document_version_id,):
+            raise InvalidResolutionError(
+                "unchanged resolution must match exactly one retained version."
             )
-            if len(relationship_keys) != len(set(relationship_keys)):
-                raise InvalidResolutionError("duplicate relationships must be unique.")
-            for relationship in relationships:
-                endpoints = (
-                    relationship.first_version_id,
-                    relationship.second_version_id,
-                )
-                if version.document_version_id not in endpoints:
-                    raise InvalidResolutionError(
-                        "duplicate relationships must include the resolved version."
-                    )
-                if not any(
-                    version_id in endpoints for version_id in self.matched_version_ids
-                ):
-                    raise InvalidResolutionError(
-                        "duplicate relationships must include matched versions."
-                    )
-            self._require_no_assertions()
-        elif self.kind is ResolutionKind.AMBIGUOUS:
-            self._require_unassigned()
-            if self.reason not in {
-                ResolutionReason.MULTIPLE_CANDIDATES,
-                ResolutionReason.UNESTABLISHED_IDENTIFIER_AUTHORITY,
-            }:
+        self._require_no_relationship()
+        if any(
+            assertion.document_version_id != version.document_version_id
+            for assertion in self.identifier_assertions_to_add
+        ):
+            raise InvalidResolutionError(
+                "identifier assertions must target the retained version."
+            )
+        existing_namespaces = {
+            identifier.namespace for identifier in version.external_identifiers
+        }
+        if any(
+            assertion.external_identifier.namespace in existing_namespaces
+            for assertion in self.identifier_assertions_to_add
+        ):
+            raise InvalidResolutionError(
+                "identifier assertions must add previously unasserted namespaces."
+            )
+
+    def _validate_new_version(self) -> None:
+        """Validate an outcome that adds a version to an existing document."""
+        self._require_assigned()
+        if self.reason not in {
+            ResolutionReason.SOURCE_CONTINUITY_MATCH,
+            ResolutionReason.EXTERNAL_IDENTIFIER_MATCH,
+        }:
+            raise InvalidResolutionError(
+                "new_version resolution requires source continuity or "
+                "external-identifier evidence."
+            )
+        if not self.matched_version_ids:
+            raise InvalidResolutionError(
+                "new-version resolution requires a matching candidate."
+            )
+        self._require_no_relationship()
+        self._require_no_assertions()
+
+    def _validate_new_document(self) -> None:
+        """Validate an outcome that creates an independent document."""
+        self._require_assigned()
+        self._require_reason(ResolutionReason.NO_MATCH)
+        if self.matched_version_ids:
+            raise InvalidResolutionError(
+                "new-document resolution cannot have matching candidates."
+            )
+        self._require_no_relationship()
+        self._require_no_assertions()
+
+    def _validate_duplicate(self) -> None:
+        """Validate an independently citable byte-identical duplicate."""
+        _, version = self._require_assigned()
+        self._require_reason(ResolutionReason.DUPLICATE_HASH_MATCH)
+        relationships = self.duplicate_relationships
+        if not self.matched_version_ids or not relationships:
+            raise InvalidResolutionError(
+                "duplicate resolution requires candidates and relationships."
+            )
+        relationship_keys = tuple(relationship.key() for relationship in relationships)
+        if len(relationship_keys) != len(set(relationship_keys)):
+            raise InvalidResolutionError("duplicate relationships must be unique.")
+        for relationship in relationships:
+            endpoints = (
+                relationship.first_version_id,
+                relationship.second_version_id,
+            )
+            if version.document_version_id not in endpoints:
                 raise InvalidResolutionError(
-                    "ambiguous resolution requires multiple candidates or "
-                    "unestablished identifier authority."
+                    "duplicate relationships must include the resolved version."
                 )
-            if not self.matched_version_ids:
+            if not any(
+                version_id in endpoints for version_id in self.matched_version_ids
+            ):
                 raise InvalidResolutionError(
-                    "ambiguous resolution requires candidate versions."
+                    "duplicate relationships must include matched versions."
                 )
-            self._require_no_assertions()
-        elif self.kind is ResolutionKind.CONFLICT:
-            self._require_unassigned()
-            self._require_reason(ResolutionReason.CONFLICTING_EVIDENCE)
-            self._require_no_assertions()
-        else:
-            raise InvalidResolutionError("unsupported resolution kind.")
+        self._require_no_assertions()
+
+    def _validate_ambiguous(self) -> None:
+        """Validate an outcome that cannot select one document identity."""
+        self._require_unassigned()
+        if self.reason not in {
+            ResolutionReason.MULTIPLE_CANDIDATES,
+            ResolutionReason.UNESTABLISHED_IDENTIFIER_AUTHORITY,
+        }:
+            raise InvalidResolutionError(
+                "ambiguous resolution requires multiple candidates or "
+                "unestablished identifier authority."
+            )
+        if not self.matched_version_ids:
+            raise InvalidResolutionError(
+                "ambiguous resolution requires candidate versions."
+            )
+        self._require_no_assertions()
+
+    def _validate_conflict(self) -> None:
+        """Validate an outcome rejected because evidence conflicts."""
+        self._require_unassigned()
+        self._require_reason(ResolutionReason.CONFLICTING_EVIDENCE)
+        self._require_no_assertions()
 
     def _require_assigned(self) -> tuple[DocumentIdentity, DocumentVersion]:
         if self.document is None or self.version is None:

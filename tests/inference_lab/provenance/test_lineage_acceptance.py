@@ -99,7 +99,6 @@ def _record(
 
 
 def test_original_source_directly_supports_chunk_and_fact_records() -> None:
-    """Accept direct source evidence for both core leaf record kinds."""
     inputs = _source_inputs(_DOCUMENT_A, _SPAN_A)
     chunk = _record(_CHUNK, kind="chunk", inputs=inputs, digest_character="1")
     fact = _record(_FACT, kind="fact", inputs=inputs, digest_character="2")
@@ -120,7 +119,6 @@ def test_original_source_directly_supports_chunk_and_fact_records() -> None:
 
 
 def test_summary_chain_round_trips_to_original_source_evidence() -> None:
-    """Preserve source-to-document-to-topic-to-corpus summary lineage."""
     document_a = _record(
         _DOCUMENT_SUMMARY_A,
         kind="document-summary",
@@ -166,6 +164,5 @@ def test_summary_chain_round_trips_to_original_source_evidence() -> None:
 
 
 def test_source_less_root_cannot_form_a_lineage_chain() -> None:
-    """Reject a derived root that has neither source evidence nor a parent."""
     with pytest.raises(InvalidLineageReferenceError, match="at least one"):
         LineageInputs()

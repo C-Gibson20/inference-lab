@@ -1,3 +1,5 @@
+"""Tests for repository Git hooks."""
+
 import os
 import subprocess
 from pathlib import Path

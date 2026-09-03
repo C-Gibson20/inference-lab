@@ -1,3 +1,5 @@
+"""Tests for metadata storage protocols."""
+
 from types import TracebackType
 from typing import Self
 

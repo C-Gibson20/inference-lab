@@ -1,3 +1,5 @@
+"""Tests for strict retrieval serialisation."""
+
 import json
 from datetime import date
 
@@ -37,7 +39,6 @@ from inference_lab.retrieval import (
 
 
 def test_query_serialisation_is_canonical_and_round_trips() -> None:
-    """Encode tagged scalars deterministically and recover exact values."""
     query = RetrievalQuery(
         "  assay date?  ",
         CorpusVersionId.from_str("00000000-0000-4000-8000-000000000001"),
@@ -64,7 +65,6 @@ def test_query_serialisation_is_canonical_and_round_trips() -> None:
 
 
 def test_set_like_filters_have_order_independent_canonical_bytes() -> None:
-    """Give equivalent one-of sets the same query and cache-key representation."""
     version = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000001")
     first = RetrievalQuery(
         "question",
@@ -114,7 +114,6 @@ def _result_fixture() -> EvidenceResult:
 
 
 def test_evidence_result_round_trips_full_provenance_and_failures() -> None:
-    """Round-trip candidates, source links, scores, status, and failures."""
     result = _result_fixture()
     encoded = serialise_evidence_result(result)
 
@@ -126,7 +125,6 @@ def test_evidence_result_round_trips_full_provenance_and_failures() -> None:
 
 
 def test_result_deserialisation_rejects_limit_and_mismatch_contradictions() -> None:
-    """Keep result invariants enforceable after crossing the wire boundary."""
     compatible_payload = json.loads(serialise_evidence_result(_result_fixture()))
     compatible_payload["failures"][0] = {
         "category": "corpus_version_mismatch",
@@ -170,7 +168,6 @@ def test_result_deserialisation_rejects_limit_and_mismatch_contradictions() -> N
 def test_query_deserialisation_rejects_non_canonical_or_malformed_payloads(
     data: bytes,
 ) -> None:
-    """Reject malformed JSON, duplicate/unknown fields, and coercion."""
     with pytest.raises((InvalidRetrievalSerialisationError, TypeError)):
         deserialise_query(data)
 
@@ -187,7 +184,6 @@ def test_query_deserialisation_rejects_non_canonical_or_malformed_payloads(
 def test_nested_filters_without_discriminators_use_serialisation_error(
     filter_payload: object,
 ) -> None:
-    """Never leak mapping implementation errors from malformed filter trees."""
     data = json.dumps(
         {
             "retrieval_schema_version": "2.0.0",
@@ -206,7 +202,6 @@ def test_nested_filters_without_discriminators_use_serialisation_error(
 def test_deserialisation_rejects_unsupported_and_non_finite_versions(
     version: str,
 ) -> None:
-    """Reject unsupported schema versions and non-finite numeric values."""
     with pytest.raises(UnsupportedRetrievalSchemaVersionError):
         deserialise_query(
             json.dumps(
@@ -226,7 +221,6 @@ def test_deserialisation_rejects_unsupported_and_non_finite_versions(
 
 
 def test_serialisation_rejection_does_not_echo_private_payload_or_log() -> None:
-    """Keep query and candidate content out of errors and operational logs."""
     marker = "private-query-and-candidate-marker"
     data = json.dumps(
         {

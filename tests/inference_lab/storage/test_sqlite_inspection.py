@@ -1,3 +1,5 @@
+"""Tests for SQLite schema inspection."""
+
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +20,7 @@ from inference_lab.storage._sqlite_inspection import (
 )
 from inference_lab.storage._sqlite_migrations import (
     MIGRATIONS,
+    SQLITE_APPLICATION_ID,
     MigrationDefinition,
 )
 
@@ -62,9 +65,9 @@ def test_current_database_inspection_is_read_only(tmp_path: Path) -> None:
         inspection = validate_database_schema(connection)
 
         assert inspection == SchemaInspection(
-            current_revision=5,
-            latest_supported_revision=5,
-            applied_migration_count=5,
+            current_revision=1,
+            latest_supported_revision=1,
+            applied_migration_count=1,
         )
         assert connection.total_changes == changes_before
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -125,6 +128,34 @@ def test_unrelated_database_is_rejected_without_changing_journal_mode(
         assert reopened.execute(
             "SELECT name FROM sqlite_schema WHERE name = 'unrelated'"
         ).fetchone() == ("unrelated",)
+    finally:
+        reopened.close()
+
+
+def test_superseded_pre_release_repository_is_rejected_without_mutation(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "pre-release.sqlite3"
+    connection = sqlite3.connect(database_path)
+    connection.execute(f"PRAGMA application_id = {SQLITE_APPLICATION_ID}")
+    connection.execute("PRAGMA user_version = 5")
+    connection.execute("CREATE TABLE superseded_schema_marker (value TEXT)")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(IncompatibleSchemaError):
+        open_current_database(database_path)
+
+    reopened = sqlite3.connect(database_path)
+    try:
+        assert reopened.execute("PRAGMA application_id").fetchone()[0] == (
+            SQLITE_APPLICATION_ID
+        )
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert reopened.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert reopened.execute(
+            "SELECT name FROM sqlite_schema WHERE name = 'superseded_schema_marker'"
+        ).fetchone() == ("superseded_schema_marker",)
     finally:
         reopened.close()
 

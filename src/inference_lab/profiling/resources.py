@@ -5,15 +5,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final, Literal, get_args
 
+from inference_lab._clock import utc_now
 from inference_lab.profiling._validation import validate_utc_datetime
 from inference_lab.profiling.types import LogLevel
-from inference_lab.profiling.utils import utc_now
 from inference_lab.profiling.versioning import (
     CURRENT_RECORD_SCHEMA_VERSION,
     validate_record_schema_version,
 )
 
-ResourceCategory = Literal[
+MemoryResourceCategory = Literal[
     "model_weights",
     "kv_cache",
     "activations",
@@ -22,12 +22,15 @@ ResourceCategory = Literal[
     "framework_overhead",
     "pinned_host_memory",
     "storage_cache",
+]
+_NonMemoryResourceCategory = Literal[
     "gpu_utilisation",
     "cpu_utilisation",
     "storage_throughput",
     "power",
     "thermal",
 ]
+ResourceCategory = MemoryResourceCategory | _NonMemoryResourceCategory
 MeasurementStatus = Literal["measured", "unavailable", "unreliable"]
 MeasurementKind = Literal["point_in_time", "sampled", "interval"]
 ResourceUnit = Literal[
@@ -38,26 +41,17 @@ ResourceUnit = Literal[
     "celsius",
 ]
 
-_RESOURCE_CATEGORIES: Final[frozenset[ResourceCategory]] = frozenset(
-    get_args(ResourceCategory)
+MEMORY_RESOURCE_CATEGORIES: Final[frozenset[MemoryResourceCategory]] = frozenset(
+    get_args(MemoryResourceCategory)
 )
-_MEASUREMENT_STATUSES: Final[frozenset[MeasurementStatus]] = frozenset(
+RESOURCE_CATEGORIES: Final[frozenset[ResourceCategory]] = frozenset(
+    (*MEMORY_RESOURCE_CATEGORIES, *get_args(_NonMemoryResourceCategory))
+)
+MEASUREMENT_STATUSES: Final[frozenset[MeasurementStatus]] = frozenset(
     get_args(MeasurementStatus)
 )
 _MEASUREMENT_KINDS: Final[frozenset[MeasurementKind]] = frozenset(
     get_args(MeasurementKind)
-)
-_MEMORY_CATEGORIES = frozenset(
-    {
-        "model_weights",
-        "kv_cache",
-        "activations",
-        "embedding_reranker_memory",
-        "index_memory",
-        "framework_overhead",
-        "pinned_host_memory",
-        "storage_cache",
-    }
 )
 _RESOURCE_UNITS: dict[ResourceCategory, ResourceUnit] = {
     "model_weights": "bytes",
@@ -75,7 +69,7 @@ _RESOURCE_UNITS: dict[ResourceCategory, ResourceUnit] = {
     "thermal": "celsius",
 }
 
-if _RESOURCE_UNITS.keys() != _RESOURCE_CATEGORIES:
+if _RESOURCE_UNITS.keys() != RESOURCE_CATEGORIES:
     raise RuntimeError("resource units must cover every resource category")
 
 
@@ -89,7 +83,7 @@ def _validate_identity_and_status(
     measurement_kind: MeasurementKind,
 ) -> None:
     """Validate resource discriminants and operational context fields."""
-    if category not in _RESOURCE_CATEGORIES:
+    if category not in RESOURCE_CATEGORIES:
         raise ValueError("category must be a supported resource category")
     if not module:
         raise ValueError("module must not be empty")
@@ -97,7 +91,7 @@ def _validate_identity_and_status(
         raise ValueError("pipeline_stage must not be empty")
     if stage_id == "":
         raise ValueError("stage_id must not be empty")
-    if status not in _MEASUREMENT_STATUSES:
+    if status not in MEASUREMENT_STATUSES:
         raise ValueError("status must be a valid measurement status")
     if measurement_kind not in _MEASUREMENT_KINDS:
         raise ValueError("measurement_kind must be valid")
@@ -132,7 +126,7 @@ def _validate_value_range(
     elif category == "thermal":
         if value < -273.15:
             raise ValueError("thermal measurement cannot be below absolute zero")
-    elif category in _MEMORY_CATEGORIES or category in {
+    elif category in MEMORY_RESOURCE_CATEGORIES or category in {
         "storage_throughput",
         "power",
     }:

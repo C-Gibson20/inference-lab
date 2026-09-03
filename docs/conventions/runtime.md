@@ -148,18 +148,23 @@ the rendered input token count, generated token count, and their total. Stop
 sequences are buffered across token and delta boundaries and matched text is
 never emitted.
 
-Generation uses the model's native past/KV state for autoregressive
-continuation and returns an asynchronous stream validated by the RUN-01
-stream adapter. The implementation-only `LocalMechanicsHarness` compares full
-uncached execution with cache state produced by executing the complete first
-request. For an extending, diverging, or shorter second request, it crops that
-native cache to the shared prefix and evaluates only the uncached suffix. It
-checks next-token selection and logits equivalence and separately records the
-tokens evaluated to create the first cache and after reuse. It records token
-counts, cache outcomes, and stable identity only; it does not expose cache
-handles, ownership, persistence, eviction, memory bytes, or a public cache
-protocol. Those lifecycle and accounting concerns remain downstream work for
-RUN-07 and RUN-03 respectively.
+`local.py` owns artefact verification, lifecycle, and prompt preparation;
+transient stream execution belongs to `_local_generation.py`. Generation
+creates the model's native `DynamicCache` before the first model call, passes
+that same object throughout autoregressive continuation, and returns an
+asynchronous stream validated by the RUN-01 stream adapter. Legacy tuple cache
+conversion is not part of this boundary.
+
+The implementation-only mechanics types and `LocalMechanicsHarness` belong to
+`_local_mechanics.py`. The harness compares full uncached execution with cache
+state produced by executing the complete first request. For an extending,
+diverging, or shorter second request, it crops that native cache to the shared
+prefix and evaluates only the uncached suffix. It checks next-token selection
+and logits equivalence and separately records the tokens evaluated to create
+the first cache and after reuse. It records token counts, cache outcomes, and
+stable identity only; it does not expose cache handles, ownership, persistence,
+eviction, memory bytes, or a public cache protocol. Those lifecycle and
+accounting concerns remain downstream work for RUN-07 and RUN-03 respectively.
 
 The focused offline CPU acceptance suite is:
 
@@ -203,11 +208,15 @@ component-attributed observations through the runtime memory contract. It is
 not part of the lifecycle, embedding, reranking, or generation protocols, so
 backends that do not implement memory reporting remain valid.
 
-Memory measurements use the profiling memory categories and
-`measured`/`unavailable`/`unreliable` statuses. Byte values are canonical
-non-negative integers. Component role and memory category are independent: for
-example, generator weights are `model_weights`, while an explicitly coarse
-embedder total may use `embedding_reranker_memory`.
+Memory measurements use the profiling `MemoryResourceCategory` vocabulary and
+`MeasurementStatus` values; profiling owns the corresponding immutable
+membership sets. Byte values are canonical non-negative integers. The closed
+runtime `MemoryComponentRole` identifies accounting ownership and is distinct
+from provenance's extensible `ComponentRole`, which describes a component's
+role in a producing operation. Integrations must map the two explicitly rather
+than interchange their values. Memory component role and category are also
+independent: for example, generator weights are `model_weights`, while an
+explicitly coarse embedder total may use `embedding_reranker_memory`.
 
 Memory snapshot schema version `2.0.0` separates the identity of the collector
 that assembles the snapshot from the identity of each adapter that supplies a
@@ -227,11 +236,13 @@ coverage, cross-space or cross-device coverage, and cycles. Adapters and the
 collector remain responsible for the physical non-overlap invariant: distinct
 exclusive slots must refer to disjoint allocations.
 
-Memory totals are derived from the expected inventory, not merely from the
-measurements that happened to arrive. An absent expected contribution is
-reported separately as `missing`; unreliable, unavailable, and missing counts
-all make the affected total incomplete. Memory totals are never combined
-across accelerator, ordinary host, pinned-host, and storage-cache spaces.
+Memory totals are derived once when the immutable snapshot is constructed,
+from the expected inventory rather than merely from the measurements that
+happened to arrive. Repeated reads and budget comparisons reuse that
+precomputed tuple. An absent expected contribution is reported separately as
+`missing`; unreliable, unavailable, and missing counts all make the affected
+total incomplete. Memory totals are never combined across accelerator,
+ordinary host, pinned-host, and storage-cache spaces.
 Accelerator contributions without a resolved device make every concrete
 device budget in that snapshot incomplete, and a measured accelerator value
 must identify its device. A budget comparison is `within_budget` only when all

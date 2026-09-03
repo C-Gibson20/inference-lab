@@ -23,6 +23,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage._sqlite_cleanup import rollback_preserving_primary
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage._sqlite_core import (
     add_corpus,
@@ -39,13 +40,15 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
 )
-from inference_lab.storage._sqlite_logging import safe_log
-from inference_lab.storage._sqlite_observations import (
+from inference_lab.storage._sqlite_identifier_assertions import (
     add_external_identifier_assertions,
+    list_external_identifier_assertions,
+)
+from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
+from inference_lab.storage._sqlite_observations import (
     add_source_observation,
     advance_source_observation,
     get_source_observation,
-    list_external_identifier_assertions,
     list_source_observation_history,
 )
 from inference_lab.storage._sqlite_relationships import (
@@ -97,12 +100,7 @@ class SQLiteMetadataTransaction:
                 sqlite_error,
                 default=StorageTransactionError,
             )
-            safe_log(
-                "error",
-                "transaction_failed",
-                error_category=error.category.value,
-                retryable=error.retryable,
-            )
+            safe_log_failure("transaction_failed", error)
             raise error from None
 
         self._active = True
@@ -120,20 +118,10 @@ class SQLiteMetadataTransaction:
         connection = self._connection_or_raise()
 
         if exception is not None or self._failed:
-            rolled_back = False
-            try:
-                connection.rollback()
-                rolled_back = True
-            except sqlite3.Error:
-                if exception is not None:
-                    safe_log(
-                        "error",
-                        "transaction_failed",
-                        error_category=StorageTransactionError.category.value,
-                        retryable=StorageTransactionError.retryable,
-                    )
-            finally:
-                self._finish()
+            rolled_back = rollback_preserving_primary(connection)
+            if not rolled_back and exception is not None:
+                safe_log_failure("transaction_failed", StorageTransactionError())
+            self._finish()
             if exception is not None:
                 if self._failed and rolled_back:
                     error = (
@@ -141,43 +129,25 @@ class SQLiteMetadataTransaction:
                         if isinstance(exception, StorageError)
                         else StorageTransactionError()
                     )
-                    safe_log(
-                        "error",
-                        "transaction_failed",
-                        error_category=error.category.value,
-                        retryable=error.retryable,
-                    )
+                    safe_log_failure("transaction_failed", error)
                 elif rolled_back:
                     safe_log("info", "transaction_rolled_back")
                 return False
 
             error = StorageTransactionError()
-            safe_log(
-                "error",
-                "transaction_failed",
-                error_category=error.category.value,
-                retryable=error.retryable,
-            )
+            safe_log_failure("transaction_failed", error)
             raise error from None
 
         try:
             connection.commit()
         except sqlite3.Error as sqlite_error:
-            try:
-                connection.rollback()
-            except sqlite3.Error:
-                pass
+            rollback_preserving_primary(connection)
             error = translate_sqlite_error(
                 sqlite_error,
                 default=StorageTransactionError,
             )
             self._finish()
-            safe_log(
-                "error",
-                "transaction_failed",
-                error_category=error.category.value,
-                retryable=error.retryable,
-            )
+            safe_log_failure("transaction_failed", error)
             raise error from None
 
         self._finish()

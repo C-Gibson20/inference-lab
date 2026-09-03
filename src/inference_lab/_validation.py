@@ -16,6 +16,11 @@ CANONICAL_SEMANTIC_VERSION_PATTERN: Final = (
 _SEMANTIC_VERSION_PATTERN: Final = re.compile(CANONICAL_SEMANTIC_VERSION_PATTERN)
 
 
+def is_strict_integer(value: object) -> bool:
+    """Return whether a runtime value is an integer but not a boolean."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def is_local_path_shape(value: object) -> bool:
     """Return whether a value names a local path on the current host.
 

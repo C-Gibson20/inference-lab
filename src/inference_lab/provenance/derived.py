@@ -5,14 +5,14 @@ import json
 from dataclasses import dataclass
 from typing import Self
 
+from inference_lab.provenance._validation import (
+    is_lowercase_slug,
+    is_sha256_hex_digest,
+)
 from inference_lab.provenance.errors import InvalidDerivedRecordError
 from inference_lab.provenance.identifiers import RecordId
 from inference_lab.provenance.lineage import LineageInputs
 from inference_lab.provenance.operations import DigestAlgorithm, ProducingOperation
-from inference_lab.provenance.utils import (
-    is_lowercase_slug,
-    is_sha256_hex_digest,
-)
 from inference_lab.provenance.versioning import validate_lineage_schema_version
 
 

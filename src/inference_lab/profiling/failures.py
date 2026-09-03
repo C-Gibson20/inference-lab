@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final, Literal, get_args
 
-from inference_lab.profiling._validation import validate_utc_datetime
+from inference_lab._clock import utc_now
+from inference_lab.profiling._validation import is_snake_case, validate_utc_datetime
 from inference_lab.profiling.types import LogLevel
-from inference_lab.profiling.utils import is_snake_case, utc_now
 from inference_lab.profiling.versioning import (
     CURRENT_RECORD_SCHEMA_VERSION,
     validate_record_schema_version,
@@ -147,6 +147,9 @@ class FailureEvent:
     corpus_id: str | None = None
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
         """Validate failure identity, severity, status, and privacy fields."""
         _validate_identity_and_context(
             event=self.event,

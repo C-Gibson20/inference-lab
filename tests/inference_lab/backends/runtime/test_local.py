@@ -1,3 +1,5 @@
+"""Tests for local runtime backend integration."""
+
 import asyncio
 import json
 import shutil
@@ -5,9 +7,10 @@ from collections.abc import AsyncGenerator
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Callable, cast
 
 import pytest
+from transformers.cache_utils import DynamicCache
 
 from inference_lab.backends.runtime import (
     BackendCapability,
@@ -24,7 +27,7 @@ from inference_lab.backends.runtime import (
     LifecycleBackend,
     LocalCausalBackend,
 )
-from inference_lab.backends.runtime.local import (
+from inference_lab.backends.runtime._local_mechanics import (
     CacheObservationOutcome,
     LocalMechanicsHarness,
 )
@@ -32,6 +35,26 @@ from inference_lab.logging.logging_config import configure_logging
 from inference_lab.settings import LoggingConfig
 
 FIXTURE_DIR = Path("tests/fixtures/backends/runtime/local_mechanics")
+
+
+class _CacheRecordingModel:
+    def __init__(self, model: Callable[..., object]) -> None:
+        self._model = model
+        self.config = getattr(model, "config")
+        self.cache_inputs: list[object] = []
+
+    def __call__(self, **kwargs: object) -> object:
+        if kwargs.get("use_cache") is True:
+            self.cache_inputs.append(kwargs.get("past_key_values"))
+        return self._model(**kwargs)
+
+
+def _record_cache_inputs(backend: LocalCausalBackend) -> _CacheRecordingModel:
+    model = backend._model
+    assert model is not None
+    recording_model = _CacheRecordingModel(model)
+    setattr(backend, "_model", recording_model)
+    return recording_model
 
 
 def test_local_backend_exposes_generation_only_metadata() -> None:
@@ -285,6 +308,28 @@ def test_local_backend_generation_is_repeatable() -> None:
     assert asyncio.run(consume()) == asyncio.run(consume())
 
 
+def test_local_backend_uses_one_native_cache_without_post_budget_advance() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    recording_model = _record_cache_inputs(backend)
+    request = GenerationRequest(
+        messages=(GenerationMessage("user", "hello"),),
+        options=GenerationOptions(maximum_output_tokens=3),
+    )
+
+    async def consume() -> None:
+        async for _event in backend.generate(request):
+            pass
+
+    asyncio.run(consume())
+
+    assert len(recording_model.cache_inputs) == 3
+    assert all(
+        isinstance(cache, DynamicCache) for cache in recording_model.cache_inputs
+    )
+    assert len({id(cache) for cache in recording_model.cache_inputs}) == 1
+
+
 def test_local_backend_buffers_and_excludes_a_stop_sequence() -> None:
     backend = LocalCausalBackend(FIXTURE_DIR)
     backend.load()
@@ -383,15 +428,23 @@ def test_local_backend_logs_are_structured_and_payload_free() -> None:
     backend.close()
 
     records = [
-        json.loads(line)
+        record
         for line in stream.getvalue().splitlines()
-        if '"module": "inference_lab.backends.runtime.local"' in line
+        if (record := json.loads(line))["module"].startswith(
+            "inference_lab.backends.runtime."
+        )
     ]
     assert [record["event"] for record in records] == [
         "backend_load_completed",
         "backend_generation_started",
         "backend_cache_observation_completed",
         "backend_close_completed",
+    ]
+    assert [record["module"] for record in records] == [
+        "inference_lab.backends.runtime.local",
+        "inference_lab.backends.runtime.local",
+        "inference_lab.backends.runtime._local_mechanics",
+        "inference_lab.backends.runtime.local",
     ]
     forbidden_values = (
         "private-prompt-marker",
@@ -469,6 +522,28 @@ def test_mechanics_harness_proves_partial_prefix_equivalence() -> None:
     assert observation.tokens_evaluated_after_cache == 2
     assert observation.logits_equivalent is True
     assert observation.selection_equivalent is True
+
+
+def test_mechanics_harness_retains_one_native_cache_throughout_reuse() -> None:
+    backend = LocalCausalBackend(FIXTURE_DIR)
+    backend.load()
+    recording_model = _record_cache_inputs(backend)
+
+    observation = LocalMechanicsHarness(backend).observe_token_prefixes(
+        (1, 2, 3),
+        (1, 2, 3, 4),
+    )
+
+    assert observation.cache_outcomes == (
+        CacheObservationOutcome.CREATED,
+        CacheObservationOutcome.REUSED,
+        CacheObservationOutcome.CLEARED,
+    )
+    assert len(recording_model.cache_inputs) == 2
+    assert all(
+        isinstance(cache, DynamicCache) for cache in recording_model.cache_inputs
+    )
+    assert len({id(cache) for cache in recording_model.cache_inputs}) == 1
 
 
 @pytest.mark.parametrize(
@@ -586,6 +661,7 @@ def test_mechanics_observation_is_immutable_and_payload_free() -> None:
 def test_mechanics_harness_clears_cache_after_failure() -> None:
     backend = LocalCausalBackend(FIXTURE_DIR)
     backend.load()
+    harness = LocalMechanicsHarness(backend)
     marker = "private-cache-failure-marker"
 
     class FailingModel:
@@ -597,11 +673,11 @@ def test_mechanics_harness_clears_cache_after_failure() -> None:
     setattr(backend, "_model", FailingModel())
 
     with pytest.raises(BackendExecutionError) as error:
-        LocalMechanicsHarness(backend).observe_token_prefixes(
+        harness.observe_token_prefixes(
             (1, 5, 40),
             (1, 5, 40, 44),
         )
 
-    assert backend._active_cache_state is None
+    assert harness._active_cache_state is None
     assert marker not in str(error.value)
     assert error.value.__cause__ is None

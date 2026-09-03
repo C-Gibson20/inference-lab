@@ -4,6 +4,8 @@ from typing import Protocol
 
 import structlog
 
+from inference_lab.provenance._resolver_context import _ResolutionContext
+from inference_lab.provenance._validation import is_lowercase_slug
 from inference_lab.provenance.identifiers import DocumentId, DocumentVersionId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship
@@ -14,10 +16,8 @@ from inference_lab.provenance.resolution import (
     InvalidResolutionError,
     ResolutionReason,
 )
-from inference_lab.provenance.utils import is_lowercase_slug
 from inference_lab.provenance.values import (
     DuplicateClass,
-    ExternalIdentifier,
     ResolutionKind,
 )
 
@@ -48,119 +48,13 @@ class UuidIdentityIdAllocator:
         return DocumentVersionId.generate()
 
 
-def _hash_matches(
-    request: IdentityResolutionRequest,
-) -> tuple[DocumentVersion, ...]:
-    """Return global candidates with exactly matching source hashes."""
-    return request.content_hash_candidates
-
-
-def _identifier_matches(
-    request: IdentityResolutionRequest,
-) -> tuple[DocumentVersion, ...]:
-    """Return candidates sharing at least one external identifier."""
-    if not request.external_identifiers:
-        return ()
-
-    return tuple(
-        candidate
-        for candidate in request.external_identifier_candidates
-        if _matching_identifier_namespaces(request, candidate)
-    )
-
-
-def _identifier_values_by_namespace(
-    identifiers: tuple[ExternalIdentifier, ...],
-) -> dict[str, frozenset[str]]:
-    """Group validated external-identifier values by namespace."""
-    grouped: dict[str, set[str]] = {}
-    for identifier in identifiers:
-        grouped.setdefault(identifier.namespace, set()).add(identifier.value)
-    return {namespace: frozenset(values) for namespace, values in grouped.items()}
-
-
-def _matching_identifier_namespaces(
-    request: IdentityResolutionRequest,
-    candidate: DocumentVersion,
-) -> tuple[str, ...]:
-    """Return namespaces whose complete asserted value sets agree."""
-    request_by_namespace = _identifier_values_by_namespace(request.external_identifiers)
-    candidate_by_namespace = _identifier_values_by_namespace(
-        _candidate_external_identifiers(request, candidate)
-    )
-    return tuple(
-        sorted(
-            namespace
-            for namespace in request_by_namespace.keys() & candidate_by_namespace.keys()
-            if request_by_namespace[namespace] == candidate_by_namespace[namespace]
-        )
-    )
-
-
-def _matching_document_ids(
-    candidates: tuple[DocumentVersion, ...],
-) -> tuple[DocumentId, ...]:
-    """Return unique matching document IDs in canonical order."""
-    return tuple(
-        sorted(
-            {candidate.document_id for candidate in candidates},
-            key=lambda document_id: document_id.as_str(),
-        )
-    )
-
-
-def _matched_version_ids(
-    candidates: tuple[DocumentVersion, ...],
-) -> tuple[DocumentVersionId, ...]:
-    """Return unique matched version IDs in canonical order."""
-    return tuple(
-        sorted(
-            {candidate.document_version_id for candidate in candidates},
-            key=lambda version_id: version_id.as_str(),
-        )
-    )
-
-
-def _conflicting_identifiers(
-    request: IdentityResolutionRequest,
-    candidate: DocumentVersion,
-) -> bool:
-    """Return whether shared namespaces contain conflicting values."""
-    request_by_namespace = _identifier_values_by_namespace(request.external_identifiers)
-    candidate_by_namespace = _identifier_values_by_namespace(
-        _candidate_external_identifiers(request, candidate)
-    )
-    return any(
-        request_by_namespace[namespace] != candidate_by_namespace[namespace]
-        for namespace in request_by_namespace.keys() & candidate_by_namespace.keys()
-    )
-
-
-def _candidate_external_identifiers(
-    request: IdentityResolutionRequest,
-    candidate: DocumentVersion,
-) -> tuple[ExternalIdentifier, ...]:
-    """Return base and appended identifiers for one candidate."""
-    identifiers = {
-        identifier.as_tuple(): identifier
-        for identifier in candidate.external_identifiers
-    }
-    for assertion in request.identifier_assertions:
-        if assertion.document_version_id == candidate.document_version_id:
-            identifier = assertion.external_identifier
-            identifiers[identifier.as_tuple()] = identifier
-    return tuple(identifiers[key] for key in sorted(identifiers))
-
-
 def _identifier_assertions_to_add(
-    request: IdentityResolutionRequest,
+    context: _ResolutionContext,
     candidate: DocumentVersion,
 ) -> tuple[ExternalIdentifierAssertion, ...]:
     """Return append-only assertions that add a new namespace."""
-    existing_namespaces = {
-        identifier.namespace
-        for identifier in _candidate_external_identifiers(request, candidate)
-    }
+    request = context.request
+    existing_namespaces = context.candidate_namespaces(candidate)
     return tuple(
         ExternalIdentifierAssertion(
             source_observation_id=request.source_observation_id,
@@ -174,33 +68,31 @@ def _identifier_assertions_to_add(
 
 def _allocate_document_id(
     allocator: IdentityIdAllocator,
-    existing: tuple[DocumentVersion, ...],
+    existing_document_ids: frozenset[DocumentId],
 ) -> DocumentId:
     """Allocate and validate a non-colliding document ID."""
     document_id = allocator.new_document_id()
     if not isinstance(document_id, DocumentId):
         raise TypeError("allocator.new_document_id() must return a DocumentId.")
-    if document_id in {candidate.document_id for candidate in existing}:
+    if document_id in existing_document_ids:
         raise InvalidResolutionError("allocator returned an existing DocumentId.")
     return document_id
 
 
 def _new_version(
-    request: IdentityResolutionRequest,
+    context: _ResolutionContext,
     *,
     document_id: DocumentId,
     allocator: IdentityIdAllocator,
 ) -> DocumentVersion:
     """Create and validate an immutable version for the incoming source."""
+    request = context.request
     version_id = allocator.new_document_version_id()
     if not isinstance(version_id, DocumentVersionId):
         raise TypeError(
             "allocator.new_document_version_id() must return a DocumentVersionId."
         )
-    if any(
-        candidate.document_version_id == version_id
-        for candidate in request.all_candidates
-    ):
+    if version_id in context.existing_version_ids:
         raise InvalidResolutionError(
             "allocator returned an existing DocumentVersionId."
         )
@@ -228,6 +120,170 @@ def _duplicate_relationship(
         second_version_id=endpoint_ids[1],
         duplicate_class=DuplicateClass.BYTE_IDENTICAL,
     )
+
+
+def _resolve_continuity(
+    context: _ResolutionContext,
+    allocator: IdentityIdAllocator,
+) -> IdentityResolutionOutcome | None:
+    """Resolve source-continuity evidence before weaker evidence stages."""
+    candidates = context.request.continuity_candidates
+    if not candidates:
+        return None
+
+    matched_version_ids = context.version_ids(candidates)
+    if context.has_identifier_conflict(candidates):
+        return IdentityResolutionOutcome(
+            kind=ResolutionKind.CONFLICT,
+            reason=ResolutionReason.CONFLICTING_EVIDENCE,
+            matched_version_ids=matched_version_ids,
+        )
+
+    matching_document_ids = context.document_ids(candidates)
+    if len(matching_document_ids) > 1 or len(context.continuity_hash_matches) > 1:
+        return IdentityResolutionOutcome(
+            kind=ResolutionKind.AMBIGUOUS,
+            reason=ResolutionReason.MULTIPLE_CANDIDATES,
+            matched_version_ids=matched_version_ids,
+        )
+
+    if context.continuity_hash_matches:
+        candidate = context.continuity_hash_matches[0]
+        return IdentityResolutionOutcome(
+            kind=ResolutionKind.UNCHANGED,
+            reason=ResolutionReason.EXACT_HASH_MATCH,
+            document=DocumentIdentity(candidate.document_id),
+            version=candidate,
+            matched_version_ids=(candidate.document_version_id,),
+            identifier_assertions_to_add=_identifier_assertions_to_add(
+                context, candidate
+            ),
+        )
+
+    document_id = candidates[0].document_id
+    version = _new_version(context, document_id=document_id, allocator=allocator)
+    return IdentityResolutionOutcome(
+        kind=ResolutionKind.NEW_VERSION,
+        reason=ResolutionReason.SOURCE_CONTINUITY_MATCH,
+        document=DocumentIdentity(document_id),
+        version=version,
+        matched_version_ids=matched_version_ids,
+    )
+
+
+def _resolve_duplicate_hash(
+    context: _ResolutionContext,
+    allocator: IdentityIdAllocator,
+) -> IdentityResolutionOutcome | None:
+    """Resolve byte-identical evidence after source continuity."""
+    candidates = context.request.content_hash_candidates
+    if not candidates:
+        return None
+
+    document_id = _allocate_document_id(allocator, context.existing_document_ids)
+    version = _new_version(context, document_id=document_id, allocator=allocator)
+    relationships = tuple(
+        _duplicate_relationship(
+            version.document_version_id,
+            candidate.document_version_id,
+        )
+        for candidate in candidates
+    )
+    return IdentityResolutionOutcome(
+        kind=ResolutionKind.DUPLICATE,
+        reason=ResolutionReason.DUPLICATE_HASH_MATCH,
+        document=DocumentIdentity(document_id),
+        version=version,
+        matched_version_ids=context.version_ids(candidates),
+        duplicate_relationships=relationships,
+    )
+
+
+def _resolve_external_identifier(
+    context: _ResolutionContext,
+    allocator: IdentityIdAllocator,
+) -> IdentityResolutionOutcome | None:
+    """Resolve external-identifier evidence after stronger evidence stages."""
+    candidates = context.request.external_identifier_candidates
+    if context.has_identifier_conflict(candidates):
+        return IdentityResolutionOutcome(
+            kind=ResolutionKind.CONFLICT,
+            reason=ResolutionReason.CONFLICTING_EVIDENCE,
+            matched_version_ids=context.version_ids(candidates),
+        )
+
+    identifier_matches = context.identifier_matches
+    matching_document_ids = context.document_ids(identifier_matches)
+    matched_version_ids = context.version_ids(identifier_matches)
+    if len(matching_document_ids) > 1:
+        return IdentityResolutionOutcome(
+            kind=ResolutionKind.AMBIGUOUS,
+            reason=ResolutionReason.MULTIPLE_CANDIDATES,
+            matched_version_ids=matched_version_ids,
+        )
+
+    if not matching_document_ids:
+        return None
+
+    matched_namespaces = {
+        namespace
+        for candidate in identifier_matches
+        for namespace in context.matching_namespaces_for(candidate)
+    }
+    authoritative_namespaces = set(
+        context.request.external_identifier_policy.authoritative_namespaces
+    )
+    if not matched_namespaces & authoritative_namespaces:
+        return IdentityResolutionOutcome(
+            kind=ResolutionKind.AMBIGUOUS,
+            reason=ResolutionReason.UNESTABLISHED_IDENTIFIER_AUTHORITY,
+            matched_version_ids=matched_version_ids,
+        )
+
+    document_id = matching_document_ids[0]
+    version = _new_version(context, document_id=document_id, allocator=allocator)
+    return IdentityResolutionOutcome(
+        kind=ResolutionKind.NEW_VERSION,
+        reason=ResolutionReason.EXTERNAL_IDENTIFIER_MATCH,
+        document=DocumentIdentity(document_id),
+        version=version,
+        matched_version_ids=matched_version_ids,
+    )
+
+
+def _resolve_new_document(
+    context: _ResolutionContext,
+    allocator: IdentityIdAllocator,
+) -> IdentityResolutionOutcome:
+    """Create a new identity after every evidence stage produces no match."""
+    document_id = _allocate_document_id(allocator, context.existing_document_ids)
+    version = _new_version(context, document_id=document_id, allocator=allocator)
+    return IdentityResolutionOutcome(
+        kind=ResolutionKind.NEW_DOCUMENT,
+        reason=ResolutionReason.NO_MATCH,
+        document=DocumentIdentity(document_id),
+        version=version,
+    )
+
+
+def _resolve_by_precedence(
+    context: _ResolutionContext,
+    allocator: IdentityIdAllocator,
+) -> IdentityResolutionOutcome:
+    """Return the first outcome selected by the evidence precedence rules."""
+    outcome = _resolve_continuity(context, allocator)
+    if outcome is not None:
+        return outcome
+
+    outcome = _resolve_duplicate_hash(context, allocator)
+    if outcome is not None:
+        return outcome
+
+    outcome = _resolve_external_identifier(context, allocator)
+    if outcome is not None:
+        return outcome
+
+    return _resolve_new_document(context, allocator)
 
 
 def _validate_allocator(allocator: object) -> None:
@@ -295,168 +351,20 @@ def resolve_identity(
         raise TypeError("request must be an IdentityResolutionRequest.")
     _validate_pipeline_stage(pipeline_stage)
     _validate_allocator(allocator)
-
-    def _complete(outcome: IdentityResolutionOutcome) -> IdentityResolutionOutcome:
-        _log_resolution_completed(
-            outcome=outcome,
-            candidate_count=len(request.all_candidates),
-            pipeline_stage=pipeline_stage,
-        )
-        return outcome
-
+    context = _ResolutionContext.from_request(request)
     try:
-        continuity_candidates = request.continuity_candidates
-        continuity_hash_matches = tuple(
-            candidate
-            for candidate in continuity_candidates
-            if candidate.content_hash == request.content_hash
-        )
-        if continuity_candidates:
-            if any(
-                _conflicting_identifiers(request, candidate)
-                for candidate in continuity_candidates
-            ):
-                return _complete(
-                    IdentityResolutionOutcome(
-                        kind=ResolutionKind.CONFLICT,
-                        reason=ResolutionReason.CONFLICTING_EVIDENCE,
-                        matched_version_ids=_matched_version_ids(continuity_candidates),
-                    )
-                )
-
-            matching_documents = _matching_document_ids(continuity_candidates)
-            if len(matching_documents) > 1 or len(continuity_hash_matches) > 1:
-                return _complete(
-                    IdentityResolutionOutcome(
-                        kind=ResolutionKind.AMBIGUOUS,
-                        reason=ResolutionReason.MULTIPLE_CANDIDATES,
-                        matched_version_ids=_matched_version_ids(continuity_candidates),
-                    )
-                )
-
-            if continuity_hash_matches:
-                candidate = continuity_hash_matches[0]
-                return _complete(
-                    IdentityResolutionOutcome(
-                        kind=ResolutionKind.UNCHANGED,
-                        reason=ResolutionReason.EXACT_HASH_MATCH,
-                        document=DocumentIdentity(candidate.document_id),
-                        version=candidate,
-                        matched_version_ids=(candidate.document_version_id,),
-                        identifier_assertions_to_add=(
-                            _identifier_assertions_to_add(request, candidate)
-                        ),
-                    )
-                )
-
-            document_id = continuity_candidates[0].document_id
-            version = _new_version(
-                request, document_id=document_id, allocator=allocator
-            )
-            return _complete(
-                IdentityResolutionOutcome(
-                    kind=ResolutionKind.NEW_VERSION,
-                    reason=ResolutionReason.SOURCE_CONTINUITY_MATCH,
-                    document=DocumentIdentity(document_id),
-                    version=version,
-                    matched_version_ids=_matched_version_ids(continuity_candidates),
-                )
-            )
-
-        hash_matches = _hash_matches(request)
-        if hash_matches:
-            document_id = _allocate_document_id(allocator, request.all_candidates)
-            version = _new_version(
-                request, document_id=document_id, allocator=allocator
-            )
-            relationships = tuple(
-                _duplicate_relationship(
-                    version.document_version_id,
-                    candidate.document_version_id,
-                )
-                for candidate in hash_matches
-            )
-            return _complete(
-                IdentityResolutionOutcome(
-                    kind=ResolutionKind.DUPLICATE,
-                    reason=ResolutionReason.DUPLICATE_HASH_MATCH,
-                    document=DocumentIdentity(document_id),
-                    version=version,
-                    matched_version_ids=_matched_version_ids(hash_matches),
-                    duplicate_relationships=relationships,
-                )
-            )
-
-        identifier_matches = _identifier_matches(request)
-        if any(
-            _conflicting_identifiers(request, candidate)
-            for candidate in request.external_identifier_candidates
-        ):
-            return _complete(
-                IdentityResolutionOutcome(
-                    kind=ResolutionKind.CONFLICT,
-                    reason=ResolutionReason.CONFLICTING_EVIDENCE,
-                    matched_version_ids=_matched_version_ids(
-                        request.external_identifier_candidates
-                    ),
-                )
-            )
-
-        matching_documents = _matching_document_ids(identifier_matches)
-        if len(matching_documents) > 1:
-            return _complete(
-                IdentityResolutionOutcome(
-                    kind=ResolutionKind.AMBIGUOUS,
-                    reason=ResolutionReason.MULTIPLE_CANDIDATES,
-                    matched_version_ids=_matched_version_ids(identifier_matches),
-                )
-            )
-
-        if matching_documents:
-            matched_namespaces = {
-                namespace
-                for candidate in identifier_matches
-                for namespace in _matching_identifier_namespaces(request, candidate)
-            }
-            authoritative_namespaces = set(
-                request.external_identifier_policy.authoritative_namespaces
-            )
-            if not matched_namespaces & authoritative_namespaces:
-                return _complete(
-                    IdentityResolutionOutcome(
-                        kind=ResolutionKind.AMBIGUOUS,
-                        reason=(ResolutionReason.UNESTABLISHED_IDENTIFIER_AUTHORITY),
-                        matched_version_ids=_matched_version_ids(identifier_matches),
-                    )
-                )
-            document_id = matching_documents[0]
-            version = _new_version(
-                request, document_id=document_id, allocator=allocator
-            )
-            return _complete(
-                IdentityResolutionOutcome(
-                    kind=ResolutionKind.NEW_VERSION,
-                    reason=ResolutionReason.EXTERNAL_IDENTIFIER_MATCH,
-                    document=DocumentIdentity(document_id),
-                    version=version,
-                    matched_version_ids=_matched_version_ids(identifier_matches),
-                )
-            )
-
-        document_id = _allocate_document_id(allocator, request.all_candidates)
-        version = _new_version(request, document_id=document_id, allocator=allocator)
-        return _complete(
-            IdentityResolutionOutcome(
-                kind=ResolutionKind.NEW_DOCUMENT,
-                reason=ResolutionReason.NO_MATCH,
-                document=DocumentIdentity(document_id),
-                version=version,
-            )
-        )
+        outcome = _resolve_by_precedence(context, allocator)
     except Exception as error:
         _log_resolution_failed(
             error=error,
-            candidate_count=len(request.all_candidates),
+            candidate_count=len(context.all_candidates),
             pipeline_stage=pipeline_stage,
         )
         raise
+
+    _log_resolution_completed(
+        outcome=outcome,
+        candidate_count=len(context.all_candidates),
+        pipeline_stage=pipeline_stage,
+    )
+    return outcome

@@ -1,4 +1,4 @@
-"""Internal, append-only SQLite metadata migration definitions."""
+"""Internal SQLite metadata baseline and migration definitions."""
 
 import hashlib
 import json
@@ -65,7 +65,7 @@ class MigrationDefinition:
                 )
 
 
-_REVISION_1_STATEMENTS: Final = (
+_CORE_SCHEMA_STATEMENTS: Final = (
     """CREATE TABLE metadata_schema (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_name TEXT NOT NULL UNIQUE
@@ -102,6 +102,11 @@ VALUES (1, 'inference_lab_metadata', 0)""",
             AND substr(corpus_id, 24, 1) = '-'
             AND length(replace(corpus_id, '-', '')) = 32
             AND corpus_id NOT GLOB '*[^0-9a-f-]*'
+        ),
+    display_name TEXT NOT NULL
+        CHECK (
+            length(trim(display_name)) > 0
+            AND instr(display_name, char(0)) = 0
         )
 ) STRICT""",
     """CREATE TABLE documents (
@@ -213,17 +218,44 @@ ON document_family_memberships (document_version_id, family_id, document_id)
 WHERE document_version_id IS NOT NULL""",
 )
 
-_REVISION_2_STATEMENTS: Final = (
+_CORPUS_MEMBERSHIP_STATEMENTS: Final = (
+    """CREATE TABLE corpus_document_version_memberships (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    FOREIGN KEY (corpus_id) REFERENCES corpora (corpus_id),
+    FOREIGN KEY (document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    UNIQUE (corpus_id, document_version_id)
+) STRICT""",
+    """CREATE INDEX corpus_document_version_memberships_document_idx
+ON corpus_document_version_memberships (
+    corpus_id,
+    document_id,
+    document_version_id
+)""",
+    """CREATE INDEX corpus_document_version_memberships_version_idx
+ON corpus_document_version_memberships (document_version_id, corpus_id)""",
+)
+
+_SOURCE_OBSERVATION_STATEMENTS: Final = (
     """CREATE TABLE source_observations (
     storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
     source_observation_id TEXT NOT NULL UNIQUE,
     document_id TEXT NOT NULL,
     current_document_version_id TEXT NOT NULL,
     current_revision INTEGER NOT NULL CHECK (current_revision >= 1),
-    FOREIGN KEY (document_id) REFERENCES documents (document_id),
+    FOREIGN KEY (corpus_id) REFERENCES corpora (corpus_id),
     FOREIGN KEY (current_document_version_id, document_id)
         REFERENCES document_versions (document_version_id, document_id),
-    UNIQUE (source_observation_id, document_id),
+    FOREIGN KEY (corpus_id, current_document_version_id)
+        REFERENCES corpus_document_version_memberships (
+            corpus_id,
+            document_version_id
+        ),
+    UNIQUE (source_observation_id, corpus_id, document_id),
     CHECK (
         length(source_observation_id) = 36
         AND source_observation_id = lower(source_observation_id)
@@ -235,24 +267,41 @@ _REVISION_2_STATEMENTS: Final = (
         AND source_observation_id NOT GLOB '*[^0-9a-f-]*'
     )
 ) STRICT""",
+    """CREATE INDEX source_observations_corpus_idx
+ON source_observations (corpus_id, source_observation_id)""",
     """CREATE TABLE source_observation_history (
     storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
     source_observation_id TEXT NOT NULL,
     observation_revision INTEGER NOT NULL CHECK (observation_revision >= 1),
     document_id TEXT NOT NULL,
     document_version_id TEXT NOT NULL,
-    FOREIGN KEY (source_observation_id, document_id)
-        REFERENCES source_observations (source_observation_id, document_id),
+    FOREIGN KEY (source_observation_id, corpus_id, document_id)
+        REFERENCES source_observations (
+            source_observation_id,
+            corpus_id,
+            document_id
+        ),
     FOREIGN KEY (document_version_id, document_id)
         REFERENCES document_versions (document_version_id, document_id),
+    FOREIGN KEY (corpus_id, document_version_id)
+        REFERENCES corpus_document_version_memberships (
+            corpus_id,
+            document_version_id
+        ),
     UNIQUE (source_observation_id, observation_revision),
     UNIQUE (source_observation_id, document_version_id),
-    UNIQUE (source_observation_id, document_version_id, document_id)
+    UNIQUE (source_observation_id, corpus_id, document_version_id, document_id)
 ) STRICT""",
     """CREATE INDEX source_observation_history_version_idx
-ON source_observation_history (document_version_id, source_observation_id)""",
+ON source_observation_history (
+    corpus_id,
+    document_version_id,
+    source_observation_id
+)""",
     """CREATE TABLE external_identifier_assertions (
     storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
     source_observation_id TEXT NOT NULL,
     document_version_id TEXT NOT NULL,
     document_id TEXT NOT NULL,
@@ -263,12 +312,17 @@ ON source_observation_history (document_version_id, source_observation_id)""",
             AND namespace NOT GLOB '*[^a-z0-9_-]*'
         ),
     identifier_value TEXT NOT NULL CHECK (length(trim(identifier_value)) > 0),
-    FOREIGN KEY (source_observation_id, document_version_id, document_id)
-        REFERENCES source_observation_history (
-            source_observation_id,
-            document_version_id,
-            document_id
-        ),
+    FOREIGN KEY (
+        source_observation_id,
+        corpus_id,
+        document_version_id,
+        document_id
+    ) REFERENCES source_observation_history (
+        source_observation_id,
+        corpus_id,
+        document_version_id,
+        document_id
+    ),
     UNIQUE (
         source_observation_id,
         document_version_id,
@@ -278,6 +332,7 @@ ON source_observation_history (document_version_id, source_observation_id)""",
 ) STRICT""",
     """CREATE INDEX external_identifier_assertions_lookup_idx
 ON external_identifier_assertions (
+    corpus_id,
     namespace,
     identifier_value,
     document_version_id,
@@ -285,7 +340,7 @@ ON external_identifier_assertions (
 )""",
 )
 
-_REVISION_3_STATEMENTS: Final = (
+_DUPLICATE_INTEGRITY_STATEMENTS: Final = (
     """CREATE TRIGGER duplicate_relationships_hash_insert
 BEFORE INSERT ON duplicate_relationships
 WHEN NEW.duplicate_class = 'byte_identical'
@@ -339,265 +394,20 @@ WHEN EXISTS (
 BEGIN
     SELECT RAISE(ABORT, 'byte-identical duplicate hashes must match');
 END""",
-    """UPDATE duplicate_relationships
-SET duplicate_class = duplicate_class""",
 )
 
-_REVISION_4_STATEMENTS: Final = (
-    """CREATE TABLE corpus_membership_migration_guard (
-    guard INTEGER NOT NULL CHECK (guard = 0)
-) STRICT""",
-    """INSERT INTO corpus_membership_migration_guard (guard)
-SELECT 1
-WHERE (SELECT count(*) FROM corpora) > 1
-    AND EXISTS (SELECT 1 FROM document_versions)""",
-    "DROP TABLE corpus_membership_migration_guard",
-    "ALTER TABLE corpora RENAME TO corpora_revision_3",
-    """CREATE TABLE corpora (
-    storage_id INTEGER PRIMARY KEY,
-    corpus_id TEXT NOT NULL UNIQUE
-        CHECK (
-            length(corpus_id) = 36
-            AND corpus_id = lower(corpus_id)
-            AND substr(corpus_id, 9, 1) = '-'
-            AND substr(corpus_id, 14, 1) = '-'
-            AND substr(corpus_id, 19, 1) = '-'
-            AND substr(corpus_id, 24, 1) = '-'
-            AND length(replace(corpus_id, '-', '')) = 32
-            AND corpus_id NOT GLOB '*[^0-9a-f-]*'
-        ),
-    display_name TEXT NOT NULL
-        CHECK (
-            length(trim(display_name)) > 0
-            AND instr(display_name, char(0)) = 0
-        )
-) STRICT""",
-    """INSERT INTO corpora (corpus_id, display_name)
-SELECT corpus_id, corpus_id
-FROM corpora_revision_3
-ORDER BY corpus_id""",
-    "DROP TABLE corpora_revision_3",
-    """CREATE TABLE corpus_document_version_memberships (
-    storage_id INTEGER PRIMARY KEY,
-    corpus_id TEXT NOT NULL,
-    document_id TEXT NOT NULL,
-    document_version_id TEXT NOT NULL,
-    FOREIGN KEY (corpus_id) REFERENCES corpora (corpus_id),
-    FOREIGN KEY (document_version_id, document_id)
-        REFERENCES document_versions (document_version_id, document_id),
-    UNIQUE (corpus_id, document_version_id)
-) STRICT""",
-    """CREATE INDEX corpus_document_version_memberships_document_idx
-ON corpus_document_version_memberships (
-    corpus_id,
-    document_id,
-    document_version_id
-)""",
-    """CREATE INDEX corpus_document_version_memberships_version_idx
-ON corpus_document_version_memberships (document_version_id, corpus_id)""",
-    """INSERT INTO corpus_document_version_memberships (
-    corpus_id,
-    document_id,
-    document_version_id
-)
-SELECT corpora.corpus_id, versions.document_id, versions.document_version_id
-FROM corpora
-CROSS JOIN document_versions AS versions
-WHERE (SELECT count(*) FROM corpora) = 1
-ORDER BY versions.document_id, versions.document_version_id""",
-)
-
-_REVISION_5_STATEMENTS: Final = (
-    """CREATE TABLE source_ownership_migration_guard (
-    guard INTEGER NOT NULL CHECK (guard = 0)
-) STRICT""",
-    """INSERT INTO source_ownership_migration_guard (guard)
-SELECT 1
-WHERE EXISTS (SELECT 1 FROM source_observations)
-    AND (SELECT count(*) FROM corpora) != 1""",
-    "DROP TABLE source_ownership_migration_guard",
-    """INSERT OR IGNORE INTO corpus_document_version_memberships (
-    corpus_id,
-    document_id,
-    document_version_id
-)
-SELECT corpora.corpus_id, history.document_id, history.document_version_id
-FROM corpora
-CROSS JOIN source_observation_history AS history
-WHERE (SELECT count(*) FROM corpora) = 1
-ORDER BY history.document_id, history.document_version_id""",
-    "ALTER TABLE external_identifier_assertions RENAME TO external_identifier_assertions_revision_4",
-    "ALTER TABLE source_observation_history RENAME TO source_observation_history_revision_4",
-    "ALTER TABLE source_observations RENAME TO source_observations_revision_4",
-    """CREATE TABLE source_observations (
-    storage_id INTEGER PRIMARY KEY,
-    corpus_id TEXT NOT NULL,
-    source_observation_id TEXT NOT NULL UNIQUE,
-    document_id TEXT NOT NULL,
-    current_document_version_id TEXT NOT NULL,
-    current_revision INTEGER NOT NULL CHECK (current_revision >= 1),
-    FOREIGN KEY (corpus_id) REFERENCES corpora (corpus_id),
-    FOREIGN KEY (current_document_version_id, document_id)
-        REFERENCES document_versions (document_version_id, document_id),
-    FOREIGN KEY (corpus_id, current_document_version_id)
-        REFERENCES corpus_document_version_memberships (
-            corpus_id,
-            document_version_id
-        ),
-    UNIQUE (source_observation_id, corpus_id, document_id),
-    CHECK (
-        length(source_observation_id) = 36
-        AND source_observation_id = lower(source_observation_id)
-        AND substr(source_observation_id, 9, 1) = '-'
-        AND substr(source_observation_id, 14, 1) = '-'
-        AND substr(source_observation_id, 19, 1) = '-'
-        AND substr(source_observation_id, 24, 1) = '-'
-        AND length(replace(source_observation_id, '-', '')) = 32
-        AND source_observation_id NOT GLOB '*[^0-9a-f-]*'
-    )
-) STRICT""",
-    """CREATE TABLE source_observation_history (
-    storage_id INTEGER PRIMARY KEY,
-    corpus_id TEXT NOT NULL,
-    source_observation_id TEXT NOT NULL,
-    observation_revision INTEGER NOT NULL CHECK (observation_revision >= 1),
-    document_id TEXT NOT NULL,
-    document_version_id TEXT NOT NULL,
-    FOREIGN KEY (source_observation_id, corpus_id, document_id)
-        REFERENCES source_observations (
-            source_observation_id,
-            corpus_id,
-            document_id
-        ),
-    FOREIGN KEY (document_version_id, document_id)
-        REFERENCES document_versions (document_version_id, document_id),
-    FOREIGN KEY (corpus_id, document_version_id)
-        REFERENCES corpus_document_version_memberships (
-            corpus_id,
-            document_version_id
-        ),
-    UNIQUE (source_observation_id, observation_revision),
-    UNIQUE (source_observation_id, document_version_id),
-    UNIQUE (source_observation_id, corpus_id, document_version_id, document_id)
-) STRICT""",
-    """CREATE TABLE external_identifier_assertions (
-    storage_id INTEGER PRIMARY KEY,
-    corpus_id TEXT NOT NULL,
-    source_observation_id TEXT NOT NULL,
-    document_version_id TEXT NOT NULL,
-    document_id TEXT NOT NULL,
-    namespace TEXT NOT NULL
-        CHECK (
-            length(namespace) > 0
-            AND substr(namespace, 1, 1) GLOB '[a-z]'
-            AND namespace NOT GLOB '*[^a-z0-9_-]*'
-        ),
-    identifier_value TEXT NOT NULL CHECK (length(trim(identifier_value)) > 0),
-    FOREIGN KEY (
-        source_observation_id,
-        corpus_id,
-        document_version_id,
-        document_id
-    ) REFERENCES source_observation_history (
-        source_observation_id,
-        corpus_id,
-        document_version_id,
-        document_id
-    ),
-    UNIQUE (
-        source_observation_id,
-        document_version_id,
-        namespace,
-        identifier_value
-    )
-) STRICT""",
-    """INSERT INTO source_observations (
-    corpus_id,
-    source_observation_id,
-    document_id,
-    current_document_version_id,
-    current_revision
-)
-SELECT corpora.corpus_id, observations.source_observation_id,
-    observations.document_id, observations.current_document_version_id,
-    observations.current_revision
-FROM source_observations_revision_4 AS observations
-CROSS JOIN corpora
-ORDER BY observations.source_observation_id""",
-    """INSERT INTO source_observation_history (
-    corpus_id,
-    source_observation_id,
-    observation_revision,
-    document_id,
-    document_version_id
-)
-SELECT corpora.corpus_id, history.source_observation_id,
-    history.observation_revision, history.document_id,
-    history.document_version_id
-FROM source_observation_history_revision_4 AS history
-CROSS JOIN corpora
-ORDER BY history.source_observation_id, history.observation_revision""",
-    """INSERT INTO external_identifier_assertions (
-    corpus_id,
-    source_observation_id,
-    document_version_id,
-    document_id,
-    namespace,
-    identifier_value
-)
-SELECT corpora.corpus_id, assertions.source_observation_id,
-    assertions.document_version_id, assertions.document_id,
-    assertions.namespace, assertions.identifier_value
-FROM external_identifier_assertions_revision_4 AS assertions
-CROSS JOIN corpora
-ORDER BY assertions.source_observation_id, assertions.document_version_id,
-    assertions.namespace, assertions.identifier_value""",
-    "DROP TABLE external_identifier_assertions_revision_4",
-    "DROP TABLE source_observation_history_revision_4",
-    "DROP TABLE source_observations_revision_4",
-    """CREATE INDEX source_observations_corpus_idx
-ON source_observations (corpus_id, source_observation_id)""",
-    """CREATE INDEX source_observation_history_version_idx
-ON source_observation_history (
-    corpus_id,
-    document_version_id,
-    source_observation_id
-)""",
-    """CREATE INDEX external_identifier_assertions_lookup_idx
-ON external_identifier_assertions (
-    corpus_id,
-    namespace,
-    identifier_value,
-    document_version_id,
-    source_observation_id
-)""",
+_BASELINE_STATEMENTS: Final = (
+    *_CORE_SCHEMA_STATEMENTS,
+    *_CORPUS_MEMBERSHIP_STATEMENTS,
+    *_SOURCE_OBSERVATION_STATEMENTS,
+    *_DUPLICATE_INTEGRITY_STATEMENTS,
 )
 
 MIGRATIONS: Final = (
     MigrationDefinition(
         revision=1,
-        migration_id="initial_metadata",
-        statements=_REVISION_1_STATEMENTS,
-    ),
-    MigrationDefinition(
-        revision=2,
-        migration_id="source_observation_identity",
-        statements=_REVISION_2_STATEMENTS,
-    ),
-    MigrationDefinition(
-        revision=3,
-        migration_id="duplicate_hash_integrity",
-        statements=_REVISION_3_STATEMENTS,
-    ),
-    MigrationDefinition(
-        revision=4,
-        migration_id="corpus_catalogue_membership",
-        statements=_REVISION_4_STATEMENTS,
-    ),
-    MigrationDefinition(
-        revision=5,
-        migration_id="corpus_owned_source_observations",
-        statements=_REVISION_5_STATEMENTS,
+        migration_id="multi_corpus_metadata_baseline",
+        statements=_BASELINE_STATEMENTS,
     ),
 )
 

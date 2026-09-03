@@ -1,3 +1,5 @@
+"""Tests for commit-message validation."""
+
 import subprocess
 from pathlib import Path
 

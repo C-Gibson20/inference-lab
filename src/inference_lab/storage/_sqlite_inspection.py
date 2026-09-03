@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
+from inference_lab.storage._sqlite_cleanup import close_preserving_primary
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     enable_durable_wal,
@@ -113,7 +114,7 @@ def _expected_schema_manifest(
         raise StorageMigrationError() from None
     finally:
         if connection is not None:
-            _close_preserving_primary(connection)
+            close_preserving_primary(connection)
 
 
 def _validate_schema_manifest(
@@ -294,13 +295,6 @@ def validate_database_schema(
     return inspection
 
 
-def _close_preserving_primary(connection: sqlite3.Connection) -> None:
-    try:
-        connection.close()
-    except sqlite3.Error:
-        pass
-
-
 def open_current_database(
     path: Path,
     *,
@@ -313,6 +307,6 @@ def open_current_database(
         validate_database_schema(connection, migrations=migrations)
         enable_durable_wal(connection)
     except BaseException:
-        _close_preserving_primary(connection)
+        close_preserving_primary(connection)
         raise
     return connection

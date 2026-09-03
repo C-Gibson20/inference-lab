@@ -1,3 +1,5 @@
+"""Tests for SQLite database opening and schema lifecycle."""
+
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,7 +31,7 @@ def _revision_two(*, failing: bool = False) -> MigrationDefinition:
     )
 
 
-def _initialise_revision_one(path: Path) -> None:
+def _initialise_baseline(path: Path) -> None:
     connection = open_sqlite_connection(path)
     try:
         initialise_empty_database(
@@ -75,21 +77,21 @@ def test_explicit_schema_policy_initialises_and_reopens_idempotently(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert (
             connection.execute("SELECT count(*) FROM migration_history").fetchone()[0]
-            == 5
+            == 1
         )
     finally:
         connection.close()
 
     reopened = open_sqlite_database(database_path, apply_migrations=True)
     try:
-        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 1
         assert (
             reopened.execute("SELECT count(*) FROM migration_history").fetchone()[0]
-            == 5
+            == 1
         )
     finally:
         reopened.close()
@@ -99,7 +101,7 @@ def test_older_schema_is_not_migrated_without_explicit_permission(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _initialise_revision_one(database_path)
+    _initialise_baseline(database_path)
     migrations = (MIGRATIONS[0], _revision_two())
 
     with pytest.raises(MigrationRequiredError):
@@ -123,7 +125,7 @@ def test_explicit_schema_policy_applies_supported_forward_migrations(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _initialise_revision_one(database_path)
+    _initialise_baseline(database_path)
     migrations = (MIGRATIONS[0], _revision_two())
 
     connection = open_sqlite_database(
@@ -202,8 +204,8 @@ def test_successful_open_logs_bounded_lifecycle_metadata(tmp_path: Path) -> None
         "repository_initialisation_completed",
         "repository_open_completed",
     ]
-    assert logs[-1]["schema_revision"] == 5
-    assert logs[-1]["applied_migration_count"] == 5
+    assert logs[-1]["schema_revision"] == 1
+    assert logs[-1]["applied_migration_count"] == 1
     assert all(log["pipeline_stage"] == "storage" for log in logs)
     assert str(database_path) not in repr(logs)
 

@@ -1,3 +1,5 @@
+"""Tests for runtime backend protocols."""
+
 from collections.abc import AsyncIterator
 
 from inference_lab.backends.runtime import (

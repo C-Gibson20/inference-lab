@@ -1,3 +1,5 @@
+"""Tests for SQLite corpus catalogue membership."""
+
 from datetime import UTC, datetime
 from pathlib import Path
 

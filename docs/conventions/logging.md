@@ -103,6 +103,13 @@ to the same privacy requirements as ordinary records.
 to an end user. `WARNING` describes recovery or reduced capability, not merely
 an undesirable product outcome.
 
+SQLite lifecycle owners use the shared storage logging boundary for repository,
+transaction, and migration events. Typed failures include their category and
+retryability through that boundary. Logging and best-effort cleanup performed
+while handling a primary failure must never replace that failure; ordinary
+close, commit, and rollback operations remain responsible for surfacing or
+translating their own errors when no primary failure exists.
+
 ## Events and profiling
 
 Event names are stable, machine-readable, and use snake case. Examples include

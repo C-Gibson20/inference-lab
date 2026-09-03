@@ -125,7 +125,6 @@ def test_no_candidates_creates_new_document_and_version() -> None:
 def test_source_location_changes_do_not_change_identity_resolution(
     source_change: str,
 ) -> None:
-    """Path-level changes are outside the resolver's provenance evidence."""
     candidate = _version(FIRST_VERSION_ID)
 
     first_outcome = resolve_identity(

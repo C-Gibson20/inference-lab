@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Final
 
 from inference_lab._validation import is_local_path_shape
+from inference_lab.storage._sqlite_cleanup import close_preserving_primary
 from inference_lab.storage.errors import (
     CorruptStorageError,
     RepositoryUnavailableError,
@@ -76,16 +77,6 @@ def _validate_busy_timeout(busy_timeout_ms: int) -> None:
         raise ValueError("busy_timeout_ms must be greater than zero.")
 
 
-def _close_after_failed_open(connection: sqlite3.Connection | None) -> None:
-    """Release a partial connection without replacing the primary failure."""
-    if connection is None:
-        return
-    try:
-        connection.close()
-    except sqlite3.Error:
-        pass
-
-
 def open_sqlite_connection(
     path: Path,
     *,
@@ -119,10 +110,10 @@ def open_sqlite_connection(
         if connection.execute("PRAGMA trusted_schema").fetchone()[0] != 0:
             raise RepositoryUnavailableError()
     except StorageError:
-        _close_after_failed_open(connection)
+        close_preserving_primary(connection)
         raise
     except sqlite3.Error as error:
-        _close_after_failed_open(connection)
+        close_preserving_primary(connection)
         raise translate_sqlite_error(
             error,
             default=RepositoryUnavailableError,
