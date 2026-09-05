@@ -28,6 +28,7 @@ from inference_lab.storage import (
     ComponentKind,
     CorpusUpdateState,
     CorpusVersionManifest,
+    CorruptStorageError,
     NoCorpusChangeOutcome,
     RepositoryUnavailableError,
     SealCorpusUpdateOutcome,
@@ -61,6 +62,7 @@ _MEMBERSHIP = CorpusDocumentVersionMembership(
 _DENSE = ComponentKind("dense")
 _LEXICAL = ComponentKind("lexical")
 _PRIVATE_VALIDATOR_FAILURE = "private-validator-failure"
+_PRIVATE_DATABASE_FAILURE = "private-database-failure"
 
 
 def _fixed_created_at() -> datetime:
@@ -73,6 +75,15 @@ def _open(path: Path) -> SQLiteMetadataRepository:
         apply_migrations=True,
         created_at_factory=_fixed_created_at,
     )
+
+
+def _install_trigger(path: Path, statement: str) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(statement)
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _prepare_update(
@@ -859,3 +870,164 @@ def test_seal_rejects_an_explicitly_aborted_update(tmp_path: Path) -> None:
                 )
     finally:
         repository.close()
+
+
+def test_component_insert_failure_is_atomic_and_hides_database_payload(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _prepare_update(repository, required_component_kinds=(_LEXICAL,))
+    _install_trigger(
+        database_path,
+        f"""CREATE TRIGGER reject_component_insert
+        BEFORE INSERT ON corpus_update_component_generations
+        BEGIN
+            SELECT RAISE(ABORT, '{_PRIVATE_DATABASE_FAILURE}');
+        END""",
+    )
+    try:
+        with capture_logs() as logs:
+            with pytest.raises(StorageConflictError) as raised:
+                with repository.transaction() as transaction:
+                    transaction.register_corpus_update_component_generation(
+                        _CORPUS_A.corpus_id,
+                        _PROPOSED_VERSION,
+                        _generation(),
+                        validator=RecordingValidator(),
+                    )
+
+        assert (
+            repository.list_corpus_update_component_generations(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+            )
+            == ()
+        )
+        update = repository.get_corpus_update(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+        )
+        assert update is not None
+        assert update.state is CorpusUpdateState.PREPARING
+        assert _PRIVATE_DATABASE_FAILURE not in str(raised.value)
+        assert _PRIVATE_DATABASE_FAILURE not in repr(logs)
+    finally:
+        repository.close()
+
+
+def test_component_replace_failure_preserves_expected_generation(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _prepare_update(repository, required_component_kinds=(_LEXICAL,))
+    first = _generation()
+    ready_first = replace(first, state=ComponentGenerationState.READY)
+    with repository.transaction() as transaction:
+        transaction.register_corpus_update_component_generation(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+            first,
+            validator=RecordingValidator(),
+        )
+    _install_trigger(
+        database_path,
+        f"""CREATE TRIGGER reject_component_replace
+        BEFORE UPDATE ON corpus_update_component_generations
+        BEGIN
+            SELECT RAISE(ABORT, '{_PRIVATE_DATABASE_FAILURE}');
+        END""",
+    )
+    try:
+        with pytest.raises(StorageConflictError) as raised:
+            with repository.transaction() as transaction:
+                transaction.replace_corpus_update_component_generation(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                    ready_first,
+                    _generation(generation_id="generation-2"),
+                    validator=RecordingValidator(),
+                )
+
+        assert repository.list_corpus_update_component_generations(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+        ) == (ready_first,)
+        assert _PRIVATE_DATABASE_FAILURE not in str(raised.value)
+    finally:
+        repository.close()
+
+
+def test_seal_database_failure_preserves_preparing_state_and_hides_payload(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _prepare_update(repository, required_component_kinds=())
+    _install_trigger(
+        database_path,
+        f"""CREATE TRIGGER reject_manifest_seal
+        BEFORE UPDATE ON corpus_updates
+        WHEN NEW.state = 'ready'
+        BEGIN
+            SELECT RAISE(ABORT, '{_PRIVATE_DATABASE_FAILURE}');
+        END""",
+    )
+    try:
+        with capture_logs() as logs:
+            with pytest.raises(StorageConflictError) as raised:
+                with repository.transaction() as transaction:
+                    transaction.seal_corpus_update(
+                        _CORPUS_A.corpus_id,
+                        _PROPOSED_VERSION,
+                    )
+
+        update = repository.get_corpus_update(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+        )
+        assert update is not None
+        assert update.state is CorpusUpdateState.PREPARING
+        assert update.manifest_digest is None
+        assert "corpus_update_ready" not in {log["event"] for log in logs}
+        assert _PRIVATE_DATABASE_FAILURE not in str(raised.value)
+        assert _PRIVATE_DATABASE_FAILURE not in repr(logs)
+    finally:
+        repository.close()
+
+
+def test_seal_replay_detects_persisted_manifest_digest_disagreement(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _prepare_update(repository, required_component_kinds=())
+    repository.close()
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """UPDATE corpus_updates
+            SET state = 'ready', manifest_digest = ?
+            WHERE corpus_id = ? AND corpus_version = ?""",
+            (
+                "f" * 64,
+                _CORPUS_A.corpus_id.as_str(),
+                _PROPOSED_VERSION.as_str(),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    reopened = SQLiteMetadataRepository.open(database_path)
+    try:
+        with pytest.raises(CorruptStorageError):
+            with reopened.transaction() as transaction:
+                transaction.seal_corpus_update(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                )
+    finally:
+        reopened.close()
