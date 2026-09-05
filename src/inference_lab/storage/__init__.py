@@ -20,8 +20,17 @@ from inference_lab.storage.protocols import (
     MetadataTransaction,
     MetadataWriter,
 )
+from inference_lab.storage.source_records import SourceArtefact
+from inference_lab.storage.source_serialisation import serialise_source_artefact
+from inference_lab.storage.source_versioning import (
+    CURRENT_SOURCE_RECORD_SCHEMA_VERSION,
+    SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS,
+    validate_source_record_schema_version,
+)
 
 __all__ = [
+    "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
+    "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
     "CorruptStorageError",
     "IncompatibleSchemaError",
     "MetadataReader",
@@ -31,6 +40,7 @@ __all__ = [
     "MigrationRequiredError",
     "RepositoryClosedError",
     "RepositoryUnavailableError",
+    "SourceArtefact",
     "StorageConcurrencyError",
     "StorageConflictError",
     "StorageError",
@@ -38,4 +48,6 @@ __all__ = [
     "StorageMigrationError",
     "StorageTransactionError",
     "open_metadata_repository",
+    "serialise_source_artefact",
+    "validate_source_record_schema_version",
 ]

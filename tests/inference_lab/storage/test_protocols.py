@@ -235,6 +235,8 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
 
 def test_public_storage_api_contains_only_contract_boundary() -> None:
     expected_exports = {
+        "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
+        "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
         "CorruptStorageError",
         "IncompatibleSchemaError",
         "MetadataReader",
@@ -244,6 +246,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "MigrationRequiredError",
         "RepositoryClosedError",
         "RepositoryUnavailableError",
+        "SourceArtefact",
         "StorageConcurrencyError",
         "StorageConflictError",
         "StorageError",
@@ -251,6 +254,8 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "StorageMigrationError",
         "StorageTransactionError",
         "open_metadata_repository",
+        "serialise_source_artefact",
+        "validate_source_record_schema_version",
     }
 
     assert set(storage.__all__) == expected_exports
