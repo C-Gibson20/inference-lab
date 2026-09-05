@@ -30,6 +30,11 @@ from inference_lab.ingest.discovery_failures import (
     DiscoveryFileKind,
     discovery_failure_policy,
 )
+from inference_lab.ingest.discovery_results import (
+    DiscoveryCounts,
+    DiscoveryResult,
+    DiscoveryStatus,
+)
 from inference_lab.ingest.errors import (
     ParserDecodeError,
     ParserFailure,
@@ -72,6 +77,7 @@ __all__ = [
     "BoundingBox",
     "DirectorySnapshotPolicy",
     "DiscoveredSource",
+    "DiscoveryCounts",
     "DiscoveryFailure",
     "DiscoveryFailureCategory",
     "DiscoveryFailureScope",
@@ -81,6 +87,8 @@ __all__ = [
     "DiscoveryInputKind",
     "DiscoveryPolicy",
     "DiscoveryRequest",
+    "DiscoveryResult",
+    "DiscoveryStatus",
     "FamilyCandidate",
     "FamilyEvidenceKind",
     "FileIdentityHint",
