@@ -90,6 +90,15 @@ def test_verified_read_returns_exact_bytes_across_restart(tmp_path: Path) -> Non
     assert second == SOURCE_BYTES
 
 
+def test_verified_stream_preserves_requested_chunk_boundaries(tmp_path: Path) -> None:
+    artefact = _artefact()
+    _install_blob(tmp_path, artefact)
+
+    stream = ManagedSourceBlobStore(tmp_path).stream_bytes(artefact, chunk_size=3)
+
+    assert tuple(stream) == (b"sou", b"rce", b" by", b"tes")
+
+
 @pytest.mark.parametrize("chunk_size", [0, -1, True, 1.5])
 def test_read_rejects_invalid_chunk_size(
     tmp_path: Path,
@@ -97,6 +106,12 @@ def test_read_rejects_invalid_chunk_size(
 ) -> None:
     with pytest.raises((TypeError, ValueError)):
         ManagedSourceBlobStore(tmp_path).read_bytes(
+            _artefact(),
+            chunk_size=chunk_size,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises((TypeError, ValueError)):
+        ManagedSourceBlobStore(tmp_path).stream_bytes(
             _artefact(),
             chunk_size=chunk_size,  # type: ignore[arg-type]
         )

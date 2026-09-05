@@ -1,6 +1,7 @@
 """Internal SQLite persistence for immutable managed source metadata."""
 
 import sqlite3
+from collections.abc import Iterator
 
 from inference_lab.provenance import (
     ContentHash,
@@ -127,6 +128,21 @@ def read_source_bytes(
     if blob_store is None:
         raise RepositoryUnavailableError()
     return blob_store.read_bytes(artefact)
+
+
+def stream_source_bytes(
+    connection: sqlite3.Connection,
+    blob_store: ManagedSourceBlobStore | None,
+    corpus_id: CorpusId,
+    document_version_id: DocumentVersionId,
+) -> Iterator[bytes] | None:
+    """Return fully verified, detached chunks for corpus-visible metadata."""
+    artefact = get_source_artefact(connection, corpus_id, document_version_id)
+    if artefact is None:
+        return None
+    if blob_store is None:
+        raise RepositoryUnavailableError()
+    return blob_store.stream_bytes(artefact)
 
 
 def add_source_artefact(

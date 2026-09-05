@@ -118,6 +118,18 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
         "document_version_id",
     ),
     (
+        "source-stream-corpus",
+        lambda owner: owner.stream_source_bytes(_invalid(CorpusId), _VERSION_ID),
+        "corpus_id",
+    ),
+    (
+        "source-stream-version",
+        lambda owner: owner.stream_source_bytes(
+            _CORPUS_ID, _invalid(DocumentVersionId)
+        ),
+        "document_version_id",
+    ),
+    (
         "find-hash-corpus",
         lambda owner: owner.find_document_versions_by_content_hash(
             _invalid(CorpusId), _invalid(ContentHash)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Self
 
@@ -63,6 +64,7 @@ from inference_lab.storage._sqlite_relationships import (
 from inference_lab.storage._sqlite_source_artefacts import (
     get_source_artefact,
     read_source_bytes,
+    stream_source_bytes,
 )
 from inference_lab.storage._sqlite_transaction import SQLiteMetadataTransaction
 from inference_lab.storage._sqlite_versions import (
@@ -222,6 +224,19 @@ class SQLiteMetadataRepository:
     ) -> bytes | None:
         """Return fully verified corpus-visible source bytes, or ``None``."""
         return read_source_bytes(
+            self._connection_or_raise(),
+            self._source_blob_store,
+            corpus_id,
+            document_version_id,
+        )
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return fully verified, detached source chunks, or ``None``."""
+        return stream_source_bytes(
             self._connection_or_raise(),
             self._source_blob_store,
             corpus_id,

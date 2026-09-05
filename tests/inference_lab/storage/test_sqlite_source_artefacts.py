@@ -1,6 +1,7 @@
 """Tests for corpus-authorised SQLite source-artefact persistence."""
 
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -175,6 +176,13 @@ def test_factory_returns_corpus_scoped_metadata_and_verified_bytes(
             )
             == SOURCE_BYTES
         )
+        stream = reopened.stream_source_bytes(
+            _FIRST_CORPUS.corpus_id,
+            DOCUMENT_VERSION_ID,
+        )
+        assert stream is not None
+        reopened.close()
+        assert b"".join(stream) == SOURCE_BYTES
     finally:
         reopened.close()
 
@@ -207,6 +215,13 @@ def test_absent_and_non_member_reads_do_not_touch_managed_bytes(
             is None
         )
         assert (
+            repository.stream_source_bytes(
+                _SECOND_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            is None
+        )
+        assert (
             repository.read_source_bytes(
                 _FIRST_CORPUS.corpus_id,
                 DocumentVersionId("30000000-0000-4000-8000-000000000099"),
@@ -230,6 +245,11 @@ def test_reachable_missing_or_modified_blob_fails_closed(tmp_path: Path) -> None
     try:
         with pytest.raises(CorruptStorageError):
             repository.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+        with pytest.raises(CorruptStorageError):
+            repository.stream_source_bytes(
                 _FIRST_CORPUS.corpus_id,
                 DOCUMENT_VERSION_ID,
             )
@@ -271,6 +291,11 @@ def test_metadata_read_does_not_require_a_configured_blob_store(
                 _FIRST_CORPUS.corpus_id,
                 DOCUMENT_VERSION_ID,
             )
+        with pytest.raises(RepositoryUnavailableError):
+            repository.stream_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
     finally:
         repository.close()
 
@@ -290,6 +315,7 @@ def test_transaction_reads_its_staged_source_metadata_and_bytes(
         source_dir=source_dir,
     )
     _add_catalogue(repository)
+    stream: Iterator[bytes] | None = None
     try:
         with repository.transaction() as transaction:
             transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
@@ -307,6 +333,13 @@ def test_transaction_reads_its_staged_source_metadata_and_bytes(
                 )
                 == SOURCE_BYTES
             )
+            stream = transaction.stream_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            assert stream is not None
+        assert stream is not None
+        assert b"".join(stream) == SOURCE_BYTES
     finally:
         repository.close()
 
@@ -322,6 +355,11 @@ def test_source_reads_reject_repository_use_after_close(tmp_path: Path) -> None:
         )
     with pytest.raises(RepositoryClosedError):
         repository.read_source_bytes(
+            _FIRST_CORPUS.corpus_id,
+            DOCUMENT_VERSION_ID,
+        )
+    with pytest.raises(RepositoryClosedError):
+        repository.stream_source_bytes(
             _FIRST_CORPUS.corpus_id,
             DOCUMENT_VERSION_ID,
         )

@@ -1,5 +1,6 @@
 """Tests for metadata storage protocols."""
 
+from collections.abc import Iterator
 from types import TracebackType
 from typing import Self
 
@@ -147,6 +148,13 @@ class StructuralTransaction:
     ) -> bytes | None:
         return None
 
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        return None
+
     def find_document_versions_by_content_hash(
         self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:
@@ -231,6 +239,7 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         list_document_versions = StructuralTransaction.list_document_versions
         get_source_artefact = StructuralTransaction.get_source_artefact
         read_source_bytes = StructuralTransaction.read_source_bytes
+        stream_source_bytes = StructuralTransaction.stream_source_bytes
         find_document_versions_by_content_hash = (
             StructuralTransaction.find_document_versions_by_content_hash
         )

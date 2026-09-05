@@ -1,5 +1,6 @@
 """Storage-neutral contracts for persistent corpus identity metadata."""
 
+from collections.abc import Iterator
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
@@ -85,6 +86,14 @@ class MetadataReader(Protocol):
         document_version_id: DocumentVersionId,
     ) -> bytes | None:
         """Return verified corpus-visible source bytes, or ``None``."""
+        ...
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return fully verified, detached source chunks, or ``None``."""
         ...
 
     def find_document_versions_by_content_hash(
