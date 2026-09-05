@@ -68,7 +68,7 @@ class StorageTransactionError(StorageError):
     """Raised when a transaction cannot start, commit, or roll back safely."""
 
     category = StorageErrorCategory.TRANSACTION
-    default_message = "The metadata transaction failed."
+    default_message = "The storage transaction failed."
 
 
 class CorruptStorageError(StorageError):
