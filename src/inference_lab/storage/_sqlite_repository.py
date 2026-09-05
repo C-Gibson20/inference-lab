@@ -12,6 +12,7 @@ from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -37,6 +38,10 @@ from inference_lab.storage._sqlite_core import (
 from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
+)
+from inference_lab.storage._sqlite_corpus_updates import (
+    CreatedAtFactory,
+    get_corpus_update,
 )
 from inference_lab.storage._sqlite_identifier_assertions import (
     list_external_identifier_assertions,
@@ -71,6 +76,7 @@ from inference_lab.storage.errors import (
     RepositoryUnavailableError,
     StorageTransactionError,
 )
+from inference_lab.storage.versioning import CorpusUpdate
 
 
 class SQLiteMetadataRepository:
@@ -80,13 +86,18 @@ class SQLiteMetadataRepository:
         self,
         connection: sqlite3.Connection,
         migrations: tuple[MigrationDefinition, ...],
+        *,
+        created_at_factory: CreatedAtFactory = utc_now,
     ) -> None:
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("connection must be a sqlite3.Connection.")
         if not isinstance(migrations, tuple):
             raise TypeError("migrations must be a tuple.")
+        if not callable(created_at_factory):
+            raise TypeError("created_at_factory must be callable.")
         self._connection: sqlite3.Connection | None = connection
         self._migrations = migrations
+        self._created_at_factory = created_at_factory
         self._transaction_active = False
 
     @classmethod
@@ -98,8 +109,11 @@ class SQLiteMetadataRepository:
         busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
         migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
         applied_at_factory: AppliedAtFactory = utc_now,
+        created_at_factory: CreatedAtFactory = utc_now,
     ) -> Self:
         """Open a validated repository under the explicit schema policy."""
+        if not callable(created_at_factory):
+            raise TypeError("created_at_factory must be callable.")
         connection = open_sqlite_database(
             path,
             apply_migrations=apply_migrations,
@@ -107,7 +121,11 @@ class SQLiteMetadataRepository:
             migrations=migrations,
             applied_at_factory=applied_at_factory,
         )
-        return cls(connection, migrations)
+        return cls(
+            connection,
+            migrations,
+            created_at_factory=created_at_factory,
+        )
 
     @property
     def is_closed(self) -> bool:
@@ -129,6 +147,18 @@ class SQLiteMetadataRepository:
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora in canonical identifier order."""
         return list_corpora(self._connection_or_raise())
+
+    def get_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusUpdate | None:
+        """Return one owned durable corpus update, or ``None``."""
+        return get_corpus_update(
+            self._connection_or_raise(),
+            corpus_id,
+            corpus_version,
+        )
 
     def get_corpus_document_version_membership(
         self,

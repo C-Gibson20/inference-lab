@@ -11,6 +11,7 @@ from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -39,6 +40,10 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     add_corpus_document_version_membership,
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
+)
+from inference_lab.storage._sqlite_corpus_updates import (
+    begin_corpus_update,
+    get_corpus_update,
 )
 from inference_lab.storage._sqlite_identifier_assertions import (
     add_external_identifier_assertions,
@@ -70,6 +75,8 @@ from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
 )
+from inference_lab.storage.outcomes import BeginCorpusUpdateOutcome
+from inference_lab.storage.versioning import ComponentKind, CorpusUpdate
 
 if TYPE_CHECKING:
     from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
@@ -86,6 +93,7 @@ class SQLiteMetadataTransaction:
         self._active = False
         self._finished = False
         self._failed = False
+        self._pending_success_logs: list[tuple[str, dict[str, object]]] = []
 
     def __enter__(self) -> Self:
         """Acquire the write transaction, rejecting nesting and reuse."""
@@ -150,7 +158,10 @@ class SQLiteMetadataTransaction:
             safe_log_failure("transaction_failed", error)
             raise error from None
 
+        pending_success_logs = tuple(self._pending_success_logs)
         self._finish()
+        for event, fields in pending_success_logs:
+            safe_log("info", event, **fields)
         safe_log("info", "transaction_completed")
         return False
 
@@ -161,6 +172,14 @@ class SQLiteMetadataTransaction:
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora within this transaction."""
         return self._execute(list_corpora)
+
+    def get_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusUpdate | None:
+        """Return one owned durable corpus update within this transaction."""
+        return self._execute(get_corpus_update, corpus_id, corpus_version)
 
     def add_corpus(self, corpus: CorpusMetadata) -> None:
         """Create a named corpus within this transaction."""
@@ -173,6 +192,41 @@ class SQLiteMetadataTransaction:
     ) -> CorpusMetadata:
         """Replace a corpus display name within this transaction."""
         return self._execute(set_corpus_display_name, corpus_id, display_name)
+
+    def begin_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        *,
+        expected_corpus_version: CorpusVersionId | None,
+        required_component_kinds: tuple[ComponentKind, ...] = (),
+        restores_corpus_version: CorpusVersionId | None = None,
+    ) -> BeginCorpusUpdateOutcome:
+        """Create and seed a preparing update or return its exact replay."""
+        outcome = self._execute(
+            begin_corpus_update,
+            corpus_id,
+            corpus_version,
+            expected_corpus_version=expected_corpus_version,
+            required_component_kinds=required_component_kinds,
+            restores_corpus_version=restores_corpus_version,
+            created_at_factory=self._repository._created_at_factory,
+        )
+        self._pending_success_logs.append(
+            (
+                "corpus_update_started",
+                {
+                    "corpus_id": outcome.update.corpus_id.as_str(),
+                    "corpus_version": outcome.update.corpus_version.as_str(),
+                    "update_state": outcome.update.state.value,
+                    "required_component_count": len(
+                        outcome.update.required_component_kinds
+                    ),
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
 
     def get_corpus_document_version_membership(
         self,
@@ -414,4 +468,5 @@ class SQLiteMetadataTransaction:
     def _finish(self) -> None:
         self._active = False
         self._finished = True
+        self._pending_success_logs.clear()
         self._repository._transaction_active = False

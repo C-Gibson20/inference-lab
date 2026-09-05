@@ -9,6 +9,7 @@ from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -21,7 +22,13 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
-from inference_lab.storage import MetadataRepository, MetadataTransaction
+from inference_lab.storage import (
+    BeginCorpusUpdateOutcome,
+    ComponentKind,
+    CorpusUpdate,
+    MetadataRepository,
+    MetadataTransaction,
+)
 
 
 class StructuralTransaction:
@@ -44,6 +51,17 @@ class StructuralTransaction:
     def set_corpus_display_name(
         self, corpus_id: CorpusId, display_name: str
     ) -> CorpusMetadata:
+        raise NotImplementedError
+
+    def begin_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        *,
+        expected_corpus_version: CorpusVersionId | None,
+        required_component_kinds: tuple[ComponentKind, ...] = (),
+        restores_corpus_version: CorpusVersionId | None = None,
+    ) -> BeginCorpusUpdateOutcome:
         raise NotImplementedError
 
     def add_corpus_document_version_membership(
@@ -91,6 +109,13 @@ class StructuralTransaction:
 
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         return ()
+
+    def get_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusUpdate | None:
+        return None
 
     def get_corpus_document_version_membership(
         self,
@@ -194,6 +219,7 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
     class ReaderOnly:
         get_corpus = StructuralTransaction.get_corpus
         list_corpora = StructuralTransaction.list_corpora
+        get_corpus_update = StructuralTransaction.get_corpus_update
         get_corpus_document_version_membership = (
             StructuralTransaction.get_corpus_document_version_membership
         )

@@ -8,6 +8,7 @@ from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -20,6 +21,8 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage.outcomes import BeginCorpusUpdateOutcome
+from inference_lab.storage.versioning import ComponentKind, CorpusUpdate
 
 
 class MetadataReader(Protocol):
@@ -31,6 +34,14 @@ class MetadataReader(Protocol):
 
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora in canonical identifier order."""
+        ...
+
+    def get_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusUpdate | None:
+        """Return one owned durable corpus update, or ``None``."""
         ...
 
     def get_corpus_document_version_membership(
@@ -140,6 +151,18 @@ class MetadataWriter(Protocol):
         display_name: str,
     ) -> CorpusMetadata:
         """Replace a corpus display name without changing its identity."""
+        ...
+
+    def begin_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        *,
+        expected_corpus_version: CorpusVersionId | None,
+        required_component_kinds: tuple[ComponentKind, ...] = (),
+        restores_corpus_version: CorpusVersionId | None = None,
+    ) -> BeginCorpusUpdateOutcome:
+        """Create and seed a preparing update or return its exact replay."""
         ...
 
     def add_corpus_document_version_membership(
