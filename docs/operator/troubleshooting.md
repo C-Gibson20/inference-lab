@@ -9,8 +9,9 @@ and that every required setting is present:
 - `models.reranker_path`;
 - `models.generator_path`;
 - `runtime.vram_budget_gb`;
-- `storage.index_dir`; and
-- `storage.metadata_db_path`.
+- `storage.index_dir`;
+- `storage.metadata_db_path`; and
+- `storage.source_dir`.
 
 Check the TOML type and any environment override. Environment values take
 precedence over the file, and settings changes require a process restart.

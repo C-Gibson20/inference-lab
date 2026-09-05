@@ -43,6 +43,7 @@ def test_main_configures_logging_and_emits_startup_event(
         [storage]
         index_dir = "/data/indexes"
         metadata_db_path = "/data/metadata.db"
+        source_dir = "/source-data"
 
         [logging]
         level = "INFO"
