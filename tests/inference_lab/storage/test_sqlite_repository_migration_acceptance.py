@@ -143,13 +143,17 @@ def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
 
 
-def test_current_baseline_persists_complete_multi_corpus_graph(
+def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _create_complete_baseline(database_path)
 
-    reopened = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
+    reopened = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+        applied_at_factory=_fixed_applied_at,
+    )
     try:
         assert reopened.schema_inspection.current_revision == 2
         assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
@@ -173,19 +177,97 @@ def test_current_baseline_persists_complete_multi_corpus_graph(
     finally:
         reopened.close()
 
+    connection = sqlite3.connect(database_path)
+    try:
+        assert connection.execute(
+            """SELECT corpus_id, corpus_version
+            FROM corpus_active_versions"""
+        ).fetchall() == [(_CORPUS_ID.as_str(), None)]
+        assert connection.execute(
+            """SELECT revision, migration_id, checksum, applied_at_utc
+            FROM migration_history
+            WHERE revision = 2"""
+        ).fetchone() == (
+            2,
+            "corpus_version_publication",
+            MIGRATIONS[1].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        )
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        connection.close()
+
+    reopened_without_permission = SQLiteMetadataRepository.open(database_path)
+    try:
+        assert reopened_without_permission.schema_inspection.current_revision == 2
+        _assert_complete_graph(reopened_without_permission)
+    finally:
+        reopened_without_permission.close()
+
 
 def test_non_empty_repository_requires_explicit_upgrade_without_mutation(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _create_complete_baseline(database_path)
-    migrations = (MIGRATIONS[0], _revision_two())
     before = _database_snapshot(database_path)
 
     with pytest.raises(MigrationRequiredError):
-        SQLiteMetadataRepository.open(database_path, migrations=migrations)
+        SQLiteMetadataRepository.open(database_path)
 
     assert _database_snapshot(database_path) == before
+
+
+def test_failed_corpus_version_migration_rolls_back_all_schema_and_data_changes(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_complete_baseline(database_path)
+    before = _database_snapshot(database_path)
+    failing_migration = MigrationDefinition(
+        revision=2,
+        migration_id="test_failing_corpus_version_publication",
+        statements=(
+            *MIGRATIONS[1].statements[:-1],
+            "CREATE TABLE documents (conflicting_value TEXT)",
+        ),
+    )
+
+    with pytest.raises(StorageMigrationError):
+        SQLiteMetadataRepository.open(
+            database_path,
+            apply_migrations=True,
+            migrations=(MIGRATIONS[0], failing_migration),
+            applied_at_factory=_fixed_applied_at,
+        )
+
+    assert _database_snapshot(database_path) == before
+    connection = sqlite3.connect(database_path)
+    try:
+        assert (
+            connection.execute(
+                """SELECT name
+            FROM sqlite_schema
+            WHERE name IN (
+                'corpus_updates',
+                'corpus_versions',
+                'corpus_active_versions'
+            )"""
+            ).fetchall()
+            == []
+        )
+    finally:
+        connection.close()
+
+    recovered = SQLiteMetadataRepository.open(
+        database_path,
+        migrations=(MIGRATIONS[0],),
+    )
+    try:
+        assert recovered.schema_inspection.current_revision == 1
+        _assert_complete_graph(recovered)
+    finally:
+        recovered.close()
 
 
 def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(

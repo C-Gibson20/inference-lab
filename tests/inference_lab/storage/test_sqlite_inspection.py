@@ -215,8 +215,11 @@ def test_inconsistent_schema_or_history_is_rejected(
     "mutations",
     [
         ("DROP TABLE document_family_memberships",),
+        ("DROP TABLE corpus_update_document_memberships",),
         ("DROP INDEX document_versions_content_hash_idx",),
+        ("DROP INDEX corpus_versions_history_idx",),
         ("DROP TRIGGER duplicate_relationships_hash_insert",),
+        ("DROP TRIGGER corpus_versions_update_immutable",),
         ("ALTER TABLE corpora ADD COLUMN unexpected_value TEXT",),
         ("CREATE TABLE incompatible_extra (value TEXT) STRICT",),
         (
@@ -231,9 +234,12 @@ def test_inconsistent_schema_or_history_is_rejected(
         ),
     ],
     ids=(
-        "missing-table",
-        "missing-index",
-        "missing-trigger",
+        "missing-baseline-table",
+        "missing-version-table",
+        "missing-baseline-index",
+        "missing-version-index",
+        "missing-baseline-trigger",
+        "missing-version-trigger",
         "changed-column",
         "extra-object",
         "changed-constraints",
