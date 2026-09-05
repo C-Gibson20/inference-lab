@@ -43,6 +43,11 @@ from inference_lab.ingest.errors import (
     ParserFailureStage,
     ParserFailureUnitKind,
 )
+from inference_lab.ingest.hashing import (
+    LocalStableReadFileSystem,
+    StableReadFileSystem,
+    hash_source_candidate,
+)
 from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
 from inference_lab.ingest.parser import (
@@ -103,6 +108,7 @@ __all__ = [
     "FileIdentityHint",
     "FileStatEvidence",
     "HiddenEntryPolicy",
+    "LocalStableReadFileSystem",
     "LocalTraversalFileSystem",
     "NestedMountPolicy",
     "NormalisedText",
@@ -124,6 +130,7 @@ __all__ = [
     "SourceSpan",
     "SourceSupport",
     "StableFileEvidence",
+    "StableReadFileSystem",
     "StableReadPolicy",
     "StructuralBlock",
     "StructuralBlockKind",
@@ -138,6 +145,7 @@ __all__ = [
     "decode_source",
     "discovery_failure_policy",
     "generate_source_span_id",
+    "hash_source_candidate",
     "inventory_local_sources",
     "normalise_source_text",
     "parsed_document_payload",
