@@ -258,6 +258,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "ParseFailureUnitKind",
         "ParseOutcome",
         "ParseStatus",
+        "ParsedRepresentation",
         "ProducerIdentity",
         "RepositoryClosedError",
         "RepositoryUnavailableError",
@@ -271,8 +272,10 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "StorageTransactionError",
         "StructuralBlock",
         "StructuralBlockKind",
+        "build_parsed_representation_output_digest",
         "open_metadata_repository",
         "serialise_parse_outcome",
+        "serialise_parsed_representation",
         "serialise_source_artefact",
         "validate_source_record_schema_version",
     }

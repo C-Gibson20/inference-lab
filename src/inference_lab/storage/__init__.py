@@ -24,6 +24,13 @@ from inference_lab.storage.parse_records import (
     ParseStatus,
 )
 from inference_lab.storage.parse_serialisation import serialise_parse_outcome
+from inference_lab.storage.parsed_records import (
+    ParsedRepresentation,
+    build_parsed_representation_output_digest,
+)
+from inference_lab.storage.parsed_serialisation import (
+    serialise_parsed_representation,
+)
 from inference_lab.storage.producers import ProducerIdentity
 from inference_lab.storage.protocols import (
     MetadataReader,
@@ -75,6 +82,7 @@ __all__ = [
     "ParseFailureUnitKind",
     "ParseOutcome",
     "ParseStatus",
+    "ParsedRepresentation",
     "ProducerIdentity",
     "RepositoryClosedError",
     "RepositoryUnavailableError",
@@ -88,8 +96,10 @@ __all__ = [
     "StorageTransactionError",
     "StructuralBlock",
     "StructuralBlockKind",
+    "build_parsed_representation_output_digest",
     "open_metadata_repository",
     "serialise_parse_outcome",
+    "serialise_parsed_representation",
     "serialise_source_artefact",
     "validate_source_record_schema_version",
 ]
