@@ -1,5 +1,11 @@
 """Document ingestion contracts and pipeline stages."""
 
+from inference_lab.ingest.classification import (
+    CURRENT_SOURCE_CLASSIFIER,
+    SourceClassifierRegistry,
+    SourceClassifierRule,
+    classify_source_candidate,
+)
 from inference_lab.ingest.discovery import (
     CURRENT_DISCOVERY_POLICY,
     DirectorySnapshotPolicy,
@@ -88,6 +94,7 @@ from inference_lab.ingest.versioning import (
 __all__ = [
     "CURRENT_DISCOVERY_POLICY",
     "CURRENT_PARSER_VERSION",
+    "CURRENT_SOURCE_CLASSIFIER",
     "BoundingBox",
     "DirectorySnapshotPolicy",
     "DiscoveredSource",
@@ -126,6 +133,8 @@ __all__ = [
     "ParserInputError",
     "ParserVersion",
     "SourceClassification",
+    "SourceClassifierRegistry",
+    "SourceClassifierRule",
     "SourceLocator",
     "SourceSpan",
     "SourceSupport",
@@ -142,6 +151,7 @@ __all__ = [
     "TraversalPathMetadata",
     "VerifiedSourceSnapshot",
     "canonical_path_key",
+    "classify_source_candidate",
     "decode_source",
     "discovery_failure_policy",
     "generate_source_span_id",
