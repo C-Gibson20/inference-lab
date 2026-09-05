@@ -1,5 +1,6 @@
 """Tests for metadata storage protocols."""
 
+from pathlib import Path
 from types import TracebackType
 from typing import Self
 
@@ -21,7 +22,12 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
-from inference_lab.storage import MetadataRepository, MetadataTransaction
+from inference_lab.storage import (
+    MetadataRepository,
+    MetadataTransaction,
+    SourceFileIdentityHint,
+    SourceLocatorRevision,
+)
 
 
 class StructuralTransaction:
@@ -71,6 +77,15 @@ class StructuralTransaction:
         expected_version_id: DocumentVersionId,
         new_version_id: DocumentVersionId,
     ) -> SourceObservationState:
+        raise NotImplementedError
+
+    def add_source_locator(self, revision: SourceLocatorRevision) -> None:
+        pass
+
+    def advance_source_locator(
+        self,
+        revision: SourceLocatorRevision,
+    ) -> SourceLocatorRevision:
         raise NotImplementedError
 
     def add_external_identifier_assertions(
@@ -144,6 +159,34 @@ class StructuralTransaction:
     ) -> tuple[SourceObservationState, ...]:
         return ()
 
+    def get_source_locator(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> SourceLocatorRevision | None:
+        return None
+
+    def list_source_locator_history(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        return ()
+
+    def find_source_locator_by_path(
+        self,
+        corpus_id: CorpusId,
+        path: Path,
+    ) -> SourceLocatorRevision | None:
+        return None
+
+    def find_source_locators_by_identity_hint(
+        self,
+        corpus_id: CorpusId,
+        identity_hint: SourceFileIdentityHint,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        return ()
+
     def list_external_identifier_assertions(
         self, corpus_id: CorpusId, document_version_id: DocumentVersionId
     ) -> tuple[ExternalIdentifierAssertion, ...]:
@@ -213,6 +256,12 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_source_observation = StructuralTransaction.get_source_observation
         list_source_observation_history = (
             StructuralTransaction.list_source_observation_history
+        )
+        get_source_locator = StructuralTransaction.get_source_locator
+        list_source_locator_history = StructuralTransaction.list_source_locator_history
+        find_source_locator_by_path = StructuralTransaction.find_source_locator_by_path
+        find_source_locators_by_identity_hint = (
+            StructuralTransaction.find_source_locators_by_identity_hint
         )
         list_external_identifier_assertions = (
             StructuralTransaction.list_external_identifier_assertions

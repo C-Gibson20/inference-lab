@@ -46,6 +46,12 @@ from inference_lab.storage._sqlite_inspection import (
     validate_database_schema,
 )
 from inference_lab.storage._sqlite_lifecycle import open_sqlite_database
+from inference_lab.storage._sqlite_locator_continuity import (
+    find_source_locator_by_path,
+    find_source_locators_by_identity_hint,
+    get_source_locator,
+    list_source_locator_history,
+)
 from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_migration_execution import AppliedAtFactory
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
@@ -70,6 +76,10 @@ from inference_lab.storage.errors import (
     RepositoryClosedError,
     RepositoryUnavailableError,
     StorageTransactionError,
+)
+from inference_lab.storage.locator_continuity import (
+    SourceFileIdentityHint,
+    SourceLocatorRevision,
 )
 
 
@@ -226,6 +236,54 @@ class SQLiteMetadataRepository:
             self._connection_or_raise(),
             corpus_id,
             source_observation_id,
+        )
+
+    def get_source_locator(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> SourceLocatorRevision | None:
+        """Return an observed source's current private locator, or ``None``."""
+        return get_source_locator(
+            self._connection_or_raise(),
+            corpus_id,
+            source_observation_id,
+        )
+
+    def list_source_locator_history(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        """Return an observed source's append-only private locator history."""
+        return list_source_locator_history(
+            self._connection_or_raise(),
+            corpus_id,
+            source_observation_id,
+        )
+
+    def find_source_locator_by_path(
+        self,
+        corpus_id: CorpusId,
+        path: Path,
+    ) -> SourceLocatorRevision | None:
+        """Return an exact current private-locator match within one corpus."""
+        return find_source_locator_by_path(
+            self._connection_or_raise(),
+            corpus_id,
+            path,
+        )
+
+    def find_source_locators_by_identity_hint(
+        self,
+        corpus_id: CorpusId,
+        identity_hint: SourceFileIdentityHint,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        """Return current filesystem-hint candidates within one corpus."""
+        return find_source_locators_by_identity_hint(
+            self._connection_or_raise(),
+            corpus_id,
+            identity_hint,
         )
 
     def list_external_identifier_assertions(

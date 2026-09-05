@@ -19,6 +19,14 @@ def _validate_sqlite_integer(value: object, *, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a non-negative SQLite integer.")
 
 
+def _validate_source_locator_path(path: object) -> None:
+    """Validate one absolute normalised deployment-local path."""
+    if not isinstance(path, Path):
+        raise TypeError("path must be a Path.")
+    if not is_local_path_shape(path) or not path.is_absolute() or ".." in path.parts:
+        raise ValueError("path must be an absolute normalised local path.")
+
+
 @dataclass(frozen=True, slots=True)
 class SourceFileIdentityHint:
     """Carry non-authoritative filesystem identity for persisted continuity."""
@@ -92,14 +100,7 @@ class SourceLocatorRevision:
         )
         if self.locator_revision == 0:
             raise ValueError("locator_revision must be greater than zero.")
-        if not isinstance(self.path, Path):
-            raise TypeError("path must be a Path.")
-        if (
-            not is_local_path_shape(self.path)
-            or not self.path.is_absolute()
-            or ".." in self.path.parts
-        ):
-            raise ValueError("path must be an absolute normalised local path.")
+        _validate_source_locator_path(self.path)
         if self.identity_hint is not None and not isinstance(
             self.identity_hint,
             SourceFileIdentityHint,

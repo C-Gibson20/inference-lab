@@ -1,5 +1,6 @@
 """Storage-neutral contracts for persistent corpus identity metadata."""
 
+from pathlib import Path
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
@@ -19,6 +20,10 @@ from inference_lab.provenance import (
     ExternalIdentifierAssertion,
     SourceObservationId,
     SourceObservationState,
+)
+from inference_lab.storage.locator_continuity import (
+    SourceFileIdentityHint,
+    SourceLocatorRevision,
 )
 
 
@@ -94,6 +99,38 @@ class MetadataReader(Protocol):
         self, corpus_id: CorpusId, source_observation_id: SourceObservationId
     ) -> tuple[SourceObservationState, ...]:
         """Return an observed source's append-only state history."""
+        ...
+
+    def get_source_locator(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> SourceLocatorRevision | None:
+        """Return an observed source's current private locator, or ``None``."""
+        ...
+
+    def list_source_locator_history(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        """Return an observed source's append-only private locator history."""
+        ...
+
+    def find_source_locator_by_path(
+        self,
+        corpus_id: CorpusId,
+        path: Path,
+    ) -> SourceLocatorRevision | None:
+        """Return an exact current private-locator match within one corpus."""
+        ...
+
+    def find_source_locators_by_identity_hint(
+        self,
+        corpus_id: CorpusId,
+        identity_hint: SourceFileIdentityHint,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        """Return current filesystem-hint candidates within one corpus."""
         ...
 
     def list_external_identifier_assertions(
@@ -174,6 +211,17 @@ class MetadataWriter(Protocol):
         new_version_id: DocumentVersionId,
     ) -> SourceObservationState:
         """Atomically advance an observed source from its expected version."""
+        ...
+
+    def add_source_locator(self, revision: SourceLocatorRevision) -> None:
+        """Create a private locator at revision one or accept exact replay."""
+        ...
+
+    def advance_source_locator(
+        self,
+        revision: SourceLocatorRevision,
+    ) -> SourceLocatorRevision:
+        """Append and select the next locator revision or accept exact replay."""
         ...
 
     def add_external_identifier_assertions(

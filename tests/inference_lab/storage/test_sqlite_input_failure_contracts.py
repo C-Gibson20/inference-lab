@@ -23,6 +23,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage import SourceFileIdentityHint, SourceLocatorRevision
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from inference_lab.storage._sqlite_transaction import SQLiteMetadataTransaction
 
@@ -140,6 +141,67 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
             _CORPUS_ID, _invalid(SourceObservationId)
         ),
         "source_observation_id",
+    ),
+    (
+        "locator-current-corpus",
+        lambda owner: owner.get_source_locator(_invalid(CorpusId), _SOURCE_ID),
+        "corpus_id",
+    ),
+    (
+        "locator-current-source",
+        lambda owner: owner.get_source_locator(
+            _CORPUS_ID,
+            _invalid(SourceObservationId),
+        ),
+        "source_observation_id",
+    ),
+    (
+        "locator-history-corpus",
+        lambda owner: owner.list_source_locator_history(
+            _invalid(CorpusId),
+            _SOURCE_ID,
+        ),
+        "corpus_id",
+    ),
+    (
+        "locator-history-source",
+        lambda owner: owner.list_source_locator_history(
+            _CORPUS_ID,
+            _invalid(SourceObservationId),
+        ),
+        "source_observation_id",
+    ),
+    (
+        "locator-path-corpus",
+        lambda owner: owner.find_source_locator_by_path(
+            _invalid(CorpusId),
+            Path("/private/source.txt"),
+        ),
+        "corpus_id",
+    ),
+    (
+        "locator-path-value",
+        lambda owner: owner.find_source_locator_by_path(
+            _CORPUS_ID,
+            _invalid(Path),
+        ),
+        "path",
+    ),
+    (
+        "locator-hint-corpus",
+        lambda owner: owner.find_source_locators_by_identity_hint(
+            _invalid(CorpusId),
+            SourceFileIdentityHint(1, 2),
+        ),
+        "corpus_id",
+    ),
+    (
+        "locator-hint-value",
+        lambda owner: owner.find_source_locators_by_identity_hint(
+            _CORPUS_ID,
+            _invalid(SourceFileIdentityHint),
+        ),
+        "identity_hint",
     ),
     (
         "assertions-corpus",
@@ -335,6 +397,20 @@ _WRITE_FAILURE_CASES: tuple[tuple[str, _WriteOperation, str], ...] = (
             new_version_id=_invalid(DocumentVersionId),
         ),
         "new_version_id",
+    ),
+    (
+        "locator-add",
+        lambda transaction: transaction.add_source_locator(
+            _invalid(SourceLocatorRevision)
+        ),
+        "revision",
+    ),
+    (
+        "locator-advance",
+        lambda transaction: transaction.advance_source_locator(
+            _invalid(SourceLocatorRevision)
+        ),
+        "revision",
     ),
     (
         "assertion-corpus",
