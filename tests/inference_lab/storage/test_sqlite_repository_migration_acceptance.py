@@ -149,9 +149,9 @@ def test_current_baseline_persists_complete_multi_corpus_graph(
     database_path = tmp_path / "metadata.sqlite3"
     _create_complete_baseline(database_path)
 
-    reopened = SQLiteMetadataRepository.open(database_path)
+    reopened = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
     try:
-        assert reopened.schema_inspection.current_revision == 1
+        assert reopened.schema_inspection.current_revision == 2
         assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
             _CORPUS_ID, "Primary corpus"
         )
