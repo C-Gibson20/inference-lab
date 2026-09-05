@@ -143,13 +143,16 @@ def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
 
 
-def test_current_baseline_persists_complete_multi_corpus_graph(
+def test_revision_one_baseline_persists_complete_multi_corpus_graph(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _create_complete_baseline(database_path)
 
-    reopened = SQLiteMetadataRepository.open(database_path)
+    reopened = SQLiteMetadataRepository.open(
+        database_path,
+        migrations=(MIGRATIONS[0],),
+    )
     try:
         assert reopened.schema_inspection.current_revision == 1
         assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(

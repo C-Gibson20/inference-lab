@@ -14,6 +14,11 @@ from inference_lab.storage.errors import (
     StorageTransactionError,
 )
 from inference_lab.storage.factory import open_metadata_repository
+from inference_lab.storage.locator_continuity import (
+    SourceFileIdentityHint,
+    SourceFingerprint,
+    SourceLocatorRevision,
+)
 from inference_lab.storage.protocols import (
     MetadataReader,
     MetadataRepository,
@@ -31,6 +36,9 @@ __all__ = [
     "MigrationRequiredError",
     "RepositoryClosedError",
     "RepositoryUnavailableError",
+    "SourceFileIdentityHint",
+    "SourceFingerprint",
+    "SourceLocatorRevision",
     "StorageConcurrencyError",
     "StorageConflictError",
     "StorageError",

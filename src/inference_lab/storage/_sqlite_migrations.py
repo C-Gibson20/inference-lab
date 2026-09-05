@@ -396,6 +396,109 @@ BEGIN
 END""",
 )
 
+_SOURCE_LOCATOR_CONTINUITY_STATEMENTS: Final = (
+    """CREATE UNIQUE INDEX source_observations_owner_key_idx
+ON source_observations (corpus_id, source_observation_id)""",
+    """CREATE TABLE source_locator_revisions (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    source_observation_id TEXT NOT NULL,
+    locator_revision INTEGER NOT NULL CHECK (locator_revision >= 1),
+    locator_path TEXT NOT NULL
+        CHECK (
+            length(locator_path) > 0
+            AND instr(locator_path, char(0)) = 0
+        ),
+    device_id INTEGER CHECK (device_id >= 0),
+    file_id INTEGER CHECK (file_id >= 0),
+    content_hash_algorithm TEXT NOT NULL
+        CHECK (content_hash_algorithm = 'sha256'),
+    content_hash_digest TEXT NOT NULL
+        CHECK (
+            length(content_hash_digest) = 64
+            AND content_hash_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+    byte_count INTEGER NOT NULL CHECK (byte_count >= 0),
+    modified_time_ns INTEGER NOT NULL CHECK (modified_time_ns >= 0),
+    FOREIGN KEY (corpus_id, source_observation_id)
+        REFERENCES source_observations (corpus_id, source_observation_id),
+    CHECK (
+        (device_id IS NULL AND file_id IS NULL)
+        OR (device_id IS NOT NULL AND file_id IS NOT NULL)
+    ),
+    UNIQUE (source_observation_id, locator_revision),
+    UNIQUE (
+        corpus_id,
+        source_observation_id,
+        locator_revision,
+        locator_path
+    )
+) STRICT""",
+    """CREATE TRIGGER source_locator_revisions_sequential_insert
+BEFORE INSERT ON source_locator_revisions
+WHEN NEW.locator_revision != coalesce(
+    (
+        SELECT max(existing.locator_revision) + 1
+        FROM source_locator_revisions AS existing
+        WHERE existing.source_observation_id = NEW.source_observation_id
+    ),
+    1
+)
+BEGIN
+    SELECT RAISE(ABORT, 'source locator revisions must be sequential');
+END""",
+    """CREATE TRIGGER source_locator_revisions_no_update
+BEFORE UPDATE ON source_locator_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'source locator revisions are append-only');
+END""",
+    """CREATE TRIGGER source_locator_revisions_no_delete
+BEFORE DELETE ON source_locator_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'source locator revisions are append-only');
+END""",
+    """CREATE INDEX source_locator_revisions_path_idx
+ON source_locator_revisions (
+    corpus_id,
+    locator_path,
+    source_observation_id,
+    locator_revision
+)""",
+    """CREATE INDEX source_locator_revisions_hint_idx
+ON source_locator_revisions (
+    corpus_id,
+    device_id,
+    file_id,
+    source_observation_id,
+    locator_revision
+)
+WHERE device_id IS NOT NULL""",
+    """CREATE TABLE current_source_locators (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    source_observation_id TEXT NOT NULL UNIQUE,
+    locator_revision INTEGER NOT NULL CHECK (locator_revision >= 1),
+    locator_path TEXT NOT NULL
+        CHECK (
+            length(locator_path) > 0
+            AND instr(locator_path, char(0)) = 0
+        ),
+    FOREIGN KEY (
+        corpus_id,
+        source_observation_id,
+        locator_revision,
+        locator_path
+    ) REFERENCES source_locator_revisions (
+        corpus_id,
+        source_observation_id,
+        locator_revision,
+        locator_path
+    ),
+    UNIQUE (corpus_id, locator_path),
+    UNIQUE (corpus_id, source_observation_id)
+) STRICT""",
+)
+
 _BASELINE_STATEMENTS: Final = (
     *_CORE_SCHEMA_STATEMENTS,
     *_CORPUS_MEMBERSHIP_STATEMENTS,
@@ -408,6 +511,11 @@ MIGRATIONS: Final = (
         revision=1,
         migration_id="multi_corpus_metadata_baseline",
         statements=_BASELINE_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=2,
+        migration_id="source_locator_continuity",
+        statements=_SOURCE_LOCATOR_CONTINUITY_STATEMENTS,
     ),
 )
 
