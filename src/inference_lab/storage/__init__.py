@@ -14,6 +14,17 @@ from inference_lab.storage.errors import (
     StorageTransactionError,
 )
 from inference_lab.storage.factory import open_metadata_repository
+from inference_lab.storage.parse_records import (
+    ParseFailureCategory,
+    ParseFailureRecord,
+    ParseFailureSeverity,
+    ParseFailureStage,
+    ParseFailureUnitKind,
+    ParseOutcome,
+    ParseStatus,
+)
+from inference_lab.storage.parse_serialisation import serialise_parse_outcome
+from inference_lab.storage.producers import ProducerIdentity
 from inference_lab.storage.protocols import (
     MetadataReader,
     MetadataRepository,
@@ -38,6 +49,14 @@ __all__ = [
     "MetadataTransaction",
     "MetadataWriter",
     "MigrationRequiredError",
+    "ParseFailureCategory",
+    "ParseFailureRecord",
+    "ParseFailureSeverity",
+    "ParseFailureStage",
+    "ParseFailureUnitKind",
+    "ParseOutcome",
+    "ParseStatus",
+    "ProducerIdentity",
     "RepositoryClosedError",
     "RepositoryUnavailableError",
     "SourceArtefact",
@@ -48,6 +67,7 @@ __all__ = [
     "StorageMigrationError",
     "StorageTransactionError",
     "open_metadata_repository",
+    "serialise_parse_outcome",
     "serialise_source_artefact",
     "validate_source_record_schema_version",
 ]
