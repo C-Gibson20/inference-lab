@@ -1,4 +1,4 @@
-"""Tests for corpus-authorised SQLite source-artefact metadata writes."""
+"""Tests for corpus-authorised SQLite source-artefact persistence."""
 
 import sqlite3
 from dataclasses import replace
@@ -18,11 +18,17 @@ from inference_lab.provenance import (
     DocumentVersionId,
     HashAlgorithm,
 )
+from inference_lab.settings import StorageConfig
 from inference_lab.storage import (
     CorruptStorageError,
+    MetadataRepository,
+    RepositoryClosedError,
+    RepositoryUnavailableError,
     SourceArtefact,
     StorageConflictError,
+    open_metadata_repository,
 )
+from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 from .fixtures import open_repository as _open_repository  # noqa: TID252
@@ -58,7 +64,7 @@ _PRIVATE_DATABASE_PAYLOAD = "private-source-artefact-trigger-payload"
 
 
 def _add_catalogue(
-    repository: SQLiteMetadataRepository,
+    repository: MetadataRepository,
     *,
     include_second_membership: bool = False,
 ) -> None:
@@ -125,6 +131,200 @@ def test_source_artefact_metadata_commits_and_survives_restart(
             _ARTEFACT.storage_key,
         )
     ]
+
+
+def test_factory_returns_corpus_scoped_metadata_and_verified_bytes(
+    tmp_path: Path,
+) -> None:
+    config = StorageConfig(
+        index_dir=tmp_path / "indexes",
+        metadata_db_path=tmp_path / "metadata.sqlite3",
+        source_dir=tmp_path / "source-data",
+    )
+    ManagedSourceBlobStore(config.source_dir).write_chunks(
+        _ARTEFACT,
+        (SOURCE_BYTES,),
+        max_source_bytes=len(SOURCE_BYTES),
+    )
+    first = open_metadata_repository(
+        config.metadata_db_path,
+        source_dir=config.source_dir,
+        apply_migrations=True,
+    )
+    _add_catalogue(first)
+    with first.transaction() as transaction:
+        transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
+    first.close()
+
+    reopened = open_metadata_repository(
+        config.metadata_db_path,
+        source_dir=config.source_dir,
+    )
+    try:
+        assert (
+            reopened.get_source_artefact(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == _ARTEFACT
+        )
+        assert (
+            reopened.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == SOURCE_BYTES
+        )
+    finally:
+        reopened.close()
+
+
+def test_absent_and_non_member_reads_do_not_touch_managed_bytes(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "missing-source-root"
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+        source_dir=source_dir,
+    )
+    _add_catalogue(repository)
+    with repository.transaction() as transaction:
+        transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
+    try:
+        assert (
+            repository.get_source_artefact(
+                _SECOND_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            is None
+        )
+        assert (
+            repository.read_source_bytes(
+                _SECOND_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            is None
+        )
+        assert (
+            repository.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DocumentVersionId("30000000-0000-4000-8000-000000000099"),
+            )
+            is None
+        )
+    finally:
+        repository.close()
+
+
+def test_reachable_missing_or_modified_blob_fails_closed(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source-data"
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+        source_dir=source_dir,
+    )
+    _add_catalogue(repository)
+    with repository.transaction() as transaction:
+        transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
+    try:
+        with pytest.raises(CorruptStorageError):
+            repository.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+
+        ManagedSourceBlobStore(source_dir).write_chunks(
+            _ARTEFACT,
+            (SOURCE_BYTES,),
+            max_source_bytes=len(SOURCE_BYTES),
+        )
+        blob_path = source_dir / _ARTEFACT.storage_key
+        blob_path.chmod(0o600)
+        blob_path.write_bytes(b"x" * len(SOURCE_BYTES))
+        with pytest.raises(CorruptStorageError):
+            repository.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+    finally:
+        repository.close()
+
+
+def test_metadata_read_does_not_require_a_configured_blob_store(
+    tmp_path: Path,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    _add_catalogue(repository)
+    with repository.transaction() as transaction:
+        transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
+    try:
+        assert (
+            repository.get_source_artefact(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == _ARTEFACT
+        )
+        with pytest.raises(RepositoryUnavailableError):
+            repository.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+    finally:
+        repository.close()
+
+
+def test_transaction_reads_its_staged_source_metadata_and_bytes(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source-data"
+    ManagedSourceBlobStore(source_dir).write_chunks(
+        _ARTEFACT,
+        (SOURCE_BYTES,),
+        max_source_bytes=len(SOURCE_BYTES),
+    )
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+        source_dir=source_dir,
+    )
+    _add_catalogue(repository)
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
+            assert (
+                transaction.get_source_artefact(
+                    _FIRST_CORPUS.corpus_id,
+                    DOCUMENT_VERSION_ID,
+                )
+                == _ARTEFACT
+            )
+            assert (
+                transaction.read_source_bytes(
+                    _FIRST_CORPUS.corpus_id,
+                    DOCUMENT_VERSION_ID,
+                )
+                == SOURCE_BYTES
+            )
+    finally:
+        repository.close()
+
+
+def test_source_reads_reject_repository_use_after_close(tmp_path: Path) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    repository.close()
+
+    with pytest.raises(RepositoryClosedError):
+        repository.get_source_artefact(
+            _FIRST_CORPUS.corpus_id,
+            DOCUMENT_VERSION_ID,
+        )
+    with pytest.raises(RepositoryClosedError):
+        repository.read_source_bytes(
+            _FIRST_CORPUS.corpus_id,
+            DOCUMENT_VERSION_ID,
+        )
 
 
 def test_source_artefact_reuse_requires_explicit_membership(

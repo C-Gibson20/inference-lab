@@ -96,6 +96,28 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
         "document_id",
     ),
     (
+        "source-artefact-corpus",
+        lambda owner: owner.get_source_artefact(_invalid(CorpusId), _VERSION_ID),
+        "corpus_id",
+    ),
+    (
+        "source-artefact-version",
+        lambda owner: owner.get_source_artefact(
+            _CORPUS_ID, _invalid(DocumentVersionId)
+        ),
+        "document_version_id",
+    ),
+    (
+        "source-bytes-corpus",
+        lambda owner: owner.read_source_bytes(_invalid(CorpusId), _VERSION_ID),
+        "corpus_id",
+    ),
+    (
+        "source-bytes-version",
+        lambda owner: owner.read_source_bytes(_CORPUS_ID, _invalid(DocumentVersionId)),
+        "document_version_id",
+    ),
+    (
         "find-hash-corpus",
         lambda owner: owner.find_document_versions_by_content_hash(
             _invalid(CorpusId), _invalid(ContentHash)

@@ -71,6 +71,22 @@ class MetadataReader(Protocol):
         """Return a document's versions in canonical identifier order."""
         ...
 
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return corpus-visible managed-source metadata, or ``None``."""
+        ...
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified corpus-visible source bytes, or ``None``."""
+        ...
+
     def find_document_versions_by_content_hash(
         self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:

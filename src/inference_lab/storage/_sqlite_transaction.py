@@ -59,7 +59,11 @@ from inference_lab.storage._sqlite_relationships import (
     list_family_memberships_by_document_version,
     list_family_memberships_by_family,
 )
-from inference_lab.storage._sqlite_source_artefacts import add_source_artefact
+from inference_lab.storage._sqlite_source_artefacts import (
+    add_source_artefact,
+    get_source_artefact,
+    read_source_bytes,
+)
 from inference_lab.storage._sqlite_versions import (
     add_document_version,
     find_document_versions_by_content_hash,
@@ -234,6 +238,31 @@ class SQLiteMetadataTransaction:
     ) -> tuple[DocumentVersion, ...]:
         """Return a document's versions within this transaction."""
         return self._execute(list_document_versions, document_id)
+
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return corpus-visible managed-source metadata in this transaction."""
+        return self._execute(
+            get_source_artefact,
+            corpus_id,
+            document_version_id,
+        )
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified corpus-visible bytes in this transaction."""
+        return self._execute(
+            read_source_bytes,
+            self._repository._source_blob_store,
+            corpus_id,
+            document_version_id,
+        )
 
     def find_document_versions_by_content_hash(
         self,

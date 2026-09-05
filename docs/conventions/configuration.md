@@ -101,9 +101,10 @@ restart. Tests and other controlled callers may clear the cache explicitly.
 
 Application composition opens metadata through
 `inference_lab.storage.open_metadata_repository()`, passing the validated
-`settings.storage.metadata_db_path`. Schema creation and supported forward
-migrations occur only when the caller explicitly sets `apply_migrations=True`;
-the default open policy is non-mutating and rejects a missing or older schema.
+`settings.storage.metadata_db_path` and `settings.storage.source_dir`. Schema
+creation and supported forward migrations occur only when the caller explicitly
+sets `apply_migrations=True`; the default open policy is non-mutating and rejects
+a missing or older schema.
 
 `storage.source_dir` is the deployment-owned root for managed copies of
 original source files. It must be separate from `storage.index_dir` and the

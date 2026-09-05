@@ -133,6 +133,20 @@ class StructuralTransaction:
     ) -> tuple[DocumentVersion, ...]:
         return ()
 
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        return None
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        return None
+
     def find_document_versions_by_content_hash(
         self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:
@@ -215,6 +229,8 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_document = StructuralTransaction.get_document
         get_document_version = StructuralTransaction.get_document_version
         list_document_versions = StructuralTransaction.list_document_versions
+        get_source_artefact = StructuralTransaction.get_source_artefact
+        read_source_bytes = StructuralTransaction.read_source_bytes
         find_document_versions_by_content_hash = (
             StructuralTransaction.find_document_versions_by_content_hash
         )

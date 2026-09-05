@@ -24,6 +24,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     translate_sqlite_error,
@@ -59,6 +60,10 @@ from inference_lab.storage._sqlite_relationships import (
     list_family_memberships_by_document_version,
     list_family_memberships_by_family,
 )
+from inference_lab.storage._sqlite_source_artefacts import (
+    get_source_artefact,
+    read_source_bytes,
+)
 from inference_lab.storage._sqlite_transaction import SQLiteMetadataTransaction
 from inference_lab.storage._sqlite_versions import (
     find_document_versions_by_content_hash,
@@ -71,6 +76,7 @@ from inference_lab.storage.errors import (
     RepositoryUnavailableError,
     StorageTransactionError,
 )
+from inference_lab.storage.source_records import SourceArtefact
 
 
 class SQLiteMetadataRepository:
@@ -80,13 +86,22 @@ class SQLiteMetadataRepository:
         self,
         connection: sqlite3.Connection,
         migrations: tuple[MigrationDefinition, ...],
+        *,
+        source_blob_store: ManagedSourceBlobStore | None = None,
     ) -> None:
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("connection must be a sqlite3.Connection.")
         if not isinstance(migrations, tuple):
             raise TypeError("migrations must be a tuple.")
+        if source_blob_store is not None and not isinstance(
+            source_blob_store, ManagedSourceBlobStore
+        ):
+            raise TypeError(
+                "source_blob_store must be a ManagedSourceBlobStore or None."
+            )
         self._connection: sqlite3.Connection | None = connection
         self._migrations = migrations
+        self._source_blob_store = source_blob_store
         self._transaction_active = False
 
     @classmethod
@@ -98,8 +113,12 @@ class SQLiteMetadataRepository:
         busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
         migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
         applied_at_factory: AppliedAtFactory = utc_now,
+        source_dir: Path | None = None,
     ) -> Self:
         """Open a validated repository under the explicit schema policy."""
+        source_blob_store = (
+            ManagedSourceBlobStore(source_dir) if source_dir is not None else None
+        )
         connection = open_sqlite_database(
             path,
             apply_migrations=apply_migrations,
@@ -107,7 +126,11 @@ class SQLiteMetadataRepository:
             migrations=migrations,
             applied_at_factory=applied_at_factory,
         )
-        return cls(connection, migrations)
+        return cls(
+            connection,
+            migrations,
+            source_blob_store=source_blob_store,
+        )
 
     @property
     def is_closed(self) -> bool:
@@ -179,6 +202,31 @@ class SQLiteMetadataRepository:
     ) -> tuple[DocumentVersion, ...]:
         """Return a document's versions in canonical identifier order."""
         return list_document_versions(self._connection_or_raise(), document_id)
+
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return corpus-visible managed-source metadata, or ``None``."""
+        return get_source_artefact(
+            self._connection_or_raise(),
+            corpus_id,
+            document_version_id,
+        )
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return fully verified corpus-visible source bytes, or ``None``."""
+        return read_source_bytes(
+            self._connection_or_raise(),
+            self._source_blob_store,
+            corpus_id,
+            document_version_id,
+        )
 
     def find_document_versions_by_content_hash(
         self,
