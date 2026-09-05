@@ -72,10 +72,10 @@ class StorageTransactionError(StorageError):
 
 
 class CorruptStorageError(StorageError):
-    """Raised when persisted metadata cannot be reconstructed safely."""
+    """Raised when persisted state cannot be reconstructed safely."""
 
     category = StorageErrorCategory.CORRUPT_STATE
-    default_message = "The metadata repository contains invalid state."
+    default_message = "Persistent storage contains invalid state."
 
 
 class StorageMigrationError(StorageError):
