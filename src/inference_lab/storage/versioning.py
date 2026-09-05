@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final, Self
 
@@ -55,6 +56,19 @@ def _validate_sha256_digest(value: object, field_name: str) -> str:
         raise InvalidCorpusVersionContractError(
             f"{field_name} must be 64 lowercase hexadecimal characters."
         )
+    return value
+
+
+def _validate_utc_datetime(value: object, field_name: str) -> datetime:
+    """Return a timezone-aware datetime whose offset is UTC."""
+    if not isinstance(value, datetime):
+        raise TypeError(f"{field_name} must be a datetime.")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise InvalidCorpusVersionContractError(
+            f"{field_name} must be timezone-aware UTC."
+        )
+    if value.utcoffset() != timedelta(0):
+        raise InvalidCorpusVersionContractError(f"{field_name} must be in UTC.")
     return value
 
 
@@ -299,3 +313,165 @@ class CorpusVersionManifest:
         canonical_required = _validate_component_kinds(required_component_kinds)
         actual = tuple(item.component_kind for item in self.component_generations)
         return actual == canonical_required
+
+
+class CorpusUpdateState(StrEnum):
+    """Durable lifecycle states for one proposed corpus version."""
+
+    PREPARING = "preparing"
+    READY = "ready"
+    COMMITTED = "committed"
+    ABORTED = "aborted"
+
+
+@dataclass(frozen=True, slots=True)
+class CorpusUpdate:
+    """Describe one durable proposal to advance a selected corpus."""
+
+    corpus_id: CorpusId
+    corpus_version: CorpusVersionId
+    expected_corpus_version: CorpusVersionId | None
+    required_component_kinds: tuple[ComponentKind, ...]
+    state: CorpusUpdateState
+    created_at: datetime
+    manifest_digest: str | None = None
+    restores_corpus_version: CorpusVersionId | None = None
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate proposal ownership, lifecycle, and sealed-state fields."""
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(self.corpus_version, CorpusVersionId):
+            raise TypeError("corpus_version must be a CorpusVersionId.")
+        if self.expected_corpus_version is not None and not isinstance(
+            self.expected_corpus_version,
+            CorpusVersionId,
+        ):
+            raise TypeError(
+                "expected_corpus_version must be a CorpusVersionId or None."
+            )
+        if self.expected_corpus_version == self.corpus_version:
+            raise InvalidCorpusVersionContractError(
+                "a corpus update cannot propose its expected active version."
+            )
+        canonical_kinds = _validate_component_kinds(self.required_component_kinds)
+        object.__setattr__(self, "required_component_kinds", canonical_kinds)
+        if not isinstance(self.state, CorpusUpdateState):
+            raise TypeError("state must be a CorpusUpdateState.")
+        _validate_utc_datetime(self.created_at, "created_at")
+        self._validate_manifest_digest()
+        self._validate_restore_target()
+
+    def _validate_manifest_digest(self) -> None:
+        """Require a sealed digest exactly when lifecycle state permits one."""
+        if self.manifest_digest is not None:
+            _validate_sha256_digest(self.manifest_digest, "manifest_digest")
+        if self.state in {CorpusUpdateState.READY, CorpusUpdateState.COMMITTED}:
+            if self.manifest_digest is None:
+                raise InvalidCorpusVersionContractError(
+                    "ready and committed updates require a manifest_digest."
+                )
+        elif self.state is CorpusUpdateState.PREPARING:
+            if self.manifest_digest is not None:
+                raise InvalidCorpusVersionContractError(
+                    "a preparing update cannot have a manifest_digest."
+                )
+
+    def _validate_restore_target(self) -> None:
+        """Validate the optional rollback publication audit target."""
+        if self.restores_corpus_version is not None and not isinstance(
+            self.restores_corpus_version,
+            CorpusVersionId,
+        ):
+            raise TypeError(
+                "restores_corpus_version must be a CorpusVersionId or None."
+            )
+        if self.restores_corpus_version == self.corpus_version:
+            raise InvalidCorpusVersionContractError(
+                "an update cannot restore its own proposed version."
+            )
+        if (
+            self.restores_corpus_version is not None
+            and self.expected_corpus_version is None
+        ):
+            raise InvalidCorpusVersionContractError(
+                "a rollback update requires an expected active version."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CorpusVersion:
+    """Describe one immutable committed snapshot owned by a corpus."""
+
+    corpus_id: CorpusId
+    corpus_version: CorpusVersionId
+    sequence: int
+    parent_corpus_version: CorpusVersionId | None
+    manifest_digest: str
+    created_at: datetime
+    restores_corpus_version: CorpusVersionId | None = None
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate local version identity, sequence, and history invariants."""
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(self.corpus_version, CorpusVersionId):
+            raise TypeError("corpus_version must be a CorpusVersionId.")
+        if not isinstance(self.sequence, int) or isinstance(self.sequence, bool):
+            raise TypeError("sequence must be an integer.")
+        if self.sequence < 1:
+            raise InvalidCorpusVersionContractError("sequence must be at least one.")
+        if self.parent_corpus_version is not None and not isinstance(
+            self.parent_corpus_version,
+            CorpusVersionId,
+        ):
+            raise TypeError("parent_corpus_version must be a CorpusVersionId or None.")
+        if self.sequence == 1 and self.parent_corpus_version is not None:
+            raise InvalidCorpusVersionContractError(
+                "the first corpus version cannot have a parent."
+            )
+        if self.sequence > 1 and self.parent_corpus_version is None:
+            raise InvalidCorpusVersionContractError(
+                "a later corpus version requires a parent."
+            )
+        if self.parent_corpus_version == self.corpus_version:
+            raise InvalidCorpusVersionContractError(
+                "a corpus version cannot be its own parent."
+            )
+        _validate_sha256_digest(self.manifest_digest, "manifest_digest")
+        _validate_utc_datetime(self.created_at, "created_at")
+        self._validate_restore_target()
+
+    def _validate_restore_target(self) -> None:
+        """Validate the optional historical version restored by publication."""
+        if self.restores_corpus_version is not None and not isinstance(
+            self.restores_corpus_version,
+            CorpusVersionId,
+        ):
+            raise TypeError(
+                "restores_corpus_version must be a CorpusVersionId or None."
+            )
+        if self.restores_corpus_version == self.corpus_version:
+            raise InvalidCorpusVersionContractError(
+                "a corpus version cannot restore itself."
+            )
+        if self.sequence == 1 and self.restores_corpus_version is not None:
+            raise InvalidCorpusVersionContractError(
+                "the first corpus version cannot be a rollback publication."
+            )
+
+    def matches_manifest(self, manifest: CorpusVersionManifest) -> bool:
+        """Return whether a complete manifest belongs to this version."""
+        if not isinstance(manifest, CorpusVersionManifest):
+            raise TypeError("manifest must be a CorpusVersionManifest.")
+        return (
+            manifest.corpus_id == self.corpus_id
+            and manifest.corpus_version == self.corpus_version
+            and manifest.manifest_digest == self.manifest_digest
+        )
