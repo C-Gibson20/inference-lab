@@ -235,8 +235,14 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
 
 def test_public_storage_api_contains_only_contract_boundary() -> None:
     expected_exports = {
+        "CORPUS_MANIFEST_CONTRACT_VERSION",
+        "ComponentGenerationReference",
+        "ComponentGenerationState",
+        "ComponentKind",
         "CorruptStorageError",
+        "CorpusVersionManifest",
         "IncompatibleSchemaError",
+        "InvalidCorpusVersionContractError",
         "MetadataReader",
         "MetadataRepository",
         "MetadataTransaction",

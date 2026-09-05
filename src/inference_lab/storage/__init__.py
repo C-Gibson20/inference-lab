@@ -20,10 +20,24 @@ from inference_lab.storage.protocols import (
     MetadataTransaction,
     MetadataWriter,
 )
+from inference_lab.storage.versioning import (
+    CORPUS_MANIFEST_CONTRACT_VERSION,
+    ComponentGenerationReference,
+    ComponentGenerationState,
+    ComponentKind,
+    CorpusVersionManifest,
+    InvalidCorpusVersionContractError,
+)
 
 __all__ = [
+    "CORPUS_MANIFEST_CONTRACT_VERSION",
+    "ComponentGenerationReference",
+    "ComponentGenerationState",
+    "ComponentKind",
+    "CorpusVersionManifest",
     "CorruptStorageError",
     "IncompatibleSchemaError",
+    "InvalidCorpusVersionContractError",
     "MetadataReader",
     "MetadataRepository",
     "MetadataTransaction",
