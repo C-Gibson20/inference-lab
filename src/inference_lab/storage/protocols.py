@@ -24,6 +24,8 @@ from inference_lab.provenance import (
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
+    NoCorpusChangeOutcome,
+    SealCorpusUpdateOutcome,
 )
 from inference_lab.storage.versioning import (
     ComponentGenerationReference,
@@ -230,6 +232,14 @@ class MetadataWriter(Protocol):
         validator: ComponentGenerationValidator,
     ) -> ComponentGenerationReference:
         """Validate and replace one explicitly expected generation."""
+        ...
+
+    def seal_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
+        """Seal a complete manifest or terminate an unchanged proposal."""
         ...
 
     def add_corpus_update_document_membership(

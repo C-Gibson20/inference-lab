@@ -31,6 +31,8 @@ from inference_lab.storage import (
     CorpusUpdate,
     MetadataRepository,
     MetadataTransaction,
+    NoCorpusChangeOutcome,
+    SealCorpusUpdateOutcome,
 )
 
 
@@ -93,6 +95,13 @@ class StructuralTransaction:
         *,
         validator: ComponentGenerationValidator,
     ) -> ComponentGenerationReference:
+        raise NotImplementedError
+
+    def seal_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
         raise NotImplementedError
 
     def add_corpus_update_document_membership(

@@ -27,6 +27,8 @@ from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
     CorpusVersionConflictKind,
+    NoCorpusChangeOutcome,
+    SealCorpusUpdateOutcome,
 )
 from inference_lab.storage.protocols import ComponentGenerationValidator
 from inference_lab.storage.versioning import (
@@ -35,6 +37,9 @@ from inference_lab.storage.versioning import (
     ComponentKind,
     CorpusUpdate,
     CorpusUpdateState,
+    CorpusVersion,
+    CorpusVersionManifest,
+    InvalidCorpusVersionContractError,
     canonicalise_component_kinds,
     validate_corpus_update_identity,
 )
@@ -538,6 +543,219 @@ def replace_corpus_update_component_generation(
             raise RepositoryUnavailableError()
         return ready
     except (StorageConflictError, CorruptStorageError, RepositoryUnavailableError):
+        raise
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
+def _proposed_manifest(
+    connection: sqlite3.Connection,
+    update: CorpusUpdate,
+    *,
+    persisted_seal: bool,
+) -> CorpusVersionManifest:
+    memberships = list_corpus_update_document_memberships(
+        connection,
+        update.corpus_id,
+        update.corpus_version,
+    )
+    components = list_corpus_update_component_generations(
+        connection,
+        update.corpus_id,
+        update.corpus_version,
+    )
+    try:
+        manifest = CorpusVersionManifest(
+            corpus_id=update.corpus_id,
+            corpus_version=update.corpus_version,
+            document_memberships=memberships,
+            component_generations=components,
+        )
+        complete = manifest.has_required_components(update.required_component_kinds)
+    except (TypeError, InvalidCorpusVersionContractError):
+        if persisted_seal:
+            raise CorruptStorageError() from None
+        _raise_conflict(update.corpus_id, update.corpus_version)
+    if not complete:
+        if persisted_seal:
+            raise CorruptStorageError()
+        _raise_conflict(update.corpus_id, update.corpus_version)
+    return manifest
+
+
+def _committed_version(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+) -> CorpusVersion:
+    row = connection.execute(
+        """SELECT corpus_id, corpus_version, sequence, parent_corpus_version,
+            manifest_digest, created_at, restores_corpus_version
+        FROM corpus_versions
+        WHERE corpus_id = ? AND corpus_version = ?""",
+        (corpus_id.as_str(), corpus_version.as_str()),
+    ).fetchone()
+    if row is None:
+        raise CorruptStorageError()
+    try:
+        parent = row["parent_corpus_version"]
+        restores = row["restores_corpus_version"]
+        return CorpusVersion(
+            corpus_id=CorpusId.from_str(row["corpus_id"]),
+            corpus_version=CorpusVersionId.from_str(row["corpus_version"]),
+            sequence=row["sequence"],
+            parent_corpus_version=(
+                None if parent is None else CorpusVersionId.from_str(parent)
+            ),
+            manifest_digest=row["manifest_digest"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            restores_corpus_version=(
+                None if restores is None else CorpusVersionId.from_str(restores)
+            ),
+        )
+    except (TypeError, ValueError, KeyError, IndexError):
+        raise CorruptStorageError() from None
+
+
+def _expected_version(
+    connection: sqlite3.Connection,
+    update: CorpusUpdate,
+) -> tuple[CorpusVersion, CorpusVersionManifest] | None:
+    expected = update.expected_corpus_version
+    if expected is None:
+        return None
+    version = _committed_version(connection, update.corpus_id, expected)
+    parent_update = _require_update(connection, update.corpus_id, expected)
+    if parent_update.state is not CorpusUpdateState.COMMITTED:
+        raise CorruptStorageError()
+    document_rows = connection.execute(
+        """SELECT corpus_id, document_id, document_version_id
+        FROM corpus_version_document_memberships
+        WHERE corpus_id = ? AND corpus_version = ?
+        ORDER BY document_id, document_version_id""",
+        (update.corpus_id.as_str(), expected.as_str()),
+    ).fetchall()
+    memberships = _reconstruct_document_memberships(document_rows)
+    components = list_corpus_update_component_generations(
+        connection,
+        update.corpus_id,
+        expected,
+    )
+    try:
+        manifest = CorpusVersionManifest(
+            corpus_id=update.corpus_id,
+            corpus_version=expected,
+            document_memberships=memberships,
+            component_generations=components,
+        )
+        complete = manifest.has_required_components(
+            parent_update.required_component_kinds
+        )
+    except (TypeError, InvalidCorpusVersionContractError):
+        raise CorruptStorageError() from None
+    if not complete:
+        raise CorruptStorageError()
+    if manifest.manifest_digest != version.manifest_digest:
+        raise CorruptStorageError()
+    return version, manifest
+
+
+def _store_update_state(
+    connection: sqlite3.Connection,
+    update: CorpusUpdate,
+    state: CorpusUpdateState,
+    manifest_digest: str,
+) -> CorpusUpdate:
+    connection.execute(
+        """UPDATE corpus_updates
+        SET state = ?, manifest_digest = ?
+        WHERE corpus_id = ? AND corpus_version = ? AND state = 'preparing'""",
+        (
+            state.value,
+            manifest_digest,
+            update.corpus_id.as_str(),
+            update.corpus_version.as_str(),
+        ),
+    )
+    if connection.execute("SELECT changes()").fetchone()[0] != 1:
+        raise RepositoryUnavailableError()
+    return replace(update, state=state, manifest_digest=manifest_digest)
+
+
+def seal_corpus_update(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
+    """Seal a complete manifest or terminate an unchanged proposal."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if not isinstance(corpus_version, CorpusVersionId):
+        raise TypeError("corpus_version must be a CorpusVersionId.")
+
+    try:
+        update = _require_update(connection, corpus_id, corpus_version)
+        persisted_seal = update.manifest_digest is not None
+        if update.state in {CorpusUpdateState.READY, CorpusUpdateState.COMMITTED}:
+            manifest = _proposed_manifest(
+                connection,
+                update,
+                persisted_seal=True,
+            )
+            if manifest.manifest_digest != update.manifest_digest:
+                raise CorruptStorageError()
+            return SealCorpusUpdateOutcome(
+                update=update,
+                manifest=manifest,
+                replayed=True,
+            )
+        if update.state is CorpusUpdateState.ABORTED and not persisted_seal:
+            _raise_conflict(corpus_id, corpus_version)
+
+        manifest = _proposed_manifest(
+            connection,
+            update,
+            persisted_seal=persisted_seal,
+        )
+        if persisted_seal and manifest.manifest_digest != update.manifest_digest:
+            raise CorruptStorageError()
+        expected = _expected_version(connection, update)
+        if (
+            expected is not None
+            and manifest.manifest_digest == expected[1].manifest_digest
+        ):
+            if update.state is CorpusUpdateState.PREPARING:
+                update = _store_update_state(
+                    connection,
+                    update,
+                    CorpusUpdateState.ABORTED,
+                    manifest.manifest_digest,
+                )
+            elif update.state is not CorpusUpdateState.ABORTED:
+                raise CorruptStorageError()
+            return NoCorpusChangeOutcome(
+                update=update,
+                active_version=expected[0],
+                proposed_manifest=manifest,
+                replayed=persisted_seal,
+            )
+        if update.state is not CorpusUpdateState.PREPARING:
+            _raise_conflict(corpus_id, corpus_version)
+        ready = _store_update_state(
+            connection,
+            update,
+            CorpusUpdateState.READY,
+            manifest.manifest_digest,
+        )
+        return SealCorpusUpdateOutcome(update=ready, manifest=manifest)
+    except (
+        StorageConflictError,
+        CorruptStorageError,
+        RepositoryUnavailableError,
+    ):
         raise
     except sqlite3.Error as error:
         raise translate_sqlite_error(

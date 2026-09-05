@@ -1,5 +1,6 @@
 """Tests for validated SQLite corpus-update component staging."""
 
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,7 +26,11 @@ from inference_lab.storage import (
     ComponentGenerationState,
     ComponentGenerationValidator,
     ComponentKind,
+    CorpusUpdateState,
+    CorpusVersionManifest,
+    NoCorpusChangeOutcome,
     RepositoryUnavailableError,
+    SealCorpusUpdateOutcome,
     StorageConflictError,
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
@@ -92,6 +97,96 @@ def _prepare_update(
             _PROPOSED_VERSION,
             _MEMBERSHIP,
         )
+
+
+def _create_committed_parent(path: Path) -> CorpusVersionManifest:
+    repository = _open(path)
+    with repository.transaction() as transaction:
+        transaction.add_corpus(_CORPUS_A)
+        transaction.add_corpus(_CORPUS_B)
+        transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
+        transaction.add_document_version(_DOCUMENT_VERSION)
+        transaction.add_corpus_document_version_membership(_MEMBERSHIP)
+    repository.close()
+
+    manifest = CorpusVersionManifest(
+        corpus_id=_CORPUS_A.corpus_id,
+        corpus_version=_OTHER_VERSION,
+        document_memberships=(_MEMBERSHIP,),
+    )
+    created_at = _CREATED_AT.isoformat(timespec="microseconds")
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        connection.execute(
+            """INSERT INTO corpus_updates (
+                corpus_id, corpus_version, expected_corpus_version, state,
+                manifest_digest, created_at, restores_corpus_version
+            ) VALUES (?, ?, NULL, 'preparing', NULL, ?, NULL)""",
+            (
+                _CORPUS_A.corpus_id.as_str(),
+                _OTHER_VERSION.as_str(),
+                created_at,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO corpus_update_document_memberships (
+                corpus_id, corpus_version, document_id, document_version_id
+            ) VALUES (?, ?, ?, ?)""",
+            (
+                _CORPUS_A.corpus_id.as_str(),
+                _OTHER_VERSION.as_str(),
+                _DOCUMENT_ID.as_str(),
+                _DOCUMENT_VERSION_ID.as_str(),
+            ),
+        )
+        connection.execute(
+            """UPDATE corpus_updates
+            SET state = 'ready', manifest_digest = ?
+            WHERE corpus_id = ? AND corpus_version = ?""",
+            (
+                manifest.manifest_digest,
+                _CORPUS_A.corpus_id.as_str(),
+                _OTHER_VERSION.as_str(),
+            ),
+        )
+        connection.execute(
+            """INSERT INTO corpus_versions (
+                corpus_id, corpus_version, sequence, parent_corpus_version,
+                manifest_digest, created_at, restores_corpus_version
+            ) VALUES (?, ?, 1, NULL, ?, ?, NULL)""",
+            (
+                _CORPUS_A.corpus_id.as_str(),
+                _OTHER_VERSION.as_str(),
+                manifest.manifest_digest,
+                created_at,
+            ),
+        )
+        connection.execute(
+            """INSERT INTO corpus_version_document_memberships (
+                corpus_id, corpus_version, document_id, document_version_id
+            ) VALUES (?, ?, ?, ?)""",
+            (
+                _CORPUS_A.corpus_id.as_str(),
+                _OTHER_VERSION.as_str(),
+                _DOCUMENT_ID.as_str(),
+                _DOCUMENT_VERSION_ID.as_str(),
+            ),
+        )
+        connection.execute(
+            """UPDATE corpus_active_versions SET corpus_version = ?
+            WHERE corpus_id = ?""",
+            (_OTHER_VERSION.as_str(), _CORPUS_A.corpus_id.as_str()),
+        )
+        connection.execute(
+            """UPDATE corpus_updates SET state = 'committed'
+            WHERE corpus_id = ? AND corpus_version = ?""",
+            (_CORPUS_A.corpus_id.as_str(), _OTHER_VERSION.as_str()),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return manifest
 
 
 def _generation(
@@ -452,6 +547,315 @@ def test_component_inspection_rejects_unknown_or_cross_corpus_update(
                 repository.list_corpus_update_component_generations(
                     corpus_id,
                     corpus_version,
+                )
+    finally:
+        repository.close()
+
+
+def test_seal_persists_canonical_manifest_and_logs_after_commit(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "private-path" / "metadata.sqlite3"
+    repository = _open(database_path)
+    _prepare_update(repository)
+    dense = _generation(_DENSE, generation_id="generation-2")
+    lexical = _generation(_LEXICAL)
+    ready_dense = replace(dense, state=ComponentGenerationState.READY)
+    ready_lexical = replace(lexical, state=ComponentGenerationState.READY)
+    with repository.transaction() as transaction:
+        transaction.register_corpus_update_component_generation(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+            lexical,
+            validator=RecordingValidator(),
+        )
+        transaction.register_corpus_update_component_generation(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+            dense,
+            validator=RecordingValidator(),
+        )
+
+    outcome: SealCorpusUpdateOutcome | None = None
+    try:
+        with capture_logs() as logs:
+            with repository.transaction() as transaction:
+                result = transaction.seal_corpus_update(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                )
+                assert isinstance(result, SealCorpusUpdateOutcome)
+                outcome = result
+
+        expected_manifest = CorpusVersionManifest(
+            corpus_id=_CORPUS_A.corpus_id,
+            corpus_version=_PROPOSED_VERSION,
+            document_memberships=(_MEMBERSHIP,),
+            component_generations=(ready_dense, ready_lexical),
+        )
+        assert outcome is not None
+        assert outcome.replayed is False
+        assert outcome.manifest == expected_manifest
+        assert outcome.update.state is CorpusUpdateState.READY
+        assert outcome.update.manifest_digest == expected_manifest.manifest_digest
+        assert (
+            repository.get_corpus_update(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+            )
+            == outcome.update
+        )
+        assert logs == [
+            {
+                "event": "corpus_update_ready",
+                "pipeline_stage": "storage",
+                "corpus_id": _CORPUS_A.corpus_id.as_str(),
+                "corpus_version": _PROPOSED_VERSION.as_str(),
+                "update_state": "ready",
+                "document_count": 1,
+                "component_count": 2,
+                "replayed": False,
+                "log_level": "info",
+            },
+            {
+                "event": "transaction_completed",
+                "pipeline_stage": "storage",
+                "log_level": "info",
+            },
+        ]
+        rendered = repr(logs)
+        assert _CORPUS_A.display_name not in rendered
+        assert _DOCUMENT_ID.as_str() not in rendered
+        assert lexical.generation_id not in rendered
+        assert str(database_path) not in rendered
+
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.remove_corpus_update_document_membership(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                    _MEMBERSHIP,
+                )
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.replace_corpus_update_component_generation(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                    ready_lexical,
+                    _generation(_LEXICAL, generation_id="generation-3"),
+                    validator=RecordingValidator(),
+                )
+    finally:
+        repository.close()
+
+    reopened = SQLiteMetadataRepository.open(database_path)
+    replayed: SealCorpusUpdateOutcome | NoCorpusChangeOutcome | None = None
+    try:
+        with reopened.transaction() as transaction:
+            replayed = transaction.seal_corpus_update(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+            )
+
+        assert isinstance(replayed, SealCorpusUpdateOutcome)
+        assert replayed.replayed is True
+        assert outcome is not None
+        assert replayed.update == outcome.update
+        assert replayed.manifest == outcome.manifest
+    finally:
+        reopened.close()
+
+
+def test_seal_rejects_missing_required_component_without_changing_update(
+    tmp_path: Path,
+) -> None:
+    repository = _open(tmp_path / "metadata.sqlite3")
+    _prepare_update(repository)
+    with repository.transaction() as transaction:
+        transaction.register_corpus_update_component_generation(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+            _generation(_LEXICAL),
+            validator=RecordingValidator(),
+        )
+    try:
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.seal_corpus_update(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                )
+
+        update = repository.get_corpus_update(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+        )
+        assert update is not None
+        assert update.state is CorpusUpdateState.PREPARING
+        assert update.manifest_digest is None
+        assert (
+            len(
+                repository.list_corpus_update_component_generations(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                )
+            )
+            == 1
+        )
+    finally:
+        repository.close()
+
+
+def test_equal_parent_manifest_returns_durable_no_change_after_restart(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    parent_manifest = _create_committed_parent(database_path)
+    repository = SQLiteMetadataRepository.open(
+        database_path,
+        created_at_factory=_fixed_created_at,
+    )
+    outcome: NoCorpusChangeOutcome | None = None
+    try:
+        with repository.transaction() as transaction:
+            transaction.begin_corpus_update(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+                expected_corpus_version=_OTHER_VERSION,
+            )
+
+        with capture_logs() as logs:
+            with repository.transaction() as transaction:
+                result = transaction.seal_corpus_update(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                )
+                assert isinstance(result, NoCorpusChangeOutcome)
+                outcome = result
+
+        assert outcome is not None
+        assert outcome.replayed is False
+        assert outcome.update.state is CorpusUpdateState.ABORTED
+        assert outcome.update.manifest_digest == parent_manifest.manifest_digest
+        assert outcome.active_version.corpus_version == _OTHER_VERSION
+        assert (
+            outcome.proposed_manifest.manifest_digest == parent_manifest.manifest_digest
+        )
+        assert [log["event"] for log in logs] == [
+            "corpus_update_aborted",
+            "transaction_completed",
+        ]
+        assert logs[0]["abort_reason"] == "no_change"
+        assert logs[0]["replayed"] is False
+    finally:
+        repository.close()
+
+    reopened = SQLiteMetadataRepository.open(database_path)
+    replayed: SealCorpusUpdateOutcome | NoCorpusChangeOutcome | None = None
+    try:
+        with reopened.transaction() as transaction:
+            replayed = transaction.seal_corpus_update(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+            )
+
+        assert isinstance(replayed, NoCorpusChangeOutcome)
+        assert replayed.replayed is True
+        assert outcome is not None
+        assert replayed.update == outcome.update
+        assert replayed.active_version == outcome.active_version
+        assert replayed.proposed_manifest == outcome.proposed_manifest
+
+        connection = sqlite3.connect(database_path)
+        try:
+            assert connection.execute(
+                "SELECT corpus_version FROM corpus_active_versions WHERE corpus_id = ?",
+                (_CORPUS_A.corpus_id.as_str(),),
+            ).fetchone() == (_OTHER_VERSION.as_str(),)
+            assert connection.execute(
+                "SELECT count(*) FROM corpus_versions WHERE corpus_id = ?",
+                (_CORPUS_A.corpus_id.as_str(),),
+            ).fetchone() == (1,)
+        finally:
+            connection.close()
+    finally:
+        reopened.close()
+
+
+def test_changed_parent_membership_seals_as_ready(tmp_path: Path) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_committed_parent(database_path)
+    repository = SQLiteMetadataRepository.open(
+        database_path,
+        created_at_factory=_fixed_created_at,
+    )
+    outcome: SealCorpusUpdateOutcome | NoCorpusChangeOutcome | None = None
+    try:
+        with repository.transaction() as transaction:
+            transaction.begin_corpus_update(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+                expected_corpus_version=_OTHER_VERSION,
+            )
+            transaction.remove_corpus_update_document_membership(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+                _MEMBERSHIP,
+            )
+            outcome = transaction.seal_corpus_update(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+            )
+
+        assert isinstance(outcome, SealCorpusUpdateOutcome)
+        assert outcome.update.state is CorpusUpdateState.READY
+        assert outcome.manifest.document_memberships == ()
+    finally:
+        repository.close()
+
+
+def test_rolled_back_seal_remains_preparing_and_emits_no_ready_event(
+    tmp_path: Path,
+) -> None:
+    repository = _open(tmp_path / "metadata.sqlite3")
+    _prepare_update(repository, required_component_kinds=())
+    try:
+        with capture_logs() as logs:
+            with pytest.raises(RuntimeError, match="private-primary"):
+                with repository.transaction() as transaction:
+                    transaction.seal_corpus_update(
+                        _CORPUS_A.corpus_id,
+                        _PROPOSED_VERSION,
+                    )
+                    raise RuntimeError("private-primary")
+
+        update = repository.get_corpus_update(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+        )
+        assert update is not None
+        assert update.state is CorpusUpdateState.PREPARING
+        assert update.manifest_digest is None
+        assert [log["event"] for log in logs] == ["transaction_rolled_back"]
+    finally:
+        repository.close()
+
+
+def test_seal_rejects_an_explicitly_aborted_update(tmp_path: Path) -> None:
+    repository = _open(tmp_path / "metadata.sqlite3")
+    _prepare_update(repository, required_component_kinds=())
+    try:
+        with repository.transaction() as transaction:
+            transaction.abort_corpus_update(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+            )
+
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.seal_corpus_update(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
                 )
     finally:
         repository.close()
