@@ -25,6 +25,7 @@ from inference_lab.provenance import (
 from inference_lab.storage import (
     MetadataRepository,
     MetadataTransaction,
+    ParsedRepresentation,
     SourceArtefact,
 )
 
@@ -69,6 +70,13 @@ class StructuralTransaction:
         self,
         corpus_id: CorpusId,
         artefact: SourceArtefact,
+    ) -> None:
+        pass
+
+    def add_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        representation: ParsedRepresentation,
     ) -> None:
         pass
 

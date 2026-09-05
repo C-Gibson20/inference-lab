@@ -21,6 +21,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_records import SourceArtefact
 
 
@@ -193,6 +194,14 @@ class MetadataWriter(Protocol):
         artefact: SourceArtefact,
     ) -> None:
         """Add managed-source metadata after proving corpus membership."""
+        ...
+
+    def add_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        representation: ParsedRepresentation,
+    ) -> None:
+        """Add one complete parsed aggregate after proving corpus membership."""
         ...
 
     def add_source_observation(self, state: SourceObservationState) -> None:
