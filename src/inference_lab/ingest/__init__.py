@@ -22,6 +22,14 @@ from inference_lab.ingest.discovery import (
     SymlinkPolicy,
     VerifiedSourceSnapshot,
 )
+from inference_lab.ingest.discovery_failures import (
+    DiscoveryFailure,
+    DiscoveryFailureCategory,
+    DiscoveryFailureScope,
+    DiscoveryFailureStage,
+    DiscoveryFileKind,
+    discovery_failure_policy,
+)
 from inference_lab.ingest.errors import (
     ParserDecodeError,
     ParserFailure,
@@ -64,6 +72,11 @@ __all__ = [
     "BoundingBox",
     "DirectorySnapshotPolicy",
     "DiscoveredSource",
+    "DiscoveryFailure",
+    "DiscoveryFailureCategory",
+    "DiscoveryFailureScope",
+    "DiscoveryFailureStage",
+    "DiscoveryFileKind",
     "DiscoveryInput",
     "DiscoveryInputKind",
     "DiscoveryPolicy",
@@ -100,6 +113,7 @@ __all__ = [
     "TextNativeParser",
     "VerifiedSourceSnapshot",
     "decode_source",
+    "discovery_failure_policy",
     "generate_source_span_id",
     "normalise_source_text",
     "parsed_document_payload",
