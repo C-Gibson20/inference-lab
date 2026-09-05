@@ -32,6 +32,7 @@ from inference_lab.storage.versioning import (
     ComponentGenerationReference,
     ComponentKind,
     CorpusUpdate,
+    CorpusVersion,
 )
 
 
@@ -57,6 +58,28 @@ class MetadataReader(Protocol):
 
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora in canonical identifier order."""
+        ...
+
+    def get_active_corpus_version(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusVersion | None:
+        """Return a corpus's active committed version, or ``None``."""
+        ...
+
+    def get_corpus_version(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusVersion | None:
+        """Return one committed version owned by a corpus, or ``None``."""
+        ...
+
+    def list_corpus_versions(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusVersion, ...]:
+        """Return committed history in ascending sequence order."""
         ...
 
     def get_corpus_update(

@@ -8,13 +8,15 @@ from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage._sqlite_corpus_updates import (
     CreatedAtFactory,
     _active_corpus_version,
-    _committed_version,
     _created_at,
     _proposed_manifest,
     _raise_conflict,
     _reconstruct_document_memberships,
     _require_update,
     list_corpus_update_component_generations,
+)
+from inference_lab.storage._sqlite_corpus_versions import (
+    _get_committed_corpus_version,
 )
 from inference_lab.storage.errors import (
     CorruptStorageError,
@@ -70,7 +72,7 @@ def _committed_replay(
     connection: sqlite3.Connection,
     update: CorpusUpdate,
 ) -> CommitCorpusUpdateOutcome:
-    version = _committed_version(
+    version = _get_committed_corpus_version(
         connection,
         update.corpus_id,
         update.corpus_version,
@@ -94,7 +96,10 @@ def _next_sequence(
     expected = update.expected_corpus_version
     if expected is None:
         return 1
-    return _committed_version(connection, update.corpus_id, expected).sequence + 1
+    return (
+        _get_committed_corpus_version(connection, update.corpus_id, expected).sequence
+        + 1
+    )
 
 
 def _insert_version(

@@ -17,6 +17,7 @@ from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
 )
+from inference_lab.storage._sqlite_corpus_versions import _get_committed_corpus_version
 from inference_lab.storage._sqlite_logging import safe_log_failure
 from inference_lab.storage.errors import (
     CorruptStorageError,
@@ -586,40 +587,6 @@ def _proposed_manifest(
     return manifest
 
 
-def _committed_version(
-    connection: sqlite3.Connection,
-    corpus_id: CorpusId,
-    corpus_version: CorpusVersionId,
-) -> CorpusVersion:
-    row = connection.execute(
-        """SELECT corpus_id, corpus_version, sequence, parent_corpus_version,
-            manifest_digest, created_at, restores_corpus_version
-        FROM corpus_versions
-        WHERE corpus_id = ? AND corpus_version = ?""",
-        (corpus_id.as_str(), corpus_version.as_str()),
-    ).fetchone()
-    if row is None:
-        raise CorruptStorageError()
-    try:
-        parent = row["parent_corpus_version"]
-        restores = row["restores_corpus_version"]
-        return CorpusVersion(
-            corpus_id=CorpusId.from_str(row["corpus_id"]),
-            corpus_version=CorpusVersionId.from_str(row["corpus_version"]),
-            sequence=row["sequence"],
-            parent_corpus_version=(
-                None if parent is None else CorpusVersionId.from_str(parent)
-            ),
-            manifest_digest=row["manifest_digest"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            restores_corpus_version=(
-                None if restores is None else CorpusVersionId.from_str(restores)
-            ),
-        )
-    except (TypeError, ValueError, KeyError, IndexError):
-        raise CorruptStorageError() from None
-
-
 def _expected_version(
     connection: sqlite3.Connection,
     update: CorpusUpdate,
@@ -627,7 +594,7 @@ def _expected_version(
     expected = update.expected_corpus_version
     if expected is None:
         return None
-    version = _committed_version(connection, update.corpus_id, expected)
+    version = _get_committed_corpus_version(connection, update.corpus_id, expected)
     parent_update = _require_update(connection, update.corpus_id, expected)
     if parent_update.state is not CorpusUpdateState.COMMITTED:
         raise CorruptStorageError()

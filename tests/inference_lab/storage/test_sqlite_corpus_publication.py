@@ -25,6 +25,7 @@ from inference_lab.storage import (
     ComponentGenerationState,
     ComponentKind,
     CorpusUpdateState,
+    CorruptStorageError,
     SealCorpusUpdateOutcome,
     StorageConflictError,
 )
@@ -42,6 +43,7 @@ _CORPUS_B = CorpusMetadata(
 _VERSION_A1 = CorpusVersionId("33333333-3333-4333-8333-333333333333")
 _VERSION_A2 = CorpusVersionId("44444444-4444-4444-8444-444444444444")
 _STALE_VERSION = CorpusVersionId("55555555-5555-4555-8555-555555555555")
+_UNKNOWN_CORPUS_ID = CorpusId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 _FIRST_DOCUMENT_ID = DocumentId("66666666-6666-4666-8666-666666666666")
 _SECOND_DOCUMENT_ID = DocumentId("77777777-7777-4777-8777-777777777777")
 _FIRST_DOCUMENT_VERSION_ID = DocumentVersionId("88888888-8888-4888-8888-888888888888")
@@ -191,6 +193,20 @@ def test_first_publication_is_atomic_materialised_and_logged_after_commit(
                     _VERSION_A1,
                 )
                 assert outcome.update.state is CorpusUpdateState.COMMITTED
+                assert (
+                    transaction.get_active_corpus_version(_CORPUS_A.corpus_id)
+                    == outcome.version
+                )
+                assert (
+                    transaction.get_corpus_version(
+                        _CORPUS_A.corpus_id,
+                        _VERSION_A1,
+                    )
+                    == outcome.version
+                )
+                assert transaction.list_corpus_versions(_CORPUS_A.corpus_id) == (
+                    outcome.version,
+                )
 
         assert outcome is not None
         assert outcome.replayed is False
@@ -329,6 +345,125 @@ def test_ordinary_advance_uses_parent_and_next_per_corpus_sequence(
             _FIRST_MEMBERSHIP,
             _SECOND_MEMBERSHIP,
         )
+    finally:
+        repository.close()
+
+
+def test_active_and_ordered_history_reads_survive_restart_and_enforce_ownership(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _add_catalogue(repository)
+    assert repository.get_active_corpus_version(_CORPUS_A.corpus_id) is None
+    assert repository.get_active_corpus_version(_UNKNOWN_CORPUS_ID) is None
+    assert repository.list_corpus_versions(_CORPUS_A.corpus_id) == ()
+    assert repository.get_corpus_version(_CORPUS_A.corpus_id, _VERSION_A1) is None
+    _prepare_update(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    first = _commit(repository, _VERSION_A1)
+    _prepare_update(
+        repository,
+        _VERSION_A2,
+        expected_corpus_version=_VERSION_A1,
+        memberships=(_SECOND_MEMBERSHIP,),
+    )
+    second = _commit(repository, _VERSION_A2)
+    repository.close()
+
+    reopened = SQLiteMetadataRepository.open(database_path)
+    try:
+        assert reopened.get_active_corpus_version(_CORPUS_A.corpus_id) == (
+            second.version
+        )
+        assert (
+            reopened.get_corpus_version(
+                _CORPUS_A.corpus_id,
+                _VERSION_A1,
+            )
+            == first.version
+        )
+        assert (
+            reopened.get_corpus_version(
+                _CORPUS_A.corpus_id,
+                _VERSION_A2,
+            )
+            == second.version
+        )
+        assert reopened.list_corpus_versions(_CORPUS_A.corpus_id) == (
+            first.version,
+            second.version,
+        )
+
+        assert reopened.get_corpus_version(_CORPUS_B.corpus_id, _VERSION_A1) is None
+        assert reopened.get_active_corpus_version(_CORPUS_B.corpus_id) is None
+        assert reopened.list_corpus_versions(_CORPUS_B.corpus_id) == ()
+    finally:
+        reopened.close()
+
+
+def test_version_reads_fail_closed_when_committed_lifecycle_is_corrupt(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _add_catalogue(repository)
+    _prepare_update(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    _commit(repository, _VERSION_A1)
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("DROP TRIGGER corpus_updates_lifecycle_update")
+        connection.execute(
+            """UPDATE corpus_updates SET state = 'ready'
+            WHERE corpus_id = ? AND corpus_version = ?""",
+            (_CORPUS_A.corpus_id.as_str(), _VERSION_A1.as_str()),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    try:
+        with pytest.raises(CorruptStorageError):
+            repository.get_active_corpus_version(_CORPUS_A.corpus_id)
+        with pytest.raises(CorruptStorageError):
+            repository.get_corpus_version(_CORPUS_A.corpus_id, _VERSION_A1)
+        with pytest.raises(CorruptStorageError):
+            repository.list_corpus_versions(_CORPUS_A.corpus_id)
+    finally:
+        repository.close()
+
+
+def test_active_read_fails_closed_when_corpus_pointer_row_is_missing(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _add_catalogue(repository)
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("DROP TRIGGER corpus_active_versions_delete_immutable")
+        connection.execute(
+            "DELETE FROM corpus_active_versions WHERE corpus_id = ?",
+            (_CORPUS_A.corpus_id.as_str(),),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    try:
+        with pytest.raises(CorruptStorageError):
+            repository.get_active_corpus_version(_CORPUS_A.corpus_id)
     finally:
         repository.close()
 

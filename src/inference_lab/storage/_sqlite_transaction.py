@@ -55,6 +55,11 @@ from inference_lab.storage._sqlite_corpus_updates import (
     replace_corpus_update_document_membership,
     seal_corpus_update,
 )
+from inference_lab.storage._sqlite_corpus_versions import (
+    get_active_corpus_version,
+    get_corpus_version,
+    list_corpus_versions,
+)
 from inference_lab.storage._sqlite_identifier_assertions import (
     add_external_identifier_assertions,
     list_external_identifier_assertions,
@@ -97,6 +102,7 @@ from inference_lab.storage.versioning import (
     ComponentGenerationReference,
     ComponentKind,
     CorpusUpdate,
+    CorpusVersion,
 )
 
 if TYPE_CHECKING:
@@ -193,6 +199,28 @@ class SQLiteMetadataTransaction:
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora within this transaction."""
         return self._execute(list_corpora)
+
+    def get_active_corpus_version(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusVersion | None:
+        """Return a corpus's active committed version within this transaction."""
+        return self._execute(get_active_corpus_version, corpus_id)
+
+    def get_corpus_version(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusVersion | None:
+        """Return one owned committed version within this transaction."""
+        return self._execute(get_corpus_version, corpus_id, corpus_version)
+
+    def list_corpus_versions(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusVersion, ...]:
+        """Return committed history within this transaction."""
+        return self._execute(list_corpus_versions, corpus_id)
 
     def get_corpus_update(
         self,

@@ -30,6 +30,7 @@ from inference_lab.storage import (
     ComponentGenerationValidator,
     ComponentKind,
     CorpusUpdate,
+    CorpusVersion,
     MetadataRepository,
     MetadataTransaction,
     NoCorpusChangeOutcome,
@@ -183,6 +184,25 @@ class StructuralTransaction:
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         return ()
 
+    def get_active_corpus_version(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusVersion | None:
+        return None
+
+    def get_corpus_version(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusVersion | None:
+        return None
+
+    def list_corpus_versions(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusVersion, ...]:
+        return ()
+
     def get_corpus_update(
         self,
         corpus_id: CorpusId,
@@ -319,6 +339,9 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
     class ReaderOnly:
         get_corpus = StructuralTransaction.get_corpus
         list_corpora = StructuralTransaction.list_corpora
+        get_active_corpus_version = StructuralTransaction.get_active_corpus_version
+        get_corpus_version = StructuralTransaction.get_corpus_version
+        list_corpus_versions = StructuralTransaction.list_corpus_versions
         get_corpus_update = StructuralTransaction.get_corpus_update
         list_corpus_update_document_memberships = (
             StructuralTransaction.list_corpus_update_document_memberships
