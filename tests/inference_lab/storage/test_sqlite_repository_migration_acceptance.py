@@ -75,11 +75,15 @@ def _failing_revision_three() -> MigrationDefinition:
     )
 
 
-def _create_complete_baseline(path: Path) -> None:
+def _create_complete_baseline(
+    path: Path,
+    *,
+    migrations: tuple[MigrationDefinition, ...] = (MIGRATIONS[0],),
+) -> None:
     repository = SQLiteMetadataRepository.open(
         path,
         apply_migrations=True,
-        migrations=(MIGRATIONS[0],),
+        migrations=migrations,
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
@@ -147,11 +151,11 @@ def test_current_baseline_persists_complete_multi_corpus_graph(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_baseline(database_path)
+    _create_complete_baseline(database_path, migrations=MIGRATIONS)
 
     reopened = SQLiteMetadataRepository.open(database_path)
     try:
-        assert reopened.schema_inspection.current_revision == 1
+        assert reopened.schema_inspection.current_revision == 2
         assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
             _CORPUS_ID, "Primary corpus"
         )
