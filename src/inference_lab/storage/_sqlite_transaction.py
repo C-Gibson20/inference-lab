@@ -42,6 +42,7 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     list_corpus_document_version_memberships,
 )
 from inference_lab.storage._sqlite_corpus_updates import (
+    abort_corpus_update,
     add_corpus_update_document_membership,
     begin_corpus_update,
     get_corpus_update,
@@ -79,7 +80,10 @@ from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
 )
-from inference_lab.storage.outcomes import BeginCorpusUpdateOutcome
+from inference_lab.storage.outcomes import (
+    AbortCorpusUpdateOutcome,
+    BeginCorpusUpdateOutcome,
+)
 from inference_lab.storage.versioning import ComponentKind, CorpusUpdate
 
 if TYPE_CHECKING:
@@ -238,6 +242,30 @@ class SQLiteMetadataTransaction:
                     "required_component_count": len(
                         outcome.update.required_component_kinds
                     ),
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
+
+    def abort_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> AbortCorpusUpdateOutcome:
+        """Abort a preparing update or return its exact abort replay."""
+        outcome = self._execute(
+            abort_corpus_update,
+            corpus_id,
+            corpus_version,
+        )
+        self._pending_success_logs.append(
+            (
+                "corpus_update_aborted",
+                {
+                    "corpus_id": outcome.update.corpus_id.as_str(),
+                    "corpus_version": outcome.update.corpus_version.as_str(),
+                    "update_state": outcome.update.state.value,
                     "replayed": outcome.replayed,
                 },
             )

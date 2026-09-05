@@ -21,7 +21,10 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
-from inference_lab.storage.outcomes import BeginCorpusUpdateOutcome
+from inference_lab.storage.outcomes import (
+    AbortCorpusUpdateOutcome,
+    BeginCorpusUpdateOutcome,
+)
 from inference_lab.storage.versioning import ComponentKind, CorpusUpdate
 
 
@@ -171,6 +174,14 @@ class MetadataWriter(Protocol):
         restores_corpus_version: CorpusVersionId | None = None,
     ) -> BeginCorpusUpdateOutcome:
         """Create and seed a preparing update or return its exact replay."""
+        ...
+
+    def abort_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> AbortCorpusUpdateOutcome:
+        """Abort a preparing update or return its exact abort replay."""
         ...
 
     def add_corpus_update_document_membership(

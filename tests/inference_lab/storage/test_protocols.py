@@ -23,6 +23,7 @@ from inference_lab.provenance import (
     SourceObservationState,
 )
 from inference_lab.storage import (
+    AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
     ComponentKind,
     CorpusUpdate,
@@ -62,6 +63,13 @@ class StructuralTransaction:
         required_component_kinds: tuple[ComponentKind, ...] = (),
         restores_corpus_version: CorpusVersionId | None = None,
     ) -> BeginCorpusUpdateOutcome:
+        raise NotImplementedError
+
+    def abort_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> AbortCorpusUpdateOutcome:
         raise NotImplementedError
 
     def add_corpus_update_document_membership(

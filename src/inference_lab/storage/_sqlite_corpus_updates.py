@@ -2,6 +2,7 @@
 
 import sqlite3
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 
@@ -23,6 +24,7 @@ from inference_lab.storage.errors import (
     StorageConflictError,
 )
 from inference_lab.storage.outcomes import (
+    AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
     CorpusVersionConflictKind,
 )
@@ -227,6 +229,42 @@ def _require_update(
 def _require_preparing(update: CorpusUpdate) -> None:
     if update.state is not CorpusUpdateState.PREPARING:
         _raise_conflict(update.corpus_id, update.corpus_version)
+
+
+def abort_corpus_update(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+) -> AbortCorpusUpdateOutcome:
+    """Abort one preparing update or accept an exact abort replay."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if not isinstance(corpus_version, CorpusVersionId):
+        raise TypeError("corpus_version must be a CorpusVersionId.")
+
+    try:
+        update = _require_update(connection, corpus_id, corpus_version)
+        if update.state is CorpusUpdateState.ABORTED:
+            return AbortCorpusUpdateOutcome(update=update, replayed=True)
+        _require_preparing(update)
+        connection.execute(
+            """UPDATE corpus_updates
+            SET state = 'aborted'
+            WHERE corpus_id = ? AND corpus_version = ? AND state = 'preparing'""",
+            (corpus_id.as_str(), corpus_version.as_str()),
+        )
+        if connection.execute("SELECT changes()").fetchone()[0] != 1:
+            raise RepositoryUnavailableError()
+        return AbortCorpusUpdateOutcome(
+            update=replace(update, state=CorpusUpdateState.ABORTED),
+        )
+    except (StorageConflictError, CorruptStorageError):
+        raise
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
 
 
 def _require_catalogue_membership(
