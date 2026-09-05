@@ -20,6 +20,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage.source_records import SourceArtefact
 
 
 class MetadataReader(Protocol):
@@ -159,6 +160,14 @@ class MetadataWriter(Protocol):
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its ordered external identifiers atomically."""
+        ...
+
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
+        """Add managed-source metadata after proving corpus membership."""
         ...
 
     def add_source_observation(self, state: SourceObservationState) -> None:

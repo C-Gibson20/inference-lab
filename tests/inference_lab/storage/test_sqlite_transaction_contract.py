@@ -90,6 +90,7 @@ def test_concrete_repository_and_transaction_satisfy_public_protocols(
         assert isinstance(transaction_contract, MetadataTransaction)
         assert not hasattr(repository, "add_document")
         assert not hasattr(repository, "add_document_version")
+        assert not hasattr(repository, "add_source_artefact")
 
         with transaction_contract:
             transaction_contract.add_corpus(_CORPUS)

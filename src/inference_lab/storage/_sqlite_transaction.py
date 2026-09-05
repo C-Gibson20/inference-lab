@@ -59,6 +59,7 @@ from inference_lab.storage._sqlite_relationships import (
     list_family_memberships_by_document_version,
     list_family_memberships_by_family,
 )
+from inference_lab.storage._sqlite_source_artefacts import add_source_artefact
 from inference_lab.storage._sqlite_versions import (
     add_document_version,
     find_document_versions_by_content_hash,
@@ -70,6 +71,7 @@ from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
 )
+from inference_lab.storage.source_records import SourceArtefact
 
 if TYPE_CHECKING:
     from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
@@ -296,6 +298,14 @@ class SQLiteMetadataTransaction:
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its external identifiers atomically."""
         self._execute(add_document_version, document_version)
+
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
+        """Add corpus-authorised managed-source metadata."""
+        self._execute(add_source_artefact, corpus_id, artefact)
 
     def add_source_observation(self, state: SourceObservationState) -> None:
         """Create an observed source at revision one."""

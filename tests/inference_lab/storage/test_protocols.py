@@ -21,7 +21,11 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
-from inference_lab.storage import MetadataRepository, MetadataTransaction
+from inference_lab.storage import (
+    MetadataRepository,
+    MetadataTransaction,
+    SourceArtefact,
+)
 
 
 class StructuralTransaction:
@@ -58,6 +62,13 @@ class StructuralTransaction:
         pass
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
+        pass
+
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
         pass
 
     def add_source_observation(self, state: SourceObservationState) -> None:

@@ -23,6 +23,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage import SourceArtefact
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from inference_lab.storage._sqlite_transaction import SQLiteMetadataTransaction
 
@@ -288,6 +289,20 @@ _WRITE_FAILURE_CASES: tuple[tuple[str, _WriteOperation, str], ...] = (
         "version",
         lambda transaction: transaction.add_document_version(_invalid(DocumentVersion)),
         "document_version",
+    ),
+    (
+        "source-artefact-corpus",
+        lambda transaction: transaction.add_source_artefact(
+            _invalid(CorpusId), _invalid(SourceArtefact)
+        ),
+        "corpus_id",
+    ),
+    (
+        "source-artefact",
+        lambda transaction: transaction.add_source_artefact(
+            _CORPUS_ID, _invalid(SourceArtefact)
+        ),
+        "artefact",
     ),
     (
         "source",
