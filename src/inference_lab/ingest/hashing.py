@@ -70,7 +70,13 @@ class LocalStableReadFileSystem(LocalTraversalFileSystem):
     def open_binary(self, path: Path) -> BinaryIO:
         """Open a binary descriptor with every available safety flag."""
         flags = os.O_RDONLY
-        for flag_name in ("O_BINARY", "O_CLOEXEC", "O_NOFOLLOW", "O_NONBLOCK"):
+        for flag_name in (
+            "O_BINARY",
+            "O_CLOEXEC",
+            "O_NOCTTY",
+            "O_NOFOLLOW",
+            "O_NONBLOCK",
+        ):
             flags |= getattr(os, flag_name, 0)
         descriptor = os.open(path, flags)
         try:
@@ -126,6 +132,23 @@ def _validated_metadata(metadata: object) -> TraversalPathMetadata:
     if not isinstance(metadata, TraversalPathMetadata):
         raise TypeError("filesystem must return TraversalPathMetadata.")
     return metadata
+
+
+def _path_changed_after_open_failure(
+    candidate: TraversalCandidate,
+    pre_open: TraversalPathMetadata,
+    filesystem: StableReadFileSystem,
+) -> bool:
+    """Check whether a failed open coincided with a safely observable path swap."""
+    try:
+        current = _validated_metadata(filesystem.lstat(candidate.locator.path))
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return not _is_regular(current) or _file_evidence(current) != _file_evidence(
+        pre_open
+    )
 
 
 def _hash_open_source(
@@ -262,6 +285,15 @@ def hash_source_candidate(
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
     except OSError:
+        if _path_changed_after_open_failure(
+            candidate,
+            pre_open,
+            selected_filesystem,
+        ):
+            return _failure(
+                candidate,
+                DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+            )
         return _failure(candidate, DiscoveryFailureCategory.SOURCE_READ_FAILED)
 
     try:
