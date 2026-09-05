@@ -25,7 +25,24 @@ from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
 )
-from inference_lab.storage.versioning import ComponentKind, CorpusUpdate
+from inference_lab.storage.versioning import (
+    ComponentGenerationReference,
+    ComponentKind,
+    CorpusUpdate,
+)
+
+
+@runtime_checkable
+class ComponentGenerationValidator(Protocol):
+    """Validate one prepared immutable generation against proposed membership."""
+
+    def validate_component_generation(
+        self,
+        generation: ComponentGenerationReference,
+        document_memberships: tuple[CorpusDocumentVersionMembership, ...],
+    ) -> bool:
+        """Return whether the generation is durable, compatible, and complete."""
+        ...
 
 
 class MetadataReader(Protocol):
@@ -53,6 +70,14 @@ class MetadataReader(Protocol):
         corpus_version: CorpusVersionId,
     ) -> tuple[CorpusDocumentVersionMembership, ...]:
         """Return deterministic proposed membership for one update."""
+        ...
+
+    def list_corpus_update_component_generations(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[ComponentGenerationReference, ...]:
+        """Return deterministic ready generations staged for one update."""
         ...
 
     def get_corpus_document_version_membership(
@@ -182,6 +207,29 @@ class MetadataWriter(Protocol):
         corpus_version: CorpusVersionId,
     ) -> AbortCorpusUpdateOutcome:
         """Abort a preparing update or return its exact abort replay."""
+        ...
+
+    def register_corpus_update_component_generation(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        generation: ComponentGenerationReference,
+        *,
+        validator: ComponentGenerationValidator,
+    ) -> ComponentGenerationReference:
+        """Validate and register one required immutable generation."""
+        ...
+
+    def replace_corpus_update_component_generation(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_generation: ComponentGenerationReference,
+        replacement_generation: ComponentGenerationReference,
+        *,
+        validator: ComponentGenerationValidator,
+    ) -> ComponentGenerationReference:
+        """Validate and replace one explicitly expected generation."""
         ...
 
     def add_corpus_update_document_membership(

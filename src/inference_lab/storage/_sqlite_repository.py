@@ -42,6 +42,7 @@ from inference_lab.storage._sqlite_corpus_memberships import (
 from inference_lab.storage._sqlite_corpus_updates import (
     CreatedAtFactory,
     get_corpus_update,
+    list_corpus_update_component_generations,
     list_corpus_update_document_memberships,
 )
 from inference_lab.storage._sqlite_identifier_assertions import (
@@ -77,7 +78,7 @@ from inference_lab.storage.errors import (
     RepositoryUnavailableError,
     StorageTransactionError,
 )
-from inference_lab.storage.versioning import CorpusUpdate
+from inference_lab.storage.versioning import ComponentGenerationReference, CorpusUpdate
 
 
 class SQLiteMetadataRepository:
@@ -168,6 +169,18 @@ class SQLiteMetadataRepository:
     ) -> tuple[CorpusDocumentVersionMembership, ...]:
         """Return deterministic proposed membership for one update."""
         return list_corpus_update_document_memberships(
+            self._connection_or_raise(),
+            corpus_id,
+            corpus_version,
+        )
+
+    def list_corpus_update_component_generations(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[ComponentGenerationReference, ...]:
+        """Return deterministic ready generations staged for one update."""
+        return list_corpus_update_component_generations(
             self._connection_or_raise(),
             corpus_id,
             corpus_version,

@@ -25,6 +25,7 @@ from inference_lab.storage.outcomes import (
     SealCorpusUpdateOutcome,
 )
 from inference_lab.storage.protocols import (
+    ComponentGenerationValidator,
     MetadataReader,
     MetadataRepository,
     MetadataTransaction,
@@ -50,6 +51,7 @@ __all__ = [
     "CommitCorpusUpdateOutcome",
     "ComponentGenerationReference",
     "ComponentGenerationState",
+    "ComponentGenerationValidator",
     "ComponentKind",
     "CorpusSnapshot",
     "CorpusUpdate",

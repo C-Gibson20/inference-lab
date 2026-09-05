@@ -46,8 +46,11 @@ from inference_lab.storage._sqlite_corpus_updates import (
     add_corpus_update_document_membership,
     begin_corpus_update,
     get_corpus_update,
+    list_corpus_update_component_generations,
     list_corpus_update_document_memberships,
+    register_corpus_update_component_generation,
     remove_corpus_update_document_membership,
+    replace_corpus_update_component_generation,
     replace_corpus_update_document_membership,
 )
 from inference_lab.storage._sqlite_identifier_assertions import (
@@ -84,7 +87,12 @@ from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
 )
-from inference_lab.storage.versioning import ComponentKind, CorpusUpdate
+from inference_lab.storage.protocols import ComponentGenerationValidator
+from inference_lab.storage.versioning import (
+    ComponentGenerationReference,
+    ComponentKind,
+    CorpusUpdate,
+)
 
 if TYPE_CHECKING:
     from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
@@ -201,6 +209,18 @@ class SQLiteMetadataTransaction:
             corpus_version,
         )
 
+    def list_corpus_update_component_generations(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[ComponentGenerationReference, ...]:
+        """Return deterministic ready generations within this transaction."""
+        return self._execute(
+            list_corpus_update_component_generations,
+            corpus_id,
+            corpus_version,
+        )
+
     def add_corpus(self, corpus: CorpusMetadata) -> None:
         """Create a named corpus within this transaction."""
         self._execute(add_corpus, corpus)
@@ -271,6 +291,42 @@ class SQLiteMetadataTransaction:
             )
         )
         return outcome
+
+    def register_corpus_update_component_generation(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        generation: ComponentGenerationReference,
+        *,
+        validator: ComponentGenerationValidator,
+    ) -> ComponentGenerationReference:
+        """Validate and register one required immutable generation."""
+        return self._execute(
+            register_corpus_update_component_generation,
+            corpus_id,
+            corpus_version,
+            generation,
+            validator=validator,
+        )
+
+    def replace_corpus_update_component_generation(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_generation: ComponentGenerationReference,
+        replacement_generation: ComponentGenerationReference,
+        *,
+        validator: ComponentGenerationValidator,
+    ) -> ComponentGenerationReference:
+        """Validate and replace one explicitly expected generation."""
+        return self._execute(
+            replace_corpus_update_component_generation,
+            corpus_id,
+            corpus_version,
+            expected_generation,
+            replacement_generation,
+            validator=validator,
+        )
 
     def add_corpus_update_document_membership(
         self,
