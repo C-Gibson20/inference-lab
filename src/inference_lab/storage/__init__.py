@@ -31,6 +31,18 @@ from inference_lab.storage.protocols import (
     MetadataTransaction,
     MetadataWriter,
 )
+from inference_lab.storage.source_locations import (
+    BoundingBox,
+    CollectionAvailability,
+    ContentOrigin,
+    CoordinateOrigin,
+    CoordinateUnit,
+    PageLayoutDescriptor,
+    PageRotation,
+    SourceLocation,
+    StructuralBlock,
+    StructuralBlockKind,
+)
 from inference_lab.storage.source_records import SourceArtefact
 from inference_lab.storage.source_serialisation import serialise_source_artefact
 from inference_lab.storage.source_versioning import (
@@ -42,6 +54,11 @@ from inference_lab.storage.source_versioning import (
 __all__ = [
     "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
     "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
+    "BoundingBox",
+    "CollectionAvailability",
+    "ContentOrigin",
+    "CoordinateOrigin",
+    "CoordinateUnit",
     "CorruptStorageError",
     "IncompatibleSchemaError",
     "MetadataReader",
@@ -49,6 +66,8 @@ __all__ = [
     "MetadataTransaction",
     "MetadataWriter",
     "MigrationRequiredError",
+    "PageLayoutDescriptor",
+    "PageRotation",
     "ParseFailureCategory",
     "ParseFailureRecord",
     "ParseFailureSeverity",
@@ -60,12 +79,15 @@ __all__ = [
     "RepositoryClosedError",
     "RepositoryUnavailableError",
     "SourceArtefact",
+    "SourceLocation",
     "StorageConcurrencyError",
     "StorageConflictError",
     "StorageError",
     "StorageErrorCategory",
     "StorageMigrationError",
     "StorageTransactionError",
+    "StructuralBlock",
+    "StructuralBlockKind",
     "open_metadata_repository",
     "serialise_parse_outcome",
     "serialise_source_artefact",
