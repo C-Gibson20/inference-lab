@@ -14,12 +14,23 @@ from inference_lab.storage.errors import (
     StorageTransactionError,
 )
 from inference_lab.storage.factory import open_metadata_repository
+from inference_lab.storage.outcomes import (
+    AbortCorpusUpdateOutcome,
+    BeginCorpusUpdateOutcome,
+    CommitCorpusUpdateOutcome,
+    CorpusVersionConflictKind,
+    CorpusVersionConflictOutcome,
+    NoCorpusChangeOutcome,
+    RollbackCorpusVersionOutcome,
+    SealCorpusUpdateOutcome,
+)
 from inference_lab.storage.protocols import (
     MetadataReader,
     MetadataRepository,
     MetadataTransaction,
     MetadataWriter,
 )
+from inference_lab.storage.snapshots import CorpusSnapshot
 from inference_lab.storage.versioning import (
     CORPUS_MANIFEST_CONTRACT_VERSION,
     ComponentGenerationReference,
@@ -34,12 +45,18 @@ from inference_lab.storage.versioning import (
 
 __all__ = [
     "CORPUS_MANIFEST_CONTRACT_VERSION",
+    "AbortCorpusUpdateOutcome",
+    "BeginCorpusUpdateOutcome",
+    "CommitCorpusUpdateOutcome",
     "ComponentGenerationReference",
     "ComponentGenerationState",
     "ComponentKind",
+    "CorpusSnapshot",
     "CorpusUpdate",
     "CorpusUpdateState",
     "CorpusVersion",
+    "CorpusVersionConflictKind",
+    "CorpusVersionConflictOutcome",
     "CorpusVersionManifest",
     "CorruptStorageError",
     "IncompatibleSchemaError",
@@ -49,8 +66,11 @@ __all__ = [
     "MetadataTransaction",
     "MetadataWriter",
     "MigrationRequiredError",
+    "NoCorpusChangeOutcome",
     "RepositoryClosedError",
     "RepositoryUnavailableError",
+    "RollbackCorpusVersionOutcome",
+    "SealCorpusUpdateOutcome",
     "StorageConcurrencyError",
     "StorageConflictError",
     "StorageError",
