@@ -6,6 +6,7 @@ import os
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from inference_lab._validation import is_local_path_shape, is_strict_integer
 from inference_lab.ingest.discovery import (
@@ -27,6 +28,92 @@ from inference_lab.provenance import ExternalIdentifier
 from inference_lab.provenance.values import validate_external_identifiers
 
 PathOrderingKey = tuple[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class TraversalPathMetadata:
+    """Carry the content-free path metadata required during traversal."""
+
+    mode: int
+    byte_count: int
+    modified_time_ns: int
+    device_id: int
+    file_id: int
+
+    def __post_init__(self) -> None:
+        """Validate the non-negative integer metadata boundary."""
+        for field_name, value in (
+            ("mode", self.mode),
+            ("byte_count", self.byte_count),
+            ("modified_time_ns", self.modified_time_ns),
+            ("device_id", self.device_id),
+            ("file_id", self.file_id),
+        ):
+            if not is_strict_integer(value):
+                raise TypeError(f"{field_name} must be an integer.")
+            if value < 0:
+                raise ValueError(f"{field_name} must be non-negative.")
+
+
+@runtime_checkable
+class TraversalFileSystem(Protocol):
+    """Provide the bounded local-filesystem operations used by traversal."""
+
+    def absolute(self, path: Path) -> Path:
+        """Return an absolute lexical path without resolving aliases."""
+        ...
+
+    def resolve(self, path: Path) -> Path:
+        """Resolve aliases without requiring the final path to exist."""
+        ...
+
+    def lstat(self, path: Path) -> TraversalPathMetadata:
+        """Return path metadata without following the final component."""
+        ...
+
+    def list_directory(self, path: Path) -> tuple[Path, ...]:
+        """Return one point-in-time snapshot of immediate entry paths."""
+        ...
+
+    def is_junction(self, path: Path) -> bool:
+        """Return whether the host identifies the path as a junction."""
+        ...
+
+
+class LocalTraversalFileSystem:
+    """Adapt host filesystem operations for content-free local traversal."""
+
+    def absolute(self, path: Path) -> Path:
+        """Return an absolute lexical path without resolving aliases."""
+        return Path(os.path.abspath(os.fspath(path)))
+
+    def resolve(self, path: Path) -> Path:
+        """Resolve aliases without requiring the final path to exist."""
+        return path.resolve(strict=False)
+
+    def lstat(self, path: Path) -> TraversalPathMetadata:
+        """Return bounded metadata without following the final component."""
+        stat_result = path.lstat()
+        return TraversalPathMetadata(
+            mode=stat_result.st_mode,
+            byte_count=stat_result.st_size,
+            modified_time_ns=stat_result.st_mtime_ns,
+            device_id=stat_result.st_dev,
+            file_id=stat_result.st_ino,
+        )
+
+    def list_directory(self, path: Path) -> tuple[Path, ...]:
+        """Snapshot immediate entry paths without retaining directory handles."""
+        with os.scandir(path) as entries:
+            return tuple(Path(entry.path) for entry in entries)
+
+    def is_junction(self, path: Path) -> bool:
+        """Return whether the host reports a Windows junction at the path."""
+        is_junction = getattr(os.path, "isjunction", None)
+        return bool(is_junction is not None and is_junction(path))
+
+
+_LOCAL_FILESYSTEM = LocalTraversalFileSystem()
 
 
 def canonical_path_key(path: Path) -> PathOrderingKey:
@@ -137,7 +224,7 @@ class _PreparedRoot:
     ordinal: int
     discovery_input: DiscoveryInput
     path: Path = field(repr=False)
-    stat_result: os.stat_result = field(repr=False)
+    metadata: TraversalPathMetadata = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,9 +243,9 @@ class _RawFailure:
     file_kind: DiscoveryFileKind | None = None
 
 
-def _resolved_path(path: Path) -> Path:
+def _resolved_path(path: Path, filesystem: TraversalFileSystem) -> Path:
     """Resolve aliases for path equality without requiring the leaf to exist."""
-    return path.resolve(strict=False)
+    return filesystem.resolve(path)
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
@@ -168,7 +255,10 @@ def _paths_overlap(first: Path, second: Path) -> bool:
     )
 
 
-def _validate_excluded_paths(excluded_paths: object) -> tuple[Path, ...]:
+def _validate_excluded_paths(
+    excluded_paths: object,
+    filesystem: TraversalFileSystem,
+) -> tuple[Path, ...]:
     """Validate and canonicalise caller-supplied active storage locations."""
     if not isinstance(excluded_paths, tuple):
         raise TypeError("excluded_paths must be a tuple.")
@@ -176,7 +266,7 @@ def _validate_excluded_paths(excluded_paths: object) -> tuple[Path, ...]:
         raise TypeError("excluded_paths must contain Path values.")
     if any(not is_local_path_shape(path) for path in excluded_paths):
         raise ValueError("excluded_paths must contain local filesystem paths.")
-    resolved = {_resolved_path(path) for path in excluded_paths}
+    resolved = {_resolved_path(path, filesystem) for path in excluded_paths}
     return tuple(sorted(resolved, key=canonical_path_key))
 
 
@@ -208,22 +298,16 @@ def _file_kind(mode: int) -> DiscoveryFileKind:
     return DiscoveryFileKind.SPECIAL
 
 
-def _stat_evidence(stat_result: os.stat_result) -> FileStatEvidence:
+def _stat_evidence(metadata: TraversalPathMetadata) -> FileStatEvidence:
     """Convert one no-follow stat result into bounded inventory evidence."""
     return FileStatEvidence(
-        byte_count=stat_result.st_size,
-        modified_time_ns=stat_result.st_mtime_ns,
+        byte_count=metadata.byte_count,
+        modified_time_ns=metadata.modified_time_ns,
         identity_hint=FileIdentityHint(
-            device_id=stat_result.st_dev,
-            file_id=stat_result.st_ino,
+            device_id=metadata.device_id,
+            file_id=metadata.file_id,
         ),
     )
-
-
-def _is_junction(path: Path) -> bool:
-    """Return whether the host reports a Windows junction at a local path."""
-    is_junction = getattr(os.path, "isjunction", None)
-    return bool(is_junction is not None and is_junction(path))
 
 
 def _root_failure(
@@ -268,18 +352,19 @@ def _same_root_metadata(first: DiscoveryInput, second: DiscoveryInput) -> bool:
 def _prepare_roots(
     request: DiscoveryRequest,
     excluded_paths: tuple[Path, ...],
+    filesystem: TraversalFileSystem,
 ) -> tuple[tuple[_PreparedRoot, ...], TraversalInventory | None]:
     """Validate, sort, deduplicate, and stat all explicit request roots."""
     ordered_inputs = sorted(
         request.inputs,
         key=lambda item: canonical_path_key(item.root),
     )
-    unique_inputs: list[tuple[Path, DiscoveryInput, os.stat_result]] = []
+    unique_inputs: list[tuple[Path, DiscoveryInput, TraversalPathMetadata]] = []
     by_path: dict[PathOrderingKey, DiscoveryInput] = {}
     for input_ordinal, discovery_input in enumerate(ordered_inputs):
-        lexical_path = Path(os.path.abspath(os.fspath(discovery_input.root)))
+        lexical_path = filesystem.absolute(discovery_input.root)
         try:
-            stat_result = lexical_path.lstat()
+            metadata = filesystem.lstat(lexical_path)
         except FileNotFoundError:
             return (), _root_failure(
                 root_count=len(request.inputs),
@@ -295,13 +380,22 @@ def _prepare_roots(
                 category=DiscoveryFailureCategory.ROOT_INACCESSIBLE,
             )
 
-        kind = _file_kind(stat_result.st_mode)
+        kind = _file_kind(metadata.mode)
         expected_kind = (
             DiscoveryFileKind.REGULAR_FILE
             if discovery_input.kind is DiscoveryInputKind.FILE
             else DiscoveryFileKind.DIRECTORY
         )
-        if kind is DiscoveryFileKind.SYMLINK or _is_junction(lexical_path):
+        try:
+            is_junction = filesystem.is_junction(lexical_path)
+        except OSError:
+            return (), _root_failure(
+                root_count=len(request.inputs),
+                root_ordinal=input_ordinal,
+                path=lexical_path,
+                category=DiscoveryFailureCategory.ROOT_INACCESSIBLE,
+            )
+        if kind is DiscoveryFileKind.SYMLINK or is_junction:
             return (), _root_failure(
                 root_count=len(request.inputs),
                 root_ordinal=input_ordinal,
@@ -318,7 +412,15 @@ def _prepare_roots(
                 file_kind=kind,
             )
 
-        resolved = _resolved_path(lexical_path)
+        try:
+            resolved = _resolved_path(lexical_path, filesystem)
+        except OSError:
+            return (), _root_failure(
+                root_count=len(request.inputs),
+                root_ordinal=input_ordinal,
+                path=lexical_path,
+                category=DiscoveryFailureCategory.ROOT_INACCESSIBLE,
+            )
         key = canonical_path_key(resolved)
         existing = by_path.get(key)
         if existing is not None:
@@ -331,12 +433,12 @@ def _prepare_roots(
                 )
             continue
         by_path[key] = discovery_input
-        unique_inputs.append((resolved, discovery_input, stat_result))
+        unique_inputs.append((resolved, discovery_input, metadata))
 
     unique_inputs.sort(key=lambda item: canonical_path_key(item[0]))
     root_count = len(unique_inputs)
     prepared: list[_PreparedRoot] = []
-    for ordinal, (path, discovery_input, stat_result) in enumerate(unique_inputs):
+    for ordinal, (path, discovery_input, metadata) in enumerate(unique_inputs):
         if any(_paths_overlap(path, excluded) for excluded in excluded_paths):
             return (), _root_failure(
                 root_count=root_count,
@@ -344,7 +446,7 @@ def _prepare_roots(
                 path=path,
                 category=DiscoveryFailureCategory.STORAGE_ROOT_OVERLAP,
             )
-        prepared.append(_PreparedRoot(ordinal, discovery_input, path, stat_result))
+        prepared.append(_PreparedRoot(ordinal, discovery_input, path, metadata))
 
     if not prepared:
         raise RuntimeError("validated discovery request produced no roots")
@@ -369,16 +471,16 @@ def _raw_failure(
     )
 
 
-def _candidate_from_stat(
+def _candidate_from_metadata(
     path: Path,
     root: _PreparedRoot,
-    stat_result: os.stat_result,
+    metadata: TraversalPathMetadata,
 ) -> _RawCandidate:
     """Build an ordinal-free regular-file candidate from no-follow metadata."""
     return _RawCandidate(
-        key=canonical_path_key(_resolved_path(path)),
+        key=canonical_path_key(path),
         locator=_locator(path, root),
-        stat_evidence=_stat_evidence(stat_result),
+        stat_evidence=_stat_evidence(metadata),
         discovery_input=root.discovery_input,
     )
 
@@ -403,20 +505,20 @@ def _scan_directory_root(
     root: _PreparedRoot,
     candidates: dict[PathOrderingKey, _RawCandidate],
     failures: list[_RawFailure],
+    filesystem: TraversalFileSystem,
 ) -> bool:
     """Iteratively scan one directory root and return whether it was complete."""
     complete = True
     pending = [root.path]
-    root_device = root.stat_result.st_dev
+    root_device = root.metadata.device_id
     while pending:
         directory = pending.pop()
         try:
-            with os.scandir(directory) as entries:
-                snapshot = sorted(
-                    list(entries),
-                    key=lambda entry: canonical_path_key(Path(entry.path)),
-                    reverse=True,
-                )
+            snapshot = sorted(
+                filesystem.list_directory(directory),
+                key=canonical_path_key,
+                reverse=True,
+            )
         except OSError:
             failures.append(
                 _raw_failure(
@@ -429,10 +531,9 @@ def _scan_directory_root(
             complete = False
             continue
 
-        for entry in snapshot:
-            path = Path(entry.path)
+        for path in snapshot:
             try:
-                if entry.is_symlink() or _is_junction(path):
+                if filesystem.is_junction(path):
                     failures.append(
                         _raw_failure(
                             path,
@@ -442,7 +543,7 @@ def _scan_directory_root(
                         )
                     )
                     continue
-                stat_result = entry.stat(follow_symlinks=False)
+                metadata = filesystem.lstat(path)
             except FileNotFoundError:
                 failures.append(
                     _raw_failure(
@@ -464,9 +565,19 @@ def _scan_directory_root(
                 complete = False
                 continue
 
-            kind = _file_kind(stat_result.st_mode)
+            kind = _file_kind(metadata.mode)
+            if kind is DiscoveryFileKind.SYMLINK:
+                failures.append(
+                    _raw_failure(
+                        path,
+                        root,
+                        DiscoveryFailureCategory.SOURCE_SYMLINK,
+                        file_kind=kind,
+                    )
+                )
+                continue
             if kind is DiscoveryFileKind.DIRECTORY:
-                if stat_result.st_dev != root_device:
+                if metadata.device_id != root_device:
                     failures.append(
                         _raw_failure(
                             path,
@@ -489,7 +600,7 @@ def _scan_directory_root(
                 )
                 continue
 
-            candidate = _candidate_from_stat(path, root, stat_result)
+            candidate = _candidate_from_metadata(path, root, metadata)
             existing = candidates.get(candidate.key)
             candidates[candidate.key] = (
                 candidate
@@ -549,12 +660,16 @@ def inventory_local_sources(
     request: DiscoveryRequest,
     *,
     excluded_paths: tuple[Path, ...],
+    filesystem: TraversalFileSystem | None = None,
 ) -> TraversalInventory:
     """Inventory explicit local roots without following links or reading content."""
     if not isinstance(request, DiscoveryRequest):
         raise TypeError("request must be a DiscoveryRequest.")
-    exclusions = _validate_excluded_paths(excluded_paths)
-    roots, failure = _prepare_roots(request, exclusions)
+    selected_filesystem = _LOCAL_FILESYSTEM if filesystem is None else filesystem
+    if not isinstance(selected_filesystem, TraversalFileSystem):
+        raise TypeError("filesystem must implement TraversalFileSystem.")
+    exclusions = _validate_excluded_paths(excluded_paths, selected_filesystem)
+    roots, failure = _prepare_roots(request, exclusions, selected_filesystem)
     if failure is not None:
         return failure
 
@@ -563,7 +678,7 @@ def inventory_local_sources(
     complete_roots: list[int] = []
     for root in roots:
         if root.discovery_input.kind is DiscoveryInputKind.FILE:
-            candidate = _candidate_from_stat(root.path, root, root.stat_result)
+            candidate = _candidate_from_metadata(root.path, root, root.metadata)
             existing = raw_candidates.get(candidate.key)
             raw_candidates[candidate.key] = (
                 candidate
@@ -572,7 +687,12 @@ def inventory_local_sources(
             )
             complete_roots.append(root.ordinal)
             continue
-        if _scan_directory_root(root, raw_candidates, raw_failures):
+        if _scan_directory_root(
+            root,
+            raw_candidates,
+            raw_failures,
+            selected_filesystem,
+        ):
             complete_roots.append(root.ordinal)
 
     return _finalise_inventory(

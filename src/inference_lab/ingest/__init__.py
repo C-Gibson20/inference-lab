@@ -65,6 +65,15 @@ from inference_lab.ingest.sources import (
     StructuralBlockKind,
 )
 from inference_lab.ingest.text_native import TextNativeParser
+from inference_lab.ingest.traversal import (
+    LocalTraversalFileSystem,
+    TraversalCandidate,
+    TraversalFileSystem,
+    TraversalInventory,
+    TraversalPathMetadata,
+    canonical_path_key,
+    inventory_local_sources,
+)
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,
@@ -94,6 +103,7 @@ __all__ = [
     "FileIdentityHint",
     "FileStatEvidence",
     "HiddenEntryPolicy",
+    "LocalTraversalFileSystem",
     "NestedMountPolicy",
     "NormalisedText",
     "ParseOutcome",
@@ -119,10 +129,16 @@ __all__ = [
     "StructuralBlockKind",
     "SymlinkPolicy",
     "TextNativeParser",
+    "TraversalCandidate",
+    "TraversalFileSystem",
+    "TraversalInventory",
+    "TraversalPathMetadata",
     "VerifiedSourceSnapshot",
+    "canonical_path_key",
     "decode_source",
     "discovery_failure_policy",
     "generate_source_span_id",
+    "inventory_local_sources",
     "normalise_source_text",
     "parsed_document_payload",
     "prepare_text",
