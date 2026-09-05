@@ -253,4 +253,7 @@ def test_read_accepts_empty_verified_blob(tmp_path: Path) -> None:
     )
     _install_blob(tmp_path, artefact, b"")
 
-    assert ManagedSourceBlobStore(tmp_path).read_bytes(artefact) == b""
+    store = ManagedSourceBlobStore(tmp_path)
+
+    assert store.read_bytes(artefact) == b""
+    assert tuple(store.stream_bytes(artefact)) == ()

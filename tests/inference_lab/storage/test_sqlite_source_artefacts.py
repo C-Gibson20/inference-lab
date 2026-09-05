@@ -53,6 +53,13 @@ _VERSION = DocumentVersion(
     DOCUMENT_ID,
     SOURCE_HASH,
 )
+_SHARED_DOCUMENT_ID = DocumentId("20000000-0000-4000-8000-000000000099")
+_SHARED_VERSION_ID = DocumentVersionId("30000000-0000-4000-8000-000000000099")
+_SHARED_VERSION = DocumentVersion(
+    _SHARED_VERSION_ID,
+    _SHARED_DOCUMENT_ID,
+    SOURCE_HASH,
+)
 _ARTEFACT = SourceArtefact(
     document_id=DOCUMENT_ID,
     document_version_id=DOCUMENT_VERSION_ID,
@@ -60,6 +67,11 @@ _ARTEFACT = SourceArtefact(
     byte_count=len(SOURCE_BYTES),
     media_type="application/pdf",
     storage_key=(f"sha256/{SOURCE_HASH.digest[:2]}/{SOURCE_HASH.digest}"),
+)
+_SHARED_ARTEFACT = replace(
+    _ARTEFACT,
+    document_id=_SHARED_DOCUMENT_ID,
+    document_version_id=_SHARED_VERSION_ID,
 )
 _PRIVATE_DATABASE_PAYLOAD = "private-source-artefact-trigger-payload"
 
@@ -363,6 +375,150 @@ def test_source_reads_reject_repository_use_after_close(tmp_path: Path) -> None:
             _FIRST_CORPUS.corpus_id,
             DOCUMENT_VERSION_ID,
         )
+
+
+def test_distinct_versions_and_corpora_share_one_verified_blob(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    ManagedSourceBlobStore(source_dir).write_chunks(
+        _ARTEFACT,
+        (SOURCE_BYTES,),
+        max_source_bytes=len(SOURCE_BYTES),
+    )
+    repository = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+        source_dir=source_dir,
+    )
+    with repository.transaction() as transaction:
+        transaction.add_corpus(_FIRST_CORPUS)
+        transaction.add_corpus(_SECOND_CORPUS)
+        transaction.add_document(DocumentIdentity(DOCUMENT_ID))
+        transaction.add_document(DocumentIdentity(_SHARED_DOCUMENT_ID))
+        transaction.add_document_version(_VERSION)
+        transaction.add_document_version(_SHARED_VERSION)
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_ID,
+                DOCUMENT_VERSION_ID,
+            )
+        )
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _SECOND_CORPUS.corpus_id,
+                _SHARED_DOCUMENT_ID,
+                _SHARED_VERSION_ID,
+            )
+        )
+        transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
+        transaction.add_source_artefact(
+            _SECOND_CORPUS.corpus_id,
+            _SHARED_ARTEFACT,
+        )
+
+    try:
+        with capture_logs() as logs:
+            first = repository.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            first_repeat = repository.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            second = repository.read_source_bytes(
+                _SECOND_CORPUS.corpus_id,
+                _SHARED_VERSION_ID,
+            )
+            first_stream = repository.stream_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            second_stream = repository.stream_source_bytes(
+                _SECOND_CORPUS.corpus_id,
+                _SHARED_VERSION_ID,
+            )
+            first_stream_repeat = repository.stream_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+
+        assert first == first_repeat == second == SOURCE_BYTES
+        assert (
+            repository.get_source_artefact(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == _ARTEFACT
+        )
+        assert (
+            repository.get_source_artefact(
+                _SECOND_CORPUS.corpus_id,
+                _SHARED_VERSION_ID,
+            )
+            == _SHARED_ARTEFACT
+        )
+        assert first_stream is not None
+        assert second_stream is not None
+        assert first_stream_repeat is not None
+        assert b"".join(first_stream) == b"".join(second_stream) == SOURCE_BYTES
+        assert b"".join(first_stream_repeat) == SOURCE_BYTES
+        assert _ARTEFACT.storage_key == _SHARED_ARTEFACT.storage_key
+        assert len(_source_rows(database_path)) == 2
+        assert (source_dir / _ARTEFACT.storage_key).is_file()
+        assert logs == []
+    finally:
+        repository.close()
+
+
+@pytest.mark.parametrize(
+    "corruption_sql",
+    [
+        "UPDATE source_artefacts SET record_schema_version = '2.0.0'",
+        """UPDATE source_artefacts
+        SET document_id = '20000000-0000-4000-8000-000000000099'""",
+    ],
+    ids=("unsupported-record-version", "mismatched-owner"),
+)
+def test_corrupt_stored_metadata_fails_closed_on_every_public_read(
+    tmp_path: Path,
+    corruption_sql: str,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open_repository(database_path)
+    _add_catalogue(repository)
+    with repository.transaction() as transaction:
+        transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(corruption_sql)
+        connection.commit()
+    finally:
+        connection.close()
+
+    try:
+        with pytest.raises(CorruptStorageError):
+            repository.get_source_artefact(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+        with pytest.raises(CorruptStorageError):
+            repository.read_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+        with pytest.raises(CorruptStorageError):
+            repository.stream_source_bytes(
+                _FIRST_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+    finally:
+        repository.close()
 
 
 def test_source_artefact_reuse_requires_explicit_membership(
