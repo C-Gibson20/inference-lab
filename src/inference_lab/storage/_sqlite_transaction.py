@@ -42,8 +42,12 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     list_corpus_document_version_memberships,
 )
 from inference_lab.storage._sqlite_corpus_updates import (
+    add_corpus_update_document_membership,
     begin_corpus_update,
     get_corpus_update,
+    list_corpus_update_document_memberships,
+    remove_corpus_update_document_membership,
+    replace_corpus_update_document_membership,
 )
 from inference_lab.storage._sqlite_identifier_assertions import (
     add_external_identifier_assertions,
@@ -181,6 +185,18 @@ class SQLiteMetadataTransaction:
         """Return one owned durable corpus update within this transaction."""
         return self._execute(get_corpus_update, corpus_id, corpus_version)
 
+    def list_corpus_update_document_memberships(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return deterministic proposed membership within this transaction."""
+        return self._execute(
+            list_corpus_update_document_memberships,
+            corpus_id,
+            corpus_version,
+        )
+
     def add_corpus(self, corpus: CorpusMetadata) -> None:
         """Create a named corpus within this transaction."""
         self._execute(add_corpus, corpus)
@@ -227,6 +243,50 @@ class SQLiteMetadataTransaction:
             )
         )
         return outcome
+
+    def add_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Add a catalogue member to a preparing update."""
+        self._execute(
+            add_corpus_update_document_membership,
+            corpus_id,
+            corpus_version,
+            membership,
+        )
+
+    def replace_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_membership: CorpusDocumentVersionMembership,
+        replacement_membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Replace one agreeing logical-document membership."""
+        self._execute(
+            replace_corpus_update_document_membership,
+            corpus_id,
+            corpus_version,
+            expected_membership,
+            replacement_membership,
+        )
+
+    def remove_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Remove one exact proposed membership."""
+        self._execute(
+            remove_corpus_update_document_membership,
+            corpus_id,
+            corpus_version,
+            membership,
+        )
 
     def get_corpus_document_version_membership(
         self,

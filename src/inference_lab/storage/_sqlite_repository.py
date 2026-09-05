@@ -42,6 +42,7 @@ from inference_lab.storage._sqlite_corpus_memberships import (
 from inference_lab.storage._sqlite_corpus_updates import (
     CreatedAtFactory,
     get_corpus_update,
+    list_corpus_update_document_memberships,
 )
 from inference_lab.storage._sqlite_identifier_assertions import (
     list_external_identifier_assertions,
@@ -155,6 +156,18 @@ class SQLiteMetadataRepository:
     ) -> CorpusUpdate | None:
         """Return one owned durable corpus update, or ``None``."""
         return get_corpus_update(
+            self._connection_or_raise(),
+            corpus_id,
+            corpus_version,
+        )
+
+    def list_corpus_update_document_memberships(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return deterministic proposed membership for one update."""
+        return list_corpus_update_document_memberships(
             self._connection_or_raise(),
             corpus_id,
             corpus_version,

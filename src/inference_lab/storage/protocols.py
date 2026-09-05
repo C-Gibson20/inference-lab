@@ -44,6 +44,14 @@ class MetadataReader(Protocol):
         """Return one owned durable corpus update, or ``None``."""
         ...
 
+    def list_corpus_update_document_memberships(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return deterministic proposed membership for one update."""
+        ...
+
     def get_corpus_document_version_membership(
         self,
         corpus_id: CorpusId,
@@ -163,6 +171,34 @@ class MetadataWriter(Protocol):
         restores_corpus_version: CorpusVersionId | None = None,
     ) -> BeginCorpusUpdateOutcome:
         """Create and seed a preparing update or return its exact replay."""
+        ...
+
+    def add_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Add a catalogue member to a preparing update or accept replay."""
+        ...
+
+    def replace_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_membership: CorpusDocumentVersionMembership,
+        replacement_membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Replace one explicitly agreeing logical-document membership."""
+        ...
+
+    def remove_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Remove one exact proposed membership or accept replay."""
         ...
 
     def add_corpus_document_version_membership(

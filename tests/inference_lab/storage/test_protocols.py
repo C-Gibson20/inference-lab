@@ -64,6 +64,31 @@ class StructuralTransaction:
     ) -> BeginCorpusUpdateOutcome:
         raise NotImplementedError
 
+    def add_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        pass
+
+    def replace_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_membership: CorpusDocumentVersionMembership,
+        replacement_membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        pass
+
+    def remove_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        pass
+
     def add_corpus_document_version_membership(
         self, membership: CorpusDocumentVersionMembership
     ) -> None:
@@ -116,6 +141,13 @@ class StructuralTransaction:
         corpus_version: CorpusVersionId,
     ) -> CorpusUpdate | None:
         return None
+
+    def list_corpus_update_document_memberships(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        return ()
 
     def get_corpus_document_version_membership(
         self,
@@ -220,6 +252,9 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_corpus = StructuralTransaction.get_corpus
         list_corpora = StructuralTransaction.list_corpora
         get_corpus_update = StructuralTransaction.get_corpus_update
+        list_corpus_update_document_memberships = (
+            StructuralTransaction.list_corpus_update_document_memberships
+        )
         get_corpus_document_version_membership = (
             StructuralTransaction.get_corpus_document_version_membership
         )
