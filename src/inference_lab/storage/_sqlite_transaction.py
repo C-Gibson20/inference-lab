@@ -41,6 +41,7 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
 )
+from inference_lab.storage._sqlite_corpus_publication import commit_corpus_update
 from inference_lab.storage._sqlite_corpus_updates import (
     abort_corpus_update,
     add_corpus_update_document_membership,
@@ -87,6 +88,7 @@ from inference_lab.storage.errors import (
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
+    CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
     SealCorpusUpdateOutcome,
 )
@@ -360,6 +362,33 @@ class SQLiteMetadataTransaction:
             event = "corpus_update_aborted"
             fields["abort_reason"] = "no_change"
         self._pending_success_logs.append((event, fields))
+        return outcome
+
+    def commit_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CommitCorpusUpdateOutcome:
+        """Atomically compare, advance, and publish one ready update."""
+        outcome = self._execute(
+            commit_corpus_update,
+            corpus_id,
+            corpus_version,
+            created_at_factory=self._repository._created_at_factory,
+        )
+        self._pending_success_logs.append(
+            (
+                "corpus_version_committed",
+                {
+                    "corpus_id": outcome.version.corpus_id.as_str(),
+                    "corpus_version": outcome.version.corpus_version.as_str(),
+                    "sequence": outcome.version.sequence,
+                    "document_count": len(outcome.manifest.document_memberships),
+                    "component_count": len(outcome.manifest.component_generations),
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
         return outcome
 
     def add_corpus_update_document_membership(

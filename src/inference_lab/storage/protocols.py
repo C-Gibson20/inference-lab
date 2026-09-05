@@ -24,6 +24,7 @@ from inference_lab.provenance import (
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
+    CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
     SealCorpusUpdateOutcome,
 )
@@ -240,6 +241,14 @@ class MetadataWriter(Protocol):
         corpus_version: CorpusVersionId,
     ) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
         """Seal a complete manifest or terminate an unchanged proposal."""
+        ...
+
+    def commit_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CommitCorpusUpdateOutcome:
+        """Atomically compare, advance, and publish one ready update."""
         ...
 
     def add_corpus_update_document_membership(

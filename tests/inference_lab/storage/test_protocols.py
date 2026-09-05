@@ -25,6 +25,7 @@ from inference_lab.provenance import (
 from inference_lab.storage import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
+    CommitCorpusUpdateOutcome,
     ComponentGenerationReference,
     ComponentGenerationValidator,
     ComponentKind,
@@ -102,6 +103,13 @@ class StructuralTransaction:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
+        raise NotImplementedError
+
+    def commit_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CommitCorpusUpdateOutcome:
         raise NotImplementedError
 
     def add_corpus_update_document_membership(
