@@ -413,6 +413,91 @@ def test_registration_rejects_incompatible_generation_without_validation(
         repository.close()
 
 
+@pytest.mark.parametrize(
+    "foreign_generation",
+    [
+        _generation(_DENSE, corpus_id=_CORPUS_B.corpus_id),
+        _generation(_DENSE, corpus_version=_OTHER_VERSION),
+    ],
+    ids=("mixed-corpus", "mixed-version"),
+)
+def test_mixed_generation_failure_preserves_exact_active_version(
+    tmp_path: Path,
+    foreign_generation: ComponentGenerationReference,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    parent_manifest = _create_committed_parent(database_path)
+    repository = SQLiteMetadataRepository.open(
+        database_path,
+        created_at_factory=_fixed_created_at,
+    )
+    validator = RecordingValidator()
+    valid_generation = _generation(_LEXICAL)
+    with repository.transaction() as transaction:
+        transaction.begin_corpus_update(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+            expected_corpus_version=_OTHER_VERSION,
+            required_component_kinds=(_DENSE, _LEXICAL),
+        )
+
+    try:
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.register_corpus_update_component_generation(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                    valid_generation,
+                    validator=validator,
+                )
+                transaction.register_corpus_update_component_generation(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                    foreign_generation,
+                    validator=validator,
+                )
+
+        assert validator.calls == [(valid_generation, (_MEMBERSHIP,))]
+        assert (
+            repository.list_corpus_update_component_generations(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+            )
+            == ()
+        )
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.seal_corpus_update(
+                    _CORPUS_A.corpus_id,
+                    _PROPOSED_VERSION,
+                )
+
+        update = repository.get_corpus_update(
+            _CORPUS_A.corpus_id,
+            _PROPOSED_VERSION,
+        )
+        assert update is not None
+        assert update.state is CorpusUpdateState.PREPARING
+        assert update.manifest_digest is None
+        active = repository.get_active_corpus_version(_CORPUS_A.corpus_id)
+        assert active is not None
+        assert active.corpus_version == _OTHER_VERSION
+        assert active.sequence == 1
+        assert repository.list_corpus_versions(_CORPUS_A.corpus_id) == (active,)
+        assert (
+            repository.get_corpus_version(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+            )
+            is None
+        )
+        with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as snapshot:
+            assert snapshot.version.corpus_version == _OTHER_VERSION
+            assert snapshot.manifest == parent_manifest
+    finally:
+        repository.close()
+
+
 def test_replacement_requires_expected_generation_and_supports_exact_replay(
     tmp_path: Path,
 ) -> None:
