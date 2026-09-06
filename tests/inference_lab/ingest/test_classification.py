@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     CURRENT_DISCOVERY_POLICY,
@@ -256,7 +257,8 @@ def test_inventory_classifies_every_file_and_exposes_only_supported_for_hashing(
         complete_root_ordinals=(0,),
     )
 
-    result = classify_source_inventory(traversal)
+    with capture_logs() as logs:
+        result = classify_source_inventory(traversal)
 
     assert tuple(
         item.classification.support for item in result.classified_candidates
@@ -279,6 +281,22 @@ def test_inventory_classifies_every_file_and_exposes_only_supported_for_hashing(
         "application/pdf",
         "application/octet-stream",
     )
+    assert [(record["event"], record["log_level"]) for record in logs] == [
+        ("source_skipped", "info"),
+        ("source_skipped", "info"),
+    ]
+    assert [record["source_ordinal"] for record in logs] == [0, 2]
+    assert [record["support"] for record in logs] == [
+        "recognised_unsupported",
+        "unknown",
+    ]
+    assert [record["media_type"] for record in logs] == [
+        "application/pdf",
+        "application/octet-stream",
+    ]
+    log_payload = repr(logs)
+    assert "paper.pdf" not in log_payload
+    assert "unknown.bin" not in log_payload
 
 
 def test_format_counts_aggregate_only_safe_stat_metadata() -> None:

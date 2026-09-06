@@ -5,7 +5,6 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Final
 
-import structlog
 from structlog.contextvars import bound_contextvars
 
 from inference_lab._validation import is_strict_integer
@@ -15,13 +14,12 @@ from inference_lab.ingest.discovery import (
     DiscoveryRequest,
 )
 from inference_lab.ingest.discovery_failures import DiscoveryFailure
+from inference_lab.ingest.discovery_logging import emit_discovery_event
 from inference_lab.ingest.discovery_results import DiscoveryResult, DiscoveryStatus
 from inference_lab.ingest.discovery_summary import build_discovery_result
 from inference_lab.ingest.identity_application import IdentityApplicationResult
 
 Clock = Callable[[], int]
-
-logger = structlog.get_logger(__name__)
 
 _COUNT_FIELDS: Final = (
     "files_seen",
@@ -36,14 +34,6 @@ _COUNT_FIELDS: Final = (
     "conflicting",
     "failed",
 )
-
-
-def _safe_log(method_name: str, event: str, **fields: object) -> None:
-    """Emit bounded lifecycle metadata without changing discovery outcomes."""
-    try:
-        getattr(logger, method_name)(event, pipeline_stage="ingest", **fields)
-    except Exception:
-        pass
 
 
 def _read_clock(clock: Clock) -> int:
@@ -111,7 +101,8 @@ class _DiscoveryLifecycle:
             field_name: getattr(result.counts, field_name)
             for field_name in _COUNT_FIELDS
         }
-        _safe_log(
+        emit_discovery_event(
+            __name__,
             _completion_level(result.status),
             "discovery_completed",
             policy_name=result.policy.policy_name,
@@ -150,7 +141,8 @@ def observe_discovery(
         corpus_version=None,
         document_id=None,
     ):
-        _safe_log(
+        emit_discovery_event(
+            __name__,
             "info",
             "discovery_started",
             policy_name=policy.policy_name,

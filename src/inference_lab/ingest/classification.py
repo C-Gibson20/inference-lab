@@ -20,6 +20,10 @@ from inference_lab.ingest.discovery_failures import (
     DiscoveryFailureCategory,
     DiscoveryFileKind,
 )
+from inference_lab.ingest.discovery_logging import (
+    emit_discovery_event,
+    failure_log_fields,
+)
 from inference_lab.ingest.traversal import TraversalCandidate, TraversalInventory
 
 _UNKNOWN_MEDIA_TYPE: Final = "application/octet-stream"
@@ -340,13 +344,14 @@ def classify_source_inventory(
         )
         for candidate in traversal.candidates
     )
-    failures = traversal.failures + tuple(
+    classification_failures = tuple(
         _classification_failure(item)
         for item in classified
         if item.classification.support is not SourceSupport.SUPPORTED
     )
+    failures = traversal.failures + classification_failures
     failures = tuple(sorted(failures, key=lambda failure: failure.ordinal))
-    return ClassificationInventory(
+    inventory = ClassificationInventory(
         classifier_name=registry.classifier_name,
         classifier_version=registry.classifier_version,
         traversal=traversal,
@@ -354,3 +359,15 @@ def classify_source_inventory(
         failures=failures,
         format_counts=_format_counts(classified),
     )
+    by_ordinal = {item.candidate.ordinal: item for item in classified}
+    for failure in classification_failures:
+        item = by_ordinal[failure.ordinal]
+        emit_discovery_event(
+            __name__,
+            "info",
+            "source_skipped",
+            support=item.classification.support.value,
+            byte_count=item.candidate.stat_evidence.byte_count,
+            **failure_log_fields(failure),
+        )
+    return inventory
