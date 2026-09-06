@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar
 
@@ -21,8 +22,11 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    KnownSourceSpan,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
 from inference_lab.storage._sqlite_cleanup import rollback_preserving_primary
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
@@ -61,6 +65,15 @@ from inference_lab.storage._sqlite_observations import (
     get_source_observation,
     list_source_observation_history,
 )
+from inference_lab.storage._sqlite_parse_outcomes import (
+    add_parse_outcome,
+    get_parse_outcome,
+)
+from inference_lab.storage._sqlite_parsed_representations import (
+    add_parsed_representation,
+    get_parsed_representation,
+    list_parsed_representations,
+)
 from inference_lab.storage._sqlite_relationships import (
     add_duplicate_relationship,
     add_family_membership,
@@ -68,6 +81,16 @@ from inference_lab.storage._sqlite_relationships import (
     list_family_memberships_by_document,
     list_family_memberships_by_document_version,
     list_family_memberships_by_family,
+)
+from inference_lab.storage._sqlite_source_artefacts import (
+    add_source_artefact,
+    get_source_artefact,
+    read_source_bytes,
+    stream_source_bytes,
+)
+from inference_lab.storage._sqlite_source_spans import (
+    list_known_source_spans,
+    resolve_source_span,
 )
 from inference_lab.storage._sqlite_versions import (
     add_document_version,
@@ -84,6 +107,10 @@ from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
 )
+from inference_lab.storage.parse_records import ParseOutcome
+from inference_lab.storage.parsed_records import ParsedRepresentation
+from inference_lab.storage.source_locations import ResolvedSourceSpan
+from inference_lab.storage.source_records import SourceArtefact
 from inference_lab.storage.versioning import ComponentKind, CorpusUpdate
 
 if TYPE_CHECKING:
@@ -138,6 +165,8 @@ class SQLiteMetadataTransaction:
             if not rolled_back and exception is not None:
                 safe_log_failure("transaction_failed", StorageTransactionError())
             self._finish()
+            if not rolled_back:
+                self._repository._discard_connection_preserving_primary()
             if exception is not None:
                 if self._failed and rolled_back:
                     error = (
@@ -157,12 +186,14 @@ class SQLiteMetadataTransaction:
         try:
             connection.commit()
         except sqlite3.Error as sqlite_error:
-            rollback_preserving_primary(connection)
+            rolled_back = rollback_preserving_primary(connection)
             error = translate_sqlite_error(
                 sqlite_error,
                 default=StorageTransactionError,
             )
             self._finish()
+            if not rolled_back:
+                self._repository._discard_connection_preserving_primary()
             safe_log_failure("transaction_failed", error)
             raise error from None
 
@@ -375,6 +406,92 @@ class SQLiteMetadataTransaction:
         """Return a document's versions within this transaction."""
         return self._execute(list_document_versions, document_id)
 
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return corpus-visible managed-source metadata in this transaction."""
+        return self._execute(
+            get_source_artefact,
+            corpus_id,
+            document_version_id,
+        )
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified corpus-visible bytes in this transaction."""
+        return self._execute(
+            read_source_bytes,
+            self._repository._source_blob_store,
+            corpus_id,
+            document_version_id,
+        )
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return fully verified, detached chunks in this transaction."""
+        return self._execute(
+            stream_source_bytes,
+            self._repository._source_blob_store,
+            corpus_id,
+            document_version_id,
+        )
+
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
+        """Return a complete corpus-visible parser outcome in this transaction."""
+        return self._execute(get_parse_outcome, corpus_id, parse_id)
+
+    def get_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        """Return a complete corpus-visible parsed record in this transaction."""
+        return self._execute(get_parsed_representation, corpus_id, record_id)
+
+    def list_parsed_representations(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ParsedRepresentation, ...]:
+        """Return a version's parsed records in this transaction."""
+        return self._execute(
+            list_parsed_representations,
+            corpus_id,
+            document_version_id,
+        )
+
+    def resolve_source_span(
+        self,
+        corpus_id: CorpusId,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
+        """Return a corpus-visible span and coordinate descriptor."""
+        return self._execute(resolve_source_span, corpus_id, source_span_id)
+
+    def list_known_source_spans(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[KnownSourceSpan, ...]:
+        """Return a version's validated PROV-03 source-span catalogue."""
+        return self._execute(
+            list_known_source_spans,
+            corpus_id,
+            document_version_id,
+        )
+
     def find_document_versions_by_content_hash(
         self,
         corpus_id: CorpusId,
@@ -438,6 +555,30 @@ class SQLiteMetadataTransaction:
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its external identifiers atomically."""
         self._execute(add_document_version, document_version)
+
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
+        """Add corpus-authorised managed-source metadata."""
+        self._execute(add_source_artefact, corpus_id, artefact)
+
+    def add_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        representation: ParsedRepresentation,
+    ) -> None:
+        """Add one complete corpus-authorised parsed aggregate."""
+        self._execute(add_parsed_representation, corpus_id, representation)
+
+    def add_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        outcome: ParseOutcome,
+    ) -> None:
+        """Add one complete corpus-authorised parser outcome."""
+        self._execute(add_parse_outcome, corpus_id, outcome)
 
     def add_source_observation(self, state: SourceObservationState) -> None:
         """Create an observed source at revision one."""

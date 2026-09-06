@@ -23,6 +23,7 @@ between nested sections and fields. For example:
 ```sh
 RUNTIME__VRAM_BUDGET_GB=24 \
 STORAGE__INDEX_DIR=/mnt/data/indexes \
+STORAGE__SOURCE_DIR=/mnt/source-data \
 uv run inference-lab
 ```
 
@@ -48,11 +49,20 @@ file or environment take effect after a process restart.
 | `runtime.max_context_tokens` | `RUNTIME__MAX_CONTEXT_TOKENS` | Defaults to `8192`. |
 | `storage.index_dir` | `STORAGE__INDEX_DIR` | Required persistent index path. |
 | `storage.metadata_db_path` | `STORAGE__METADATA_DB_PATH` | Required metadata database path. |
+| `storage.source_dir` | `STORAGE__SOURCE_DIR` | Required managed original-source path; keep it separate from indexes and metadata. |
 | `logging.level` | `LOGGING__LEVEL` | Logging threshold; example default is `INFO`. |
 | `logging.format` | `LOGGING__FORMAT` | `console`, `json`, or `auto`; example default is `auto`. |
+| `ingest.max_source_bytes` | `INGEST__MAX_SOURCE_BYTES` | Maximum original-source size in bytes; defaults to `52428800` and must be greater than zero. |
 
 The configuration loader must reject missing required values and invalid types.
 It must not substitute guessed model paths, storage paths, or runtime values.
+Managed originals under `storage.source_dir` require a separate source-data
+backup; they are not part of corpus-state backups.
+The directory is repository-owned: do not rename, edit, move, or delete its
+contents directly. The service account needs permission to create, stage,
+atomically rename, lock, and read files there. See
+[source availability](source-availability.md) for integrity and recovery
+guidance.
 Backup-specific settings are defined but not yet available; see the
 [backup and restore runbook](backup-restore.md) for the selected contract and
 current implementation status.
