@@ -45,16 +45,20 @@ class RuntimeConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    """Filesystem locations for persistent indexes and metadata."""
+    """Filesystem locations for persistent indexes, metadata, and source files."""
 
     model_config = ConfigDict(extra="forbid")
 
     index_dir: Path
     metadata_db_path: Path
+    source_dir: Path
 
-    _validate_paths = field_validator("index_dir", "metadata_db_path", mode="before")(
-        _validate_local_path
-    )
+    _validate_paths = field_validator(
+        "index_dir",
+        "metadata_db_path",
+        "source_dir",
+        mode="before",
+    )(_validate_local_path)
 
 
 class LoggingConfig(BaseModel):

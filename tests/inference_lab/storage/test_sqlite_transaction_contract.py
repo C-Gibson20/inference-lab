@@ -24,6 +24,7 @@ from inference_lab.provenance import (
 from inference_lab.storage import (
     MetadataRepository,
     MetadataTransaction,
+    RepositoryClosedError,
     StorageConflictError,
     StorageTransactionError,
 )
@@ -90,6 +91,7 @@ def test_concrete_repository_and_transaction_satisfy_public_protocols(
         assert isinstance(transaction_contract, MetadataTransaction)
         assert not hasattr(repository, "add_document")
         assert not hasattr(repository, "add_document_version")
+        assert not hasattr(repository, "add_source_artefact")
 
         with transaction_contract:
             transaction_contract.add_corpus(_CORPUS)
@@ -253,6 +255,9 @@ def test_rollback_failure_does_not_replace_primary_transaction_exception(
                     raise primary
 
         assert raised.value is primary
+        assert repository.is_closed is True
+        with pytest.raises(RepositoryClosedError):
+            repository.get_corpus(_CORPUS_ID)
         assert logs == [
             {
                 "event": "transaction_failed",
