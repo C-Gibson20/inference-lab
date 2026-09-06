@@ -49,6 +49,7 @@ from inference_lab.storage._sqlite_corpus_updates import (
     get_corpus_update,
     list_corpus_update_component_generations,
     list_corpus_update_document_memberships,
+    list_non_terminal_corpus_updates,
 )
 from inference_lab.storage._sqlite_corpus_versions import (
     get_active_corpus_version,
@@ -201,6 +202,10 @@ class SQLiteMetadataRepository:
             corpus_id,
             corpus_version,
         )
+
+    def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
+        """Return durable preparing and ready work for explicit recovery."""
+        return list_non_terminal_corpus_updates(self._connection_or_raise())
 
     def list_corpus_update_document_memberships(
         self,

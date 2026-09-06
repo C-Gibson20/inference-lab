@@ -91,6 +91,10 @@ class MetadataReader(Protocol):
         """Return one owned durable corpus update, or ``None``."""
         ...
 
+    def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
+        """Return durable preparing and ready work for explicit recovery."""
+        ...
+
     def list_corpus_update_document_memberships(
         self,
         corpus_id: CorpusId,
@@ -233,7 +237,7 @@ class MetadataWriter(Protocol):
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> AbortCorpusUpdateOutcome:
-        """Abort a preparing update or return its exact abort replay."""
+        """Abort preparing or ready work or return its exact replay."""
         ...
 
     def register_corpus_update_component_generation(

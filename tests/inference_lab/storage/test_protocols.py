@@ -211,6 +211,9 @@ class StructuralTransaction:
     ) -> CorpusUpdate | None:
         return None
 
+    def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
+        return ()
+
     def list_corpus_update_document_memberships(
         self,
         corpus_id: CorpusId,
@@ -357,6 +360,9 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_corpus_version = StructuralTransaction.get_corpus_version
         list_corpus_versions = StructuralTransaction.list_corpus_versions
         get_corpus_update = StructuralTransaction.get_corpus_update
+        list_non_terminal_corpus_updates = (
+            StructuralTransaction.list_non_terminal_corpus_updates
+        )
         list_corpus_update_document_memberships = (
             StructuralTransaction.list_corpus_update_document_memberships
         )

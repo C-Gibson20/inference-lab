@@ -49,6 +49,7 @@ from inference_lab.storage._sqlite_corpus_updates import (
     get_corpus_update,
     list_corpus_update_component_generations,
     list_corpus_update_document_memberships,
+    list_non_terminal_corpus_updates,
     register_corpus_update_component_generation,
     remove_corpus_update_document_membership,
     replace_corpus_update_component_generation,
@@ -230,6 +231,10 @@ class SQLiteMetadataTransaction:
         """Return one owned durable corpus update within this transaction."""
         return self._execute(get_corpus_update, corpus_id, corpus_version)
 
+    def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
+        """Return durable preparing and ready work within this transaction."""
+        return self._execute(list_non_terminal_corpus_updates)
+
     def list_corpus_update_document_memberships(
         self,
         corpus_id: CorpusId,
@@ -306,7 +311,7 @@ class SQLiteMetadataTransaction:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> AbortCorpusUpdateOutcome:
-        """Abort a preparing update or return its exact abort replay."""
+        """Abort preparing or ready work or return its exact abort replay."""
         outcome = self._execute(
             abort_corpus_update,
             corpus_id,

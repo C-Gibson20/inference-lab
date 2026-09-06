@@ -142,6 +142,28 @@ def get_corpus_update(
         ) from None
 
 
+def list_non_terminal_corpus_updates(
+    connection: sqlite3.Connection,
+) -> tuple[CorpusUpdate, ...]:
+    """Return durable preparing and ready work in deterministic order."""
+    try:
+        rows = connection.execute(
+            """SELECT corpus_id, corpus_version, expected_corpus_version, state,
+                manifest_digest, created_at, restores_corpus_version
+            FROM corpus_updates
+            WHERE state IN ('preparing', 'ready')
+            ORDER BY created_at, corpus_id, corpus_version"""
+        ).fetchall()
+        return _reconstruct_updates(connection, rows)
+    except CorruptStorageError:
+        raise
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
 def _reconstruct_document_memberships(
     rows: Sequence[sqlite3.Row],
 ) -> tuple[CorpusDocumentVersionMembership, ...]:
@@ -296,12 +318,17 @@ def _require_preparing(update: CorpusUpdate) -> None:
         _raise_conflict(update.corpus_id, update.corpus_version)
 
 
+def _require_abortable(update: CorpusUpdate) -> None:
+    if update.state not in {CorpusUpdateState.PREPARING, CorpusUpdateState.READY}:
+        _raise_conflict(update.corpus_id, update.corpus_version)
+
+
 def abort_corpus_update(
     connection: sqlite3.Connection,
     corpus_id: CorpusId,
     corpus_version: CorpusVersionId,
 ) -> AbortCorpusUpdateOutcome:
-    """Abort one preparing update or accept an exact abort replay."""
+    """Abort one preparing or ready update or accept an exact replay."""
     if not isinstance(corpus_id, CorpusId):
         raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(corpus_version, CorpusVersionId):
@@ -311,11 +338,12 @@ def abort_corpus_update(
         update = _require_update(connection, corpus_id, corpus_version)
         if update.state is CorpusUpdateState.ABORTED:
             return AbortCorpusUpdateOutcome(update=update, replayed=True)
-        _require_preparing(update)
+        _require_abortable(update)
         connection.execute(
             """UPDATE corpus_updates
             SET state = 'aborted'
-            WHERE corpus_id = ? AND corpus_version = ? AND state = 'preparing'""",
+            WHERE corpus_id = ? AND corpus_version = ?
+                AND state IN ('preparing', 'ready')""",
             (corpus_id.as_str(), corpus_version.as_str()),
         )
         if connection.execute("SELECT changes()").fetchone()[0] != 1:
