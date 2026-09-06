@@ -6,6 +6,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Final
 
+from inference_lab.storage._sqlite_version_schema import (
+    CORPUS_VERSION_SCHEMA_STATEMENTS,
+)
+
 _MIGRATION_ID_PATTERN: Final = re.compile(r"^[a-z][a-z0-9_]*$")
 _TRANSACTION_CONTROL_PATTERN: Final = re.compile(
     r"^(?:begin|commit|end|rollback|savepoint|release)\b",
@@ -1030,6 +1034,11 @@ MIGRATIONS: Final = (
         revision=2,
         migration_id="source_persistence",
         statements=_SOURCE_PERSISTENCE_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=3,
+        migration_id="corpus_version_publication",
+        statements=CORPUS_VERSION_SCHEMA_STATEMENTS,
     ),
 )
 
