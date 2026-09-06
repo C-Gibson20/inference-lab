@@ -47,11 +47,13 @@ from inference_lab.ingest.discovery_failures import (
     DiscoveryFileKind,
     discovery_failure_policy,
 )
+from inference_lab.ingest.discovery_observability import observe_discovery
 from inference_lab.ingest.discovery_results import (
     DiscoveryCounts,
     DiscoveryResult,
     DiscoveryStatus,
 )
+from inference_lab.ingest.discovery_summary import build_discovery_result
 from inference_lab.ingest.errors import (
     ParserDecodeError,
     ParserFailure,
@@ -189,6 +191,7 @@ __all__ = [
     "UuidSourceObservationIdAllocator",
     "VerifiedSourceSnapshot",
     "apply_discovery_identity_outcome",
+    "build_discovery_result",
     "canonical_path_key",
     "classify_source_candidate",
     "classify_source_inventory",
@@ -198,6 +201,7 @@ __all__ = [
     "hash_source_candidate",
     "inventory_local_sources",
     "normalise_source_text",
+    "observe_discovery",
     "parsed_document_payload",
     "persist_discovered_source_identities",
     "persist_discovered_source_identity",

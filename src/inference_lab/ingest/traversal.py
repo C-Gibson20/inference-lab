@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from structlog.contextvars import bound_contextvars
+
 from inference_lab._validation import is_local_path_shape, is_strict_integer
 from inference_lab.ingest.discovery import (
     DiscoveryInput,
@@ -22,7 +24,12 @@ from inference_lab.ingest.discovery import (
 from inference_lab.ingest.discovery_failures import (
     DiscoveryFailure,
     DiscoveryFailureCategory,
+    DiscoveryFailureScope,
     DiscoveryFileKind,
+)
+from inference_lab.ingest.discovery_logging import (
+    emit_discovery_event,
+    failure_log_fields,
 )
 from inference_lab.provenance import ExternalIdentifier
 from inference_lab.provenance.values import validate_external_identifiers
@@ -114,6 +121,14 @@ class LocalTraversalFileSystem:
 
 
 _LOCAL_FILESYSTEM = LocalTraversalFileSystem()
+
+_POLICY_SKIP_CATEGORIES = frozenset(
+    {
+        DiscoveryFailureCategory.SOURCE_SYMLINK,
+        DiscoveryFailureCategory.SOURCE_SPECIAL_FILE,
+        DiscoveryFailureCategory.NESTED_MOUNT,
+    }
+)
 
 
 def canonical_path_key(path: Path) -> PathOrderingKey:
@@ -706,6 +721,37 @@ def _finalise_inventory(
     )
 
 
+def _log_traversal_inventory(inventory: TraversalInventory) -> None:
+    """Emit ordered, content-free outcomes from one traversal boundary."""
+    entries = sorted(
+        (*inventory.candidates, *inventory.failures),
+        key=lambda item: item.ordinal,
+    )
+    for entry in entries:
+        if isinstance(entry, TraversalCandidate):
+            emit_discovery_event(
+                __name__,
+                "debug",
+                "source_discovered",
+                source_ordinal=entry.ordinal,
+                file_kind=DiscoveryFileKind.REGULAR_FILE.value,
+                byte_count=entry.stat_evidence.byte_count,
+            )
+            continue
+
+        fields = failure_log_fields(entry)
+        if entry.scope is DiscoveryFailureScope.REQUEST:
+            method_name = "error"
+            event = "discovery_failed"
+        elif entry.category in _POLICY_SKIP_CATEGORIES:
+            method_name = "debug"
+            event = "source_skipped"
+        else:
+            method_name = "warning"
+            event = "source_skipped"
+        emit_discovery_event(__name__, method_name, event, **fields)
+
+
 def inventory_local_sources(
     request: DiscoveryRequest,
     *,
@@ -721,6 +767,12 @@ def inventory_local_sources(
     exclusions = _validate_excluded_paths(excluded_paths, selected_filesystem)
     roots, failure = _prepare_roots(request, exclusions, selected_filesystem)
     if failure is not None:
+        with bound_contextvars(
+            corpus_id=request.corpus_id.as_str(),
+            corpus_version=None,
+            document_id=None,
+        ):
+            _log_traversal_inventory(failure)
         return failure
 
     raw_candidates: dict[PathOrderingKey, _RawCandidate] = {}
@@ -745,7 +797,7 @@ def inventory_local_sources(
         ):
             complete_roots.append(root.ordinal)
 
-    return _finalise_inventory(
+    inventory = _finalise_inventory(
         root_count=len(roots),
         raw_candidates=raw_candidates,
         raw_failures=raw_failures,
@@ -759,3 +811,10 @@ def inventory_local_sources(
             for root in roots
         ),
     )
+    with bound_contextvars(
+        corpus_id=request.corpus_id.as_str(),
+        corpus_version=None,
+        document_id=None,
+    ):
+        _log_traversal_inventory(inventory)
+    return inventory

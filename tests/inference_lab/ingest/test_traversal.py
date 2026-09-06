@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     DiscoveryFailureCategory,
@@ -88,10 +89,11 @@ def test_explicit_regular_file_becomes_content_free_candidate(tmp_path: Path) ->
     source.write_bytes(b"private payload")
     identifier = ExternalIdentifier("doi", "10.1000/private")
 
-    inventory = inventory_local_sources(
-        _request(_file_input(source, external_identifiers=(identifier,))),
-        excluded_paths=(),
-    )
+    with capture_logs() as logs:
+        inventory = inventory_local_sources(
+            _request(_file_input(source, external_identifiers=(identifier,))),
+            excluded_paths=(),
+        )
 
     assert len(inventory.candidates) == 1
     candidate = inventory.candidates[0]
@@ -112,6 +114,20 @@ def test_explicit_regular_file_becomes_content_free_candidate(tmp_path: Path) ->
         "external_identifiers",
         "family_candidates",
     }
+    assert logs == [
+        {
+            "pipeline_stage": "ingest",
+            "source_ordinal": 0,
+            "file_kind": "regular_file",
+            "byte_count": len(b"private payload"),
+            "event": "source_discovered",
+            "log_level": "debug",
+        }
+    ]
+    log_payload = repr(logs)
+    assert source.name not in log_payload
+    assert identifier.value not in log_payload
+    assert "private payload" not in log_payload
 
 
 def test_nested_directory_is_sorted_and_includes_hidden_entries(
@@ -384,11 +400,12 @@ def test_inaccessible_root_fails_the_request_without_leaking_error(
     filesystem = _FaultInjectingFileSystem()
     filesystem.inaccessible_metadata.add(root)
 
-    inventory = inventory_local_sources(
-        _request(_directory_input(root)),
-        excluded_paths=(),
-        filesystem=filesystem,
-    )
+    with capture_logs() as logs:
+        inventory = inventory_local_sources(
+            _request(_directory_input(root)),
+            excluded_paths=(),
+            filesystem=filesystem,
+        )
 
     assert inventory.candidates == ()
     assert tuple(failure.category for failure in inventory.failures) == (
@@ -396,6 +413,11 @@ def test_inaccessible_root_fails_the_request_without_leaking_error(
     )
     assert inventory.complete_root_ordinals == ()
     assert "private-root" not in repr(inventory.failures[0])
+    assert [(record["event"], record["log_level"]) for record in logs] == [
+        ("discovery_failed", "error")
+    ]
+    assert logs[0]["error_category"] == "root_inaccessible"
+    assert root.name not in repr(logs)
 
 
 def test_inaccessible_subtree_and_file_do_not_block_safe_sibling(
@@ -412,11 +434,12 @@ def test_inaccessible_subtree_and_file_do_not_block_safe_sibling(
     filesystem.inaccessible_directories.add(blocked)
     filesystem.inaccessible_metadata.add(inaccessible_file)
 
-    inventory = inventory_local_sources(
-        _request(_directory_input(root)),
-        excluded_paths=(),
-        filesystem=filesystem,
-    )
+    with capture_logs() as logs:
+        inventory = inventory_local_sources(
+            _request(_directory_input(root)),
+            excluded_paths=(),
+            filesystem=filesystem,
+        )
 
     assert _relative_locations(inventory) == ("c-safe.txt",)
     assert tuple(failure.category for failure in inventory.failures) == (
@@ -426,6 +449,45 @@ def test_inaccessible_subtree_and_file_do_not_block_safe_sibling(
     assert tuple(failure.ordinal for failure in inventory.failures) == (0, 1)
     assert inventory.candidates[0].ordinal == 2
     assert inventory.complete_root_ordinals == ()
+    assert [(record["event"], record["log_level"]) for record in logs] == [
+        ("source_skipped", "warning"),
+        ("source_skipped", "warning"),
+        ("source_discovered", "debug"),
+    ]
+    assert [record["source_ordinal"] for record in logs] == [0, 1, 2]
+    assert logs[0]["error_category"] == "traversal_failed"
+    assert logs[1]["error_category"] == "source_inaccessible"
+    log_payload = repr(logs)
+    assert blocked.name not in log_payload
+    assert inaccessible_file.name not in log_payload
+    assert safe_file.name not in log_payload
+
+
+def test_request_fatal_traversal_logs_bounded_failure_without_private_path(
+    tmp_path: Path,
+) -> None:
+    marker = "confidential-missing-root-9813"
+
+    with capture_logs() as logs:
+        inventory = inventory_local_sources(
+            _request(_directory_input(tmp_path / marker)),
+            excluded_paths=(),
+        )
+
+    assert inventory.failures[0].category is DiscoveryFailureCategory.ROOT_NOT_FOUND
+    assert logs == [
+        {
+            "pipeline_stage": "ingest",
+            "source_ordinal": 0,
+            "error_category": "root_not_found",
+            "failure_scope": "request",
+            "failure_stage": "input",
+            "retryable": True,
+            "event": "discovery_failed",
+            "log_level": "error",
+        }
+    ]
+    assert marker not in repr(logs)
 
 
 def test_entry_removed_after_snapshot_is_a_bounded_source_failure(
@@ -492,17 +554,24 @@ def test_nested_mount_is_reported_without_crossing_device_boundary(
     root_device = filesystem.lstat(root).device_id
     filesystem.device_overrides[nested_mount] = root_device + 1
 
-    inventory = inventory_local_sources(
-        _request(_directory_input(root)),
-        excluded_paths=(),
-        filesystem=filesystem,
-    )
+    with capture_logs() as logs:
+        inventory = inventory_local_sources(
+            _request(_directory_input(root)),
+            excluded_paths=(),
+            filesystem=filesystem,
+        )
 
     assert _relative_locations(inventory) == ("b-local.txt",)
     assert tuple(failure.category for failure in inventory.failures) == (
         DiscoveryFailureCategory.NESTED_MOUNT,
     )
     assert inventory.complete_root_ordinals == (0,)
+    assert [(record["event"], record["log_level"]) for record in logs] == [
+        ("source_skipped", "debug"),
+        ("source_discovered", "debug"),
+    ]
+    assert logs[0]["error_category"] == "nested_mount"
+    assert nested_mount.name not in repr(logs)
 
 
 def test_junction_is_reported_without_traversing_its_target(tmp_path: Path) -> None:

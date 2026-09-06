@@ -54,3 +54,7 @@ clean-checkout walkthrough:
 
 Do not treat successful process startup as evidence that a corpus is indexed
 or queryable.
+
+The discovery APIs and their current operational boundaries are documented in
+[local source discovery](source-discovery.md). There is not yet a supported
+command that operators should use to run those APIs directly.

@@ -442,12 +442,86 @@ def test_resolution_and_application_share_one_transaction(
         application,
     )
 
-    result = _persist(source, snapshot, request, inventory, repository)
+    with capture_logs() as logs:
+        result = _persist(source, snapshot, request, inventory, repository)
 
     assert result == expected
     assert resolver.call_args.kwargs["transaction"] is transaction
     assert application.call_args.kwargs["transaction"] is transaction
     assert transaction.exit_exception is None
+    assert logs == [
+        {
+            "pipeline_stage": "ingest",
+            "source_ordinal": 0,
+            "source_observation_id": _SOURCE_ID.as_str(),
+            "outcome_kind": "new_document",
+            "outcome_reason": "no_match",
+            "parse_eligible": True,
+            "attempt_count": 1,
+            "event": "identity_persistence_completed",
+            "log_level": "info",
+        }
+    ]
+    assert "source.txt" not in repr(logs)
+    assert _HASH.digest not in repr(logs)
+
+
+def test_completion_is_emitted_after_commit_with_identity_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, snapshot, request, inventory = _case(tmp_path)
+    resolved = _resolved(source, snapshot, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID)
+    expected = IdentityApplicationResult(resolved, parse_eligible=True)
+    transaction = _Transaction()
+    repository = _Repository(transaction)
+    captured_context: dict[str, object] = {}
+    captured_fields: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        persistence_module,
+        "resolve_discovered_source_identity",
+        Mock(return_value=resolved),
+    )
+    monkeypatch.setattr(
+        persistence_module,
+        "apply_discovery_identity_outcome",
+        Mock(return_value=expected),
+    )
+
+    def capture_completion(
+        module: str,
+        method_name: str,
+        event: str,
+        **fields: object,
+    ) -> None:
+        assert not transaction.active
+        captured_context.update(get_contextvars())
+        captured_fields.update(
+            module=module,
+            method_name=method_name,
+            event=event,
+            **fields,
+        )
+
+    monkeypatch.setattr(
+        persistence_module,
+        "emit_discovery_event",
+        capture_completion,
+    )
+
+    result = _persist(source, snapshot, request, inventory, repository)
+
+    assert result == expected
+    assert captured_context == {
+        "corpus_id": _CORPUS_ID.as_str(),
+        "corpus_version": None,
+        "document_id": _FIRST_DOCUMENT_ID.as_str(),
+    }
+    assert captured_fields["module"] == persistence_module.__name__
+    assert captured_fields["method_name"] == "info"
+    assert captured_fields["event"] == "identity_persistence_completed"
+    assert "corpus_id" not in get_contextvars()
 
 
 def test_conflict_retry_rebuilds_resolution_in_a_new_transaction(
@@ -490,12 +564,24 @@ def test_conflict_retry_rebuilds_resolution_in_a_new_transaction(
     assert application.call_args_list[1].args == (rebuilt,)
     assert transactions[0].exit_exception is primary
     assert transactions[1].exit_exception is None
-    assert contexts == [{"corpus_id": _CORPUS_ID.as_str()}] * 2
+    assert (
+        contexts
+        == [
+            {
+                "corpus_id": _CORPUS_ID.as_str(),
+                "corpus_version": None,
+                "document_id": None,
+            }
+        ]
+        * 2
+    )
     assert [(record["event"], record["log_level"]) for record in logs] == [
-        ("identity_persistence_retry", "warning")
+        ("identity_persistence_retry", "warning"),
+        ("identity_persistence_completed", "info"),
     ]
     assert logs[0]["error_category"] == "conflict"
     assert logs[0]["retry_number"] == 1
+    assert logs[1]["attempt_count"] == 2
 
 
 def test_allocator_collision_retries_resolution_before_any_application(
@@ -533,9 +619,11 @@ def test_allocator_collision_retries_resolution_before_any_application(
     assert transactions[0].exit_exception is collision
     assert transactions[1].exit_exception is None
     assert [(record["event"], record["log_level"]) for record in logs] == [
-        ("identity_persistence_retry", "warning")
+        ("identity_persistence_retry", "warning"),
+        ("identity_persistence_completed", "info"),
     ]
     assert logs[0]["error_category"] == "identity_write_failed"
+    assert logs[1]["attempt_count"] == 2
     assert "private-allocator-payload" not in repr(logs)
 
 
@@ -965,6 +1053,11 @@ def test_retry_exhaustion_returns_bounded_persistence_failure(
         "identity_persistence_failed",
     ]
     assert logs[-1]["error_category"] == expected_category.value
+    assert logs[-1]["failure_scope"] == "source"
+    assert logs[-1]["failure_stage"] == "persistence"
+    assert logs[-1]["retryable"] is (
+        expected_category is DiscoveryFailureCategory.CONCURRENT_WRITE_CONFLICT
+    )
     assert "source.txt" not in repr(logs)
     assert _HASH.digest not in repr(logs)
 

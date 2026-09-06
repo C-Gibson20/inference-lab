@@ -50,9 +50,9 @@ file or environment take effect after a process restart.
 | `storage.index_dir` | `STORAGE__INDEX_DIR` | Required persistent index path. |
 | `storage.metadata_db_path` | `STORAGE__METADATA_DB_PATH` | Required metadata database path. |
 | `storage.source_dir` | `STORAGE__SOURCE_DIR` | Required managed original-source path; keep it separate from indexes and metadata. |
+| `ingest.max_source_bytes` | `INGEST__MAX_SOURCE_BYTES` | Positive byte limit for source hashing and text parsing; defaults to `52428800` (50 MiB). |
 | `logging.level` | `LOGGING__LEVEL` | Logging threshold; example default is `INFO`. |
 | `logging.format` | `LOGGING__FORMAT` | `console`, `json`, or `auto`; example default is `auto`. |
-| `ingest.max_source_bytes` | `INGEST__MAX_SOURCE_BYTES` | Maximum original-source size in bytes; defaults to `52428800` and must be greater than zero. |
 
 The configuration loader must reject missing required values and invalid types.
 It must not substitute guessed model paths, storage paths, or runtime values.
@@ -78,6 +78,19 @@ binary unit would require a separately named setting such as `gib`.
 Feature flags are not currently part of the configuration contract. They will
 be added as typed, feature-owned settings when the corresponding feature is
 introduced; a generic top-level `feature_flags` section is unsupported.
+
+### Source discovery
+
+`ingest.max_source_bytes` is enforced before and during streaming reads, so a
+source that grows past the limit is rejected even if its initial stat was below
+the threshold. Increasing the value raises the permitted source size but does
+not change the fixed-size streaming behaviour or cause complete files to be
+retained in memory.
+
+Traversal, symlink, mount, hidden-entry, stable-read, and format-classification
+behaviour is code-owned and versioned rather than configurable in the initial
+baseline. See [local source discovery](source-discovery.md) for the selected
+policy and operational limits.
 
 ## Logging
 

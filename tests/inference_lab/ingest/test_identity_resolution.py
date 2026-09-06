@@ -6,6 +6,7 @@ from typing import Literal
 
 import pytest
 from structlog.contextvars import get_contextvars
+from structlog.testing import capture_logs
 
 import inference_lab.ingest.identity_resolution as identity_resolution_module
 from inference_lab.ingest import (
@@ -448,14 +449,15 @@ def test_new_source_without_candidates_resolves_new_document(tmp_path: Path) -> 
     transaction = _Transaction()
     allocator = _Allocator()
 
-    result = _resolve(
-        source,
-        snapshot,
-        inventory,
-        transaction,
-        allocator,
-        _request(tmp_path),
-    )
+    with capture_logs() as logs:
+        result = _resolve(
+            source,
+            snapshot,
+            inventory,
+            transaction,
+            allocator,
+            _request(tmp_path),
+        )
 
     assert not isinstance(result, DiscoveryFailure)
     assert result.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
@@ -470,6 +472,25 @@ def test_new_source_without_candidates_resolves_new_document(tmp_path: Path) -> 
         1,
         1,
     )
+    source_logs = [
+        record for record in logs if record["event"] == "source_identity_assigned"
+    ]
+    assert source_logs == [
+        {
+            "pipeline_stage": "ingest",
+            "source_ordinal": 0,
+            "source_observation_id": _ALLOCATED_SOURCE_ID.as_str(),
+            "media_type": "text/plain",
+            "outcome_kind": "new_document",
+            "outcome_reason": "no_match",
+            "matched_candidate_count": 0,
+            "event": "source_identity_assigned",
+            "log_level": "debug",
+        }
+    ]
+    log_payload = repr(source_logs)
+    assert "current.txt" not in log_payload
+    assert _HASH_A.digest not in log_payload
 
 
 def test_exact_source_with_same_hash_resolves_unchanged(tmp_path: Path) -> None:
@@ -483,19 +504,25 @@ def test_exact_source_with_same_hash_resolves_unchanged(tmp_path: Path) -> None:
         locators=(locator,),
     )
 
-    result = _resolve(
-        source,
-        snapshot,
-        inventory,
-        transaction,
-        _Allocator(),
-        _request(tmp_path),
-    )
+    with capture_logs() as logs:
+        result = _resolve(
+            source,
+            snapshot,
+            inventory,
+            transaction,
+            _Allocator(),
+            _request(tmp_path),
+        )
 
     assert not isinstance(result, DiscoveryFailure)
     assert result.identity_outcome.kind is ResolutionKind.UNCHANGED
     assert result.identity_outcome.reason is ResolutionReason.EXACT_HASH_MATCH
     assert result.source_observation_id == _SOURCE_ID
+    source_logs = [record for record in logs if record["event"].startswith("source_")]
+    assert [(record["event"], record["log_level"]) for record in source_logs] == [
+        ("source_unchanged", "info")
+    ]
+    assert source_logs[0]["outcome_reason"] == "exact_hash_match"
 
 
 def test_exact_source_with_changed_hash_resolves_new_version(tmp_path: Path) -> None:
@@ -565,18 +592,29 @@ def test_multiple_identifier_documents_preserve_ambiguous_outcome(
         memberships={_CORPUS_ID: frozenset({_FIRST_VERSION_ID, _SECOND_VERSION_ID})},
     )
 
-    result = _resolve(
-        source,
-        snapshot,
-        inventory,
-        transaction,
-        _Allocator(),
-        _request(tmp_path),
-    )
+    with capture_logs() as logs:
+        result = _resolve(
+            source,
+            snapshot,
+            inventory,
+            transaction,
+            _Allocator(),
+            _request(tmp_path),
+        )
 
     assert not isinstance(result, DiscoveryFailure)
     assert result.identity_outcome.kind is ResolutionKind.AMBIGUOUS
     assert result.identity_outcome.reason is ResolutionReason.MULTIPLE_CANDIDATES
+    source_logs = [record for record in logs if record["event"].startswith("source_")]
+    assert [(record["event"], record["log_level"]) for record in source_logs] == [
+        ("source_skipped", "info")
+    ]
+    assert source_logs[0]["outcome_kind"] == "ambiguous"
+    assert source_logs[0]["matched_candidate_count"] == 2
+    log_payload = repr(logs)
+    assert snapshot.locator.relative_path.name not in log_payload
+    assert snapshot.content_hash.digest not in log_payload
+    assert _DOI.value not in log_payload
 
 
 def test_conflicting_continuity_identifiers_preserve_conflict_outcome(
@@ -595,18 +633,24 @@ def test_conflicting_continuity_identifiers_preserve_conflict_outcome(
         locators=(_locator(snapshot.locator.path),),
     )
 
-    result = _resolve(
-        source,
-        snapshot,
-        inventory,
-        transaction,
-        _Allocator(),
-        _request(tmp_path),
-    )
+    with capture_logs() as logs:
+        result = _resolve(
+            source,
+            snapshot,
+            inventory,
+            transaction,
+            _Allocator(),
+            _request(tmp_path),
+        )
 
     assert not isinstance(result, DiscoveryFailure)
     assert result.identity_outcome.kind is ResolutionKind.CONFLICT
     assert result.identity_outcome.reason is ResolutionReason.CONFLICTING_EVIDENCE
+    source_logs = [record for record in logs if record["event"].startswith("source_")]
+    assert [(record["event"], record["log_level"]) for record in source_logs] == [
+        ("source_skipped", "info")
+    ]
+    assert source_logs[0]["outcome_kind"] == "conflict"
 
 
 @pytest.mark.parametrize(
@@ -723,17 +767,24 @@ def test_traversal_gap_stops_before_provenance_resolution(tmp_path: Path) -> Non
         locators=(old_locator,),
     )
 
-    result = _resolve(
-        source,
-        snapshot,
-        inventory,
-        transaction,
-        _Allocator(),
-        _request(tmp_path),
-    )
+    with capture_logs() as logs:
+        result = _resolve(
+            source,
+            snapshot,
+            inventory,
+            transaction,
+            _Allocator(),
+            _request(tmp_path),
+        )
 
     assert isinstance(result, DiscoveryFailure)
     assert result.category is DiscoveryFailureCategory.OBSERVATION_AMBIGUOUS
+    assert [(record["event"], record["log_level"]) for record in logs] == [
+        ("source_failed", "error")
+    ]
+    assert logs[0]["error_category"] == "observation_ambiguous"
+    assert logs[0]["failure_stage"] == "continuity"
+    assert snapshot.locator.relative_path.name not in repr(logs)
 
 
 def test_candidate_reads_never_cross_the_selected_corpus(tmp_path: Path) -> None:
@@ -791,6 +842,8 @@ def test_complete_request_and_corpus_context_reach_resolver_unchanged(
     )
     captured_request: IdentityResolutionRequest | None = None
     captured_context: dict[str, object] = {}
+    captured_log_context: dict[str, object] = {}
+    captured_log_fields: dict[str, object] = {}
     original_resolver = identity_resolution_module.resolve_identity
 
     def _capturing_resolver(
@@ -806,6 +859,26 @@ def test_complete_request_and_corpus_context_reach_resolver_unchanged(
         identity_resolution_module,
         "resolve_identity",
         _capturing_resolver,
+    )
+
+    def _capturing_log(
+        module: str,
+        method_name: str,
+        event: str,
+        **fields: object,
+    ) -> None:
+        captured_log_context.update(get_contextvars())
+        captured_log_fields.update(
+            module=module,
+            method_name=method_name,
+            event=event,
+            **fields,
+        )
+
+    monkeypatch.setattr(
+        identity_resolution_module,
+        "emit_discovery_event",
+        _capturing_log,
     )
 
     result = _resolve(
@@ -827,6 +900,14 @@ def test_complete_request_and_corpus_context_reach_resolver_unchanged(
         CONSERVATIVE_EXTERNAL_IDENTIFIER_POLICY
     )
     assert captured_context["corpus_id"] == _CORPUS_ID.as_str()
+    assert captured_context["document_id"] is None
+    assert captured_context["corpus_version"] is None
+    assert captured_log_context == {
+        "corpus_id": _CORPUS_ID.as_str(),
+        "corpus_version": None,
+        "document_id": _FIRST_DOCUMENT_ID.as_str(),
+    }
+    assert captured_log_fields["event"] == "source_unchanged"
     assert "corpus_id" not in get_contextvars()
 
 
