@@ -7,11 +7,13 @@ import pytest
 
 from inference_lab.ingest import (
     DiscoveryFailure,
+    DiscoveryFailureCategory,
     DiscoveryInput,
     DiscoveryInputKind,
     DiscoveryRequest,
     IdentityApplicationResult,
     IdentityPersistenceUnit,
+    LocalTraversalFileSystem,
     UuidDiscoveryIdentityIdAllocator,
     VerifiedSourceSnapshot,
     classify_source_inventory,
@@ -31,6 +33,18 @@ from inference_lab.storage import MetadataRepository, open_metadata_repository
 from .fixtures import fixture_settings  # noqa: TID252
 
 _CORPUS_ID = CorpusId("11111111-1111-4111-8111-111111111111")
+
+
+class _IncompleteScanFileSystem(LocalTraversalFileSystem):
+    """Make one real directory unreadable to preserve an incomplete scan."""
+
+    def __init__(self, inaccessible_directory: Path) -> None:
+        self._inaccessible_directory = inaccessible_directory.resolve()
+
+    def list_directory(self, path: Path) -> tuple[Path, ...]:
+        if path == self._inaccessible_directory:
+            raise PermissionError("injected inaccessible directory")
+        return super().list_directory(path)
 
 
 def _persist_supported_sources(
@@ -465,5 +479,172 @@ def test_live_identical_source_is_an_independent_duplicate_after_restart(
         assert original_hint is not None
         assert duplicate_hint is not None
         assert (original_hint == duplicate_hint) is shares_identity_hint
+    finally:
+        reopened.close()
+
+
+def test_removed_source_after_restart_leaves_durable_identity_unchanged(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    source_path = source_root / "removed.txt"
+    source_path.write_bytes(b"source removed between runs\n")
+    request = DiscoveryRequest(
+        corpus_id=_CORPUS_ID,
+        inputs=(DiscoveryInput(source_root, DiscoveryInputKind.DIRECTORY),),
+    )
+    database_path = tmp_path / "metadata.sqlite3"
+
+    initial = open_metadata_repository(database_path, apply_migrations=True)
+    with initial.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
+    try:
+        first_results = _persist_supported_sources(request, initial)
+        assert len(first_results) == 1
+        first = first_results[0]
+        assert isinstance(first, IdentityApplicationResult)
+        outcome = first.source.identity_outcome
+        assert outcome.document is not None
+        assert outcome.version is not None
+        durable_before = (
+            initial.list_document_versions(outcome.document.document_id),
+            initial.list_corpus_document_version_memberships(_CORPUS_ID),
+            initial.list_source_observation_history(
+                _CORPUS_ID,
+                first.source.source_observation_id,
+            ),
+            initial.list_source_locator_history(
+                _CORPUS_ID,
+                first.source.source_observation_id,
+            ),
+            initial.list_duplicate_relationships(
+                _CORPUS_ID,
+                outcome.version.document_version_id,
+            ),
+        )
+    finally:
+        initial.close()
+
+    source_path.unlink()
+
+    reopened = open_metadata_repository(database_path)
+    try:
+        assert _persist_supported_sources(request, reopened) == ()
+        assert (
+            reopened.list_document_versions(outcome.document.document_id),
+            reopened.list_corpus_document_version_memberships(_CORPUS_ID),
+            reopened.list_source_observation_history(
+                _CORPUS_ID,
+                first.source.source_observation_id,
+            ),
+            reopened.list_source_locator_history(
+                _CORPUS_ID,
+                first.source.source_observation_id,
+            ),
+            reopened.list_duplicate_relationships(
+                _CORPUS_ID,
+                outcome.version.document_version_id,
+            ),
+        ) == durable_before
+    finally:
+        reopened.close()
+
+
+def test_incomplete_scan_preserves_ambiguous_matching_source_after_restart(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "sources"
+    hidden_root = source_root / "a-inaccessible"
+    hidden_root.mkdir(parents=True)
+    original_path = hidden_root / "original.txt"
+    visible_path = source_root / "z-visible-copy.txt"
+    source_bytes = b"source hidden by an incomplete scan\n"
+    original_path.write_bytes(source_bytes)
+    request = DiscoveryRequest(
+        corpus_id=_CORPUS_ID,
+        inputs=(DiscoveryInput(source_root, DiscoveryInputKind.DIRECTORY),),
+    )
+    database_path = tmp_path / "metadata.sqlite3"
+
+    initial = open_metadata_repository(database_path, apply_migrations=True)
+    with initial.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
+    try:
+        first_results = _persist_supported_sources(request, initial)
+        assert len(first_results) == 1
+        first = first_results[0]
+        assert isinstance(first, IdentityApplicationResult)
+        outcome = first.source.identity_outcome
+        assert outcome.document is not None
+        assert outcome.version is not None
+    finally:
+        initial.close()
+
+    visible_path.write_bytes(source_bytes)
+    filesystem = _IncompleteScanFileSystem(hidden_root)
+    traversal = inventory_local_sources(
+        request,
+        excluded_paths=(),
+        filesystem=filesystem,
+    )
+    assert traversal.complete_root_ordinals == ()
+    assert tuple(failure.category for failure in traversal.failures) == (
+        DiscoveryFailureCategory.TRAVERSAL_FAILED,
+    )
+    classification = classify_source_inventory(traversal)
+    assert len(classification.hashable_candidates) == 1
+    visible_source = classification.hashable_candidates[0]
+    assert visible_source.candidate.locator.path == visible_path.resolve()
+    snapshot = hash_source_candidate(
+        visible_source.candidate,
+        visible_source.classification,
+        settings=fixture_settings(),
+    )
+    assert isinstance(snapshot, VerifiedSourceSnapshot)
+
+    reopened = open_metadata_repository(database_path)
+    try:
+        results = persist_discovered_source_identities(
+            (IdentityPersistenceUnit(visible_source, snapshot),),
+            request=request,
+            inventory=traversal,
+            repository=reopened,
+            allocator=UuidDiscoveryIdentityIdAllocator(),
+        )
+        assert len(results) == 1
+        failure = results[0]
+        assert isinstance(failure, DiscoveryFailure)
+        assert failure.category is DiscoveryFailureCategory.OBSERVATION_AMBIGUOUS
+
+        assert reopened.list_document_versions(outcome.document.document_id) == (
+            outcome.version,
+        )
+        assert len(reopened.list_corpus_document_version_memberships(_CORPUS_ID)) == 1
+        assert (
+            len(
+                reopened.list_source_observation_history(
+                    _CORPUS_ID,
+                    first.source.source_observation_id,
+                )
+            )
+            == 1
+        )
+        assert (
+            len(
+                reopened.list_source_locator_history(
+                    _CORPUS_ID,
+                    first.source.source_observation_id,
+                )
+            )
+            == 1
+        )
+        assert (
+            reopened.list_duplicate_relationships(
+                _CORPUS_ID,
+                outcome.version.document_version_id,
+            )
+            == ()
+        )
     finally:
         reopened.close()
