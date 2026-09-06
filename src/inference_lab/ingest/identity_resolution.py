@@ -16,6 +16,10 @@ from inference_lab.ingest.discovery import (
     VerifiedSourceSnapshot,
 )
 from inference_lab.ingest.discovery_failures import DiscoveryFailure
+from inference_lab.ingest.discovery_logging import (
+    emit_discovery_event,
+    failure_log_fields,
+)
 from inference_lab.ingest.traversal import TraversalInventory
 from inference_lab.provenance import (
     DocumentId,
@@ -24,6 +28,7 @@ from inference_lab.provenance import (
     ExternalIdentifierAssertion,
     IdentityIdAllocator,
     IdentityResolutionRequest,
+    ResolutionKind,
     SourceObservationId,
     resolve_identity,
 )
@@ -206,6 +211,43 @@ def _resolve_with_bound_corpus(
     )
 
 
+def _log_resolution(result: DiscoveredSource | DiscoveryFailure) -> None:
+    """Emit one bounded terminal event for a source identity decision."""
+    if isinstance(result, DiscoveryFailure):
+        emit_discovery_event(
+            __name__,
+            "error",
+            "source_failed",
+            **failure_log_fields(result),
+        )
+        return
+
+    outcome = result.identity_outcome
+    fields: dict[str, object] = {
+        "source_ordinal": result.ordinal,
+        "source_observation_id": result.source_observation_id.as_str(),
+        "media_type": result.classification.media_type,
+        "outcome_kind": outcome.kind.value,
+        "outcome_reason": outcome.reason.value,
+        "matched_candidate_count": len(outcome.matched_version_ids),
+    }
+    if outcome.kind is ResolutionKind.UNCHANGED:
+        method_name = "info"
+        event = "source_unchanged"
+    elif outcome.kind in {ResolutionKind.AMBIGUOUS, ResolutionKind.CONFLICT}:
+        method_name = "info"
+        event = "source_skipped"
+    else:
+        method_name = "debug"
+        event = "source_identity_assigned"
+
+    document_id = None
+    if outcome.document is not None:
+        document_id = outcome.document.document_id.as_str()
+    with bound_contextvars(document_id=document_id):
+        emit_discovery_event(__name__, method_name, event, **fields)
+
+
 def resolve_discovered_source_identity(
     source: ClassifiedSourceCandidate,
     snapshot: VerifiedSourceSnapshot,
@@ -233,8 +275,12 @@ def resolve_discovered_source_identity(
             raise TypeError(f"allocator must provide {method_name}().")
     _validate_source_snapshot(source, snapshot, inventory)
 
-    with bound_contextvars(corpus_id=request.corpus_id.as_str()):
-        return _resolve_with_bound_corpus(
+    with bound_contextvars(
+        corpus_id=request.corpus_id.as_str(),
+        corpus_version=None,
+        document_id=None,
+    ):
+        result = _resolve_with_bound_corpus(
             source,
             snapshot,
             request=request,
@@ -242,3 +288,5 @@ def resolve_discovered_source_identity(
             transaction=transaction,
             allocator=allocator,
         )
+        _log_resolution(result)
+        return result
