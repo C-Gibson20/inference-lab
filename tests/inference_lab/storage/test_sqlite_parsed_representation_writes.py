@@ -1,6 +1,7 @@
 """Tests for atomic SQLite parsed-representation aggregate writes."""
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,8 @@ from inference_lab.provenance import (
     DocumentIdentity,
     DocumentVersion,
     HashAlgorithm,
+    RecordId,
+    SourceSpanId,
 )
 from inference_lab.storage import (
     BoundingBox,
@@ -23,6 +26,7 @@ from inference_lab.storage import (
     PageLayoutDescriptor,
     PageRotation,
     ParsedRepresentation,
+    ProducerIdentity,
     StorageConflictError,
     StructuralBlock,
     StructuralBlockKind,
@@ -50,6 +54,18 @@ _VERSION = DocumentVersion(
     DOCUMENT_VERSION_ID,
     DOCUMENT_ID,
     ContentHash(HashAlgorithm.SHA256, "a" * 64),
+)
+_SECOND_RECORD_ID = RecordId("80000000-0000-4000-8000-000000000002")
+_THIRD_RECORD_ID = RecordId("80000000-0000-4000-8000-000000000003")
+_MISSING_RECORD_ID = RecordId("80000000-0000-4000-8000-000000000099")
+_SECOND_SPAN_ID = SourceSpanId("90000000-0000-4000-8000-000000000002")
+_THIRD_SPAN_ID = SourceSpanId("90000000-0000-4000-8000-000000000003")
+_UPDATED_PARSER = ProducerIdentity("text-native", "3.0.0")
+_OCR_PRODUCER = ProducerIdentity(
+    "local-ocr",
+    "1.0.0",
+    "ocr-model",
+    "revision-1",
 )
 
 
@@ -99,6 +115,51 @@ def _representation() -> ParsedRepresentation:
         ),
         source_locations=(location,),
         page_layouts=(layout,),
+    )
+
+
+def _reidentified_representation(
+    representation: ParsedRepresentation,
+    *,
+    record_id: RecordId,
+    source_span_id: SourceSpanId,
+) -> ParsedRepresentation:
+    location = replace(
+        representation.source_locations[0],
+        source_span_id=source_span_id,
+        parsed_record_id=record_id,
+    )
+    block = replace(
+        representation.blocks[0],
+        source_span_id=source_span_id,
+    )
+    return replace(
+        representation,
+        record_id=record_id,
+        blocks=(block,),
+        source_locations=(location,),
+    )
+
+
+def _empty_representation() -> ParsedRepresentation:
+    return ParsedRepresentation(
+        record_id=_SECOND_RECORD_ID,
+        document_id=DOCUMENT_ID,
+        document_version_id=DOCUMENT_VERSION_ID,
+        source_text="",
+        text="",
+        parser=_UPDATED_PARSER,
+        normalisation_version="1.0.0",
+        language=None,
+        page_count=None,
+        character_count=0,
+        token_count=None,
+        page_collection_availability=CollectionAvailability.AVAILABLE,
+        section_collection_availability=CollectionAvailability.UNAVAILABLE,
+        paragraph_collection_availability=CollectionAvailability.AVAILABLE,
+        blocks=(),
+        source_locations=(),
+        page_layouts=(),
     )
 
 
@@ -259,6 +320,232 @@ def test_complete_representation_requires_explicit_corpus_membership(
         repository.close()
 
     assert _table_count(database_path, "parsed_representations") == 0
+    assert _table_count(database_path, "page_layouts") == 0
+    assert _table_count(database_path, "source_spans") == 0
+    assert _table_count(database_path, "structural_blocks") == 0
+
+
+def test_record_and_natural_identity_reuse_with_different_payload_conflicts(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _add_catalogue(database_path)
+    representation = _representation()
+    changed_record = replace(representation, language="fr")
+    changed_natural_identity = _reidentified_representation(
+        representation,
+        record_id=_SECOND_RECORD_ID,
+        source_span_id=_SECOND_SPAN_ID,
+    )
+    repository = _open_repository(database_path)
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_parsed_representation(
+                _CORPUS.corpus_id,
+                representation,
+            )
+
+        for conflicting in (changed_record, changed_natural_identity):
+            with pytest.raises(StorageConflictError):
+                with repository.transaction() as transaction:
+                    transaction.add_parsed_representation(
+                        _CORPUS.corpus_id,
+                        conflicting,
+                    )
+
+        with repository.transaction() as transaction:
+            transaction.add_parsed_representation(
+                _CORPUS.corpus_id,
+                representation,
+            )
+    finally:
+        repository.close()
+
+    assert _table_count(database_path, "parsed_representations") == 1
+    assert _table_count(database_path, "page_layouts") == 1
+    assert _table_count(database_path, "source_spans") == 1
+    assert _table_count(database_path, "structural_blocks") == 1
+
+
+def test_exact_representation_reuse_requires_explicit_second_membership(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _add_catalogue(database_path)
+    repository = _open_repository(database_path)
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_parsed_representation(
+                _CORPUS.corpus_id,
+                _representation(),
+            )
+
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.add_parsed_representation(
+                    _OTHER_CORPUS.corpus_id,
+                    _representation(),
+                )
+
+        with repository.transaction() as transaction:
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(
+                    _OTHER_CORPUS.corpus_id,
+                    DOCUMENT_ID,
+                    DOCUMENT_VERSION_ID,
+                )
+            )
+            transaction.add_parsed_representation(
+                _OTHER_CORPUS.corpus_id,
+                _representation(),
+            )
+    finally:
+        repository.close()
+
+    assert _table_count(database_path, "parsed_representations") == 1
+    assert _table_count(database_path, "page_layouts") == 1
+    assert _table_count(database_path, "source_spans") == 1
+    assert _table_count(database_path, "structural_blocks") == 1
+
+
+def test_parser_ocr_variants_and_supersession_are_persisted(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _add_catalogue(database_path)
+    original = _representation()
+    successor = replace(
+        _reidentified_representation(
+            original,
+            record_id=_SECOND_RECORD_ID,
+            source_span_id=_SECOND_SPAN_ID,
+        ),
+        parser=_UPDATED_PARSER,
+        supersedes_record_id=PARSED_RECORD_ID,
+    )
+    ocr_identity = _reidentified_representation(
+        original,
+        record_id=_THIRD_RECORD_ID,
+        source_span_id=_THIRD_SPAN_ID,
+    )
+    ocr_location = replace(
+        ocr_identity.source_locations[0],
+        content_origin=ContentOrigin.OCR,
+    )
+    ocr_layout = replace(
+        ocr_identity.page_layouts[0],
+        content_origin=ContentOrigin.OCR,
+        producer=_OCR_PRODUCER,
+    )
+    ocr = replace(
+        ocr_identity,
+        ocr_producer=_OCR_PRODUCER,
+        source_locations=(ocr_location,),
+        page_layouts=(ocr_layout,),
+        supersedes_record_id=_SECOND_RECORD_ID,
+    )
+
+    repository = _open_repository(database_path)
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_parsed_representation(_CORPUS.corpus_id, original)
+            transaction.add_parsed_representation(_CORPUS.corpus_id, successor)
+            transaction.add_parsed_representation(_CORPUS.corpus_id, ocr)
+    finally:
+        repository.close()
+
+    assert _rows(
+        database_path,
+        """SELECT record_id, parser_contract_version, ocr_implementation,
+            ocr_contract_version, ocr_artefact_identity,
+            ocr_artefact_revision, supersedes_record_id
+        FROM parsed_representations ORDER BY record_id""",
+    ) == [
+        (PARSED_RECORD_ID.as_str(), "2.0.0", None, None, None, None, None),
+        (
+            _SECOND_RECORD_ID.as_str(),
+            "3.0.0",
+            None,
+            None,
+            None,
+            None,
+            PARSED_RECORD_ID.as_str(),
+        ),
+        (
+            _THIRD_RECORD_ID.as_str(),
+            "2.0.0",
+            "local-ocr",
+            "1.0.0",
+            "ocr-model",
+            "revision-1",
+            _SECOND_RECORD_ID.as_str(),
+        ),
+    ]
+    assert _rows(
+        database_path,
+        """SELECT parsed_record_id, content_origin, producer_implementation
+        FROM page_layouts ORDER BY parsed_record_id""",
+    )[-1] == (_THIRD_RECORD_ID.as_str(), "ocr", "local-ocr")
+    assert _rows(
+        database_path,
+        """SELECT parsed_record_id, content_origin
+        FROM source_spans ORDER BY parsed_record_id""",
+    )[-1] == (_THIRD_RECORD_ID.as_str(), "ocr")
+
+
+def test_missing_superseded_representation_rolls_back_every_row(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _add_catalogue(database_path)
+    successor = replace(
+        _reidentified_representation(
+            _representation(),
+            record_id=_SECOND_RECORD_ID,
+            source_span_id=_SECOND_SPAN_ID,
+        ),
+        parser=_UPDATED_PARSER,
+        supersedes_record_id=_MISSING_RECORD_ID,
+    )
+    repository = _open_repository(database_path)
+    try:
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.add_parsed_representation(
+                    _CORPUS.corpus_id,
+                    successor,
+                )
+    finally:
+        repository.close()
+
+    assert _table_count(database_path, "parsed_representations") == 0
+    assert _table_count(database_path, "page_layouts") == 0
+    assert _table_count(database_path, "source_spans") == 0
+    assert _table_count(database_path, "structural_blocks") == 0
+
+
+def test_optional_values_and_available_empty_collections_remain_explicit(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _add_catalogue(database_path)
+    repository = _open_repository(database_path)
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_parsed_representation(
+                _CORPUS.corpus_id,
+                _empty_representation(),
+            )
+    finally:
+        repository.close()
+
+    assert _rows(
+        database_path,
+        """SELECT language, page_count, token_count, ocr_implementation,
+            page_collection_availability, section_collection_availability,
+            paragraph_collection_availability
+        FROM parsed_representations""",
+    ) == [(None, None, None, None, "available", "unavailable", "available")]
     assert _table_count(database_path, "page_layouts") == 0
     assert _table_count(database_path, "source_spans") == 0
     assert _table_count(database_path, "structural_blocks") == 0
