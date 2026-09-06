@@ -114,6 +114,12 @@ dedicated read transaction and one complete manifest pinned until it closes.
 A concurrent publication does not change what that open reader sees; a later
 snapshot sees the newly active version.
 
+Open source bytes, parsed records, parse outcomes, and source spans through the
+snapshot's exact-identity methods. They return no result when the owning
+document version is outside the pinned manifest, even if an ingest catalogue
+record for it remains in storage. Do not fall back to repository catalogue
+reads for product retrieval or citation navigation.
+
 Keep a snapshot for one bounded request or job unit and close it promptly.
 Never cache the snapshot object, use it after context exit, nest its context,
 or share it as a mutable active-version handle. A long-lived SQLite reader can

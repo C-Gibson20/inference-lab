@@ -1,6 +1,7 @@
 """Dedicated SQLite snapshot lifecycle for version-pinned corpus readers."""
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -18,9 +19,12 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
+from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
 from inference_lab.storage._sqlite_cleanup import (
     close_preserving_primary,
     rollback_preserving_primary,
@@ -45,6 +49,10 @@ from inference_lab.storage._sqlite_migrations import MigrationDefinition
 from inference_lab.storage._sqlite_observations import (
     list_source_observation_history as read_source_observation_history,
 )
+from inference_lab.storage._sqlite_parse_outcomes import get_parse_outcome
+from inference_lab.storage._sqlite_parsed_representations import (
+    get_parsed_representation,
+)
 from inference_lab.storage._sqlite_relationships import (
     list_duplicate_relationships as read_duplicate_relationships,
 )
@@ -57,6 +65,12 @@ from inference_lab.storage._sqlite_relationships import (
 from inference_lab.storage._sqlite_relationships import (
     list_family_memberships_by_family as read_family_memberships_by_family,
 )
+from inference_lab.storage._sqlite_source_artefacts import (
+    get_source_artefact,
+    read_source_bytes,
+    stream_source_bytes,
+)
+from inference_lab.storage._sqlite_source_spans import resolve_source_span
 from inference_lab.storage._sqlite_versions import (
     find_document_versions_by_content_hash as read_versions_by_content_hash,
 )
@@ -77,6 +91,10 @@ from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
 )
+from inference_lab.storage.parse_records import ParseOutcome
+from inference_lab.storage.parsed_records import ParsedRepresentation
+from inference_lab.storage.source_locations import ResolvedSourceSpan
+from inference_lab.storage.source_records import SourceArtefact
 from inference_lab.storage.versioning import (
     CorpusUpdateState,
     CorpusVersion,
@@ -121,6 +139,7 @@ class SQLiteCorpusSnapshot:
         database_path: Path,
         busy_timeout_ms: int,
         migrations: tuple[MigrationDefinition, ...],
+        source_blob_store: ManagedSourceBlobStore | None,
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId | None,
     ) -> None:
@@ -132,6 +151,12 @@ class SQLiteCorpusSnapshot:
             raise ValueError("busy_timeout_ms must be greater than zero.")
         if not isinstance(migrations, tuple):
             raise TypeError("migrations must be a tuple.")
+        if source_blob_store is not None and not isinstance(
+            source_blob_store, ManagedSourceBlobStore
+        ):
+            raise TypeError(
+                "source_blob_store must be a ManagedSourceBlobStore or None."
+            )
         if not isinstance(corpus_id, CorpusId):
             raise TypeError("corpus_id must be a CorpusId.")
         if corpus_version is not None and not isinstance(
@@ -141,6 +166,7 @@ class SQLiteCorpusSnapshot:
         self._database_path = database_path
         self._busy_timeout_ms = busy_timeout_ms
         self._migrations = migrations
+        self._source_blob_store = source_blob_store
         self._requested_corpus_id = corpus_id
         self._requested_corpus_version = corpus_version
         self._connection: sqlite3.Connection | None = None
@@ -216,6 +242,107 @@ class SQLiteCorpusSnapshot:
             for version in read_document_versions(connection, document_id)
             if self._is_visible_document_version(version)
         )
+
+    def get_source_artefact(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return source metadata only for a version in the pinned manifest."""
+        connection = self._reader_connection()
+        self._require_document_version_id(document_version_id)
+        if document_version_id not in self._visible_document_version_ids:
+            return None
+        return get_source_artefact(connection, self.corpus_id, document_version_id)
+
+    def read_source_bytes(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified source bytes only for a visible source version."""
+        connection = self._reader_connection()
+        self._require_document_version_id(document_version_id)
+        if document_version_id not in self._visible_document_version_ids:
+            return None
+        return read_source_bytes(
+            connection,
+            self._source_blob_store,
+            self.corpus_id,
+            document_version_id,
+        )
+
+    def stream_source_bytes(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return detached verified chunks only for a visible source version."""
+        connection = self._reader_connection()
+        self._require_document_version_id(document_version_id)
+        if document_version_id not in self._visible_document_version_ids:
+            return None
+        return stream_source_bytes(
+            connection,
+            self._source_blob_store,
+            self.corpus_id,
+            document_version_id,
+        )
+
+    def get_parse_outcome(self, parse_id: RecordId) -> ParseOutcome | None:
+        """Return an outcome only when its source version is visible."""
+        connection = self._reader_connection()
+        if not isinstance(parse_id, RecordId):
+            raise TypeError("parse_id must be a RecordId.")
+        if not self._record_source_is_visible(
+            connection,
+            "SELECT document_version_id FROM parse_outcomes WHERE parse_id = ?",
+            parse_id.as_str(),
+        ):
+            return None
+        outcome = get_parse_outcome(connection, self.corpus_id, parse_id)
+        if outcome is None:
+            raise CorruptStorageError()
+        return outcome
+
+    def get_parsed_representation(
+        self,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        """Return a parsed aggregate only when its source version is visible."""
+        connection = self._reader_connection()
+        if not isinstance(record_id, RecordId):
+            raise TypeError("record_id must be a RecordId.")
+        if not self._record_source_is_visible(
+            connection,
+            "SELECT document_version_id FROM parsed_representations WHERE record_id = ?",
+            record_id.as_str(),
+        ):
+            return None
+        representation = get_parsed_representation(
+            connection,
+            self.corpus_id,
+            record_id,
+        )
+        if representation is None:
+            raise CorruptStorageError()
+        return representation
+
+    def resolve_source_span(
+        self,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
+        """Resolve a span only when its source version is visible."""
+        connection = self._reader_connection()
+        if not isinstance(source_span_id, SourceSpanId):
+            raise TypeError("source_span_id must be a SourceSpanId.")
+        if not self._record_source_is_visible(
+            connection,
+            "SELECT document_version_id FROM source_spans WHERE source_span_id = ?",
+            source_span_id.as_str(),
+        ):
+            return None
+        resolved = resolve_source_span(connection, self.corpus_id, source_span_id)
+        if resolved is None:
+            raise CorruptStorageError()
+        return resolved
 
     def find_document_versions_by_content_hash(
         self,
@@ -554,6 +681,31 @@ class SQLiteCorpusSnapshot:
             version.document_version_id,
         ) in self._visible_membership_keys
 
+    @staticmethod
+    def _require_document_version_id(document_version_id: object) -> None:
+        if not isinstance(document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")
+
+    def _record_source_is_visible(
+        self,
+        connection: sqlite3.Connection,
+        statement: str,
+        record_id: str,
+    ) -> bool:
+        try:
+            row = connection.execute(statement, (record_id,)).fetchone()
+            if row is None:
+                return False
+            document_version_id = DocumentVersionId.from_str(row["document_version_id"])
+        except (TypeError, ValueError, KeyError, IndexError):
+            raise CorruptStorageError() from None
+        except sqlite3.Error as error:
+            raise translate_sqlite_error(
+                error,
+                default=RepositoryUnavailableError,
+            ) from None
+        return document_version_id in self._visible_document_version_ids
+
     def _visible_family_memberships(
         self,
         memberships: tuple[DocumentFamilyMembership, ...],
@@ -576,6 +728,7 @@ class SQLiteCorpusSnapshot:
 def create_active_corpus_snapshot(
     connection: sqlite3.Connection,
     migrations: tuple[MigrationDefinition, ...],
+    source_blob_store: ManagedSourceBlobStore | None,
     corpus_id: CorpusId,
 ) -> SQLiteCorpusSnapshot:
     """Create an unopened owner that will select the active version on entry."""
@@ -586,6 +739,7 @@ def create_active_corpus_snapshot(
         database_path,
         busy_timeout_ms,
         migrations,
+        source_blob_store,
         corpus_id,
         None,
     )
@@ -594,6 +748,7 @@ def create_active_corpus_snapshot(
 def create_corpus_snapshot(
     connection: sqlite3.Connection,
     migrations: tuple[MigrationDefinition, ...],
+    source_blob_store: ManagedSourceBlobStore | None,
     corpus_id: CorpusId,
     corpus_version: CorpusVersionId,
 ) -> SQLiteCorpusSnapshot:
@@ -607,6 +762,7 @@ def create_corpus_snapshot(
         database_path,
         busy_timeout_ms,
         migrations,
+        source_blob_store,
         corpus_id,
         corpus_version,
     )

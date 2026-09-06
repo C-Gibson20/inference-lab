@@ -1,5 +1,6 @@
 """Storage-neutral lifecycle contract for version-pinned corpus readers."""
 
+from collections.abc import Iterator
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
@@ -15,9 +16,15 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
+from inference_lab.storage.parse_records import ParseOutcome
+from inference_lab.storage.parsed_records import ParsedRepresentation
+from inference_lab.storage.source_locations import ResolvedSourceSpan
+from inference_lab.storage.source_records import SourceArtefact
 from inference_lab.storage.versioning import CorpusVersion, CorpusVersionManifest
 
 
@@ -56,6 +63,45 @@ class CorpusSnapshot(Protocol):
         document_id: DocumentId,
     ) -> tuple[DocumentVersion, ...]:
         """Return only versions of a document visible in this version."""
+        ...
+
+    def get_source_artefact(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return source metadata for a version visible in this snapshot."""
+        ...
+
+    def read_source_bytes(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified source bytes for a version visible in this snapshot."""
+        ...
+
+    def stream_source_bytes(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return detached source chunks for a version visible in this snapshot."""
+        ...
+
+    def get_parse_outcome(self, parse_id: RecordId) -> ParseOutcome | None:
+        """Return an outcome whose source version is visible in this snapshot."""
+        ...
+
+    def get_parsed_representation(
+        self,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        """Return a parsed record whose source version is visible here."""
+        ...
+
+    def resolve_source_span(
+        self,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
+        """Resolve a span whose source version is visible in this snapshot."""
         ...
 
     def find_document_versions_by_content_hash(

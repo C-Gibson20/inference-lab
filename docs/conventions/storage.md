@@ -139,6 +139,15 @@ manifest. Every read remains scoped to that membership. Relationships are
 visible only when their required endpoints are visible; global catalogue
 records and another corpus's records remain hidden.
 
+Source artefacts, original bytes, parsed representations, parse outcomes, and
+source spans are immutable records owned by a document version. Snapshot
+readers expose exact-identity lookups for those records only when the owning
+`DocumentVersionId` occurs in the pinned manifest. Catalogue enumeration of
+parser outputs remains an ingest and audit operation on `MetadataRepository`;
+it is not a product-facing snapshot selection mechanism. Persistent component
+generations record the exact source-manifest digest used to build their derived
+state.
+
 The selected version does not change during the snapshot, even when another
 writer publishes. Keep the snapshot open for one bounded request or job unit,
 then close it promptly so SQLite can reclaim reader resources and checkpoint
@@ -256,9 +265,11 @@ repository explicitly; operations after closure are rejected.
 
 `DocumentId` and `DocumentVersionId` are deployment-global immutable
 identities. Physical source bytes and parsed records may be reused across
-corpora, but reuse never grants visibility. A public source or parsed-record
+corpora, but reuse never grants visibility. A catalogue source or parsed-record
 read returns data only when the requested version is explicitly present in the
-selected corpus catalogue.
+selected corpus catalogue. Product reads use the snapshot methods, which
+additionally require that version in the selected immutable corpus-version
+manifest.
 
 An absent record and a record outside the selected corpus both return `None`
 where the reader contract is nullable. This non-disclosure rule prevents a
