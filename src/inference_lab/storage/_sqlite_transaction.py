@@ -52,6 +52,9 @@ from inference_lab.storage._sqlite_observations import (
     get_source_observation,
     list_source_observation_history,
 )
+from inference_lab.storage._sqlite_parsed_representations import (
+    add_parsed_representation,
+)
 from inference_lab.storage._sqlite_relationships import (
     add_duplicate_relationship,
     add_family_membership,
@@ -77,6 +80,7 @@ from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
 )
+from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_records import SourceArtefact
 
 if TYPE_CHECKING:
@@ -350,6 +354,14 @@ class SQLiteMetadataTransaction:
     ) -> None:
         """Add corpus-authorised managed-source metadata."""
         self._execute(add_source_artefact, corpus_id, artefact)
+
+    def add_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        representation: ParsedRepresentation,
+    ) -> None:
+        """Add one complete corpus-authorised parsed aggregate."""
+        self._execute(add_parsed_representation, corpus_id, representation)
 
     def add_source_observation(self, state: SourceObservationState) -> None:
         """Create an observed source at revision one."""
