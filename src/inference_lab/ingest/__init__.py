@@ -65,6 +65,11 @@ from inference_lab.ingest.hashing import (
     StableReadFileSystem,
     hash_source_candidate,
 )
+from inference_lab.ingest.identity_resolution import (
+    DiscoveryIdentityIdAllocator,
+    UuidDiscoveryIdentityIdAllocator,
+    resolve_discovered_source_identity,
+)
 from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
 from inference_lab.ingest.parser import (
@@ -118,6 +123,7 @@ __all__ = [
     "DiscoveryFailureScope",
     "DiscoveryFailureStage",
     "DiscoveryFileKind",
+    "DiscoveryIdentityIdAllocator",
     "DiscoveryInput",
     "DiscoveryInputKind",
     "DiscoveryPolicy",
@@ -168,6 +174,7 @@ __all__ = [
     "TraversalInventory",
     "TraversalPathMetadata",
     "TraversalRootScope",
+    "UuidDiscoveryIdentityIdAllocator",
     "UuidSourceObservationIdAllocator",
     "VerifiedSourceSnapshot",
     "canonical_path_key",
@@ -181,6 +188,7 @@ __all__ = [
     "normalise_source_text",
     "parsed_document_payload",
     "prepare_text",
+    "resolve_discovered_source_identity",
     "resolve_source_observation",
     "serialise_parsed_document",
 ]
