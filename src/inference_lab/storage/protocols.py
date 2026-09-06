@@ -26,6 +26,7 @@ from inference_lab.storage.outcomes import (
     BeginCorpusUpdateOutcome,
     CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
+    RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
 )
 from inference_lab.storage.snapshots import CorpusSnapshot
@@ -229,7 +230,7 @@ class MetadataWriter(Protocol):
         required_component_kinds: tuple[ComponentKind, ...] = (),
         restores_corpus_version: CorpusVersionId | None = None,
     ) -> BeginCorpusUpdateOutcome:
-        """Create and seed a preparing update or return its exact replay."""
+        """Create and seed an update, deriving rollback requirements from its target."""
         ...
 
     def abort_corpus_update(
@@ -277,6 +278,14 @@ class MetadataWriter(Protocol):
         corpus_version: CorpusVersionId,
     ) -> CommitCorpusUpdateOutcome:
         """Atomically compare, advance, and publish one ready update."""
+        ...
+
+    def commit_corpus_rollback(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> RollbackCorpusVersionOutcome:
+        """Publish one ready rollback as a new monotonic corpus version."""
         ...
 
     def add_corpus_update_document_membership(

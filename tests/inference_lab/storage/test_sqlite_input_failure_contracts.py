@@ -551,6 +551,20 @@ _WRITE_FAILURE_CASES: tuple[tuple[str, _WriteOperation, str], ...] = (
         "corpus_version",
     ),
     (
+        "commit-rollback-corpus",
+        lambda transaction: transaction.commit_corpus_rollback(
+            _invalid(CorpusId), _UPDATE_VERSION_ID
+        ),
+        "corpus_id",
+    ),
+    (
+        "commit-rollback-version",
+        lambda transaction: transaction.commit_corpus_rollback(
+            _CORPUS_ID, _invalid(CorpusVersionId)
+        ),
+        "corpus_version",
+    ),
+    (
         "add-update-membership-corpus",
         lambda transaction: transaction.add_corpus_update_document_membership(
             _invalid(CorpusId),

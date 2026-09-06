@@ -35,6 +35,7 @@ from inference_lab.storage import (
     MetadataRepository,
     MetadataTransaction,
     NoCorpusChangeOutcome,
+    RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
 )
 
@@ -112,6 +113,13 @@ class StructuralTransaction:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> CommitCorpusUpdateOutcome:
+        raise NotImplementedError
+
+    def commit_corpus_rollback(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> RollbackCorpusVersionOutcome:
         raise NotImplementedError
 
     def add_corpus_update_document_membership(
