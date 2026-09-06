@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Self
+
+from structlog.contextvars import bound_contextvars
 
 from inference_lab._clock import utc_now
 from inference_lab.provenance import (
@@ -88,6 +90,8 @@ from inference_lab.storage._sqlite_versions import (
 from inference_lab.storage.errors import (
     RepositoryClosedError,
     RepositoryUnavailableError,
+    StorageConflictError,
+    StorageError,
     StorageTransactionError,
 )
 from inference_lab.storage.parse_records import ParseOutcome
@@ -426,6 +430,94 @@ class SQLiteMetadataRepository:
         """Return a new write transaction that starts on context entry."""
         self._connection_or_raise()
         return SQLiteMetadataTransaction(self)
+
+    def persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+    ) -> None:
+        """Publish verified source bytes before atomically exposing metadata."""
+        if not isinstance(corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(artefact, SourceArtefact):
+            raise TypeError("artefact must be a SourceArtefact.")
+        fields = {
+            "corpus_id": corpus_id.as_str(),
+            "document_id": artefact.document_id.as_str(),
+        }
+        with bound_contextvars(**fields):
+            safe_log("info", "source_persistence_started")
+            try:
+                self._persist_source_artefact(
+                    corpus_id,
+                    artefact,
+                    chunks,
+                    max_source_bytes=max_source_bytes,
+                )
+            except StorageError as error:
+                safe_log_failure("source_persistence_failed", error)
+                raise
+            except Exception:
+                safe_log_failure(
+                    "source_persistence_failed",
+                    StorageTransactionError(),
+                )
+                raise
+
+            safe_log(
+                "info",
+                "source_persistence_completed",
+                byte_count=artefact.byte_count,
+            )
+
+    def _persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+    ) -> None:
+        """Execute the preflight, blob promotion, and metadata commit sequence."""
+        connection = self._connection_or_raise()
+        if self._transaction_active:
+            raise StorageTransactionError()
+        blob_store = self._source_blob_store
+        if blob_store is None:
+            raise RepositoryUnavailableError()
+
+        membership = get_corpus_document_version_membership(
+            connection,
+            corpus_id,
+            artefact.document_version_id,
+        )
+        version = get_document_version(connection, artefact.document_version_id)
+        if (
+            membership is None
+            or membership.document_id != artefact.document_id
+            or version is None
+            or version.document_id != artefact.document_id
+            or version.content_hash != artefact.content_hash
+        ):
+            raise StorageConflictError()
+        stored = get_source_artefact(
+            connection,
+            corpus_id,
+            artefact.document_version_id,
+        )
+        if stored is not None and stored != artefact:
+            raise StorageConflictError()
+
+        blob_store.write_chunks(
+            artefact,
+            chunks,
+            max_source_bytes=max_source_bytes,
+        )
+        with self.transaction() as transaction:
+            transaction.add_source_artefact(corpus_id, artefact)
 
     def _connection_or_raise(self) -> sqlite3.Connection:
         connection = self._connection

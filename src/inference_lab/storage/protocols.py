@@ -1,6 +1,6 @@
 """Storage-neutral contracts for persistent corpus identity metadata."""
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
@@ -322,6 +322,17 @@ class MetadataRepository(MetadataReader, Protocol):
 
     def transaction(self) -> MetadataTransaction:
         """Return a new transaction that starts on context entry."""
+        ...
+
+    def persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+    ) -> None:
+        """Publish verified source bytes before atomically exposing metadata."""
         ...
 
     def close(self) -> None:

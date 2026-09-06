@@ -1,6 +1,6 @@
 """Tests for metadata storage protocols."""
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from types import TracebackType
 from typing import Self
 
@@ -265,6 +265,16 @@ class StructuralRepository(StructuralTransaction):
 
     def transaction(self) -> MetadataTransaction:
         return StructuralTransaction()
+
+    def persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+    ) -> None:
+        pass
 
     def close(self) -> None:
         pass
