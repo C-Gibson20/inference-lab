@@ -14,8 +14,10 @@ from inference_lab.ingest import (
     IdentityApplicationResult,
     IdentityPersistenceUnit,
     LocalTraversalFileSystem,
+    TraversalInventory,
     UuidDiscoveryIdentityIdAllocator,
     VerifiedSourceSnapshot,
+    canonical_path_key,
     classify_source_inventory,
     hash_source_candidate,
     inventory_local_sources,
@@ -24,9 +26,12 @@ from inference_lab.ingest import (
 from inference_lab.provenance import (
     CorpusId,
     CorpusMetadata,
+    DocumentId,
+    DocumentVersionId,
     DuplicateClass,
     ResolutionKind,
     ResolutionReason,
+    SourceObservationId,
 )
 from inference_lab.storage import MetadataRepository, open_metadata_repository
 
@@ -47,10 +52,35 @@ class _IncompleteScanFileSystem(LocalTraversalFileSystem):
         return super().list_directory(path)
 
 
-def _persist_supported_sources(
+class _RecordingAllocator:
+    """Count allocations while delegating production-shaped UUID values."""
+
+    def __init__(self) -> None:
+        self._delegate = UuidDiscoveryIdentityIdAllocator()
+        self.source_calls = 0
+        self.document_calls = 0
+        self.version_calls = 0
+
+    def new_source_observation_id(self) -> SourceObservationId:
+        self.source_calls += 1
+        return self._delegate.new_source_observation_id()
+
+    def new_document_id(self) -> DocumentId:
+        self.document_calls += 1
+        return self._delegate.new_document_id()
+
+    def new_document_version_id(self) -> DocumentVersionId:
+        self.version_calls += 1
+        return self._delegate.new_document_version_id()
+
+    @property
+    def counts(self) -> tuple[int, int, int]:
+        return self.source_calls, self.document_calls, self.version_calls
+
+
+def _supported_persistence_units(
     request: DiscoveryRequest,
-    repository: MetadataRepository,
-) -> tuple[IdentityApplicationResult | DiscoveryFailure, ...]:
+) -> tuple[TraversalInventory, tuple[IdentityPersistenceUnit, ...]]:
     traversal = inventory_local_sources(request, excluded_paths=())
     classification = classify_source_inventory(traversal)
     assert classification.failures == ()
@@ -64,9 +94,17 @@ def _persist_supported_sources(
         )
         assert isinstance(snapshot, VerifiedSourceSnapshot)
         units.append(IdentityPersistenceUnit(source, snapshot))
+    return traversal, tuple(units)
+
+
+def _persist_supported_sources(
+    request: DiscoveryRequest,
+    repository: MetadataRepository,
+) -> tuple[IdentityApplicationResult | DiscoveryFailure, ...]:
+    traversal, units = _supported_persistence_units(request)
 
     return persist_discovered_source_identities(
-        tuple(units),
+        units,
         request=request,
         inventory=traversal,
         repository=repository,
@@ -645,6 +683,166 @@ def test_incomplete_scan_preserves_ambiguous_matching_source_after_restart(
                 outcome.version.document_version_id,
             )
             == ()
+        )
+    finally:
+        reopened.close()
+
+
+def test_overlapping_roots_repeat_in_stable_order_as_an_exact_noop(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "sources"
+    nested_root = source_root / "nested"
+    nested_root.mkdir(parents=True)
+    paths = (
+        source_root / "z-last.txt",
+        nested_root / "a-first.txt",
+        source_root / "m-middle.txt",
+    )
+    for ordinal, path in enumerate(paths):
+        path.write_bytes(f"stable source {ordinal}\n".encode())
+    expected_paths = tuple(
+        sorted((path.resolve() for path in paths), key=canonical_path_key)
+    )
+    request = DiscoveryRequest(
+        corpus_id=_CORPUS_ID,
+        inputs=(
+            DiscoveryInput(nested_root, DiscoveryInputKind.DIRECTORY),
+            DiscoveryInput(source_root, DiscoveryInputKind.DIRECTORY),
+        ),
+    )
+    database_path = tmp_path / "metadata.sqlite3"
+
+    initial = open_metadata_repository(database_path, apply_migrations=True)
+    with initial.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
+    first_inventory, first_units = _supported_persistence_units(request)
+    assert first_inventory.complete_root_ordinals == (0, 1)
+    assert tuple(unit.snapshot.locator.path for unit in first_units) == expected_paths
+    assert tuple(unit.ordinal for unit in first_units) == (0, 1, 2)
+    first_allocator = _RecordingAllocator()
+    try:
+        first_results = persist_discovered_source_identities(
+            first_units,
+            request=request,
+            inventory=first_inventory,
+            repository=initial,
+            allocator=first_allocator,
+        )
+        first_successes = tuple(
+            result
+            for result in first_results
+            if isinstance(result, IdentityApplicationResult)
+        )
+        assert len(first_successes) == len(first_units)
+        assert all(result.parse_eligible for result in first_successes)
+        assert all(
+            result.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
+            for result in first_successes
+        )
+        assert first_allocator.counts == (3, 3, 3)
+
+        for unit, result in zip(first_units, first_successes, strict=True):
+            assert result.source.snapshot == unit.snapshot
+            locator = initial.get_source_locator(
+                _CORPUS_ID,
+                result.source.source_observation_id,
+            )
+            assert locator is not None
+            opened = unit.snapshot.file_evidence.opened_after_read
+            assert locator.fingerprint.content_hash == unit.snapshot.content_hash
+            assert locator.fingerprint.byte_count == unit.snapshot.byte_count
+            assert locator.fingerprint.modified_time_ns == opened.modified_time_ns
+            assert opened.identity_hint is not None
+            assert locator.identity_hint is not None
+            assert locator.identity_hint.device_id == opened.identity_hint.device_id
+            assert locator.identity_hint.file_id == opened.identity_hint.file_id
+
+        durable_before = tuple(
+            (
+                initial.list_document_versions(
+                    result.source.identity_outcome.document.document_id
+                ),
+                initial.list_source_observation_history(
+                    _CORPUS_ID,
+                    result.source.source_observation_id,
+                ),
+                initial.list_source_locator_history(
+                    _CORPUS_ID,
+                    result.source.source_observation_id,
+                ),
+                initial.list_duplicate_relationships(
+                    _CORPUS_ID,
+                    result.source.identity_outcome.version.document_version_id,
+                ),
+            )
+            for result in first_successes
+            if result.source.identity_outcome.document is not None
+            and result.source.identity_outcome.version is not None
+        )
+        memberships_before = initial.list_corpus_document_version_memberships(
+            _CORPUS_ID
+        )
+    finally:
+        initial.close()
+
+    reopened = open_metadata_repository(database_path)
+    second_inventory, second_units = _supported_persistence_units(request)
+    assert second_inventory.candidates == first_inventory.candidates
+    assert second_units == first_units
+    second_allocator = _RecordingAllocator()
+    try:
+        repeated_results = persist_discovered_source_identities(
+            second_units,
+            request=request,
+            inventory=second_inventory,
+            repository=reopened,
+            allocator=second_allocator,
+        )
+        repeated_successes = tuple(
+            result
+            for result in repeated_results
+            if isinstance(result, IdentityApplicationResult)
+        )
+        assert len(repeated_successes) == len(first_successes)
+        assert (
+            tuple(result.source.snapshot.locator.path for result in repeated_successes)
+            == expected_paths
+        )
+        assert all(not result.parse_eligible for result in repeated_successes)
+        assert all(
+            result.source.identity_outcome.kind is ResolutionKind.UNCHANGED
+            for result in repeated_successes
+        )
+        assert second_allocator.counts == (0, 0, 0)
+        assert (
+            tuple(
+                (
+                    reopened.list_document_versions(
+                        result.source.identity_outcome.document.document_id
+                    ),
+                    reopened.list_source_observation_history(
+                        _CORPUS_ID,
+                        result.source.source_observation_id,
+                    ),
+                    reopened.list_source_locator_history(
+                        _CORPUS_ID,
+                        result.source.source_observation_id,
+                    ),
+                    reopened.list_duplicate_relationships(
+                        _CORPUS_ID,
+                        result.source.identity_outcome.version.document_version_id,
+                    ),
+                )
+                for result in repeated_successes
+                if result.source.identity_outcome.document is not None
+                and result.source.identity_outcome.version is not None
+            )
+            == durable_before
+        )
+        assert (
+            reopened.list_corpus_document_version_memberships(_CORPUS_ID)
+            == memberships_before
         )
     finally:
         reopened.close()
