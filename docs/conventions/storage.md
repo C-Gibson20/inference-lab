@@ -40,6 +40,12 @@ a metadata write transaction while parsing documents, calling a model, or
 building an index. Build immutable component data outside the transaction and
 use a short transaction to validate and register it.
 
+Metadata transactions expose database-backed metadata reads but deliberately
+do not expose `read_source_bytes()` or `stream_source_bytes()`. Read managed
+source files through the repository outside a write transaction, or through a
+version-pinned snapshot for product-facing work. Commit any source metadata
+changes before reading their bytes through the repository.
+
 An error makes the transaction rollback-only. Never catch an operation error
 inside the context and continue issuing writes. Exit, let the transaction roll
 back, inspect durable state through a new unit, and then decide whether a safe

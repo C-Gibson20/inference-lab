@@ -302,20 +302,6 @@ class StructuralTransaction:
     ) -> SourceArtefact | None:
         return None
 
-    def read_source_bytes(
-        self,
-        corpus_id: CorpusId,
-        document_version_id: DocumentVersionId,
-    ) -> bytes | None:
-        return None
-
-    def stream_source_bytes(
-        self,
-        corpus_id: CorpusId,
-        document_version_id: DocumentVersionId,
-    ) -> Iterator[bytes] | None:
-        return None
-
     def get_parse_outcome(
         self,
         corpus_id: CorpusId,
@@ -432,6 +418,20 @@ class StructuralRepository(StructuralTransaction):
     ) -> CorpusSnapshot:
         raise NotImplementedError
 
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        return None
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        return None
+
     def reconcile_source_storage(self, *, max_entries: int) -> None:
         pass
 
@@ -458,6 +458,8 @@ def test_storage_protocols_are_structural() -> None:
     assert isinstance(transaction, MetadataTransaction)
     assert isinstance(repository, MetadataRepository)
     assert isinstance(StructuralComponentValidator(), ComponentGenerationValidator)
+    assert not hasattr(transaction, "read_source_bytes")
+    assert not hasattr(transaction, "stream_source_bytes")
 
 
 def test_reader_without_writes_is_not_a_transaction() -> None:
@@ -488,8 +490,6 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_document_version = StructuralTransaction.get_document_version
         list_document_versions = StructuralTransaction.list_document_versions
         get_source_artefact = StructuralTransaction.get_source_artefact
-        read_source_bytes = StructuralTransaction.read_source_bytes
-        stream_source_bytes = StructuralTransaction.stream_source_bytes
         get_parse_outcome = StructuralTransaction.get_parse_outcome
         get_parsed_representation = StructuralTransaction.get_parsed_representation
         list_parsed_representations = StructuralTransaction.list_parsed_representations

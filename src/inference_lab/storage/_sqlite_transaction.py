@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar, cast
 
@@ -99,8 +98,6 @@ from inference_lab.storage._sqlite_relationships import (
 from inference_lab.storage._sqlite_source_artefacts import (
     add_source_artefact,
     get_source_artefact,
-    read_source_bytes,
-    stream_source_bytes,
 )
 from inference_lab.storage._sqlite_source_spans import (
     list_known_source_spans,
@@ -610,32 +607,6 @@ class SQLiteMetadataTransaction:
         """Return corpus-visible managed-source metadata in this transaction."""
         return self._execute(
             get_source_artefact,
-            corpus_id,
-            document_version_id,
-        )
-
-    def read_source_bytes(
-        self,
-        corpus_id: CorpusId,
-        document_version_id: DocumentVersionId,
-    ) -> bytes | None:
-        """Return verified corpus-visible bytes in this transaction."""
-        return self._execute(
-            read_source_bytes,
-            self._repository._source_blob_store,
-            corpus_id,
-            document_version_id,
-        )
-
-    def stream_source_bytes(
-        self,
-        corpus_id: CorpusId,
-        document_version_id: DocumentVersionId,
-    ) -> Iterator[bytes] | None:
-        """Return fully verified, detached chunks in this transaction."""
-        return self._execute(
-            stream_source_bytes,
-            self._repository._source_blob_store,
             corpus_id,
             document_version_id,
         )
