@@ -102,6 +102,26 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
         "corpus_id",
     ),
     (
+        "get-active-version",
+        lambda owner: owner.get_active_corpus_version(_invalid(CorpusId)),
+        "corpus_id",
+    ),
+    (
+        "get-committed-version-corpus",
+        lambda owner: owner.get_corpus_version(_invalid(CorpusId), _UPDATE_VERSION_ID),
+        "corpus_id",
+    ),
+    (
+        "get-committed-version-id",
+        lambda owner: owner.get_corpus_version(_CORPUS_ID, _invalid(CorpusVersionId)),
+        "corpus_version",
+    ),
+    (
+        "list-committed-versions",
+        lambda owner: owner.list_corpus_versions(_invalid(CorpusId)),
+        "corpus_id",
+    ),
+    (
         "get-update-version",
         lambda owner: owner.get_corpus_update(_CORPUS_ID, _invalid(CorpusVersionId)),
         "corpus_version",
@@ -548,6 +568,20 @@ _WRITE_FAILURE_CASES: tuple[tuple[str, _WriteOperation, str], ...] = (
     (
         "seal-update-version",
         lambda transaction: transaction.seal_corpus_update(
+            _CORPUS_ID, _invalid(CorpusVersionId)
+        ),
+        "corpus_version",
+    ),
+    (
+        "commit-update-corpus",
+        lambda transaction: transaction.commit_corpus_update(
+            _invalid(CorpusId), _UPDATE_VERSION_ID
+        ),
+        "corpus_id",
+    ),
+    (
+        "commit-update-version",
+        lambda transaction: transaction.commit_corpus_update(
             _CORPUS_ID, _invalid(CorpusVersionId)
         ),
         "corpus_version",

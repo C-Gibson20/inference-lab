@@ -56,6 +56,11 @@ from inference_lab.storage._sqlite_corpus_updates import (
     list_corpus_update_component_generations,
     list_corpus_update_document_memberships,
 )
+from inference_lab.storage._sqlite_corpus_versions import (
+    get_active_corpus_version,
+    get_corpus_version,
+    list_corpus_versions,
+)
 from inference_lab.storage._sqlite_identifier_assertions import (
     list_external_identifier_assertions,
 )
@@ -112,6 +117,7 @@ from inference_lab.storage.source_records import SourceArtefact
 from inference_lab.storage.versioning import (
     ComponentGenerationReference,
     CorpusUpdate,
+    CorpusVersion,
 )
 
 DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES: Final = 10_000
@@ -225,6 +231,32 @@ class SQLiteMetadataRepository:
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora in canonical identifier order."""
         return list_corpora(self._connection_or_raise())
+
+    def get_active_corpus_version(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusVersion | None:
+        """Return a corpus's active committed version, or ``None``."""
+        return get_active_corpus_version(self._connection_or_raise(), corpus_id)
+
+    def get_corpus_version(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusVersion | None:
+        """Return one committed version owned by a corpus, or ``None``."""
+        return get_corpus_version(
+            self._connection_or_raise(),
+            corpus_id,
+            corpus_version,
+        )
+
+    def list_corpus_versions(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusVersion, ...]:
+        """Return committed history in ascending sequence order."""
+        return list_corpus_versions(self._connection_or_raise(), corpus_id)
 
     def get_corpus_update(
         self,

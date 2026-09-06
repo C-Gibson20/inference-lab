@@ -29,10 +29,12 @@ from inference_lab.provenance import (
 from inference_lab.storage import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
+    CommitCorpusUpdateOutcome,
     ComponentGenerationReference,
     ComponentGenerationValidator,
     ComponentKind,
     CorpusUpdate,
+    CorpusVersion,
     MetadataRepository,
     MetadataTransaction,
     NoCorpusChangeOutcome,
@@ -110,6 +112,13 @@ class StructuralTransaction:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
+        raise NotImplementedError
+
+    def commit_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CommitCorpusUpdateOutcome:
         raise NotImplementedError
 
     def add_corpus_update_document_membership(
@@ -202,6 +211,25 @@ class StructuralTransaction:
         return None
 
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
+        return ()
+
+    def get_active_corpus_version(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusVersion | None:
+        return None
+
+    def get_corpus_version(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusVersion | None:
+        return None
+
+    def list_corpus_versions(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusVersion, ...]:
         return ()
 
     def get_corpus_update(
@@ -411,6 +439,9 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
     class ReaderOnly:
         get_corpus = StructuralTransaction.get_corpus
         list_corpora = StructuralTransaction.list_corpora
+        get_active_corpus_version = StructuralTransaction.get_active_corpus_version
+        get_corpus_version = StructuralTransaction.get_corpus_version
+        list_corpus_versions = StructuralTransaction.list_corpus_versions
         get_corpus_update = StructuralTransaction.get_corpus_update
         list_corpus_update_document_memberships = (
             StructuralTransaction.list_corpus_update_document_memberships

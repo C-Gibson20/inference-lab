@@ -28,6 +28,7 @@ from inference_lab.provenance import (
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
+    CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
     SealCorpusUpdateOutcome,
 )
@@ -39,6 +40,7 @@ from inference_lab.storage.versioning import (
     ComponentGenerationReference,
     ComponentKind,
     CorpusUpdate,
+    CorpusVersion,
 )
 
 
@@ -64,6 +66,28 @@ class MetadataReader(Protocol):
 
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora in canonical identifier order."""
+        ...
+
+    def get_active_corpus_version(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusVersion | None:
+        """Return a corpus's active committed version, or ``None``."""
+        ...
+
+    def get_corpus_version(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusVersion | None:
+        """Return one committed version owned by a corpus, or ``None``."""
+        ...
+
+    def list_corpus_versions(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusVersion, ...]:
+        """Return committed history in ascending sequence order."""
         ...
 
     def get_corpus_update(
@@ -312,6 +336,14 @@ class MetadataWriter(Protocol):
         corpus_version: CorpusVersionId,
     ) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
         """Seal a complete manifest or terminate an unchanged proposal."""
+        ...
+
+    def commit_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CommitCorpusUpdateOutcome:
+        """Atomically compare, advance, and publish one ready update."""
         ...
 
     def add_corpus_update_document_membership(
