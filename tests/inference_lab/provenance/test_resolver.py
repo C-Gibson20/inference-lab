@@ -18,6 +18,7 @@ from inference_lab.provenance import (
     ExternalIdentifierAssertion,
     ExternalIdentifierResolutionPolicy,
     HashAlgorithm,
+    IdentityIdCollisionError,
     IdentityResolutionRequest,
     InvalidResolutionError,
     ResolutionKind,
@@ -551,7 +552,7 @@ def test_allocator_collisions_fail_closed() -> None:
     allocator = FixedAllocator(document_id=DOCUMENT_ID)
     candidate = _version(FIRST_VERSION_ID, content_hash=HASH_A)
 
-    with pytest.raises(InvalidResolutionError, match="existing DocumentId"):
+    with pytest.raises(IdentityIdCollisionError, match="existing DocumentId"):
         resolve_identity(
             _request(HASH_B, external_identifier_candidates=(candidate,)),
             allocator=allocator,
@@ -559,11 +560,15 @@ def test_allocator_collisions_fail_closed() -> None:
         )
 
 
+def test_allocator_collision_error_is_a_resolution_contract_failure() -> None:
+    assert issubclass(IdentityIdCollisionError, InvalidResolutionError)
+
+
 def test_allocator_version_collision_fails_closed() -> None:
     allocator = FixedAllocator(version_id=FIRST_VERSION_ID)
     candidate = _version(FIRST_VERSION_ID, content_hash=HASH_A)
 
-    with pytest.raises(InvalidResolutionError, match="existing DocumentVersionId"):
+    with pytest.raises(IdentityIdCollisionError, match="existing DocumentVersionId"):
         resolve_identity(
             _request(HASH_B, external_identifier_candidates=(candidate,)),
             allocator=allocator,
@@ -754,7 +759,7 @@ def test_resolution_failure_emits_error_without_sensitive_fields(
     allocator = FixedAllocator(document_id=DOCUMENT_ID)
     candidate = _version(FIRST_VERSION_ID, content_hash=HASH_A)
 
-    with pytest.raises(InvalidResolutionError, match="existing DocumentId"):
+    with pytest.raises(IdentityIdCollisionError, match="existing DocumentId"):
         resolve_identity(
             _request(HASH_B, external_identifier_candidates=(candidate,)),
             allocator=allocator,
@@ -764,7 +769,7 @@ def test_resolution_failure_emits_error_without_sensitive_fields(
     logger.error.assert_called_once_with(
         "identity_resolution_failed",
         pipeline_stage="ingest",
-        failure_type="InvalidResolutionError",
+        failure_type="IdentityIdCollisionError",
         candidate_count=1,
     )
     logger.info.assert_not_called()

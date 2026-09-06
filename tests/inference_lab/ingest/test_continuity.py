@@ -30,7 +30,7 @@ from inference_lab.provenance import (
     ExternalIdentifier,
     ExternalIdentifierAssertion,
     HashAlgorithm,
-    InvalidResolutionError,
+    IdentityIdCollisionError,
     SourceObservationId,
     SourceObservationState,
 )
@@ -518,7 +518,7 @@ def test_new_assignment_rejects_allocator_collision(tmp_path: Path) -> None:
         document_version_id=_VERSION_ID,
     )
 
-    with pytest.raises(InvalidResolutionError, match="existing SourceObservationId"):
+    with pytest.raises(IdentityIdCollisionError, match="existing SourceObservationId"):
         _resolve(
             snapshot,
             _inventory(root, snapshot),

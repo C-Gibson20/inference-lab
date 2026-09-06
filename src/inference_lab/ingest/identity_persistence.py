@@ -21,6 +21,7 @@ from inference_lab.ingest.identity_resolution import (
     resolve_discovered_source_identity,
 )
 from inference_lab.ingest.traversal import TraversalInventory
+from inference_lab.provenance import IdentityIdCollisionError
 from inference_lab.storage import (
     MetadataRepository,
     StorageConcurrencyError,
@@ -81,11 +82,18 @@ def _attempt_identity_persistence(
     raise AssertionError("metadata transaction suppressed identity persistence")
 
 
-def _log_retry(error: StorageConcurrencyError | StorageConflictError) -> None:
+def _log_retry(
+    error: IdentityIdCollisionError | StorageConcurrencyError | StorageConflictError,
+) -> None:
+    error_category = (
+        DiscoveryFailureCategory.IDENTITY_WRITE_FAILED.value
+        if isinstance(error, IdentityIdCollisionError)
+        else error.category.value
+    )
     _safe_log(
         "warning",
         "identity_persistence_retry",
-        error_category=error.category.value,
+        error_category=error_category,
         retry_number=1,
     )
 
@@ -126,7 +134,11 @@ def persist_discovered_source_identity(
                     repository=repository,
                     allocator=allocator,
                 )
-            except (StorageConcurrencyError, StorageConflictError) as error:
+            except (
+                IdentityIdCollisionError,
+                StorageConcurrencyError,
+                StorageConflictError,
+            ) as error:
                 if attempt + 1 < _MAX_IDENTITY_ATTEMPTS:
                     _log_retry(error)
                     continue

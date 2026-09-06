@@ -35,6 +35,7 @@ from inference_lab.ingest import (
 )
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
     DocumentId,
@@ -42,10 +43,12 @@ from inference_lab.provenance import (
     DocumentVersion,
     DocumentVersionId,
     HashAlgorithm,
+    IdentityIdCollisionError,
     IdentityResolutionOutcome,
     ResolutionKind,
     ResolutionReason,
     SourceObservationId,
+    SourceObservationState,
 )
 from inference_lab.storage import (
     RepositoryUnavailableError,
@@ -60,7 +63,9 @@ _SECOND_DOCUMENT_ID = DocumentId("33333333-3333-4333-8333-333333333333")
 _FIRST_VERSION_ID = DocumentVersionId("44444444-4444-4444-8444-444444444444")
 _SECOND_VERSION_ID = DocumentVersionId("55555555-5555-4555-8555-555555555555")
 _SOURCE_ID = SourceObservationId("66666666-6666-4666-8666-666666666666")
+_SECOND_SOURCE_ID = SourceObservationId("77777777-7777-4777-8777-777777777777")
 _HASH = ContentHash(HashAlgorithm.SHA256, "a" * 64)
+_OTHER_HASH = ContentHash(HashAlgorithm.SHA256, "b" * 64)
 
 
 class _Transaction:
@@ -117,6 +122,20 @@ class _CountingAllocator:
 
     def counts(self) -> tuple[int, int, int]:
         return self.source_calls, self.document_calls, self.version_calls
+
+
+class _CollisionThenUniqueAllocator(_CountingAllocator):
+    def new_source_observation_id(self) -> SourceObservationId:
+        self.source_calls += 1
+        return (_SOURCE_ID, _SECOND_SOURCE_ID)[self.source_calls - 1]
+
+    def new_document_id(self) -> DocumentId:
+        self.document_calls += 1
+        return _SECOND_DOCUMENT_ID
+
+    def new_document_version_id(self) -> DocumentVersionId:
+        self.version_calls += 1
+        return _SECOND_VERSION_ID
 
 
 def _case(
@@ -416,6 +435,156 @@ def test_conflict_retry_rebuilds_resolution_in_a_new_transaction(
     ]
     assert logs[0]["error_category"] == "conflict"
     assert logs[0]["retry_number"] == 1
+
+
+def test_allocator_collision_retries_resolution_before_any_application(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, snapshot, request, inventory = _case(tmp_path)
+    rebuilt = _resolved(source, snapshot, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID)
+    expected = IdentityApplicationResult(rebuilt, parse_eligible=True)
+    collision = IdentityIdCollisionError("private-allocator-payload")
+    transactions = (_Transaction(), _Transaction())
+    repository = _Repository(*transactions)
+    resolver = Mock(side_effect=(collision, rebuilt))
+    application = Mock(return_value=expected)
+    monkeypatch.setattr(
+        persistence_module,
+        "resolve_discovered_source_identity",
+        resolver,
+    )
+    monkeypatch.setattr(
+        persistence_module,
+        "apply_discovery_identity_outcome",
+        application,
+    )
+    with capture_logs() as logs:
+        result = _persist(source, snapshot, request, inventory, repository)
+
+    assert result == expected
+    assert repository.calls == resolver.call_count == 2
+    application.assert_called_once_with(
+        rebuilt,
+        corpus_id=_CORPUS_ID,
+        transaction=transactions[1],
+    )
+    assert transactions[0].exit_exception is collision
+    assert transactions[1].exit_exception is None
+    assert [(record["event"], record["log_level"]) for record in logs] == [
+        ("identity_persistence_retry", "warning")
+    ]
+    assert logs[0]["error_category"] == "identity_write_failed"
+    assert "private-allocator-payload" not in repr(logs)
+
+
+def test_real_observation_id_collision_recovers_with_fresh_allocation(
+    tmp_path: Path,
+) -> None:
+    source, snapshot, request, inventory = _case(tmp_path)
+    allocator = _CollisionThenUniqueAllocator()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    prior_version = DocumentVersion(
+        _FIRST_VERSION_ID,
+        _FIRST_DOCUMENT_ID,
+        _OTHER_HASH,
+    )
+    with repository.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Test corpus"))
+        transaction.add_document(DocumentIdentity(_FIRST_DOCUMENT_ID))
+        transaction.add_document_version(prior_version)
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _CORPUS_ID,
+                _FIRST_DOCUMENT_ID,
+                _FIRST_VERSION_ID,
+            )
+        )
+        transaction.add_source_observation(
+            SourceObservationState(
+                _CORPUS_ID,
+                _SOURCE_ID,
+                1,
+                _FIRST_DOCUMENT_ID,
+                _FIRST_VERSION_ID,
+            )
+        )
+    try:
+        result = persist_discovered_source_identity(
+            source,
+            snapshot,
+            request=request,
+            inventory=inventory,
+            repository=repository,
+            allocator=allocator,
+        )
+
+        assert isinstance(result, IdentityApplicationResult)
+        assert result.parse_eligible
+        assert result.source.source_observation_id == _SECOND_SOURCE_ID
+        assert result.source.identity_outcome.document == DocumentIdentity(
+            _SECOND_DOCUMENT_ID
+        )
+        assert result.source.identity_outcome.version == DocumentVersion(
+            _SECOND_VERSION_ID,
+            _SECOND_DOCUMENT_ID,
+            _HASH,
+        )
+        assert allocator.counts() == (2, 1, 1)
+        assert repository.get_source_observation(
+            _CORPUS_ID,
+            _SOURCE_ID,
+        ) == SourceObservationState(
+            _CORPUS_ID,
+            _SOURCE_ID,
+            1,
+            _FIRST_DOCUMENT_ID,
+            _FIRST_VERSION_ID,
+        )
+        assert (
+            repository.get_source_observation(
+                _CORPUS_ID,
+                _SECOND_SOURCE_ID,
+            )
+            is not None
+        )
+    finally:
+        repository.close()
+
+
+def test_repeated_allocator_collision_returns_bounded_identity_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, snapshot, request, inventory = _case(tmp_path)
+    collisions = (IdentityIdCollisionError(), IdentityIdCollisionError())
+    transactions = (_Transaction(), _Transaction())
+    repository = _Repository(*transactions)
+    resolver = Mock(side_effect=collisions)
+    application = Mock()
+    monkeypatch.setattr(
+        persistence_module,
+        "resolve_discovered_source_identity",
+        resolver,
+    )
+    monkeypatch.setattr(
+        persistence_module,
+        "apply_discovery_identity_outcome",
+        application,
+    )
+
+    result = _persist(source, snapshot, request, inventory, repository)
+
+    assert isinstance(result, DiscoveryFailure)
+    assert result.category is DiscoveryFailureCategory.IDENTITY_WRITE_FAILED
+    assert not result.retryable
+    assert repository.calls == resolver.call_count == 2
+    application.assert_not_called()
+    assert transactions[0].exit_exception is collisions[0]
+    assert transactions[1].exit_exception is collisions[1]
 
 
 @pytest.mark.parametrize(

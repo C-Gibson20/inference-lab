@@ -20,7 +20,7 @@ from inference_lab.provenance import (
     CorpusId,
     DocumentVersion,
     ExternalIdentifier,
-    InvalidResolutionError,
+    IdentityIdCollisionError,
     SourceObservationId,
 )
 from inference_lab.provenance.values import validate_external_identifiers
@@ -271,7 +271,7 @@ def _new_assignment(
             "allocator.new_source_observation_id() must return a SourceObservationId."
         )
     if reader.get_source_observation(corpus_id, source_observation_id) is not None:
-        raise InvalidResolutionError(
+        raise IdentityIdCollisionError(
             "allocator returned an existing SourceObservationId."
         )
     return SourceObservationAssignment(

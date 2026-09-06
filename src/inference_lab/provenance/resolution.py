@@ -24,6 +24,10 @@ class InvalidResolutionError(ValueError):
     """Raised when a resolution request or outcome violates its contract."""
 
 
+class IdentityIdCollisionError(InvalidResolutionError):
+    """Raised when an allocator returns an identity already in use."""
+
+
 class ResolutionReason(StrEnum):
     """Reasons explaining a deterministic resolution outcome."""
 
