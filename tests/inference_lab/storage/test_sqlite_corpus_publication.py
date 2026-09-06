@@ -94,6 +94,14 @@ class _CommitFailingConnection(sqlite3.Connection):
         raise sqlite3.OperationalError(_PRIVATE_FAILURE)
 
 
+class _UncertainCommitConnection(sqlite3.Connection):
+    """Connection that commits durably before reporting an ambiguous failure."""
+
+    def commit(self) -> None:
+        super().commit()
+        raise sqlite3.OperationalError(_PRIVATE_FAILURE)
+
+
 class _AcceptingComponentValidator:
     def validate_component_generation(
         self,
@@ -333,6 +341,99 @@ def test_exact_commit_replay_survives_restart_without_calling_clock(
         assert replayed.update == committed.update
         assert replayed.version == committed.version
         assert replayed.manifest == committed.manifest
+    finally:
+        reopened.close()
+
+
+def test_exact_retry_recovers_after_uncertain_commit_response(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "private-path" / "metadata.sqlite3"
+    initial = _open(database_path)
+    _add_catalogue(initial)
+    sealed = _prepare_update(
+        initial,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    initial.close()
+
+    connection = sqlite3.connect(
+        database_path,
+        isolation_level=None,
+        factory=_UncertainCommitConnection,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    uncertain = SQLiteMetadataRepository(
+        connection,
+        MIGRATIONS,
+        created_at_factory=_fixed_created_at,
+    )
+    try:
+        with capture_logs() as logs:
+            with pytest.raises(StorageTransactionError) as raised:
+                with uncertain.transaction() as transaction:
+                    transaction.commit_corpus_update(
+                        _CORPUS_A.corpus_id,
+                        _VERSION_A1,
+                    )
+
+        committed = uncertain.get_active_corpus_version(_CORPUS_A.corpus_id)
+        assert committed is not None
+        assert committed.corpus_version == _VERSION_A1
+        assert committed.sequence == 1
+        assert uncertain.list_corpus_versions(_CORPUS_A.corpus_id) == (committed,)
+        assert _PRIVATE_FAILURE not in str(raised.value)
+        assert logs == [
+            {
+                "event": "transaction_failed",
+                "pipeline_stage": "storage",
+                "error_category": "transaction",
+                "retryable": False,
+                "log_level": "error",
+            }
+        ]
+        assert _PRIVATE_FAILURE not in repr(logs)
+        assert _CORPUS_A.display_name not in repr(logs)
+        assert str(database_path) not in repr(logs)
+    finally:
+        uncertain.close()
+
+    def unexpected_clock_call() -> datetime:
+        raise AssertionError("an exact retry must retain the committed timestamp")
+
+    reopened = SQLiteMetadataRepository.open(
+        database_path,
+        created_at_factory=unexpected_clock_call,
+    )
+    try:
+        with capture_logs() as retry_logs:
+            replayed = _commit(reopened, _VERSION_A1)
+
+        assert replayed.replayed is True
+        assert replayed.version == committed
+        assert replayed.manifest == sealed.manifest
+        assert reopened.list_corpus_versions(_CORPUS_A.corpus_id) == (committed,)
+        assert retry_logs == [
+            {
+                "event": "corpus_version_committed",
+                "pipeline_stage": "storage",
+                "corpus_id": _CORPUS_A.corpus_id.as_str(),
+                "corpus_version": _VERSION_A1.as_str(),
+                "sequence": 1,
+                "document_count": 1,
+                "component_count": 0,
+                "replayed": True,
+                "log_level": "info",
+            },
+            {
+                "event": "transaction_completed",
+                "pipeline_stage": "storage",
+                "log_level": "info",
+            },
+        ]
     finally:
         reopened.close()
 
