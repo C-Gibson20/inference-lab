@@ -60,21 +60,26 @@ def _insert_version(
 def test_multi_corpus_baseline_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 3
+    assert len(MIGRATIONS) == 4
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "multi_corpus_metadata_baseline"
     assert MIGRATIONS[0].checksum == (
         "7516eeb4654186443550d64d7c61f5eb541e944c24c3f3d978017442d651d0bc"
     )
     assert MIGRATIONS[1].revision == 2
-    assert MIGRATIONS[1].migration_id == "source_persistence"
+    assert MIGRATIONS[1].migration_id == "source_locator_continuity"
     assert MIGRATIONS[1].checksum == (
-        "794c287e42d99cd0ab24f1750aa15550e78693ab9e6f44a33c12542230ac7fc2"
+        "fd5d64b788a960363c13cffea178cba48fef1a21d2b4b03a66be11e709174e62"
     )
     assert MIGRATIONS[2].revision == 3
-    assert MIGRATIONS[2].migration_id == "corpus_version_publication"
+    assert MIGRATIONS[2].migration_id == "source_persistence"
     assert MIGRATIONS[2].checksum == (
-        "9daa869c9fb6939b8615c0611b9b55a4d39ee88e2682ba4ecda6fbeb9746da80"
+        "042ceb39a0c31f5cb9427f52f5bbfa524745535a9a71ff3f0398a211c5b8434d"
+    )
+    assert MIGRATIONS[3].revision == 4
+    assert MIGRATIONS[3].migration_id == "corpus_version_publication"
+    assert MIGRATIONS[3].checksum == (
+        "715300e82383992a929c7377bdbe2d7840ca7e1ddf9a9a1931ddcf57fee0f268"
     )
 
 
