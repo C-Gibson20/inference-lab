@@ -159,6 +159,8 @@ def test_rollback_update_requires_distinct_proposal_and_active_parent() -> None:
         replace(update, expected_corpus_version=None)
     with pytest.raises(InvalidCorpusVersionContractError, match="own proposed"):
         replace(update, restores_corpus_version=VERSION_ID)
+    with pytest.raises(InvalidCorpusVersionContractError, match="historical"):
+        replace(update, restores_corpus_version=PARENT_VERSION_ID)
 
 
 @pytest.mark.parametrize(
@@ -256,6 +258,12 @@ def test_version_rejects_invalid_rollback_shape() -> None:
         _version(restores=RESTORED_VERSION_ID)
     with pytest.raises(InvalidCorpusVersionContractError, match="restore itself"):
         _version(sequence=2, parent=PARENT_VERSION_ID, restores=VERSION_ID)
+    with pytest.raises(InvalidCorpusVersionContractError, match="historical"):
+        _version(
+            sequence=2,
+            parent=PARENT_VERSION_ID,
+            restores=PARENT_VERSION_ID,
+        )
 
 
 def test_matches_manifest_requires_manifest_contract() -> None:

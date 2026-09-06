@@ -42,6 +42,7 @@ from inference_lab.storage import (
     ParsedRepresentation,
     ParseOutcome,
     ResolvedSourceSpan,
+    RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
     SourceArtefact,
 )
@@ -120,6 +121,13 @@ class StructuralTransaction:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> CommitCorpusUpdateOutcome:
+        raise NotImplementedError
+
+    def commit_corpus_rollback(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> RollbackCorpusVersionOutcome:
         raise NotImplementedError
 
     def add_corpus_update_document_membership(
@@ -239,6 +247,9 @@ class StructuralTransaction:
         corpus_version: CorpusVersionId,
     ) -> CorpusUpdate | None:
         return None
+
+    def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
+        return ()
 
     def list_corpus_update_document_memberships(
         self,
@@ -457,6 +468,9 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_corpus_version = StructuralTransaction.get_corpus_version
         list_corpus_versions = StructuralTransaction.list_corpus_versions
         get_corpus_update = StructuralTransaction.get_corpus_update
+        list_non_terminal_corpus_updates = (
+            StructuralTransaction.list_non_terminal_corpus_updates
+        )
         list_corpus_update_document_memberships = (
             StructuralTransaction.list_corpus_update_document_memberships
         )

@@ -183,6 +183,13 @@ def validate_corpus_update_identity(
         raise InvalidCorpusVersionContractError(
             "a rollback update requires an expected active version."
         )
+    if (
+        restores_corpus_version is not None
+        and restores_corpus_version == expected_corpus_version
+    ):
+        raise InvalidCorpusVersionContractError(
+            "a rollback target must be historical, not the expected active version."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -474,6 +481,13 @@ class CorpusVersion:
         if self.sequence == 1 and self.restores_corpus_version is not None:
             raise InvalidCorpusVersionContractError(
                 "the first corpus version cannot be a rollback publication."
+            )
+        if (
+            self.restores_corpus_version is not None
+            and self.restores_corpus_version == self.parent_corpus_version
+        ):
+            raise InvalidCorpusVersionContractError(
+                "a rollback target must be historical, not the version parent."
             )
 
     def matches_manifest(self, manifest: CorpusVersionManifest) -> bool:

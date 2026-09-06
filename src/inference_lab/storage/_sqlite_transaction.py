@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from types import TracebackType
-from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar
+from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar, cast
 
 from inference_lab.provenance import (
     ContentHash,
@@ -45,7 +45,10 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
 )
-from inference_lab.storage._sqlite_corpus_publication import commit_corpus_update
+from inference_lab.storage._sqlite_corpus_publication import (
+    commit_corpus_rollback,
+    commit_corpus_update,
+)
 from inference_lab.storage._sqlite_corpus_updates import (
     abort_corpus_update,
     add_corpus_update_document_membership,
@@ -53,6 +56,7 @@ from inference_lab.storage._sqlite_corpus_updates import (
     get_corpus_update,
     list_corpus_update_component_generations,
     list_corpus_update_document_memberships,
+    list_non_terminal_corpus_updates,
     register_corpus_update_component_generation,
     remove_corpus_update_document_membership,
     replace_corpus_update_component_generation,
@@ -118,6 +122,7 @@ from inference_lab.storage.outcomes import (
     BeginCorpusUpdateOutcome,
     CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
+    RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
 )
 from inference_lab.storage.parse_records import ParseOutcome
@@ -261,6 +266,10 @@ class SQLiteMetadataTransaction:
         """Return one owned durable corpus update within this transaction."""
         return self._execute(get_corpus_update, corpus_id, corpus_version)
 
+    def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
+        """Return durable preparing and ready work within this transaction."""
+        return self._execute(list_non_terminal_corpus_updates)
+
     def list_corpus_update_document_memberships(
         self,
         corpus_id: CorpusId,
@@ -306,7 +315,7 @@ class SQLiteMetadataTransaction:
         required_component_kinds: tuple[ComponentKind, ...] = (),
         restores_corpus_version: CorpusVersionId | None = None,
     ) -> BeginCorpusUpdateOutcome:
-        """Create and seed a preparing update or return its exact replay."""
+        """Create and seed an update, deriving rollback requirements from its target."""
         outcome = self._execute(
             begin_corpus_update,
             corpus_id,
@@ -316,18 +325,21 @@ class SQLiteMetadataTransaction:
             restores_corpus_version=restores_corpus_version,
             created_at_factory=self._repository._created_at_factory,
         )
+        fields: dict[str, object] = {
+            "corpus_id": outcome.update.corpus_id.as_str(),
+            "corpus_version": outcome.update.corpus_version.as_str(),
+            "update_state": outcome.update.state.value,
+            "required_component_count": len(outcome.update.required_component_kinds),
+            "replayed": outcome.replayed,
+        }
+        if outcome.update.restores_corpus_version is not None:
+            fields["restores_corpus_version"] = (
+                outcome.update.restores_corpus_version.as_str()
+            )
         self._pending_success_logs.append(
             (
                 "corpus_update_started",
-                {
-                    "corpus_id": outcome.update.corpus_id.as_str(),
-                    "corpus_version": outcome.update.corpus_version.as_str(),
-                    "update_state": outcome.update.state.value,
-                    "required_component_count": len(
-                        outcome.update.required_component_kinds
-                    ),
-                    "replayed": outcome.replayed,
-                },
+                fields,
             )
         )
         return outcome
@@ -337,7 +349,7 @@ class SQLiteMetadataTransaction:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> AbortCorpusUpdateOutcome:
-        """Abort a preparing update or return its exact abort replay."""
+        """Abort preparing or ready work or return its exact abort replay."""
         outcome = self._execute(
             abort_corpus_update,
             corpus_id,
@@ -420,6 +432,10 @@ class SQLiteMetadataTransaction:
         else:
             event = "corpus_update_aborted"
             fields["abort_reason"] = "no_change"
+        if outcome.update.restores_corpus_version is not None:
+            fields["restores_corpus_version"] = (
+                outcome.update.restores_corpus_version.as_str()
+            )
         self._pending_success_logs.append((event, fields))
         return outcome
 
@@ -445,6 +461,39 @@ class SQLiteMetadataTransaction:
                     "document_count": len(outcome.manifest.document_memberships),
                     "component_count": len(outcome.manifest.component_generations),
                     "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
+
+    def commit_corpus_rollback(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> RollbackCorpusVersionOutcome:
+        """Publish one ready rollback as a new monotonic corpus version."""
+        outcome = self._execute(
+            commit_corpus_rollback,
+            corpus_id,
+            corpus_version,
+            created_at_factory=self._repository._created_at_factory,
+        )
+        publication = outcome.publication
+        restores_corpus_version = cast(
+            CorpusVersionId,
+            publication.version.restores_corpus_version,
+        )
+        self._pending_success_logs.append(
+            (
+                "corpus_version_rollback_committed",
+                {
+                    "corpus_id": publication.version.corpus_id.as_str(),
+                    "corpus_version": publication.version.corpus_version.as_str(),
+                    "restores_corpus_version": restores_corpus_version.as_str(),
+                    "sequence": publication.version.sequence,
+                    "document_count": len(publication.manifest.document_memberships),
+                    "component_count": len(publication.manifest.component_generations),
+                    "replayed": publication.replayed,
                 },
             )
         )

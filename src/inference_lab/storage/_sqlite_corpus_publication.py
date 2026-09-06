@@ -26,6 +26,7 @@ from inference_lab.storage.errors import (
 from inference_lab.storage.outcomes import (
     CommitCorpusUpdateOutcome,
     CorpusVersionConflictKind,
+    RollbackCorpusVersionOutcome,
 )
 from inference_lab.storage.versioning import (
     CorpusUpdate,
@@ -183,14 +184,15 @@ def _mark_committed(
     return replace(update, state=CorpusUpdateState.COMMITTED)
 
 
-def commit_corpus_update(
+def _commit_corpus_update(
     connection: sqlite3.Connection,
     corpus_id: CorpusId,
     corpus_version: CorpusVersionId,
     *,
     created_at_factory: CreatedAtFactory,
+    rollback: bool,
 ) -> CommitCorpusUpdateOutcome:
-    """Atomically publish one ready update using per-corpus compare-and-advance."""
+    """Publish one ready ordinary update or rollback with explicit intent."""
     if not isinstance(corpus_id, CorpusId):
         raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(corpus_version, CorpusVersionId):
@@ -198,6 +200,8 @@ def commit_corpus_update(
 
     try:
         update = _require_update(connection, corpus_id, corpus_version)
+        if (update.restores_corpus_version is not None) is not rollback:
+            _raise_conflict(corpus_id, corpus_version)
         if update.state is CorpusUpdateState.COMMITTED:
             return _committed_replay(connection, update)
         if update.state is not CorpusUpdateState.READY:
@@ -250,3 +254,41 @@ def commit_corpus_update(
             error,
             default=RepositoryUnavailableError,
         ) from None
+
+
+def commit_corpus_update(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+    *,
+    created_at_factory: CreatedAtFactory,
+) -> CommitCorpusUpdateOutcome:
+    """Atomically publish one ready non-rollback corpus update."""
+    return _commit_corpus_update(
+        connection,
+        corpus_id,
+        corpus_version,
+        created_at_factory=created_at_factory,
+        rollback=False,
+    )
+
+
+def commit_corpus_rollback(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+    *,
+    created_at_factory: CreatedAtFactory,
+) -> RollbackCorpusVersionOutcome:
+    """Atomically publish one ready rollback as a new corpus version."""
+    publication = _commit_corpus_update(
+        connection,
+        corpus_id,
+        corpus_version,
+        created_at_factory=created_at_factory,
+        rollback=True,
+    )
+    try:
+        return RollbackCorpusVersionOutcome(publication=publication)
+    except InvalidCorpusVersionContractError:
+        raise CorruptStorageError() from None

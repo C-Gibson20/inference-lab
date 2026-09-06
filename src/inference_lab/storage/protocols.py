@@ -30,6 +30,7 @@ from inference_lab.storage.outcomes import (
     BeginCorpusUpdateOutcome,
     CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
+    RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
 )
 from inference_lab.storage.parse_records import ParseOutcome
@@ -97,6 +98,10 @@ class MetadataReader(Protocol):
         corpus_version: CorpusVersionId,
     ) -> CorpusUpdate | None:
         """Return one owned durable corpus update, or ``None``."""
+        ...
+
+    def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
+        """Return durable preparing and ready work for explicit recovery."""
         ...
 
     def list_corpus_update_document_memberships(
@@ -297,7 +302,7 @@ class MetadataWriter(Protocol):
         required_component_kinds: tuple[ComponentKind, ...] = (),
         restores_corpus_version: CorpusVersionId | None = None,
     ) -> BeginCorpusUpdateOutcome:
-        """Create and seed a preparing update or return its exact replay."""
+        """Create and seed an update, deriving rollback requirements from its target."""
         ...
 
     def abort_corpus_update(
@@ -305,7 +310,7 @@ class MetadataWriter(Protocol):
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> AbortCorpusUpdateOutcome:
-        """Abort a preparing update or return its exact abort replay."""
+        """Abort preparing or ready work or return its exact replay."""
         ...
 
     def register_corpus_update_component_generation(
@@ -345,6 +350,14 @@ class MetadataWriter(Protocol):
         corpus_version: CorpusVersionId,
     ) -> CommitCorpusUpdateOutcome:
         """Atomically compare, advance, and publish one ready update."""
+        ...
+
+    def commit_corpus_rollback(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> RollbackCorpusVersionOutcome:
+        """Publish one ready rollback as a new monotonic corpus version."""
         ...
 
     def add_corpus_update_document_membership(

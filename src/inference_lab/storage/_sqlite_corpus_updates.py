@@ -17,7 +17,10 @@ from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
 )
-from inference_lab.storage._sqlite_corpus_versions import _get_committed_corpus_version
+from inference_lab.storage._sqlite_corpus_versions import (
+    _get_committed_corpus_version,
+    get_corpus_version,
+)
 from inference_lab.storage._sqlite_logging import safe_log_failure
 from inference_lab.storage.errors import (
     CorruptStorageError,
@@ -133,6 +136,28 @@ def get_corpus_update(
         if stored is None or stored.corpus_id != corpus_id:
             return None
         return stored
+    except CorruptStorageError:
+        raise
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
+def list_non_terminal_corpus_updates(
+    connection: sqlite3.Connection,
+) -> tuple[CorpusUpdate, ...]:
+    """Return durable preparing and ready work in deterministic order."""
+    try:
+        rows = connection.execute(
+            """SELECT corpus_id, corpus_version, expected_corpus_version, state,
+                manifest_digest, created_at, restores_corpus_version
+            FROM corpus_updates
+            WHERE state IN ('preparing', 'ready')
+            ORDER BY created_at, corpus_id, corpus_version"""
+        ).fetchall()
+        return _reconstruct_updates(connection, rows)
     except CorruptStorageError:
         raise
     except sqlite3.Error as error:
@@ -296,12 +321,23 @@ def _require_preparing(update: CorpusUpdate) -> None:
         _raise_conflict(update.corpus_id, update.corpus_version)
 
 
+def _require_membership_editable(update: CorpusUpdate) -> None:
+    _require_preparing(update)
+    if update.restores_corpus_version is not None:
+        _raise_conflict(update.corpus_id, update.corpus_version)
+
+
+def _require_abortable(update: CorpusUpdate) -> None:
+    if update.state not in {CorpusUpdateState.PREPARING, CorpusUpdateState.READY}:
+        _raise_conflict(update.corpus_id, update.corpus_version)
+
+
 def abort_corpus_update(
     connection: sqlite3.Connection,
     corpus_id: CorpusId,
     corpus_version: CorpusVersionId,
 ) -> AbortCorpusUpdateOutcome:
-    """Abort one preparing update or accept an exact abort replay."""
+    """Abort one preparing or ready update or accept an exact replay."""
     if not isinstance(corpus_id, CorpusId):
         raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(corpus_version, CorpusVersionId):
@@ -311,11 +347,12 @@ def abort_corpus_update(
         update = _require_update(connection, corpus_id, corpus_version)
         if update.state is CorpusUpdateState.ABORTED:
             return AbortCorpusUpdateOutcome(update=update, replayed=True)
-        _require_preparing(update)
+        _require_abortable(update)
         connection.execute(
             """UPDATE corpus_updates
             SET state = 'aborted'
-            WHERE corpus_id = ? AND corpus_version = ? AND state = 'preparing'""",
+            WHERE corpus_id = ? AND corpus_version = ?
+                AND state IN ('preparing', 'ready')""",
             (corpus_id.as_str(), corpus_version.as_str()),
         )
         if connection.execute("SELECT changes()").fetchone()[0] != 1:
@@ -587,39 +624,37 @@ def _proposed_manifest(
     return manifest
 
 
-def _expected_version(
+def _committed_version_manifest(
     connection: sqlite3.Connection,
-    update: CorpusUpdate,
-) -> tuple[CorpusVersion, CorpusVersionManifest] | None:
-    expected = update.expected_corpus_version
-    if expected is None:
-        return None
-    version = _get_committed_corpus_version(connection, update.corpus_id, expected)
-    parent_update = _require_update(connection, update.corpus_id, expected)
-    if parent_update.state is not CorpusUpdateState.COMMITTED:
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+) -> tuple[CorpusVersion, CorpusUpdate, CorpusVersionManifest]:
+    version = _get_committed_corpus_version(connection, corpus_id, corpus_version)
+    committed_update = _require_update(connection, corpus_id, corpus_version)
+    if committed_update.state is not CorpusUpdateState.COMMITTED:
         raise CorruptStorageError()
     document_rows = connection.execute(
         """SELECT corpus_id, document_id, document_version_id
         FROM corpus_version_document_memberships
         WHERE corpus_id = ? AND corpus_version = ?
         ORDER BY document_id, document_version_id""",
-        (update.corpus_id.as_str(), expected.as_str()),
+        (corpus_id.as_str(), corpus_version.as_str()),
     ).fetchall()
     memberships = _reconstruct_document_memberships(document_rows)
     components = list_corpus_update_component_generations(
         connection,
-        update.corpus_id,
-        expected,
+        corpus_id,
+        corpus_version,
     )
     try:
         manifest = CorpusVersionManifest(
-            corpus_id=update.corpus_id,
-            corpus_version=expected,
+            corpus_id=corpus_id,
+            corpus_version=corpus_version,
             document_memberships=memberships,
             component_generations=components,
         )
         complete = manifest.has_required_components(
-            parent_update.required_component_kinds
+            committed_update.required_component_kinds
         )
     except (TypeError, InvalidCorpusVersionContractError):
         raise CorruptStorageError() from None
@@ -627,6 +662,21 @@ def _expected_version(
         raise CorruptStorageError()
     if manifest.manifest_digest != version.manifest_digest:
         raise CorruptStorageError()
+    return version, committed_update, manifest
+
+
+def _expected_version(
+    connection: sqlite3.Connection,
+    update: CorpusUpdate,
+) -> tuple[CorpusVersion, CorpusVersionManifest] | None:
+    expected = update.expected_corpus_version
+    if expected is None:
+        return None
+    version, _, manifest = _committed_version_manifest(
+        connection,
+        update.corpus_id,
+        expected,
+    )
     return version, manifest
 
 
@@ -650,6 +700,48 @@ def _store_update_state(
     if connection.execute("SELECT changes()").fetchone()[0] != 1:
         raise RepositoryUnavailableError()
     return replace(update, state=state, manifest_digest=manifest_digest)
+
+
+def _component_rollback_semantics(
+    generation: ComponentGenerationReference,
+) -> tuple[object, ...]:
+    return (
+        generation.component_kind,
+        generation.implementation,
+        generation.format_version,
+        generation.contract_version,
+        generation.configuration_digest,
+        generation.source_manifest_digest,
+    )
+
+
+def _require_rollback_manifest_equivalence(
+    connection: sqlite3.Connection,
+    update: CorpusUpdate,
+    proposed: CorpusVersionManifest,
+) -> None:
+    target = update.restores_corpus_version
+    if target is None:
+        return
+    _, target_update, target_manifest = _committed_version_manifest(
+        connection,
+        update.corpus_id,
+        target,
+    )
+    proposed_components = tuple(
+        _component_rollback_semantics(generation)
+        for generation in proposed.component_generations
+    )
+    target_components = tuple(
+        _component_rollback_semantics(generation)
+        for generation in target_manifest.component_generations
+    )
+    if (
+        update.required_component_kinds != target_update.required_component_kinds
+        or proposed.document_memberships != target_manifest.document_memberships
+        or proposed_components != target_components
+    ):
+        _raise_conflict(update.corpus_id, update.corpus_version)
 
 
 def seal_corpus_update(
@@ -689,9 +781,11 @@ def seal_corpus_update(
         )
         if persisted_seal and manifest.manifest_digest != update.manifest_digest:
             raise CorruptStorageError()
+        _require_rollback_manifest_equivalence(connection, update, manifest)
         expected = _expected_version(connection, update)
         if (
-            expected is not None
+            update.restores_corpus_version is None
+            and expected is not None
             and manifest.manifest_digest == expected[1].manifest_digest
         ):
             if update.state is CorpusUpdateState.PREPARING:
@@ -765,7 +859,7 @@ def add_corpus_update_document_membership(
             return
         if staged is not None:
             _raise_conflict(corpus_id, corpus_version)
-        _require_preparing(update)
+        _require_membership_editable(update)
         connection.execute(
             """INSERT INTO corpus_update_document_memberships (
                 corpus_id, corpus_version, document_id, document_version_id
@@ -829,7 +923,7 @@ def replace_corpus_update_document_membership(
             return
         if staged != expected_membership:
             _raise_conflict(corpus_id, corpus_version)
-        _require_preparing(update)
+        _require_membership_editable(update)
         connection.execute(
             """UPDATE corpus_update_document_memberships
             SET document_version_id = ?
@@ -882,7 +976,7 @@ def remove_corpus_update_document_membership(
             return
         if staged != membership:
             _raise_conflict(corpus_id, corpus_version)
-        _require_preparing(update)
+        _require_membership_editable(update)
         connection.execute(
             """DELETE FROM corpus_update_document_memberships
             WHERE corpus_id = ? AND corpus_version = ?
@@ -963,6 +1057,22 @@ def _created_at(factory: CreatedAtFactory) -> datetime:
     return value
 
 
+def _rollback_target(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    proposed_corpus_version: CorpusVersionId,
+    restores_corpus_version: CorpusVersionId,
+) -> tuple[CorpusUpdate, CorpusVersionManifest]:
+    if get_corpus_version(connection, corpus_id, restores_corpus_version) is None:
+        _raise_conflict(corpus_id, proposed_corpus_version)
+    _, target_update, target_manifest = _committed_version_manifest(
+        connection,
+        corpus_id,
+        restores_corpus_version,
+    )
+    return target_update, target_manifest
+
+
 def begin_corpus_update(
     connection: sqlite3.Connection,
     corpus_id: CorpusId,
@@ -973,7 +1083,7 @@ def begin_corpus_update(
     restores_corpus_version: CorpusVersionId | None,
     created_at_factory: CreatedAtFactory,
 ) -> BeginCorpusUpdateOutcome:
-    """Create one preparing update, seed its parent, or accept exact replay."""
+    """Create and seed an update, deriving rollback requirements from its target."""
     if not isinstance(corpus_id, CorpusId):
         raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(corpus_version, CorpusVersionId):
@@ -996,6 +1106,19 @@ def begin_corpus_update(
     )
 
     try:
+        rollback_manifest: CorpusVersionManifest | None = None
+        if restores_corpus_version is not None:
+            target_update, rollback_manifest = _rollback_target(
+                connection,
+                corpus_id,
+                corpus_version,
+                restores_corpus_version,
+            )
+            target_required = target_update.required_component_kinds
+            if required and required != target_required:
+                _raise_conflict(corpus_id, corpus_version)
+            required = target_required
+
         stored = _get_update_by_version(connection, corpus_version)
         if stored is not None:
             if _matches_begin_payload(
@@ -1069,7 +1192,12 @@ def begin_corpus_update(
                 for kind in update.required_component_kinds
             ),
         )
-        if update.expected_corpus_version is not None:
+        seed_corpus_version = (
+            update.restores_corpus_version
+            if rollback_manifest is not None
+            else update.expected_corpus_version
+        )
+        if seed_corpus_version is not None:
             connection.execute(
                 """INSERT INTO corpus_update_document_memberships (
                     corpus_id,
@@ -1083,7 +1211,7 @@ def begin_corpus_update(
                 (
                     update.corpus_version.as_str(),
                     update.corpus_id.as_str(),
-                    update.expected_corpus_version.as_str(),
+                    seed_corpus_version.as_str(),
                 ),
             )
         return BeginCorpusUpdateOutcome(update=update)
