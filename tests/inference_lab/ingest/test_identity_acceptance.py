@@ -29,6 +29,7 @@ from inference_lab.provenance import (
     DocumentId,
     DocumentVersionId,
     DuplicateClass,
+    ExternalIdentifier,
     ResolutionKind,
     ResolutionReason,
     SourceObservationId,
@@ -38,6 +39,7 @@ from inference_lab.storage import MetadataRepository, open_metadata_repository
 from .fixtures import fixture_settings  # noqa: TID252
 
 _CORPUS_ID = CorpusId("11111111-1111-4111-8111-111111111111")
+_OTHER_CORPUS_ID = CorpusId("22222222-2222-4222-8222-222222222222")
 
 
 class _IncompleteScanFileSystem(LocalTraversalFileSystem):
@@ -110,6 +112,16 @@ def _persist_supported_sources(
         repository=repository,
         allocator=UuidDiscoveryIdentityIdAllocator(),
     )
+
+
+def _successful_results(
+    results: tuple[IdentityApplicationResult | DiscoveryFailure, ...],
+) -> tuple[IdentityApplicationResult, ...]:
+    successes: list[IdentityApplicationResult] = []
+    for result in results:
+        assert isinstance(result, IdentityApplicationResult)
+        successes.append(result)
+    return tuple(successes)
 
 
 def test_rename_after_restart_preserves_identity_and_advances_locator(
@@ -846,3 +858,291 @@ def test_overlapping_roots_repeat_in_stable_order_as_an_exact_noop(
         )
     finally:
         reopened.close()
+
+
+def test_two_corpora_isolate_shared_candidates_observations_and_relationships(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    shared_path = source_root / "a-shared.txt"
+    first_only_path = source_root / "b-first-only.txt"
+    second_only_path = source_root / "c-second-only.txt"
+    duplicate_path = source_root / "z-second-duplicate.txt"
+    shared_bytes = b"bytes intentionally shared across corpora\n"
+    shared_path.write_bytes(shared_bytes)
+    first_only_path.write_bytes(b"first corpus only\n")
+    second_only_path.write_bytes(b"second corpus only\n")
+    shared_identifier = ExternalIdentifier("doi", "10.1000/shared")
+    first_only_identifier = ExternalIdentifier("doi", "10.1000/first-only")
+    second_only_identifier = ExternalIdentifier("doi", "10.1000/second-only")
+    first_request = DiscoveryRequest(
+        corpus_id=_CORPUS_ID,
+        inputs=(
+            DiscoveryInput(
+                shared_path,
+                DiscoveryInputKind.FILE,
+                external_identifiers=(shared_identifier,),
+            ),
+            DiscoveryInput(
+                first_only_path,
+                DiscoveryInputKind.FILE,
+                external_identifiers=(first_only_identifier,),
+            ),
+        ),
+    )
+    second_request = DiscoveryRequest(
+        corpus_id=_OTHER_CORPUS_ID,
+        inputs=(
+            DiscoveryInput(
+                shared_path,
+                DiscoveryInputKind.FILE,
+                external_identifiers=(shared_identifier,),
+            ),
+            DiscoveryInput(
+                second_only_path,
+                DiscoveryInputKind.FILE,
+                external_identifiers=(second_only_identifier,),
+            ),
+        ),
+    )
+    database_path = tmp_path / "metadata.sqlite3"
+
+    initial = open_metadata_repository(database_path, apply_migrations=True)
+    with initial.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "First corpus"))
+        transaction.add_corpus(CorpusMetadata(_OTHER_CORPUS_ID, "Second corpus"))
+    try:
+        first_results = _successful_results(
+            _persist_supported_sources(first_request, initial)
+        )
+        assert len(first_results) == 2
+        assert all(
+            result.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
+            for result in first_results
+        )
+        first_by_path = {
+            result.source.snapshot.locator.path: result for result in first_results
+        }
+        first_shared = first_by_path[shared_path.resolve()]
+        first_only = first_by_path[first_only_path.resolve()]
+    finally:
+        initial.close()
+
+    second = open_metadata_repository(database_path)
+    try:
+        second_results = _successful_results(
+            _persist_supported_sources(second_request, second)
+        )
+        assert len(second_results) == 2
+        assert all(
+            result.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
+            for result in second_results
+        )
+        second_by_path = {
+            result.source.snapshot.locator.path: result for result in second_results
+        }
+        second_shared = second_by_path[shared_path.resolve()]
+        second_only = second_by_path[second_only_path.resolve()]
+
+        first_shared_outcome = first_shared.source.identity_outcome
+        first_only_outcome = first_only.source.identity_outcome
+        second_shared_outcome = second_shared.source.identity_outcome
+        second_only_outcome = second_only.source.identity_outcome
+        for outcome in (
+            first_shared_outcome,
+            first_only_outcome,
+            second_shared_outcome,
+            second_only_outcome,
+        ):
+            assert outcome.document is not None
+            assert outcome.version is not None
+        assert first_shared_outcome.version is not None
+        assert second_shared_outcome.version is not None
+
+        assert (
+            first_shared.source.snapshot.content_hash
+            == second_shared.source.snapshot.content_hash
+        )
+        assert (
+            first_shared.source.source_observation_id
+            != second_shared.source.source_observation_id
+        )
+        assert first_shared_outcome.document != second_shared_outcome.document
+        assert first_shared_outcome.version != second_shared_outcome.version
+
+        assert second.find_document_versions_by_content_hash(
+            _CORPUS_ID,
+            first_shared.source.snapshot.content_hash,
+        ) == (first_shared_outcome.version,)
+        assert second.find_document_versions_by_content_hash(
+            _OTHER_CORPUS_ID,
+            second_shared.source.snapshot.content_hash,
+        ) == (second_shared_outcome.version,)
+        assert second.find_document_versions_by_external_identifiers(
+            _CORPUS_ID,
+            (shared_identifier,),
+        ) == (first_shared_outcome.version,)
+        assert second.find_document_versions_by_external_identifiers(
+            _OTHER_CORPUS_ID,
+            (shared_identifier,),
+        ) == (second_shared_outcome.version,)
+        assert (
+            second.find_document_versions_by_content_hash(
+                _CORPUS_ID,
+                second_only.source.snapshot.content_hash,
+            )
+            == ()
+        )
+        assert (
+            second.find_document_versions_by_external_identifiers(
+                _CORPUS_ID,
+                (second_only_identifier,),
+            )
+            == ()
+        )
+        assert (
+            second.find_document_versions_by_content_hash(
+                _OTHER_CORPUS_ID,
+                first_only.source.snapshot.content_hash,
+            )
+            == ()
+        )
+        assert (
+            second.find_document_versions_by_external_identifiers(
+                _OTHER_CORPUS_ID,
+                (first_only_identifier,),
+            )
+            == ()
+        )
+
+        first_locator = second.find_source_locator_by_path(
+            _CORPUS_ID,
+            shared_path.resolve(),
+        )
+        second_locator = second.find_source_locator_by_path(
+            _OTHER_CORPUS_ID,
+            shared_path.resolve(),
+        )
+        assert first_locator is not None
+        assert second_locator is not None
+        assert (
+            first_locator.source_observation_id
+            == first_shared.source.source_observation_id
+        )
+        assert (
+            second_locator.source_observation_id
+            == second_shared.source.source_observation_id
+        )
+        assert (
+            second.get_source_observation(
+                _CORPUS_ID,
+                second_shared.source.source_observation_id,
+            )
+            is None
+        )
+        assert (
+            second.get_source_observation(
+                _OTHER_CORPUS_ID,
+                first_shared.source.source_observation_id,
+            )
+            is None
+        )
+    finally:
+        second.close()
+
+    duplicate_path.write_bytes(shared_bytes)
+    expanded_second_request = DiscoveryRequest(
+        corpus_id=_OTHER_CORPUS_ID,
+        inputs=second_request.inputs
+        + (
+            DiscoveryInput(
+                duplicate_path,
+                DiscoveryInputKind.FILE,
+                external_identifiers=(shared_identifier,),
+            ),
+        ),
+    )
+    final = open_metadata_repository(database_path)
+    try:
+        final_results = _successful_results(
+            _persist_supported_sources(expanded_second_request, final)
+        )
+        assert len(final_results) == 3
+        final_by_path = {
+            result.source.snapshot.locator.path: result for result in final_results
+        }
+        assert (
+            final_by_path[shared_path.resolve()].source.identity_outcome.kind
+            is ResolutionKind.UNCHANGED
+        )
+        assert (
+            final_by_path[second_only_path.resolve()].source.identity_outcome.kind
+            is ResolutionKind.UNCHANGED
+        )
+        duplicate = final_by_path[duplicate_path.resolve()]
+        duplicate_outcome = duplicate.source.identity_outcome
+        assert duplicate.parse_eligible
+        assert duplicate_outcome.kind is ResolutionKind.DUPLICATE
+        assert duplicate_outcome.reason is ResolutionReason.DUPLICATE_HASH_MATCH
+        assert duplicate_outcome.document is not None
+        assert duplicate_outcome.version is not None
+        assert duplicate_outcome.matched_version_ids == (
+            second_shared_outcome.version.document_version_id,
+        )
+        assert first_shared_outcome.version.document_version_id not in (
+            duplicate_outcome.matched_version_ids
+        )
+        assert len(duplicate_outcome.duplicate_relationships) == 1
+        relationship = duplicate_outcome.duplicate_relationships[0]
+        assert final.list_duplicate_relationships(
+            _OTHER_CORPUS_ID,
+            duplicate_outcome.version.document_version_id,
+        ) == (relationship,)
+        assert final.list_duplicate_relationships(
+            _OTHER_CORPUS_ID,
+            second_shared_outcome.version.document_version_id,
+        ) == (relationship,)
+        assert (
+            final.list_duplicate_relationships(
+                _CORPUS_ID,
+                duplicate_outcome.version.document_version_id,
+            )
+            == ()
+        )
+        assert (
+            final.list_duplicate_relationships(
+                _CORPUS_ID,
+                first_shared_outcome.version.document_version_id,
+            )
+            == ()
+        )
+
+        first_memberships = final.list_corpus_document_version_memberships(_CORPUS_ID)
+        second_memberships = final.list_corpus_document_version_memberships(
+            _OTHER_CORPUS_ID
+        )
+        assert len(first_memberships) == 2
+        assert len(second_memberships) == 3
+        first_version_ids = {
+            membership.document_version_id for membership in first_memberships
+        }
+        second_version_ids = {
+            membership.document_version_id for membership in second_memberships
+        }
+        assert first_version_ids.isdisjoint(second_version_ids)
+        assert duplicate_outcome.version.document_version_id in second_version_ids
+        assert duplicate_outcome.version.document_version_id not in first_version_ids
+
+        assert final.find_document_versions_by_external_identifiers(
+            _CORPUS_ID,
+            (shared_identifier,),
+        ) == (first_shared_outcome.version,)
+        assert frozenset(
+            final.find_document_versions_by_external_identifiers(
+                _OTHER_CORPUS_ID,
+                (shared_identifier,),
+            )
+        ) == frozenset((second_shared_outcome.version, duplicate_outcome.version))
+    finally:
+        final.close()
