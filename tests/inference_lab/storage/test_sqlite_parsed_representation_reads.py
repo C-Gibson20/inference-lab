@@ -1,7 +1,10 @@
 """Tests for corpus-scoped SQLite parsed-representation reads."""
 
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
@@ -18,6 +21,7 @@ from inference_lab.storage import (
     ContentOrigin,
     CoordinateOrigin,
     CoordinateUnit,
+    CorruptStorageError,
     PageLayoutDescriptor,
     PageRotation,
     ParsedRepresentation,
@@ -309,5 +313,42 @@ def test_representation_reads_do_not_disclose_absence_or_other_corpus_data(
             )
             == ()
         )
+    finally:
+        repository.close()
+
+
+def test_unsupported_representation_version_fails_repository_integrity_check(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _persist(database_path, (parsed_representation(),))
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            "UPDATE parsed_representations SET record_schema_version = '2.0.0'"
+        )
+
+    with pytest.raises(CorruptStorageError):
+        _open_repository(database_path)
+
+
+def test_digest_corruption_fails_closed_across_read_operations(tmp_path: Path) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _persist(database_path, (parsed_representation(),))
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE parsed_representations SET output_digest = ?",
+            ("0" * 64,),
+        )
+
+    repository = _open_repository(database_path)
+    try:
+        with pytest.raises(CorruptStorageError):
+            repository.get_parsed_representation(
+                _CORPUS.corpus_id,
+                PARSED_RECORD_ID,
+            )
+        with pytest.raises(CorruptStorageError):
+            repository.resolve_source_span(_CORPUS.corpus_id, FIRST_SPAN_ID)
     finally:
         repository.close()
