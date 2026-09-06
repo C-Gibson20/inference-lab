@@ -1,9 +1,11 @@
 """Tests for atomic SQLite parse-outcome writes."""
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
@@ -22,6 +24,8 @@ from inference_lab.storage import (
     ParseFailureUnitKind,
     ParseOutcome,
     ParseStatus,
+    ProducerIdentity,
+    StorageConflictError,
 )
 
 from .fixtures import open_repository as _open_repository  # noqa: TID252
@@ -32,6 +36,7 @@ from .source_fixtures import (  # noqa: TID252
     PARSED_RECORD_ID,
     PARSER,
     SOURCE_HASH,
+    SOURCE_TEXT,
     parsed_representation,
 )
 
@@ -46,6 +51,9 @@ _OTHER_CORPUS = CorpusMetadata(
 _VERSION = DocumentVersion(DOCUMENT_VERSION_ID, DOCUMENT_ID, SOURCE_HASH)
 _RECOVERABLE_PARSE_ID = RecordId("30000000-0000-4000-8000-000000000002")
 _FAILED_PARSE_ID = RecordId("30000000-0000-4000-8000-000000000003")
+_MISSING_PARSED_RECORD_ID = RecordId("40000000-0000-4000-8000-000000000099")
+_ABSENT_CORPUS_ID = CorpusId("70000000-0000-4000-8000-000000000099")
+_PRIVATE_TRIGGER_PAYLOAD = "private rejected parse payload"
 
 _RECOVERABLE_FAILURES = (
     ParseFailureRecord(
@@ -327,5 +335,157 @@ def test_corrupt_outcomes_fail_closed_during_reconstruction(
                 _CORPUS.corpus_id,
                 _RECOVERABLE_PARSE_ID,
             )
+    finally:
+        repository.close()
+
+
+def test_parse_identity_reuse_with_different_failures_conflicts(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _add_catalogue_and_representation(database_path)
+    original = _outcome(_FAILED_PARSE_ID, ParseStatus.FAILED, None, _FATAL_FAILURES)
+    conflicting = replace(original, failures=(_FATAL_FAILURES[1],))
+    repository = _open_repository(database_path)
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_parse_outcome(_CORPUS.corpus_id, original)
+
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.add_parse_outcome(_CORPUS.corpus_id, conflicting)
+
+        assert (
+            repository.get_parse_outcome(
+                _CORPUS.corpus_id,
+                _FAILED_PARSE_ID,
+            )
+            == original
+        )
+    finally:
+        repository.close()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        _outcome(PARSE_ID, ParseStatus.SUCCEEDED, _MISSING_PARSED_RECORD_ID, ()),
+        replace(
+            _outcome(PARSE_ID, ParseStatus.SUCCEEDED, PARSED_RECORD_ID, ()),
+            parser=ProducerIdentity("text-native", "3.0.0"),
+        ),
+    ],
+    ids=("missing-representation", "mismatched-representation"),
+)
+def test_outcome_writes_require_an_agreeing_representation(
+    tmp_path: Path,
+    outcome: ParseOutcome,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _add_catalogue_and_representation(database_path)
+    repository = _open_repository(database_path)
+    try:
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.add_parse_outcome(_CORPUS.corpus_id, outcome)
+    finally:
+        repository.close()
+
+    assert _rows(database_path, "SELECT parse_id FROM parse_outcomes") == []
+    assert _rows(database_path, "SELECT parse_id FROM parse_failures") == []
+
+
+def test_outcome_reuse_requires_explicit_membership(tmp_path: Path) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _add_catalogue_and_representation(database_path)
+    outcome = _outcome(_FAILED_PARSE_ID, ParseStatus.FAILED, None, _FATAL_FAILURES)
+    repository = _open_repository(database_path)
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_parse_outcome(_CORPUS.corpus_id, outcome)
+
+        for corpus_id in (_OTHER_CORPUS.corpus_id, _ABSENT_CORPUS_ID):
+            with pytest.raises(StorageConflictError):
+                with repository.transaction() as transaction:
+                    transaction.add_parse_outcome(corpus_id, outcome)
+
+        with repository.transaction() as transaction:
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(
+                    _OTHER_CORPUS.corpus_id,
+                    DOCUMENT_ID,
+                    DOCUMENT_VERSION_ID,
+                )
+            )
+            transaction.add_parse_outcome(_OTHER_CORPUS.corpus_id, outcome)
+
+        assert (
+            repository.get_parse_outcome(
+                _OTHER_CORPUS.corpus_id,
+                _FAILED_PARSE_ID,
+            )
+            == outcome
+        )
+    finally:
+        repository.close()
+
+
+def test_failure_payload_and_source_data_are_absent_from_errors_and_logs(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "private-path" / "metadata.sqlite3"
+    _add_catalogue_and_representation(database_path)
+    repository = _open_repository(database_path)
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            f"""CREATE TRIGGER reject_parse_failure
+            BEFORE INSERT ON parse_failures
+            BEGIN
+                SELECT RAISE(ABORT, '{_PRIVATE_TRIGGER_PAYLOAD}');
+            END"""  # noqa: S608
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    try:
+        with capture_logs() as logs:
+            with pytest.raises(StorageConflictError) as raised:
+                with repository.transaction() as transaction:
+                    transaction.add_parse_outcome(
+                        _CORPUS.corpus_id,
+                        _outcome(
+                            _RECOVERABLE_PARSE_ID,
+                            ParseStatus.COMPLETED_WITH_RECOVERABLE_FAILURES,
+                            PARSED_RECORD_ID,
+                            _RECOVERABLE_FAILURES,
+                        ),
+                    )
+
+        assert str(raised.value) == StorageConflictError.default_message
+        assert logs == [
+            {
+                "event": "transaction_failed",
+                "pipeline_stage": "storage",
+                "error_category": "conflict",
+                "retryable": False,
+                "log_level": "error",
+            }
+        ]
+        for private_value in (_PRIVATE_TRIGGER_PAYLOAD, "private-path", SOURCE_TEXT):
+            assert private_value not in str(raised.value)
+            assert private_value not in repr(logs)
+    finally:
+        repository.close()
+
+    assert _rows(database_path, "SELECT parse_id FROM parse_outcomes") == []
+    assert _rows(database_path, "SELECT parse_id FROM parse_failures") == []
+
+
+def test_repository_exposes_no_parse_outcome_writer(tmp_path: Path) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    try:
+        assert not hasattr(repository, "add_parse_outcome")
     finally:
         repository.close()
