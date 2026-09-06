@@ -18,6 +18,7 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
 )
@@ -96,6 +97,14 @@ class MetadataReader(Protocol):
         document_version_id: DocumentVersionId,
     ) -> Iterator[bytes] | None:
         """Return fully verified, detached source chunks, or ``None``."""
+        ...
+
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
+        """Return a complete corpus-visible parser outcome, or ``None``."""
         ...
 
     def find_document_versions_by_content_hash(

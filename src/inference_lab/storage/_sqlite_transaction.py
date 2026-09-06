@@ -21,6 +21,7 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
 )
@@ -52,7 +53,10 @@ from inference_lab.storage._sqlite_observations import (
     get_source_observation,
     list_source_observation_history,
 )
-from inference_lab.storage._sqlite_parse_outcomes import add_parse_outcome
+from inference_lab.storage._sqlite_parse_outcomes import (
+    add_parse_outcome,
+    get_parse_outcome,
+)
 from inference_lab.storage._sqlite_parsed_representations import (
     add_parsed_representation,
 )
@@ -284,6 +288,14 @@ class SQLiteMetadataTransaction:
             corpus_id,
             document_version_id,
         )
+
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
+        """Return a complete corpus-visible parser outcome in this transaction."""
+        return self._execute(get_parse_outcome, corpus_id, parse_id)
 
     def find_document_versions_by_content_hash(
         self,

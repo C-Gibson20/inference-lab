@@ -19,6 +19,7 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
 )
@@ -171,6 +172,13 @@ class StructuralTransaction:
     ) -> Iterator[bytes] | None:
         return None
 
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
+        return None
+
     def find_document_versions_by_content_hash(
         self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:
@@ -256,6 +264,7 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_source_artefact = StructuralTransaction.get_source_artefact
         read_source_bytes = StructuralTransaction.read_source_bytes
         stream_source_bytes = StructuralTransaction.stream_source_bytes
+        get_parse_outcome = StructuralTransaction.get_parse_outcome
         find_document_versions_by_content_hash = (
             StructuralTransaction.find_document_versions_by_content_hash
         )
