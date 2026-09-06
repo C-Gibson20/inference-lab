@@ -6,8 +6,11 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic, perf_counter, sleep
 
 import pytest
+from structlog.contextvars import merge_contextvars
+from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
     ContentHash,
@@ -32,6 +35,7 @@ from inference_lab.storage import (
     ParseOutcome,
     ParseStatus,
     SourceArtefact,
+    StorageConcurrencyError,
     StorageConflictError,
     open_metadata_repository,
     serialise_parse_outcome,
@@ -212,6 +216,78 @@ result_path.write_text(
     json.dumps(payload, ensure_ascii=False, sort_keys=True),
     encoding="utf-8",
 )
+"""
+
+_CONTENDED_PUBLICATION_WRITER = """
+import sys
+from pathlib import Path
+from time import monotonic, sleep
+
+from inference_lab.storage import (
+    MetadataRepository,
+    ParseOutcome,
+    ParseStatus,
+    SourceArtefact,
+    open_metadata_repository,
+)
+from tests.inference_lab.storage.source_fixtures import (
+    DOCUMENT_ID,
+    DOCUMENT_VERSION_ID,
+    PARSE_ID,
+    PARSED_RECORD_ID,
+    PARSER,
+    SOURCE_BYTES,
+    SOURCE_HASH,
+    parsed_representation,
+)
+from inference_lab.provenance import CorpusId
+
+database_path = Path(sys.argv[1])
+source_dir = Path(sys.argv[2])
+ready_path = Path(sys.argv[3])
+release_path = Path(sys.argv[4])
+corpus_id = CorpusId.from_str(sys.argv[5])
+artefact = SourceArtefact(
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    content_hash=SOURCE_HASH,
+    byte_count=len(SOURCE_BYTES),
+    media_type="application/pdf",
+    storage_key=f"sha256/{SOURCE_HASH.digest[:2]}/{SOURCE_HASH.digest}",
+)
+outcome = ParseOutcome(
+    parse_id=PARSE_ID,
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    status=ParseStatus.SUCCEEDED,
+    parser=PARSER,
+    normalisation_version="1.0.0",
+    parsed_record_id=PARSED_RECORD_ID,
+    failures=(),
+)
+
+def controlled_chunks():
+    ready_path.touch()
+    deadline = monotonic() + 10
+    while not release_path.exists():
+        if monotonic() >= deadline:
+            raise TimeoutError("publication release was not signalled")
+        sleep(0.01)
+    yield SOURCE_BYTES
+
+repository = open_metadata_repository(database_path, source_dir=source_dir)
+assert isinstance(repository, MetadataRepository)
+try:
+    repository.persist_source_artefact(
+        corpus_id,
+        artefact,
+        controlled_chunks(),
+        max_source_bytes=len(SOURCE_BYTES),
+        parse_outcome=outcome,
+        parsed_representation=parsed_representation(),
+    )
+finally:
+    repository.close()
 """
 
 
@@ -591,3 +667,154 @@ def test_two_corpora_reuse_only_explicitly_shared_source_and_parse_records(
     )
     assert len(managed_blobs) == 3
     assert (source_dir / _ARTEFACT.storage_key).is_file()
+
+
+def test_cross_process_publication_contention_is_bounded_and_retryable(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    database_path = tmp_path / "private-metadata" / "metadata.sqlite3"
+    source_dir = tmp_path / "private-source-data"
+    ready_path = tmp_path / "publication-lock-held"
+    release_path = tmp_path / "release-publication-lock"
+    representation = parsed_representation()
+    repository: MetadataRepository = open_metadata_repository(
+        database_path,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    request.addfinalizer(repository.close)
+    with repository.transaction() as transaction:
+        transaction.add_corpus(_CORPUS)
+        transaction.add_document(DocumentIdentity(DOCUMENT_ID))
+        transaction.add_document_version(_VERSION)
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                _CORPUS.corpus_id,
+                DOCUMENT_ID,
+                DOCUMENT_VERSION_ID,
+            )
+        )
+
+    writer = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _CONTENDED_PUBLICATION_WRITER,
+            str(database_path),
+            str(source_dir),
+            str(ready_path),
+            str(release_path),
+            _CORPUS.corpus_id.as_str(),
+        ],
+        cwd=_REPOSITORY_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    child_stdout = child_stderr = ""
+    try:
+        deadline = monotonic() + 10
+        while not ready_path.exists() and writer.poll() is None:
+            if monotonic() >= deadline:
+                break
+            sleep(0.01)
+        assert ready_path.is_file(), "child did not acquire the publication lock"
+
+        with capture_logs(processors=(merge_contextvars,)) as logs:
+            started_at = perf_counter()
+            with pytest.raises(StorageConcurrencyError) as raised:
+                repository.persist_source_artefact(
+                    _CORPUS.corpus_id,
+                    _ARTEFACT,
+                    (SOURCE_BYTES,),
+                    max_source_bytes=len(SOURCE_BYTES),
+                    parse_outcome=_OUTCOME,
+                    parsed_representation=representation,
+                )
+            elapsed = perf_counter() - started_at
+
+        assert elapsed < 1.0
+        assert raised.value.retryable is True
+        assert "locked" not in str(raised.value).lower()
+        assert str(database_path) not in str(raised.value)
+        assert str(source_dir) not in str(raised.value)
+        assert [record["event"] for record in logs] == [
+            "source_persistence_started",
+            "source_persistence_failed",
+        ]
+        assert logs[-1]["error_category"] == "concurrency"
+        assert logs[-1]["retryable"] is True
+        assert str(database_path) not in repr(logs)
+        assert str(source_dir) not in repr(logs)
+        assert (
+            repository.get_source_artefact(
+                _CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            is None
+        )
+        assert (
+            repository.get_parsed_representation(
+                _CORPUS.corpus_id,
+                PARSED_RECORD_ID,
+            )
+            is None
+        )
+        assert repository.get_parse_outcome(_CORPUS.corpus_id, PARSE_ID) is None
+        assert not (source_dir / _ARTEFACT.storage_key).exists()
+    finally:
+        release_path.touch()
+        try:
+            child_stdout, child_stderr = writer.communicate(timeout=12)
+        except subprocess.TimeoutExpired:
+            writer.kill()
+            child_stdout, child_stderr = writer.communicate()
+            raise
+
+    try:
+        assert writer.returncode == 0, child_stderr
+        assert child_stderr == ""
+        assert "source_persistence_completed" in child_stdout
+        for private_value in (
+            str(database_path),
+            str(source_dir),
+            _ARTEFACT.storage_key,
+            SOURCE_HASH.digest,
+            SOURCE_BYTES.decode(),
+        ):
+            assert private_value not in child_stdout
+
+        assert (
+            repository.read_source_bytes(
+                _CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == SOURCE_BYTES
+        )
+        assert (
+            repository.get_parsed_representation(
+                _CORPUS.corpus_id,
+                PARSED_RECORD_ID,
+            )
+            == representation
+        )
+        assert repository.get_parse_outcome(_CORPUS.corpus_id, PARSE_ID) == _OUTCOME
+
+        repository.persist_source_artefact(
+            _CORPUS.corpus_id,
+            _ARTEFACT,
+            (SOURCE_BYTES,),
+            max_source_bytes=len(SOURCE_BYTES),
+            parse_outcome=_OUTCOME,
+            parsed_representation=representation,
+        )
+        assert (
+            repository.read_source_bytes(
+                _CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == SOURCE_BYTES
+        )
+    finally:
+        repository.close()
