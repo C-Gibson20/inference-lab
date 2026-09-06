@@ -1,10 +1,13 @@
 """Internal managed storage for immutable original-source blobs."""
 
+import fcntl
 import hashlib
 import os
 import secrets
 import stat
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -12,6 +15,7 @@ from inference_lab._validation import is_local_path_shape
 from inference_lab.provenance import ContentHash, HashAlgorithm
 from inference_lab.storage.errors import (
     CorruptStorageError,
+    StorageConcurrencyError,
     StorageConflictError,
     StorageTransactionError,
 )
@@ -21,6 +25,9 @@ DEFAULT_BLOB_READ_CHUNK_SIZE: Final = 64 * 1024
 _DIRECTORY_MODE: Final = 0o700
 _BLOB_MODE: Final = 0o400
 _STAGING_MODE: Final = 0o600
+_LOCK_MODE: Final = 0o600
+_LOCK_NAME: Final = ".publication.lock"
+_LOWER_HEX: Final = frozenset("0123456789abcdef")
 _DIRECTORY_FLAGS: Final = (
     os.O_RDONLY
     | getattr(os, "O_CLOEXEC", 0)
@@ -37,11 +44,26 @@ _STAGING_FLAGS: Final = (
     | getattr(os, "O_CLOEXEC", 0)
     | getattr(os, "O_NOFOLLOW", 0)
 )
+_LOCK_FLAGS: Final = (
+    os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+)
 _HAS_SECURE_DIRECTORY_OPEN: Final = (
     os.open in os.supports_dir_fd
     and hasattr(os, "O_DIRECTORY")
     and hasattr(os, "O_NOFOLLOW")
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SourceBlobReconciliation:
+    """Bounded, payload-free result of one managed-source maintenance pass."""
+
+    entries_examined: int
+    staging_files_removed: int
+    referenced_blobs_found: int
+    orphan_blobs_found: int
+    ambiguous_entries_retained: int
+    limit_reached: bool
 
 
 def build_source_blob_storage_key(content_hash: ContentHash) -> str:
@@ -130,6 +152,245 @@ class ManagedSourceBlobStore:
             content[offset : offset + chunk_size]
             for offset in range(0, len(content), chunk_size)
         )
+
+    @contextmanager
+    def publication_lock(self) -> Iterator[None]:
+        """Exclude concurrent publication and reconciliation across processes."""
+        root_descriptor: int | None = None
+        lock_descriptor: int | None = None
+        try:
+            self._source_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=_DIRECTORY_MODE,
+            )
+            if _HAS_SECURE_DIRECTORY_OPEN:
+                root_descriptor = os.open(self._source_dir, _DIRECTORY_FLAGS)
+                lock_descriptor = os.open(
+                    _LOCK_NAME,
+                    _LOCK_FLAGS,
+                    _LOCK_MODE,
+                    dir_fd=root_descriptor,
+                )
+            else:
+                root = self._prepare_fallback_directory(self._source_dir)
+                lock_descriptor = os.open(root / _LOCK_NAME, _LOCK_FLAGS, _LOCK_MODE)
+            if not stat.S_ISREG(os.fstat(lock_descriptor).st_mode):
+                raise OSError
+            fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
+        except BlockingIOError:
+            raise StorageConcurrencyError() from None
+        except (StorageConcurrencyError, StorageConflictError, TypeError, ValueError):
+            raise
+        except OSError:
+            raise StorageTransactionError() from None
+        finally:
+            if lock_descriptor is not None:
+                try:
+                    os.close(lock_descriptor)
+                except OSError:
+                    pass
+            if root_descriptor is not None:
+                try:
+                    os.close(root_descriptor)
+                except OSError:
+                    pass
+
+    def reconcile_locked(
+        self,
+        is_referenced: Callable[[str], bool],
+        *,
+        max_entries: int,
+    ) -> SourceBlobReconciliation:
+        """Clean staging and inventory final blobs while publication is locked."""
+        if not callable(is_referenced):
+            raise TypeError("is_referenced must be callable.")
+        if not isinstance(max_entries, int) or isinstance(max_entries, bool):
+            raise TypeError("max_entries must be an integer.")
+        if max_entries <= 0:
+            raise ValueError("max_entries must be greater than zero.")
+        if not _HAS_SECURE_DIRECTORY_OPEN:
+            raise StorageTransactionError()
+
+        root_descriptor: int | None = None
+        try:
+            root_descriptor = os.open(self._source_dir, _DIRECTORY_FLAGS)
+            return self._reconcile_root(
+                root_descriptor,
+                is_referenced,
+                max_entries=max_entries,
+            )
+        except StorageTransactionError:
+            raise
+        except OSError:
+            raise StorageTransactionError() from None
+        finally:
+            if root_descriptor is not None:
+                try:
+                    os.close(root_descriptor)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _is_writer_staging_name(name: str) -> bool:
+        return (
+            len(name) == 37
+            and name.startswith(".")
+            and name.endswith(".tmp")
+            and set(name[1:-4]) <= _LOWER_HEX
+        )
+
+    @staticmethod
+    def _is_shard_name(name: str) -> bool:
+        return len(name) == 2 and set(name) <= _LOWER_HEX
+
+    @staticmethod
+    def _is_digest_name(name: str, shard_name: str) -> bool:
+        return (
+            len(name) == 64 and name.startswith(shard_name) and set(name) <= _LOWER_HEX
+        )
+
+    def _reconcile_root(
+        self,
+        root_descriptor: int,
+        is_referenced: Callable[[str], bool],
+        *,
+        max_entries: int,
+    ) -> SourceBlobReconciliation:
+        examined = staging_removed = referenced = orphans = ambiguous = 0
+        limit_reached = False
+
+        try:
+            staging_descriptor = os.open(
+                ".staging",
+                _DIRECTORY_FLAGS,
+                dir_fd=root_descriptor,
+            )
+        except FileNotFoundError:
+            staging_descriptor = None
+        except OSError:
+            staging_descriptor = None
+            ambiguous += 1
+        if staging_descriptor is not None:
+            try:
+                with os.scandir(staging_descriptor) as iterator:
+                    for entry in iterator:
+                        if examined >= max_entries:
+                            limit_reached = True
+                            break
+                        examined += 1
+                        if self._is_writer_staging_name(entry.name) and entry.is_file(
+                            follow_symlinks=False
+                        ):
+                            os.unlink(entry.name, dir_fd=staging_descriptor)
+                            staging_removed += 1
+                            os.fsync(staging_descriptor)
+                        else:
+                            ambiguous += 1
+            finally:
+                os.close(staging_descriptor)
+
+        if not limit_reached:
+            try:
+                algorithm_descriptor = os.open(
+                    "sha256",
+                    _DIRECTORY_FLAGS,
+                    dir_fd=root_descriptor,
+                )
+            except FileNotFoundError:
+                algorithm_descriptor = None
+            except OSError:
+                algorithm_descriptor = None
+                ambiguous += 1
+            if algorithm_descriptor is not None:
+                try:
+                    with os.scandir(algorithm_descriptor) as iterator:
+                        for shard in iterator:
+                            if examined >= max_entries:
+                                limit_reached = True
+                                break
+                            examined += 1
+                            if not self._is_shard_name(shard.name) or not shard.is_dir(
+                                follow_symlinks=False
+                            ):
+                                ambiguous += 1
+                                continue
+                            shard_result = self._inventory_shard(
+                                algorithm_descriptor,
+                                shard.name,
+                                is_referenced,
+                                max_entries=max_entries,
+                                entries_examined=examined,
+                            )
+                            if shard_result is None:
+                                ambiguous += 1
+                                continue
+                            (
+                                shard_examined,
+                                shard_referenced,
+                                shard_orphans,
+                                shard_ambiguous,
+                                shard_limit_reached,
+                            ) = shard_result
+                            examined += shard_examined
+                            referenced += shard_referenced
+                            orphans += shard_orphans
+                            ambiguous += shard_ambiguous
+                            if shard_limit_reached:
+                                limit_reached = True
+                                break
+                finally:
+                    os.close(algorithm_descriptor)
+
+        return SourceBlobReconciliation(
+            entries_examined=examined,
+            staging_files_removed=staging_removed,
+            referenced_blobs_found=referenced,
+            orphan_blobs_found=orphans,
+            ambiguous_entries_retained=ambiguous,
+            limit_reached=limit_reached,
+        )
+
+    def _inventory_shard(
+        self,
+        algorithm_descriptor: int,
+        shard_name: str,
+        is_referenced: Callable[[str], bool],
+        *,
+        max_entries: int,
+        entries_examined: int,
+    ) -> tuple[int, int, int, int, bool] | None:
+        try:
+            descriptor = os.open(
+                shard_name,
+                _DIRECTORY_FLAGS,
+                dir_fd=algorithm_descriptor,
+            )
+        except OSError:
+            return None
+        examined = referenced = orphans = ambiguous = 0
+        limit_reached = False
+        try:
+            with os.scandir(descriptor) as iterator:
+                for entry in iterator:
+                    if entries_examined + examined >= max_entries:
+                        limit_reached = True
+                        break
+                    examined += 1
+                    if not self._is_digest_name(
+                        entry.name, shard_name
+                    ) or not entry.is_file(follow_symlinks=False):
+                        ambiguous += 1
+                        continue
+                    key = f"sha256/{shard_name}/{entry.name}"
+                    if is_referenced(key):
+                        referenced += 1
+                    else:
+                        orphans += 1
+        finally:
+            os.close(descriptor)
+        return examined, referenced, orphans, ambiguous, limit_reached
 
     def write_chunks(
         self,

@@ -24,6 +24,7 @@ from inference_lab.provenance import (
 from inference_lab.storage import (
     MetadataRepository,
     MetadataTransaction,
+    RepositoryClosedError,
     StorageConflictError,
     StorageTransactionError,
 )
@@ -254,6 +255,9 @@ def test_rollback_failure_does_not_replace_primary_transaction_exception(
                     raise primary
 
         assert raised.value is primary
+        assert repository.is_closed is True
+        with pytest.raises(RepositoryClosedError):
+            repository.get_corpus(_CORPUS_ID)
         assert logs == [
             {
                 "event": "transaction_failed",

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Self
+from typing import Final, Self
+
+from structlog.contextvars import bound_contextvars
 
 from inference_lab._clock import utc_now
 from inference_lab.provenance import (
@@ -28,7 +30,11 @@ from inference_lab.provenance import (
     SourceObservationState,
     SourceSpanId,
 )
-from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
+from inference_lab.storage._source_blob_store import (
+    ManagedSourceBlobStore,
+    SourceBlobReconciliation,
+)
+from inference_lab.storage._sqlite_cleanup import close_preserving_primary
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     translate_sqlite_error,
@@ -88,12 +94,27 @@ from inference_lab.storage._sqlite_versions import (
 from inference_lab.storage.errors import (
     RepositoryClosedError,
     RepositoryUnavailableError,
+    StorageConflictError,
+    StorageError,
     StorageTransactionError,
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
+
+DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES: Final = 10_000
+
+
+def _validate_source_reconciliation_max_entries(
+    max_entries: int,
+    *,
+    parameter_name: str,
+) -> None:
+    if not isinstance(max_entries, int) or isinstance(max_entries, bool):
+        raise TypeError(f"{parameter_name} must be an integer.")
+    if max_entries <= 0:
+        raise ValueError(f"{parameter_name} must be greater than zero.")
 
 
 class SQLiteMetadataRepository:
@@ -131,8 +152,15 @@ class SQLiteMetadataRepository:
         migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
         applied_at_factory: AppliedAtFactory = utc_now,
         source_dir: Path | None = None,
+        source_reconciliation_max_entries: int = (
+            DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES
+        ),
     ) -> Self:
         """Open a validated repository under the explicit schema policy."""
+        _validate_source_reconciliation_max_entries(
+            source_reconciliation_max_entries,
+            parameter_name="source_reconciliation_max_entries",
+        )
         source_blob_store = (
             ManagedSourceBlobStore(source_dir) if source_dir is not None else None
         )
@@ -143,11 +171,20 @@ class SQLiteMetadataRepository:
             migrations=migrations,
             applied_at_factory=applied_at_factory,
         )
-        return cls(
+        repository = cls(
             connection,
             migrations,
             source_blob_store=source_blob_store,
         )
+        if source_blob_store is not None:
+            try:
+                repository.reconcile_source_storage(
+                    max_entries=source_reconciliation_max_entries
+                )
+            except BaseException:
+                close_preserving_primary(connection)
+                raise
+        return repository
 
     @property
     def is_closed(self) -> bool:
@@ -427,11 +464,230 @@ class SQLiteMetadataRepository:
         self._connection_or_raise()
         return SQLiteMetadataTransaction(self)
 
+    def reconcile_source_storage(self, *, max_entries: int) -> None:
+        """Remove abandoned staging and report bounded final-blob inventory."""
+        _validate_source_reconciliation_max_entries(
+            max_entries,
+            parameter_name="max_entries",
+        )
+        safe_log("info", "source_reconciliation_started")
+        try:
+            result = self._reconcile_source_storage(max_entries=max_entries)
+        except StorageError as error:
+            safe_log_failure("source_reconciliation_failed", error)
+            raise
+        except Exception:
+            safe_log_failure(
+                "source_reconciliation_failed",
+                StorageTransactionError(),
+            )
+            raise
+        safe_log(
+            "info",
+            "source_reconciliation_completed",
+            entries_examined=result.entries_examined,
+            staging_files_removed=result.staging_files_removed,
+            referenced_blobs_found=result.referenced_blobs_found,
+            orphan_blobs_found=result.orphan_blobs_found,
+            ambiguous_entries_retained=result.ambiguous_entries_retained,
+            limit_reached=result.limit_reached,
+        )
+
+    def _reconcile_source_storage(
+        self,
+        *,
+        max_entries: int,
+    ) -> SourceBlobReconciliation:
+        connection = self._connection_or_raise()
+        if self._transaction_active:
+            raise StorageTransactionError()
+        blob_store = self._source_blob_store
+        if blob_store is None:
+            raise RepositoryUnavailableError()
+        with blob_store.publication_lock():
+
+            def is_referenced(storage_key: str) -> bool:
+                try:
+                    row = connection.execute(
+                        """SELECT 1 FROM source_artefacts
+                        WHERE storage_key = ? LIMIT 1""",
+                        (storage_key,),
+                    ).fetchone()
+                except sqlite3.Error as error:
+                    raise translate_sqlite_error(
+                        error,
+                        default=RepositoryUnavailableError,
+                    ) from None
+                return row is not None
+
+            return blob_store.reconcile_locked(
+                is_referenced,
+                max_entries=max_entries,
+            )
+
+    def persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+        parse_outcome: ParseOutcome | None = None,
+        parsed_representation: ParsedRepresentation | None = None,
+    ) -> None:
+        """Publish bytes, source metadata, and optional parse records safely."""
+        if not isinstance(corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(artefact, SourceArtefact):
+            raise TypeError("artefact must be a SourceArtefact.")
+        fields = {
+            "corpus_id": corpus_id.as_str(),
+            "document_id": artefact.document_id.as_str(),
+        }
+        with bound_contextvars(**fields):
+            safe_log("info", "source_persistence_started")
+            try:
+                self._persist_source_artefact(
+                    corpus_id,
+                    artefact,
+                    chunks,
+                    max_source_bytes=max_source_bytes,
+                    parse_outcome=parse_outcome,
+                    parsed_representation=parsed_representation,
+                )
+            except StorageError as error:
+                safe_log_failure("source_persistence_failed", error)
+                raise
+            except Exception:
+                safe_log_failure(
+                    "source_persistence_failed",
+                    StorageTransactionError(),
+                )
+                raise
+
+            safe_log(
+                "info",
+                "source_persistence_completed",
+                byte_count=artefact.byte_count,
+            )
+
+    def _persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+        parse_outcome: ParseOutcome | None,
+        parsed_representation: ParsedRepresentation | None,
+    ) -> None:
+        """Execute the preflight, blob promotion, and metadata commit sequence."""
+        connection = self._connection_or_raise()
+        if self._transaction_active:
+            raise StorageTransactionError()
+        blob_store = self._source_blob_store
+        if blob_store is None:
+            raise RepositoryUnavailableError()
+        with blob_store.publication_lock():
+            self._validate_parse_publication(
+                artefact,
+                parse_outcome,
+                parsed_representation,
+            )
+
+            membership = get_corpus_document_version_membership(
+                connection,
+                corpus_id,
+                artefact.document_version_id,
+            )
+            version = get_document_version(connection, artefact.document_version_id)
+            if (
+                membership is None
+                or membership.document_id != artefact.document_id
+                or version is None
+                or version.document_id != artefact.document_id
+                or version.content_hash != artefact.content_hash
+            ):
+                raise StorageConflictError()
+            stored = get_source_artefact(
+                connection,
+                corpus_id,
+                artefact.document_version_id,
+            )
+            if stored is not None and stored != artefact:
+                raise StorageConflictError()
+
+            blob_store.write_chunks(
+                artefact,
+                chunks,
+                max_source_bytes=max_source_bytes,
+            )
+            with self.transaction() as transaction:
+                transaction.add_source_artefact(corpus_id, artefact)
+                if parsed_representation is not None:
+                    transaction.add_parsed_representation(
+                        corpus_id,
+                        parsed_representation,
+                    )
+                if parse_outcome is not None:
+                    transaction.add_parse_outcome(corpus_id, parse_outcome)
+
+    @staticmethod
+    def _validate_parse_publication(
+        artefact: SourceArtefact,
+        parse_outcome: ParseOutcome | None,
+        parsed_representation: ParsedRepresentation | None,
+    ) -> None:
+        """Reject an incomplete or mismatched parse bundle before promotion."""
+        if parse_outcome is not None and not isinstance(parse_outcome, ParseOutcome):
+            raise TypeError("parse_outcome must be a ParseOutcome or None.")
+        if parsed_representation is not None and not isinstance(
+            parsed_representation,
+            ParsedRepresentation,
+        ):
+            raise TypeError(
+                "parsed_representation must be a ParsedRepresentation or None."
+            )
+        if parse_outcome is None:
+            if parsed_representation is not None:
+                raise StorageConflictError()
+            return
+
+        expected_representation = parse_outcome.parsed_record_id is not None
+        if expected_representation != (parsed_representation is not None):
+            raise StorageConflictError()
+        if (
+            parse_outcome.document_id != artefact.document_id
+            or parse_outcome.document_version_id != artefact.document_version_id
+        ):
+            raise StorageConflictError()
+        if parsed_representation is None:
+            return
+        if (
+            parsed_representation.record_id != parse_outcome.parsed_record_id
+            or parsed_representation.document_id != parse_outcome.document_id
+            or parsed_representation.document_version_id
+            != parse_outcome.document_version_id
+            or parsed_representation.record_schema_version
+            != parse_outcome.record_schema_version
+            or parsed_representation.parser != parse_outcome.parser
+            or parsed_representation.normalisation_version
+            != parse_outcome.normalisation_version
+            or parsed_representation.ocr_producer != parse_outcome.ocr_producer
+        ):
+            raise StorageConflictError()
+
     def _connection_or_raise(self) -> sqlite3.Connection:
         connection = self._connection
         if connection is None:
             raise RepositoryClosedError()
         return connection
+
+    def _discard_connection_preserving_primary(self) -> None:
+        """Make a cleanup-failed connection unreachable without raising."""
+        connection = self._connection
+        self._connection = None
+        close_preserving_primary(connection)
 
     def close(self) -> None:
         """Close the owned connection idempotently and reject future use."""

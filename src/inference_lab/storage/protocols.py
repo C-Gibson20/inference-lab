@@ -1,6 +1,6 @@
 """Storage-neutral contracts for persistent corpus identity metadata."""
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
@@ -322,6 +322,23 @@ class MetadataRepository(MetadataReader, Protocol):
 
     def transaction(self) -> MetadataTransaction:
         """Return a new transaction that starts on context entry."""
+        ...
+
+    def reconcile_source_storage(self, *, max_entries: int) -> None:
+        """Clean abandoned staging and report a bounded final-blob inventory."""
+        ...
+
+    def persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+        parse_outcome: ParseOutcome | None = None,
+        parsed_representation: ParsedRepresentation | None = None,
+    ) -> None:
+        """Publish bytes, source metadata, and optional parse records safely."""
         ...
 
     def close(self) -> None:

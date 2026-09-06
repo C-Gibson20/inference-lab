@@ -18,6 +18,7 @@ from inference_lab.provenance import (
 )
 from inference_lab.storage import (
     SourceArtefact,
+    StorageConcurrencyError,
     StorageConflictError,
     StorageTransactionError,
 )
@@ -472,3 +473,18 @@ def test_write_emits_no_paths_or_logs(tmp_path: Path) -> None:
     assert (
         os.fspath(tmp_path).encode() not in _blob_path(tmp_path, artefact).read_bytes()
     )
+
+
+def test_publication_lock_excludes_other_store_and_releases_cleanly(
+    tmp_path: Path,
+) -> None:
+    first = ManagedSourceBlobStore(tmp_path)
+    second = ManagedSourceBlobStore(tmp_path)
+
+    with first.publication_lock():
+        with pytest.raises(StorageConcurrencyError):
+            with second.publication_lock():
+                pytest.fail("a second writer acquired the publication lock")
+
+    with second.publication_lock():
+        pass

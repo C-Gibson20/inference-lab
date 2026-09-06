@@ -83,3 +83,31 @@ def test_factory_rejects_invalid_source_directory_type(tmp_path: Path) -> None:
             tmp_path / "metadata.sqlite3",
             source_dir=object(),  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize(
+    ("max_entries", "error_type"),
+    [
+        (True, TypeError),
+        (1.5, TypeError),
+        (0, ValueError),
+        (-1, ValueError),
+    ],
+)
+def test_factory_rejects_invalid_reconciliation_bound_before_opening_storage(
+    tmp_path: Path,
+    max_entries: object,
+    error_type: type[Exception],
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+
+    with pytest.raises(error_type, match="source_reconciliation_max_entries"):
+        open_metadata_repository(
+            database_path,
+            source_dir=source_dir,
+            source_reconciliation_max_entries=max_entries,  # type: ignore[arg-type]
+        )
+
+    assert not database_path.exists()
+    assert not source_dir.exists()

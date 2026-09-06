@@ -149,6 +149,8 @@ class SQLiteMetadataTransaction:
             if not rolled_back and exception is not None:
                 safe_log_failure("transaction_failed", StorageTransactionError())
             self._finish()
+            if not rolled_back:
+                self._repository._discard_connection_preserving_primary()
             if exception is not None:
                 if self._failed and rolled_back:
                     error = (
@@ -168,12 +170,14 @@ class SQLiteMetadataTransaction:
         try:
             connection.commit()
         except sqlite3.Error as sqlite_error:
-            rollback_preserving_primary(connection)
+            rolled_back = rollback_preserving_primary(connection)
             error = translate_sqlite_error(
                 sqlite_error,
                 default=StorageTransactionError,
             )
             self._finish()
+            if not rolled_back:
+                self._repository._discard_connection_preserving_primary()
             safe_log_failure("transaction_failed", error)
             raise error from None
 
