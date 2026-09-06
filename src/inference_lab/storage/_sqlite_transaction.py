@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar
 
@@ -59,6 +60,12 @@ from inference_lab.storage._sqlite_relationships import (
     list_family_memberships_by_document_version,
     list_family_memberships_by_family,
 )
+from inference_lab.storage._sqlite_source_artefacts import (
+    add_source_artefact,
+    get_source_artefact,
+    read_source_bytes,
+    stream_source_bytes,
+)
 from inference_lab.storage._sqlite_versions import (
     add_document_version,
     find_document_versions_by_content_hash,
@@ -70,6 +77,7 @@ from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
 )
+from inference_lab.storage.source_records import SourceArtefact
 
 if TYPE_CHECKING:
     from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
@@ -233,6 +241,44 @@ class SQLiteMetadataTransaction:
         """Return a document's versions within this transaction."""
         return self._execute(list_document_versions, document_id)
 
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return corpus-visible managed-source metadata in this transaction."""
+        return self._execute(
+            get_source_artefact,
+            corpus_id,
+            document_version_id,
+        )
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified corpus-visible bytes in this transaction."""
+        return self._execute(
+            read_source_bytes,
+            self._repository._source_blob_store,
+            corpus_id,
+            document_version_id,
+        )
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return fully verified, detached chunks in this transaction."""
+        return self._execute(
+            stream_source_bytes,
+            self._repository._source_blob_store,
+            corpus_id,
+            document_version_id,
+        )
+
     def find_document_versions_by_content_hash(
         self,
         corpus_id: CorpusId,
@@ -296,6 +342,14 @@ class SQLiteMetadataTransaction:
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its external identifiers atomically."""
         self._execute(add_document_version, document_version)
+
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
+        """Add corpus-authorised managed-source metadata."""
+        self._execute(add_source_artefact, corpus_id, artefact)
 
     def add_source_observation(self, state: SourceObservationState) -> None:
         """Create an observed source at revision one."""

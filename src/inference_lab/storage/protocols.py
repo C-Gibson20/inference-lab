@@ -1,5 +1,6 @@
 """Storage-neutral contracts for persistent corpus identity metadata."""
 
+from collections.abc import Iterator
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
@@ -20,6 +21,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage.source_records import SourceArtefact
 
 
 class MetadataReader(Protocol):
@@ -68,6 +70,30 @@ class MetadataReader(Protocol):
         self, document_id: DocumentId
     ) -> tuple[DocumentVersion, ...]:
         """Return a document's versions in canonical identifier order."""
+        ...
+
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return corpus-visible managed-source metadata, or ``None``."""
+        ...
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified corpus-visible source bytes, or ``None``."""
+        ...
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return fully verified, detached source chunks, or ``None``."""
         ...
 
     def find_document_versions_by_content_hash(
@@ -159,6 +185,14 @@ class MetadataWriter(Protocol):
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
         """Create a version and its ordered external identifiers atomically."""
+        ...
+
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
+        """Add managed-source metadata after proving corpus membership."""
         ...
 
     def add_source_observation(self, state: SourceObservationState) -> None:

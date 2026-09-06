@@ -1,5 +1,6 @@
 """Tests for metadata storage protocols."""
 
+from collections.abc import Iterator
 from types import TracebackType
 from typing import Self
 
@@ -21,7 +22,11 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
-from inference_lab.storage import MetadataRepository, MetadataTransaction
+from inference_lab.storage import (
+    MetadataRepository,
+    MetadataTransaction,
+    SourceArtefact,
+)
 
 
 class StructuralTransaction:
@@ -58,6 +63,13 @@ class StructuralTransaction:
         pass
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
+        pass
+
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
         pass
 
     def add_source_observation(self, state: SourceObservationState) -> None:
@@ -121,6 +133,27 @@ class StructuralTransaction:
         self, document_id: DocumentId
     ) -> tuple[DocumentVersion, ...]:
         return ()
+
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        return None
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        return None
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        return None
 
     def find_document_versions_by_content_hash(
         self, corpus_id: CorpusId, content_hash: ContentHash
@@ -204,6 +237,9 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_document = StructuralTransaction.get_document
         get_document_version = StructuralTransaction.get_document_version
         list_document_versions = StructuralTransaction.list_document_versions
+        get_source_artefact = StructuralTransaction.get_source_artefact
+        read_source_bytes = StructuralTransaction.read_source_bytes
+        stream_source_bytes = StructuralTransaction.stream_source_bytes
         find_document_versions_by_content_hash = (
             StructuralTransaction.find_document_versions_by_content_hash
         )

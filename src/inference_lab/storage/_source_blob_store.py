@@ -118,6 +118,19 @@ class ManagedSourceBlobStore:
 
         return content
 
+    def stream_bytes(
+        self,
+        artefact: SourceArtefact,
+        *,
+        chunk_size: int = DEFAULT_BLOB_READ_CHUNK_SIZE,
+    ) -> Iterator[bytes]:
+        """Return a chunk iterator only after complete blob verification."""
+        content = self.read_bytes(artefact, chunk_size=chunk_size)
+        return (
+            content[offset : offset + chunk_size]
+            for offset in range(0, len(content), chunk_size)
+        )
+
     def write_chunks(
         self,
         artefact: SourceArtefact,
