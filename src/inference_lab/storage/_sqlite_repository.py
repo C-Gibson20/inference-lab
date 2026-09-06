@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Self
+from typing import Final, Self
 
 from structlog.contextvars import bound_contextvars
 
@@ -34,6 +34,7 @@ from inference_lab.storage._source_blob_store import (
     ManagedSourceBlobStore,
     SourceBlobReconciliation,
 )
+from inference_lab.storage._sqlite_cleanup import close_preserving_primary
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     translate_sqlite_error,
@@ -91,7 +92,6 @@ from inference_lab.storage._sqlite_versions import (
     list_document_versions,
 )
 from inference_lab.storage.errors import (
-    CorruptStorageError,
     RepositoryClosedError,
     RepositoryUnavailableError,
     StorageConflictError,
@@ -102,6 +102,19 @@ from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
+
+DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES: Final = 10_000
+
+
+def _validate_source_reconciliation_max_entries(
+    max_entries: int,
+    *,
+    parameter_name: str,
+) -> None:
+    if not isinstance(max_entries, int) or isinstance(max_entries, bool):
+        raise TypeError(f"{parameter_name} must be an integer.")
+    if max_entries <= 0:
+        raise ValueError(f"{parameter_name} must be greater than zero.")
 
 
 class SQLiteMetadataRepository:
@@ -139,8 +152,15 @@ class SQLiteMetadataRepository:
         migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
         applied_at_factory: AppliedAtFactory = utc_now,
         source_dir: Path | None = None,
+        source_reconciliation_max_entries: int = (
+            DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES
+        ),
     ) -> Self:
         """Open a validated repository under the explicit schema policy."""
+        _validate_source_reconciliation_max_entries(
+            source_reconciliation_max_entries,
+            parameter_name="source_reconciliation_max_entries",
+        )
         source_blob_store = (
             ManagedSourceBlobStore(source_dir) if source_dir is not None else None
         )
@@ -151,11 +171,20 @@ class SQLiteMetadataRepository:
             migrations=migrations,
             applied_at_factory=applied_at_factory,
         )
-        return cls(
+        repository = cls(
             connection,
             migrations,
             source_blob_store=source_blob_store,
         )
+        if source_blob_store is not None:
+            try:
+                repository.reconcile_source_storage(
+                    max_entries=source_reconciliation_max_entries
+                )
+            except BaseException:
+                close_preserving_primary(connection)
+                raise
+        return repository
 
     @property
     def is_closed(self) -> bool:
@@ -437,15 +466,21 @@ class SQLiteMetadataRepository:
 
     def reconcile_source_storage(self, *, max_entries: int) -> None:
         """Remove abandoned staging and report bounded final-blob inventory."""
-        if not isinstance(max_entries, int) or isinstance(max_entries, bool):
-            raise TypeError("max_entries must be an integer.")
-        if max_entries <= 0:
-            raise ValueError("max_entries must be greater than zero.")
+        _validate_source_reconciliation_max_entries(
+            max_entries,
+            parameter_name="max_entries",
+        )
         safe_log("info", "source_reconciliation_started")
         try:
             result = self._reconcile_source_storage(max_entries=max_entries)
         except StorageError as error:
             safe_log_failure("source_reconciliation_failed", error)
+            raise
+        except Exception:
+            safe_log_failure(
+                "source_reconciliation_failed",
+                StorageTransactionError(),
+            )
             raise
         safe_log(
             "info",
@@ -470,20 +505,23 @@ class SQLiteMetadataRepository:
         if blob_store is None:
             raise RepositoryUnavailableError()
         with blob_store.publication_lock():
-            try:
-                rows = connection.execute(
-                    "SELECT storage_key FROM source_artefacts ORDER BY storage_key"
-                ).fetchall()
-            except sqlite3.Error as error:
-                raise translate_sqlite_error(
-                    error,
-                    default=RepositoryUnavailableError,
-                ) from None
-            referenced_keys = frozenset(row["storage_key"] for row in rows)
-            if any(not isinstance(key, str) for key in referenced_keys):
-                raise CorruptStorageError()
+
+            def is_referenced(storage_key: str) -> bool:
+                try:
+                    row = connection.execute(
+                        """SELECT 1 FROM source_artefacts
+                        WHERE storage_key = ? LIMIT 1""",
+                        (storage_key,),
+                    ).fetchone()
+                except sqlite3.Error as error:
+                    raise translate_sqlite_error(
+                        error,
+                        default=RepositoryUnavailableError,
+                    ) from None
+                return row is not None
+
             return blob_store.reconcile_locked(
-                referenced_keys,
+                is_referenced,
                 max_entries=max_entries,
             )
 

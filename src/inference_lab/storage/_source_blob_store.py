@@ -5,7 +5,7 @@ import hashlib
 import os
 import secrets
 import stat
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -199,15 +199,13 @@ class ManagedSourceBlobStore:
 
     def reconcile_locked(
         self,
-        referenced_keys: frozenset[str],
+        is_referenced: Callable[[str], bool],
         *,
         max_entries: int,
     ) -> SourceBlobReconciliation:
         """Clean staging and inventory final blobs while publication is locked."""
-        if not isinstance(referenced_keys, frozenset) or any(
-            not isinstance(key, str) for key in referenced_keys
-        ):
-            raise TypeError("referenced_keys must be a frozenset of strings.")
+        if not callable(is_referenced):
+            raise TypeError("is_referenced must be callable.")
         if not isinstance(max_entries, int) or isinstance(max_entries, bool):
             raise TypeError("max_entries must be an integer.")
         if max_entries <= 0:
@@ -220,7 +218,7 @@ class ManagedSourceBlobStore:
             root_descriptor = os.open(self._source_dir, _DIRECTORY_FLAGS)
             return self._reconcile_root(
                 root_descriptor,
-                referenced_keys,
+                is_referenced,
                 max_entries=max_entries,
             )
         except StorageTransactionError:
@@ -256,7 +254,7 @@ class ManagedSourceBlobStore:
     def _reconcile_root(
         self,
         root_descriptor: int,
-        referenced_keys: frozenset[str],
+        is_referenced: Callable[[str], bool],
         *,
         max_entries: int,
     ) -> SourceBlobReconciliation:
@@ -277,20 +275,19 @@ class ManagedSourceBlobStore:
         if staging_descriptor is not None:
             try:
                 with os.scandir(staging_descriptor) as iterator:
-                    entries = sorted(iterator, key=lambda item: item.name)
-                for entry in entries:
-                    if examined >= max_entries:
-                        limit_reached = True
-                        break
-                    examined += 1
-                    if self._is_writer_staging_name(entry.name) and entry.is_file(
-                        follow_symlinks=False
-                    ):
-                        os.unlink(entry.name, dir_fd=staging_descriptor)
-                        staging_removed += 1
-                        os.fsync(staging_descriptor)
-                    else:
-                        ambiguous += 1
+                    for entry in iterator:
+                        if examined >= max_entries:
+                            limit_reached = True
+                            break
+                        examined += 1
+                        if self._is_writer_staging_name(entry.name) and entry.is_file(
+                            follow_symlinks=False
+                        ):
+                            os.unlink(entry.name, dir_fd=staging_descriptor)
+                            staging_removed += 1
+                            os.fsync(staging_descriptor)
+                        else:
+                            ambiguous += 1
             finally:
                 os.close(staging_descriptor)
 
@@ -309,41 +306,40 @@ class ManagedSourceBlobStore:
             if algorithm_descriptor is not None:
                 try:
                     with os.scandir(algorithm_descriptor) as iterator:
-                        shards = sorted(iterator, key=lambda item: item.name)
-                    for shard in shards:
-                        if examined >= max_entries:
-                            limit_reached = True
-                            break
-                        examined += 1
-                        if not self._is_shard_name(shard.name) or not shard.is_dir(
-                            follow_symlinks=False
-                        ):
-                            ambiguous += 1
-                            continue
-                        shard_result = self._inventory_shard(
-                            algorithm_descriptor,
-                            shard.name,
-                            referenced_keys,
-                            max_entries=max_entries,
-                            entries_examined=examined,
-                        )
-                        if shard_result is None:
-                            ambiguous += 1
-                            continue
-                        (
-                            shard_examined,
-                            shard_referenced,
-                            shard_orphans,
-                            shard_ambiguous,
-                            shard_limit_reached,
-                        ) = shard_result
-                        examined += shard_examined
-                        referenced += shard_referenced
-                        orphans += shard_orphans
-                        ambiguous += shard_ambiguous
-                        if shard_limit_reached:
-                            limit_reached = True
-                            break
+                        for shard in iterator:
+                            if examined >= max_entries:
+                                limit_reached = True
+                                break
+                            examined += 1
+                            if not self._is_shard_name(shard.name) or not shard.is_dir(
+                                follow_symlinks=False
+                            ):
+                                ambiguous += 1
+                                continue
+                            shard_result = self._inventory_shard(
+                                algorithm_descriptor,
+                                shard.name,
+                                is_referenced,
+                                max_entries=max_entries,
+                                entries_examined=examined,
+                            )
+                            if shard_result is None:
+                                ambiguous += 1
+                                continue
+                            (
+                                shard_examined,
+                                shard_referenced,
+                                shard_orphans,
+                                shard_ambiguous,
+                                shard_limit_reached,
+                            ) = shard_result
+                            examined += shard_examined
+                            referenced += shard_referenced
+                            orphans += shard_orphans
+                            ambiguous += shard_ambiguous
+                            if shard_limit_reached:
+                                limit_reached = True
+                                break
                 finally:
                     os.close(algorithm_descriptor)
 
@@ -360,7 +356,7 @@ class ManagedSourceBlobStore:
         self,
         algorithm_descriptor: int,
         shard_name: str,
-        referenced_keys: frozenset[str],
+        is_referenced: Callable[[str], bool],
         *,
         max_entries: int,
         entries_examined: int,
@@ -374,26 +370,27 @@ class ManagedSourceBlobStore:
         except OSError:
             return None
         examined = referenced = orphans = ambiguous = 0
+        limit_reached = False
         try:
             with os.scandir(descriptor) as iterator:
-                entries = sorted(iterator, key=lambda item: item.name)
-            for entry in entries:
-                if entries_examined + examined >= max_entries:
-                    break
-                examined += 1
-                if not self._is_digest_name(
-                    entry.name, shard_name
-                ) or not entry.is_file(follow_symlinks=False):
-                    ambiguous += 1
-                    continue
-                key = f"sha256/{shard_name}/{entry.name}"
-                if key in referenced_keys:
-                    referenced += 1
-                else:
-                    orphans += 1
+                for entry in iterator:
+                    if entries_examined + examined >= max_entries:
+                        limit_reached = True
+                        break
+                    examined += 1
+                    if not self._is_digest_name(
+                        entry.name, shard_name
+                    ) or not entry.is_file(follow_symlinks=False):
+                        ambiguous += 1
+                        continue
+                    key = f"sha256/{shard_name}/{entry.name}"
+                    if is_referenced(key):
+                        referenced += 1
+                    else:
+                        orphans += 1
         finally:
             os.close(descriptor)
-        return examined, referenced, orphans, ambiguous, examined < len(entries)
+        return examined, referenced, orphans, ambiguous, limit_reached
 
     def write_chunks(
         self,

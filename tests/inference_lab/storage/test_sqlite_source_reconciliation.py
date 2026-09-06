@@ -1,7 +1,10 @@
 """Tests for bounded, conservative managed-source reconciliation."""
 
+import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
@@ -11,7 +14,9 @@ from inference_lab.provenance import (
     DocumentIdentity,
     DocumentVersion,
 )
-from inference_lab.storage import SourceArtefact
+from inference_lab.storage import SourceArtefact, open_metadata_repository
+from inference_lab.storage import _sqlite_repository as repository_module
+from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 from .source_fixtures import (  # noqa: TID252
@@ -107,7 +112,7 @@ def test_reconciliation_cleans_staging_and_reports_final_blob_inventory(
         repository.close()
 
 
-def test_reconciliation_stops_at_the_deterministic_entry_bound(
+def test_reconciliation_stops_at_the_entry_bound(
     tmp_path: Path,
 ) -> None:
     repository, source_dir = _repository(tmp_path)
@@ -120,13 +125,94 @@ def test_reconciliation_stops_at_the_deterministic_entry_bound(
         with capture_logs() as logs:
             repository.reconcile_source_storage(max_entries=1)
 
-        assert not staging_files[0].exists()
-        assert all(path.is_file() for path in staging_files[1:])
+        assert sum(path.is_file() for path in staging_files) == 2
         assert logs[-1]["entries_examined"] == 1
         assert logs[-1]["staging_files_removed"] == 1
         assert logs[-1]["limit_reached"] is True
     finally:
         repository.close()
+
+
+def test_repository_startup_runs_bounded_source_reconciliation(tmp_path: Path) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    initial = SQLiteMetadataRepository.open(
+        database_path,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    initial.close()
+    staging_files = tuple(_staging_path(source_dir, digit) for digit in "123")
+    staging_files[0].parent.mkdir(parents=True, exist_ok=True)
+    for path in staging_files:
+        path.write_bytes(b"partial")
+
+    with capture_logs() as logs:
+        repository = open_metadata_repository(
+            database_path,
+            source_dir=source_dir,
+            source_reconciliation_max_entries=1,
+        )
+    try:
+        assert sum(path.is_file() for path in staging_files) == 2
+        reconciliation = [
+            record
+            for record in logs
+            if record["event"] == "source_reconciliation_completed"
+        ]
+        assert len(reconciliation) == 1
+        assert reconciliation[0]["entries_examined"] == 1
+        assert reconciliation[0]["staging_files_removed"] == 1
+        assert reconciliation[0]["limit_reached"] is True
+    finally:
+        repository.close()
+
+
+def test_repository_startup_closes_database_without_replacing_recovery_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    initial = SQLiteMetadataRepository.open(
+        database_path,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    initial.close()
+    primary = RuntimeError("private-reconciliation-payload")
+    closed_connections: list[sqlite3.Connection] = []
+    real_close = repository_module.close_preserving_primary
+
+    def fail_reconciliation(
+        self: ManagedSourceBlobStore,
+        is_referenced: Callable[[str], bool],
+        *,
+        max_entries: int,
+    ) -> object:
+        raise primary
+
+    def record_close(connection: sqlite3.Connection | None) -> bool:
+        if connection is not None:
+            closed_connections.append(connection)
+        return real_close(connection)
+
+    monkeypatch.setattr(ManagedSourceBlobStore, "reconcile_locked", fail_reconciliation)
+    monkeypatch.setattr(repository_module, "close_preserving_primary", record_close)
+
+    with capture_logs() as logs:
+        with pytest.raises(RuntimeError) as raised:
+            SQLiteMetadataRepository.open(database_path, source_dir=source_dir)
+
+    assert raised.value is primary
+    assert len(closed_connections) == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        closed_connections[0].execute("SELECT 1")
+    assert [record["event"] for record in logs[-2:]] == [
+        "source_reconciliation_started",
+        "source_reconciliation_failed",
+    ]
+    assert "private-reconciliation-payload" not in repr(logs)
 
 
 def test_reconciliation_does_not_report_an_exactly_exhausted_complete_scan_as_limited(
