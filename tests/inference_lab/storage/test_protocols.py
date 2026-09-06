@@ -174,7 +174,7 @@ class StructuralTransaction:
         document_version_id: DocumentVersionId,
     ) -> Iterator[bytes] | None:
         return None
-      
+
     def get_parse_outcome(
         self,
         corpus_id: CorpusId,
@@ -348,7 +348,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
     expected_exports = {
         "CORPUS_MANIFEST_CONTRACT_VERSION",
         "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
-        "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSION",
+        "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
         "AbortCorpusUpdateOutcome",
         "BeginCorpusUpdateOutcome",
         "BoundingBox",
