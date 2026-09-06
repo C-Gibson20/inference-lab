@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
     ContentHash,
@@ -28,6 +29,7 @@ from inference_lab.storage import (
     ParsedRepresentation,
     ProducerIdentity,
     StorageConflictError,
+    StorageTransactionError,
     StructuralBlock,
     StructuralBlockKind,
 )
@@ -67,6 +69,13 @@ _OCR_PRODUCER = ProducerIdentity(
     "ocr-model",
     "revision-1",
 )
+_AGGREGATE_TABLES = (
+    "parsed_representations",
+    "page_layouts",
+    "source_spans",
+    "structural_blocks",
+)
+_PRIVATE_TRIGGER_PAYLOAD = "private aggregate insert payload"
 
 
 def _representation() -> ParsedRepresentation:
@@ -200,6 +209,22 @@ def _rows(path: Path, query: str) -> list[tuple[object, ...]]:
         connection.close()
 
 
+def _reject_inserts(path: Path, table: str) -> None:
+    if table not in _AGGREGATE_TABLES:
+        raise ValueError
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            f"""CREATE TRIGGER reject_{table}_insert
+            BEFORE INSERT ON {table}
+            BEGIN
+                SELECT RAISE(ABORT, '{_PRIVATE_TRIGGER_PAYLOAD}');
+            END"""  # noqa: S608
+        )
+    finally:
+        connection.close()
+
+
 def test_complete_representation_commits_all_rows_and_accepts_exact_replay(
     tmp_path: Path,
 ) -> None:
@@ -295,6 +320,52 @@ def test_complete_representation_rolls_back_with_its_transaction(
     assert _table_count(database_path, "page_layouts") == 0
     assert _table_count(database_path, "source_spans") == 0
     assert _table_count(database_path, "structural_blocks") == 0
+
+
+@pytest.mark.parametrize("rejected_table", _AGGREGATE_TABLES)
+def test_each_insert_failure_rolls_back_and_poisons_the_transaction(
+    tmp_path: Path,
+    rejected_table: str,
+) -> None:
+    database_path = tmp_path / "private-path" / "metadata.sqlite3"
+    _add_catalogue(database_path)
+    representation = _representation()
+    repository = _open_repository(database_path)
+    try:
+        _reject_inserts(database_path, rejected_table)
+        with capture_logs() as logs:
+            with pytest.raises(StorageTransactionError):
+                with repository.transaction() as transaction:
+                    with pytest.raises(StorageConflictError) as insert_error:
+                        transaction.add_parsed_representation(
+                            _CORPUS.corpus_id,
+                            representation,
+                        )
+                    assert (
+                        str(insert_error.value) == StorageConflictError.default_message
+                    )
+                    with pytest.raises(StorageTransactionError):
+                        transaction.add_parsed_representation(
+                            _CORPUS.corpus_id,
+                            representation,
+                        )
+        assert logs == [
+            {
+                "event": "transaction_failed",
+                "pipeline_stage": "storage",
+                "error_category": "transaction",
+                "retryable": False,
+                "log_level": "error",
+            }
+        ]
+        assert _PRIVATE_TRIGGER_PAYLOAD not in repr(logs)
+        assert "private-path" not in repr(logs)
+        assert representation.source_text not in repr(logs)
+    finally:
+        repository.close()
+
+    for table in _AGGREGATE_TABLES:
+        assert _table_count(database_path, table) == 0
 
 
 @pytest.mark.parametrize(
