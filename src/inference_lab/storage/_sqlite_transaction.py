@@ -21,9 +21,11 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    KnownSourceSpan,
     RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
 from inference_lab.storage._sqlite_cleanup import rollback_preserving_primary
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
@@ -59,6 +61,8 @@ from inference_lab.storage._sqlite_parse_outcomes import (
 )
 from inference_lab.storage._sqlite_parsed_representations import (
     add_parsed_representation,
+    get_parsed_representation,
+    list_parsed_representations,
 )
 from inference_lab.storage._sqlite_relationships import (
     add_duplicate_relationship,
@@ -74,6 +78,10 @@ from inference_lab.storage._sqlite_source_artefacts import (
     read_source_bytes,
     stream_source_bytes,
 )
+from inference_lab.storage._sqlite_source_spans import (
+    list_known_source_spans,
+    resolve_source_span,
+)
 from inference_lab.storage._sqlite_versions import (
     add_document_version,
     find_document_versions_by_content_hash,
@@ -87,6 +95,7 @@ from inference_lab.storage.errors import (
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
+from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
 
 if TYPE_CHECKING:
@@ -296,6 +305,46 @@ class SQLiteMetadataTransaction:
     ) -> ParseOutcome | None:
         """Return a complete corpus-visible parser outcome in this transaction."""
         return self._execute(get_parse_outcome, corpus_id, parse_id)
+
+    def get_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        """Return a complete corpus-visible parsed record in this transaction."""
+        return self._execute(get_parsed_representation, corpus_id, record_id)
+
+    def list_parsed_representations(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ParsedRepresentation, ...]:
+        """Return a version's parsed records in this transaction."""
+        return self._execute(
+            list_parsed_representations,
+            corpus_id,
+            document_version_id,
+        )
+
+    def resolve_source_span(
+        self,
+        corpus_id: CorpusId,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
+        """Return a corpus-visible span and coordinate descriptor."""
+        return self._execute(resolve_source_span, corpus_id, source_span_id)
+
+    def list_known_source_spans(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[KnownSourceSpan, ...]:
+        """Return a version's validated PROV-03 source-span catalogue."""
+        return self._execute(
+            list_known_source_spans,
+            corpus_id,
+            document_version_id,
+        )
 
     def find_document_versions_by_content_hash(
         self,

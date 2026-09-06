@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 
 from inference_lab.provenance import (
+    DocumentId,
     DocumentVersionId,
     KnownSourceSpan,
     RecordId,
@@ -192,6 +193,40 @@ class SourceLocation:
             document_version_id=self.document_version_id,
             source_span_id=self.source_span_id,
         )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResolvedSourceSpan:
+    """Return one source location with its owning document and coordinates."""
+
+    document_id: DocumentId
+    location: SourceLocation
+    page_layout: PageLayoutDescriptor | None
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        if not isinstance(self.document_id, DocumentId):
+            raise TypeError("document_id must be a DocumentId.")
+        if not isinstance(self.location, SourceLocation):
+            raise TypeError("location must be a SourceLocation.")
+        if self.page_layout is not None and not isinstance(
+            self.page_layout, PageLayoutDescriptor
+        ):
+            raise TypeError("page_layout must be a PageLayoutDescriptor or None.")
+        if self.location.bounding_box is not None and self.page_layout is None:
+            raise ValueError("a resolved bounding box requires its page layout.")
+        if self.page_layout is not None and (
+            self.location.page_number != self.page_layout.page_number
+        ):
+            raise ValueError(
+                "resolved location and page layout must identify one page."
+            )
+
+    def as_known_source_span(self) -> KnownSourceSpan:
+        """Return this resolution as a PROV-03 catalogue entry."""
+        return self.location.as_known_source_span()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
