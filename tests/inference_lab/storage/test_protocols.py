@@ -545,8 +545,6 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "CorpusUpdate",
         "CorpusUpdateState",
         "CorpusVersion",
-        "CorpusVersionConflictKind",
-        "CorpusVersionConflictOutcome",
         "CorpusVersionManifest",
         "CorruptStorageError",
         "IncompatibleSchemaError",

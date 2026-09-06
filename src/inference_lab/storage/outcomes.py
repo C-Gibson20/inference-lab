@@ -1,9 +1,7 @@
 """Typed outcomes for corpus update and publication operations."""
 
 from dataclasses import dataclass
-from enum import StrEnum
 
-from inference_lab.provenance import CorpusId, CorpusVersionId
 from inference_lab.storage.versioning import (
     CorpusUpdate,
     CorpusUpdateState,
@@ -196,58 +194,6 @@ class NoCorpusChangeOutcome:
         if not self.proposed_manifest.has_same_semantic_state(self.active_manifest):
             raise InvalidCorpusVersionContractError(
                 "a no-change proposal must match the active manifest semantics."
-            )
-
-
-class CorpusVersionConflictKind(StrEnum):
-    """Bounded reasons why a corpus proposal cannot advance."""
-
-    EXPECTED_ACTIVE_MISMATCH = "expected_active_mismatch"
-    VERSION_ID_REUSED = "version_id_reused"
-    UPDATE_PAYLOAD_MISMATCH = "update_payload_mismatch"
-
-
-@dataclass(frozen=True, slots=True)
-class CorpusVersionConflictOutcome:
-    """Describe a fail-closed corpus-version conflict without payload data."""
-
-    corpus_id: CorpusId
-    corpus_version: CorpusVersionId
-    kind: CorpusVersionConflictKind
-    expected_corpus_version: CorpusVersionId | None = None
-    observed_active_corpus_version: CorpusVersionId | None = None
-
-    def __post_init__(self) -> None:
-        self._validate()
-
-    def _validate(self) -> None:
-        """Validate that the conflict outcome is self-consistent."""
-        if not isinstance(self.corpus_id, CorpusId):
-            raise TypeError("corpus_id must be a CorpusId.")
-        if not isinstance(self.corpus_version, CorpusVersionId):
-            raise TypeError("corpus_version must be a CorpusVersionId.")
-        if not isinstance(self.kind, CorpusVersionConflictKind):
-            raise TypeError("kind must be a CorpusVersionConflictKind.")
-        if self.expected_corpus_version is not None and not isinstance(
-            self.expected_corpus_version,
-            CorpusVersionId,
-        ):
-            raise TypeError(
-                "expected_corpus_version must be a CorpusVersionId or None."
-            )
-        if self.observed_active_corpus_version is not None and not isinstance(
-            self.observed_active_corpus_version,
-            CorpusVersionId,
-        ):
-            raise TypeError(
-                "observed_active_corpus_version must be a CorpusVersionId or None."
-            )
-        if (
-            self.kind is CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH
-            and self.observed_active_corpus_version == self.expected_corpus_version
-        ):
-            raise InvalidCorpusVersionContractError(
-                "an active-version conflict requires a mismatched observation."
             )
 
 

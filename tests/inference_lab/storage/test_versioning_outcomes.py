@@ -20,8 +20,6 @@ from inference_lab.storage import (
     CorpusUpdate,
     CorpusUpdateState,
     CorpusVersion,
-    CorpusVersionConflictKind,
-    CorpusVersionConflictOutcome,
     CorpusVersionManifest,
     InvalidCorpusVersionContractError,
     NoCorpusChangeOutcome,
@@ -430,51 +428,6 @@ def test_no_change_outcome_rejects_different_semantic_state() -> None:
 
     with pytest.raises(InvalidCorpusVersionContractError, match="semantics"):
         NoCorpusChangeOutcome(update, active, active_manifest, manifest)
-
-
-def test_conflict_outcome_records_bounded_fail_closed_context() -> None:
-    conflict = CorpusVersionConflictOutcome(
-        corpus_id=CORPUS_ID,
-        corpus_version=PROPOSED_ID,
-        kind=CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
-        expected_corpus_version=None,
-        observed_active_corpus_version=ACTIVE_ID,
-    )
-
-    assert conflict.kind is CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH
-    assert conflict.observed_active_corpus_version == ACTIVE_ID
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("corpus_id", PROPOSED_ID),
-        ("corpus_version", CORPUS_ID),
-        ("kind", "expected_active_mismatch"),
-        ("expected_corpus_version", CORPUS_ID),
-        ("observed_active_corpus_version", CORPUS_ID),
-    ],
-)
-def test_conflict_outcome_rejects_wrong_types(field: str, value: object) -> None:
-    conflict = CorpusVersionConflictOutcome(
-        CORPUS_ID,
-        PROPOSED_ID,
-        CorpusVersionConflictKind.VERSION_ID_REUSED,
-    )
-
-    with pytest.raises(TypeError, match=field):
-        replace(conflict, **{field: value})
-
-
-def test_active_mismatch_conflict_requires_different_versions() -> None:
-    with pytest.raises(InvalidCorpusVersionContractError, match="mismatched"):
-        CorpusVersionConflictOutcome(
-            CORPUS_ID,
-            PROPOSED_ID,
-            CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
-            expected_corpus_version=ACTIVE_ID,
-            observed_active_corpus_version=ACTIVE_ID,
-        )
 
 
 def test_rollback_outcome_wraps_audited_commit() -> None:

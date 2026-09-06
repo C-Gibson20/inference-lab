@@ -172,7 +172,9 @@ may prepare from the same parent, but exactly one can advance that corpus. The
 loser receives `StorageConflictError`; it must not be rebased or retried
 blindly because its membership and components were built for a stale parent.
 Start a fresh proposal only after the owning workflow re-evaluates the new
-active state.
+active state. Conflict subtypes are not a public result contract; bounded
+operational reasons such as an expected-active mismatch or reused version ID
+may appear only in privacy-safe structured logs.
 
 SQLite uses a bounded lock wait. Lock expiry becomes
 `StorageConcurrencyError`, the only retryable storage error. Callers may retry

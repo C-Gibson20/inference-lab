@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import NoReturn
 
 from inference_lab.provenance import (
@@ -30,7 +31,6 @@ from inference_lab.storage.errors import (
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
-    CorpusVersionConflictKind,
     NoCorpusChangeOutcome,
     SealCorpusUpdateOutcome,
 )
@@ -49,6 +49,14 @@ from inference_lab.storage.versioning import (
 )
 
 CreatedAtFactory = Callable[[], datetime]
+
+
+class _CorpusVersionConflictKind(StrEnum):
+    """Bounded operational reasons why a corpus proposal cannot advance."""
+
+    EXPECTED_ACTIVE_MISMATCH = "expected_active_mismatch"
+    VERSION_ID_REUSED = "version_id_reused"
+    UPDATE_PAYLOAD_MISMATCH = "update_payload_mismatch"
 
 
 def _required_component_kinds(
@@ -292,7 +300,7 @@ def list_corpus_update_component_generations(
 def _raise_conflict(
     corpus_id: CorpusId,
     corpus_version: CorpusVersionId,
-    kind: CorpusVersionConflictKind | None = None,
+    kind: _CorpusVersionConflictKind | None = None,
 ) -> NoReturn:
     error = StorageConflictError()
     fields: dict[str, object] = {
@@ -1109,9 +1117,9 @@ def begin_corpus_update(
             ):
                 return BeginCorpusUpdateOutcome(update=stored, replayed=True)
             kind = (
-                CorpusVersionConflictKind.UPDATE_PAYLOAD_MISMATCH
+                _CorpusVersionConflictKind.UPDATE_PAYLOAD_MISMATCH
                 if stored.corpus_id == corpus_id
-                else CorpusVersionConflictKind.VERSION_ID_REUSED
+                else _CorpusVersionConflictKind.VERSION_ID_REUSED
             )
             _raise_conflict(corpus_id, corpus_version, kind)
 
@@ -1120,7 +1128,7 @@ def begin_corpus_update(
             _raise_conflict(
                 corpus_id,
                 corpus_version,
-                CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
+                _CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
             )
 
         update = CorpusUpdate(
