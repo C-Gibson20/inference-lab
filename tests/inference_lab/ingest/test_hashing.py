@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     DiscoveryFailure,
@@ -129,13 +130,16 @@ def test_regular_file_is_streamed_into_a_verified_sha256_snapshot(
     source.write_bytes(content)
     candidate = _candidate(source)
     filesystem = _RecordingFileSystem()
+    clock_values = iter((1_000_000_000, 1_040_000_000))
 
-    result = hash_source_candidate(
-        candidate,
-        _classification(),
-        settings=fixture_settings(max_source_bytes=len(content)),
-        filesystem=filesystem,
-    )
+    with capture_logs() as logs:
+        result = hash_source_candidate(
+            candidate,
+            _classification(),
+            settings=fixture_settings(max_source_bytes=len(content)),
+            filesystem=filesystem,
+            clock=clock_values.__next__,
+        )
 
     assert isinstance(result, VerifiedSourceSnapshot)
     assert result.byte_count == len(content)
@@ -150,6 +154,22 @@ def test_regular_file_is_streamed_into_a_verified_sha256_snapshot(
     assert (
         result.file_evidence.opened_after_read == result.file_evidence.path_after_read
     )
+    assert logs == [
+        {
+            "pipeline_stage": "ingest",
+            "source_ordinal": 0,
+            "file_kind": "regular_file",
+            "media_type": "text/plain",
+            "byte_count": len(content),
+            "duration_ms": 40.0,
+            "event": "source_hashed",
+            "log_level": "debug",
+        }
+    ]
+    log_payload = repr(logs)
+    assert source.name not in log_payload
+    assert result.content_hash.digest not in log_payload
+    assert "exact original bytes" not in log_payload
 
 
 def test_empty_file_has_the_standard_empty_sha256_digest(tmp_path: Path) -> None:
@@ -191,6 +211,7 @@ def test_size_limit_accepts_boundary_and_rejects_oversized_source(
     assert accepted.byte_count == 4
     assert isinstance(rejected, DiscoveryFailure)
     assert rejected.category is DiscoveryFailureCategory.SOURCE_TOO_LARGE
+    assert rejected.media_type == "text/plain"
 
 
 def test_candidate_replaced_by_symlink_is_not_opened(tmp_path: Path) -> None:
@@ -390,6 +411,7 @@ def test_io_failures_are_bounded_and_close_open_source(
     source = tmp_path / "private-source.txt"
     source.write_bytes(b"private payload")
     filesystem = _FaultInjectingFileSystem()
+    clock_values = iter((100, 1_000_100))
     if failure_point == "pre_stat":
         filesystem.lstat_errors.add(1)
     elif failure_point == "open":
@@ -402,20 +424,35 @@ def test_io_failures_are_bounded_and_close_open_source(
         filesystem.fstat_errors.add(2)
     else:
         filesystem.lstat_errors.add(2)
+    candidate = _candidate(source)
 
-    result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(),
-        filesystem=filesystem,
-    )
+    with capture_logs() as logs:
+        result = hash_source_candidate(
+            candidate,
+            _classification(),
+            settings=fixture_settings(),
+            filesystem=filesystem,
+            clock=clock_values.__next__,
+        )
 
     assert isinstance(result, DiscoveryFailure)
     assert result.category is DiscoveryFailureCategory.SOURCE_READ_FAILED
     assert "private-source" not in repr(result)
     assert "private payload" not in repr(result)
+    assert result.media_type == "text/plain"
     if filesystem.opened_source is not None:
         assert filesystem.opened_source.closed
+    assert [(record["event"], record["log_level"]) for record in logs] == [
+        ("source_failed", "error")
+    ]
+    assert logs[0]["error_category"] == "source_read_failed"
+    assert logs[0]["failure_stage"] == "hashing"
+    assert logs[0]["retryable"] is True
+    assert logs[0]["duration_ms"] == 1.0
+    log_payload = repr(logs)
+    assert source.name not in log_payload
+    assert "injected private" not in log_payload
+    assert "private payload" not in log_payload
 
 
 @pytest.mark.parametrize("lstat_call", [1, 2])
@@ -504,6 +541,40 @@ def test_hashing_boundary_requires_typed_supported_inputs(tmp_path: Path) -> Non
             settings=fixture_settings(),
             filesystem=object(),  # pyright: ignore[reportArgumentType]
         )
+    with pytest.raises(TypeError, match="clock must be callable"):
+        hash_source_candidate(
+            candidate,
+            _classification(),
+            settings=fixture_settings(),
+            clock=object(),  # pyright: ignore[reportArgumentType]
+        )
+    with pytest.raises(TypeError, match="clock must return an integer"):
+        hash_source_candidate(
+            candidate,
+            _classification(),
+            settings=fixture_settings(),
+            clock=lambda: True,  # pyright: ignore[reportReturnType]
+        )
+
+
+def test_hashing_rejects_a_clock_that_moves_backwards_without_logging_bytes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "private-clock-source.txt"
+    source.write_bytes(b"private clock payload")
+    candidate = _candidate(source)
+    clock_values = iter((20, 10))
+
+    with capture_logs() as logs:
+        with pytest.raises(ValueError, match="must not move backwards"):
+            hash_source_candidate(
+                candidate,
+                _classification(),
+                settings=fixture_settings(),
+                clock=clock_values.__next__,
+            )
+
+    assert logs == []
 
 
 def test_hash_failure_representation_hides_source_path(tmp_path: Path) -> None:
