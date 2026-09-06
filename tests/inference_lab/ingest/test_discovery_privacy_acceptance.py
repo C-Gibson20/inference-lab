@@ -49,7 +49,11 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
             ),
         ),
     )
-    repository = open_metadata_repository(private_database, apply_migrations=True)
+    repository = open_metadata_repository(
+        private_database,
+        source_dir=tmp_path / "source-data",
+        apply_migrations=True,
+    )
     with repository.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(request.corpus_id, private_corpus_name))
 

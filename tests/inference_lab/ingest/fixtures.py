@@ -75,6 +75,7 @@ def fixture_settings(*, max_source_bytes: int = 50 * 1024 * 1024) -> Settings:
         storage=StorageConfig(
             index_dir=Path("fixture/index"),
             metadata_db_path=Path("fixture/metadata.db"),
+            source_dir=Path("fixture/source-data"),
         ),
         ingest=IngestConfig(max_source_bytes=max_source_bytes),
     )

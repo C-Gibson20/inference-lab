@@ -42,6 +42,19 @@ _CORPUS_ID = CorpusId("11111111-1111-4111-8111-111111111111")
 _OTHER_CORPUS_ID = CorpusId("22222222-2222-4222-8222-222222222222")
 
 
+def _open_test_repository(
+    database_path: Path,
+    *,
+    apply_migrations: bool = False,
+) -> MetadataRepository:
+    """Open test metadata and managed-source storage under one temporary root."""
+    return open_metadata_repository(
+        database_path,
+        source_dir=database_path.parent / "source-data",
+        apply_migrations=apply_migrations,
+    )
+
+
 class _IncompleteScanFileSystem(LocalTraversalFileSystem):
     """Make one real directory unreadable to preserve an incomplete scan."""
 
@@ -138,7 +151,7 @@ def test_rename_after_restart_preserves_identity_and_advances_locator(
     )
     database_path = tmp_path / "metadata.sqlite3"
 
-    initial = open_metadata_repository(database_path, apply_migrations=True)
+    initial = _open_test_repository(database_path, apply_migrations=True)
     with initial.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
     try:
@@ -153,7 +166,7 @@ def test_rename_after_restart_preserves_identity_and_advances_locator(
 
     original_path.rename(renamed_path)
 
-    reopened = open_metadata_repository(database_path)
+    reopened = _open_test_repository(database_path)
     try:
         renamed_results = _persist_supported_sources(request, reopened)
         assert len(renamed_results) == 1
@@ -218,7 +231,7 @@ def test_in_place_change_after_restart_creates_one_continuous_version(
     )
     database_path = tmp_path / "metadata.sqlite3"
 
-    initial = open_metadata_repository(database_path, apply_migrations=True)
+    initial = _open_test_repository(database_path, apply_migrations=True)
     with initial.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
     try:
@@ -233,7 +246,7 @@ def test_in_place_change_after_restart_creates_one_continuous_version(
 
     source_path.write_bytes(b"second source byte\n")
 
-    reopened = open_metadata_repository(database_path)
+    reopened = _open_test_repository(database_path)
     try:
         changed_results = _persist_supported_sources(request, reopened)
         assert len(changed_results) == 1
@@ -325,7 +338,7 @@ def test_copy_delete_move_after_restart_uses_hash_continuity(
     )
     database_path = tmp_path / "metadata.sqlite3"
 
-    initial = open_metadata_repository(database_path, apply_migrations=True)
+    initial = _open_test_repository(database_path, apply_migrations=True)
     with initial.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
     try:
@@ -341,7 +354,7 @@ def test_copy_delete_move_after_restart_uses_hash_continuity(
     copied_path.write_bytes(source_bytes)
     original_path.unlink()
 
-    reopened = open_metadata_repository(database_path)
+    reopened = _open_test_repository(database_path)
     try:
         moved_results = _persist_supported_sources(request, reopened)
         assert len(moved_results) == 1
@@ -427,7 +440,7 @@ def test_live_identical_source_is_an_independent_duplicate_after_restart(
     )
     database_path = tmp_path / "metadata.sqlite3"
 
-    initial = open_metadata_repository(database_path, apply_migrations=True)
+    initial = _open_test_repository(database_path, apply_migrations=True)
     with initial.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
     try:
@@ -447,7 +460,7 @@ def test_live_identical_source_is_an_independent_duplicate_after_restart(
     else:
         duplicate_path.write_bytes(source_bytes)
 
-    reopened = open_metadata_repository(database_path)
+    reopened = _open_test_repository(database_path)
     try:
         repeated_results = _persist_supported_sources(request, reopened)
         assert len(repeated_results) == 2
@@ -546,7 +559,7 @@ def test_removed_source_after_restart_leaves_durable_identity_unchanged(
     )
     database_path = tmp_path / "metadata.sqlite3"
 
-    initial = open_metadata_repository(database_path, apply_migrations=True)
+    initial = _open_test_repository(database_path, apply_migrations=True)
     with initial.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
     try:
@@ -578,7 +591,7 @@ def test_removed_source_after_restart_leaves_durable_identity_unchanged(
 
     source_path.unlink()
 
-    reopened = open_metadata_repository(database_path)
+    reopened = _open_test_repository(database_path)
     try:
         assert _persist_supported_sources(request, reopened) == ()
         assert (
@@ -617,7 +630,7 @@ def test_incomplete_scan_preserves_ambiguous_matching_source_after_restart(
     )
     database_path = tmp_path / "metadata.sqlite3"
 
-    initial = open_metadata_repository(database_path, apply_migrations=True)
+    initial = _open_test_repository(database_path, apply_migrations=True)
     with initial.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
     try:
@@ -653,7 +666,7 @@ def test_incomplete_scan_preserves_ambiguous_matching_source_after_restart(
     )
     assert isinstance(snapshot, VerifiedSourceSnapshot)
 
-    reopened = open_metadata_repository(database_path)
+    reopened = _open_test_repository(database_path)
     try:
         results = persist_discovered_source_identities(
             (IdentityPersistenceUnit(visible_source, snapshot),),
@@ -725,7 +738,7 @@ def test_overlapping_roots_repeat_in_stable_order_as_an_exact_noop(
     )
     database_path = tmp_path / "metadata.sqlite3"
 
-    initial = open_metadata_repository(database_path, apply_migrations=True)
+    initial = _open_test_repository(database_path, apply_migrations=True)
     with initial.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
     first_inventory, first_units = _supported_persistence_units(request)
@@ -798,7 +811,7 @@ def test_overlapping_roots_repeat_in_stable_order_as_an_exact_noop(
     finally:
         initial.close()
 
-    reopened = open_metadata_repository(database_path)
+    reopened = _open_test_repository(database_path)
     second_inventory, second_units = _supported_persistence_units(request)
     assert second_inventory.candidates == first_inventory.candidates
     assert second_units == first_units
@@ -908,7 +921,7 @@ def test_two_corpora_isolate_shared_candidates_observations_and_relationships(
     )
     database_path = tmp_path / "metadata.sqlite3"
 
-    initial = open_metadata_repository(database_path, apply_migrations=True)
+    initial = _open_test_repository(database_path, apply_migrations=True)
     with initial.transaction() as transaction:
         transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "First corpus"))
         transaction.add_corpus(CorpusMetadata(_OTHER_CORPUS_ID, "Second corpus"))
@@ -929,7 +942,7 @@ def test_two_corpora_isolate_shared_candidates_observations_and_relationships(
     finally:
         initial.close()
 
-    second = open_metadata_repository(database_path)
+    second = _open_test_repository(database_path)
     try:
         second_results = _successful_results(
             _persist_supported_sources(second_request, second)
@@ -1063,7 +1076,7 @@ def test_two_corpora_isolate_shared_candidates_observations_and_relationships(
             ),
         ),
     )
-    final = open_metadata_repository(database_path)
+    final = _open_test_repository(database_path)
     try:
         final_results = _successful_results(
             _persist_supported_sources(expanded_second_request, final)

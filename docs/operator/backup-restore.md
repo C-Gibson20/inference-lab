@@ -14,7 +14,9 @@ may cover the complete deployment. The normative policy is defined in the
 Recovery should restore a validated selected-corpus state that can serve
 queries without reconstructing unchanged data and without changing unrelated
 corpora. A complete recovery also requires the original source documents to be
-available through the separate source-data backup or availability policy.
+available through the separate source-data backup or availability policy. See
+[source availability](source-availability.md) for the current managed-original
+integrity and operator boundary.
 
 ## Backup procedure
 
@@ -64,8 +66,9 @@ post-activation check fails.
 - Treat incomplete, corrupt, mixed-version, and incompatible backups as
   unusable.
 - Keep the previous active state available until activation succeeds.
-- Roll back to the previous state if activation or post-activation checks
-  fail.
+- Restore prior corpus state by publishing a new rollback version if activation
+  or post-activation checks fail; never rewind the active pointer. Follow the
+  [corpus-version runbook](corpus-versions.md).
 - Keep the last known-good published backup available.
 - Make retries idempotent and do not publish partial state.
 - Report whether recovery remains available after every failed operation.
