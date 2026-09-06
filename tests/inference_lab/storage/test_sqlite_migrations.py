@@ -60,11 +60,16 @@ def _insert_version(
 def test_multi_corpus_baseline_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 1
+    assert len(MIGRATIONS) == 2
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "multi_corpus_metadata_baseline"
     assert MIGRATIONS[0].checksum == (
         "7516eeb4654186443550d64d7c61f5eb541e944c24c3f3d978017442d651d0bc"
+    )
+    assert MIGRATIONS[1].revision == 2
+    assert MIGRATIONS[1].migration_id == "source_persistence"
+    assert MIGRATIONS[1].checksum == (
+        "794c287e42d99cd0ab24f1750aa15550e78693ab9e6f44a33c12542230ac7fc2"
     )
 
 
