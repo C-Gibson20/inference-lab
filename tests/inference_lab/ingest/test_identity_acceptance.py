@@ -240,3 +240,97 @@ def test_in_place_change_after_restart_creates_one_continuous_version(
         )
     finally:
         reopened.close()
+
+
+def test_copy_delete_move_after_restart_uses_hash_continuity(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    original_path = source_root / "original.txt"
+    copied_path = source_root / "copied.txt"
+    source_bytes = b"content-preserving copied source\n"
+    original_path.write_bytes(source_bytes)
+    request = DiscoveryRequest(
+        corpus_id=_CORPUS_ID,
+        inputs=(DiscoveryInput(source_root, DiscoveryInputKind.DIRECTORY),),
+    )
+    database_path = tmp_path / "metadata.sqlite3"
+
+    initial = open_metadata_repository(database_path, apply_migrations=True)
+    with initial.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
+    try:
+        first_results = _persist_supported_sources(request, initial)
+        assert len(first_results) == 1
+        first = first_results[0]
+        assert isinstance(first, IdentityApplicationResult)
+        assert first.parse_eligible
+        assert first.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
+    finally:
+        initial.close()
+
+    copied_path.write_bytes(source_bytes)
+    original_path.unlink()
+
+    reopened = open_metadata_repository(database_path)
+    try:
+        moved_results = _persist_supported_sources(request, reopened)
+        assert len(moved_results) == 1
+        moved = moved_results[0]
+        assert isinstance(moved, IdentityApplicationResult)
+        assert not moved.parse_eligible
+        assert moved.source.identity_outcome.kind is ResolutionKind.UNCHANGED
+        assert moved.source.source_observation_id == first.source.source_observation_id
+        assert (
+            moved.source.identity_outcome.document
+            == first.source.identity_outcome.document
+        )
+        assert (
+            moved.source.identity_outcome.version
+            == first.source.identity_outcome.version
+        )
+
+        outcome = first.source.identity_outcome
+        assert outcome.document is not None
+        assert outcome.version is not None
+        assert reopened.list_document_versions(outcome.document.document_id) == (
+            outcome.version,
+        )
+        assert len(reopened.list_corpus_document_version_memberships(_CORPUS_ID)) == 1
+        assert (
+            len(
+                reopened.list_source_observation_history(
+                    _CORPUS_ID,
+                    first.source.source_observation_id,
+                )
+            )
+            == 1
+        )
+        assert (
+            reopened.list_duplicate_relationships(
+                _CORPUS_ID,
+                outcome.version.document_version_id,
+            )
+            == ()
+        )
+
+        locator_history = reopened.list_source_locator_history(
+            _CORPUS_ID,
+            first.source.source_observation_id,
+        )
+        assert tuple(locator.locator_revision for locator in locator_history) == (1, 2)
+        assert tuple(locator.path for locator in locator_history) == (
+            original_path.resolve(),
+            copied_path.resolve(),
+        )
+        assert locator_history[0].identity_hint is not None
+        assert locator_history[1].identity_hint is not None
+        assert locator_history[0].identity_hint != locator_history[1].identity_hint
+        assert (
+            locator_history[0].fingerprint.content_hash
+            == locator_history[1].fingerprint.content_hash
+            == outcome.version.content_hash
+        )
+    finally:
+        reopened.close()
