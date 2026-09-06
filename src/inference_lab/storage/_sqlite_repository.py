@@ -683,6 +683,12 @@ class SQLiteMetadataRepository:
             raise RepositoryClosedError()
         return connection
 
+    def _discard_connection_preserving_primary(self) -> None:
+        """Make a cleanup-failed connection unreachable without raising."""
+        connection = self._connection
+        self._connection = None
+        close_preserving_primary(connection)
+
     def close(self) -> None:
         """Close the owned connection idempotently and reject future use."""
         connection = self._connection
