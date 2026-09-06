@@ -110,94 +110,55 @@ def _prepare_update(
         )
 
 
-def _create_committed_parent(path: Path) -> CorpusVersionManifest:
+def _create_committed_parent(
+    path: Path,
+    *,
+    with_component: bool = False,
+) -> CorpusVersionManifest:
     repository = _open(path)
-    with repository.transaction() as transaction:
-        transaction.add_corpus(_CORPUS_A)
-        transaction.add_corpus(_CORPUS_B)
-        transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
-        transaction.add_document_version(_DOCUMENT_VERSION)
-        transaction.add_corpus_document_version_membership(_MEMBERSHIP)
-    repository.close()
-
-    manifest = CorpusVersionManifest(
-        corpus_id=_CORPUS_A.corpus_id,
-        corpus_version=_OTHER_VERSION,
-        document_memberships=(_MEMBERSHIP,),
-    )
-    created_at = _CREATED_AT.isoformat(timespec="microseconds")
-    connection = sqlite3.connect(path)
-    connection.execute("PRAGMA foreign_keys = ON")
+    parent_manifest: CorpusVersionManifest | None = None
     try:
-        connection.execute(
-            """INSERT INTO corpus_updates (
-                corpus_id, corpus_version, expected_corpus_version, state,
-                manifest_digest, created_at, restores_corpus_version
-            ) VALUES (?, ?, NULL, 'preparing', NULL, ?, NULL)""",
-            (
-                _CORPUS_A.corpus_id.as_str(),
-                _OTHER_VERSION.as_str(),
-                created_at,
-            ),
-        )
-        connection.execute(
-            """INSERT INTO corpus_update_document_memberships (
-                corpus_id, corpus_version, document_id, document_version_id
-            ) VALUES (?, ?, ?, ?)""",
-            (
-                _CORPUS_A.corpus_id.as_str(),
-                _OTHER_VERSION.as_str(),
-                _DOCUMENT_ID.as_str(),
-                _DOCUMENT_VERSION_ID.as_str(),
-            ),
-        )
-        connection.execute(
-            """UPDATE corpus_updates
-            SET state = 'ready', manifest_digest = ?
-            WHERE corpus_id = ? AND corpus_version = ?""",
-            (
-                manifest.manifest_digest,
-                _CORPUS_A.corpus_id.as_str(),
-                _OTHER_VERSION.as_str(),
-            ),
-        )
-        connection.execute(
-            """INSERT INTO corpus_versions (
-                corpus_id, corpus_version, sequence, parent_corpus_version,
-                manifest_digest, created_at, restores_corpus_version
-            ) VALUES (?, ?, 1, NULL, ?, ?, NULL)""",
-            (
-                _CORPUS_A.corpus_id.as_str(),
-                _OTHER_VERSION.as_str(),
-                manifest.manifest_digest,
-                created_at,
-            ),
-        )
-        connection.execute(
-            """INSERT INTO corpus_version_document_memberships (
-                corpus_id, corpus_version, document_id, document_version_id
-            ) VALUES (?, ?, ?, ?)""",
-            (
-                _CORPUS_A.corpus_id.as_str(),
-                _OTHER_VERSION.as_str(),
-                _DOCUMENT_ID.as_str(),
-                _DOCUMENT_VERSION_ID.as_str(),
-            ),
-        )
-        connection.execute(
-            """UPDATE corpus_active_versions SET corpus_version = ?
-            WHERE corpus_id = ?""",
-            (_OTHER_VERSION.as_str(), _CORPUS_A.corpus_id.as_str()),
-        )
-        connection.execute(
-            """UPDATE corpus_updates SET state = 'committed'
-            WHERE corpus_id = ? AND corpus_version = ?""",
-            (_CORPUS_A.corpus_id.as_str(), _OTHER_VERSION.as_str()),
-        )
-        connection.commit()
+        with repository.transaction() as transaction:
+            transaction.add_corpus(_CORPUS_A)
+            transaction.add_corpus(_CORPUS_B)
+            transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
+            transaction.add_document_version(_DOCUMENT_VERSION)
+            transaction.add_corpus_document_version_membership(_MEMBERSHIP)
+            transaction.begin_corpus_update(
+                _CORPUS_A.corpus_id,
+                _OTHER_VERSION,
+                expected_corpus_version=None,
+                required_component_kinds=(_LEXICAL,) if with_component else (),
+            )
+            transaction.add_corpus_update_document_membership(
+                _CORPUS_A.corpus_id,
+                _OTHER_VERSION,
+                _MEMBERSHIP,
+            )
+            if with_component:
+                transaction.register_corpus_update_component_generation(
+                    _CORPUS_A.corpus_id,
+                    _OTHER_VERSION,
+                    _generation(
+                        corpus_version=_OTHER_VERSION,
+                        generation_id="parent-generation",
+                    ),
+                    validator=RecordingValidator(),
+                )
+            sealed = transaction.seal_corpus_update(
+                _CORPUS_A.corpus_id,
+                _OTHER_VERSION,
+            )
+            assert isinstance(sealed, SealCorpusUpdateOutcome)
+            committed = transaction.commit_corpus_update(
+                _CORPUS_A.corpus_id,
+                _OTHER_VERSION,
+            )
+            parent_manifest = committed.manifest
     finally:
-        connection.close()
-    return manifest
+        repository.close()
+    assert parent_manifest is not None
+    return parent_manifest
 
 
 def _generation(
@@ -802,11 +763,11 @@ def test_seal_rejects_missing_required_component_without_changing_update(
         repository.close()
 
 
-def test_equal_parent_manifest_returns_durable_no_change_after_restart(
+def test_semantically_equal_parent_with_new_generation_returns_durable_no_change(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    parent_manifest = _create_committed_parent(database_path)
+    parent_manifest = _create_committed_parent(database_path, with_component=True)
     repository = SQLiteMetadataRepository.open(
         database_path,
         created_at_factory=_fixed_created_at,
@@ -818,6 +779,13 @@ def test_equal_parent_manifest_returns_durable_no_change_after_restart(
                 _CORPUS_A.corpus_id,
                 _PROPOSED_VERSION,
                 expected_corpus_version=_OTHER_VERSION,
+                required_component_kinds=(_LEXICAL,),
+            )
+            transaction.register_corpus_update_component_generation(
+                _CORPUS_A.corpus_id,
+                _PROPOSED_VERSION,
+                _generation(generation_id="proposed-generation"),
+                validator=RecordingValidator(),
             )
 
         with capture_logs() as logs:
@@ -832,10 +800,14 @@ def test_equal_parent_manifest_returns_durable_no_change_after_restart(
         assert outcome is not None
         assert outcome.replayed is False
         assert outcome.update.state is CorpusUpdateState.ABORTED
-        assert outcome.update.manifest_digest == parent_manifest.manifest_digest
+        assert outcome.update.manifest_digest == (
+            outcome.proposed_manifest.manifest_digest
+        )
         assert outcome.active_version.corpus_version == _OTHER_VERSION
+        assert outcome.active_manifest == parent_manifest
+        assert outcome.proposed_manifest.has_same_semantic_state(parent_manifest)
         assert (
-            outcome.proposed_manifest.manifest_digest == parent_manifest.manifest_digest
+            outcome.proposed_manifest.manifest_digest != parent_manifest.manifest_digest
         )
         assert [log["event"] for log in logs] == [
             "corpus_update_aborted",

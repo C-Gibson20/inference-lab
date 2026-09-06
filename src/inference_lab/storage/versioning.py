@@ -165,6 +165,20 @@ def canonicalise_component_kinds(kinds: object) -> tuple[ComponentKind, ...]:
     return tuple(sorted(kinds, key=ComponentKind.as_str))
 
 
+def _component_semantic_state(
+    generation: ComponentGenerationReference,
+) -> tuple[ComponentKind, str, str, str, str, str]:
+    """Return generation-ID-independent component state."""
+    return (
+        generation.component_kind,
+        generation.implementation,
+        generation.format_version,
+        generation.contract_version,
+        generation.configuration_digest,
+        generation.source_manifest_digest,
+    )
+
+
 def validate_corpus_update_identity(
     corpus_version: CorpusVersionId,
     expected_corpus_version: CorpusVersionId | None,
@@ -207,7 +221,7 @@ class CorpusVersionManifest:
         object.__setattr__(
             self,
             "manifest_digest",
-            hashlib.sha256(self._canonical_semantic_bytes()).hexdigest(),
+            hashlib.sha256(self._canonical_manifest_bytes()).hexdigest(),
         )
 
     def _validate(self) -> None:
@@ -295,12 +309,12 @@ class CorpusVersionManifest:
             )
         return tuple(sorted(self.component_generations, key=lambda item: item.key()))
 
-    def _canonical_semantic_bytes(self) -> bytes:
-        """Return stable bytes for state equality and manifest hashing.
+    def _canonical_manifest_bytes(self) -> bytes:
+        """Return stable bytes for exact manifest hashing.
 
         The proposed corpus-version identity and readiness state are deliberately
-        excluded. They describe publication ownership and staging, not the
-        complete corpus state used by the no-change guard.
+        excluded. Concrete component-generation identities remain included so
+        committed manifest integrity covers the exact artefacts to reopen.
         """
         payload = {
             "component_generations": [
@@ -331,6 +345,23 @@ class CorpusVersionManifest:
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
+
+    def has_same_semantic_state(self, other: object) -> bool:
+        """Compare publishable state while ignoring generation identities."""
+        if not isinstance(other, CorpusVersionManifest):
+            raise TypeError("other must be a CorpusVersionManifest.")
+        return (
+            self.corpus_id == other.corpus_id
+            and self.document_memberships == other.document_memberships
+            and tuple(
+                _component_semantic_state(generation)
+                for generation in self.component_generations
+            )
+            == tuple(
+                _component_semantic_state(generation)
+                for generation in other.component_generations
+            )
+        )
 
     def has_required_components(
         self,

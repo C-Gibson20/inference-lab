@@ -72,6 +72,11 @@ manifest, persists its SHA-256 digest, and makes the update `ready` and
 immutable. If the complete semantic manifest is unchanged from the expected
 active version, sealing returns `NoCorpusChangeOutcome`, marks the proposal
 terminal, creates no sequence, and leaves the active pointer unchanged.
+Semantic equality compares membership plus component implementation, format,
+contract, configuration, and source-manifest digests; it deliberately ignores
+the new generation IDs. The persisted manifest digest still covers those exact
+generation IDs so committed snapshots reopen the precise immutable artefacts
+that were published.
 
 `commit_corpus_update()` accepts only a ready ordinary update. In one database
 transaction it rechecks the expected active version, creates the immutable

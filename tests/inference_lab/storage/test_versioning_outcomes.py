@@ -5,7 +5,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.provenance import (
+    CorpusDocumentVersionMembership,
+    CorpusId,
+    CorpusVersionId,
+    DocumentId,
+    DocumentVersionId,
+)
 from inference_lab.storage import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
@@ -30,14 +36,20 @@ PROPOSED_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000003")
 ACTIVE_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000004")
 OTHER_VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000005")
 RESTORE_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000006")
+MEMBERSHIP = CorpusDocumentVersionMembership(
+    CORPUS_ID,
+    DocumentId.from_str("00000000-0000-4000-8000-000000000007"),
+    DocumentVersionId.from_str("00000000-0000-4000-8000-000000000008"),
+)
 
 
 def _manifest(
     *,
     corpus_id: CorpusId = CORPUS_ID,
     corpus_version: CorpusVersionId = PROPOSED_ID,
+    memberships: tuple[CorpusDocumentVersionMembership, ...] = (),
 ) -> CorpusVersionManifest:
-    return CorpusVersionManifest(corpus_id, corpus_version)
+    return CorpusVersionManifest(corpus_id, corpus_version, memberships)
 
 
 def _update(
@@ -296,13 +308,17 @@ def test_no_change_outcome_requires_equal_terminal_proposal() -> None:
         parent=OTHER_VERSION_ID,
     )
 
-    outcome = NoCorpusChangeOutcome(update, active, manifest)
+    outcome = NoCorpusChangeOutcome(update, active, active_manifest, manifest)
 
     assert outcome.active_version == active
+    assert outcome.active_manifest == active_manifest
     assert outcome.proposed_manifest.manifest_digest == active.manifest_digest
 
 
-@pytest.mark.parametrize("field", ["update", "active_version", "proposed_manifest"])
+@pytest.mark.parametrize(
+    "field",
+    ["update", "active_version", "proposed_manifest", "active_manifest"],
+)
 def test_no_change_outcome_rejects_wrong_types(field: str) -> None:
     manifest = _manifest()
     update = _update(
@@ -319,6 +335,7 @@ def test_no_change_outcome_rejects_wrong_types(field: str) -> None:
             sequence=2,
             parent=OTHER_VERSION_ID,
         ),
+        active_manifest,
         manifest,
     )
 
@@ -343,12 +360,16 @@ def test_no_change_outcome_rejects_nonterminal_or_mismatched_state() -> None:
 
     with pytest.raises(InvalidCorpusVersionContractError, match="terminal"):
         NoCorpusChangeOutcome(
-            replace(update, state=CorpusUpdateState.READY), active, manifest
+            replace(update, state=CorpusUpdateState.READY),
+            active,
+            active_manifest,
+            manifest,
         )
     with pytest.raises(InvalidCorpusVersionContractError, match="expectation"):
         NoCorpusChangeOutcome(
             replace(update, expected_corpus_version=OTHER_VERSION_ID),
             active,
+            active_manifest,
             manifest,
         )
     with pytest.raises(InvalidCorpusVersionContractError, match="update corpus"):
@@ -361,11 +382,12 @@ def test_no_change_outcome_rejects_nonterminal_or_mismatched_state() -> None:
                 sequence=2,
                 parent=OTHER_VERSION_ID,
             ),
+            active_manifest,
             manifest,
         )
 
 
-def test_no_change_outcome_rejects_different_semantic_manifest() -> None:
+def test_no_change_outcome_rejects_active_manifest_mismatch() -> None:
     manifest = _manifest()
     update = _update(
         state=CorpusUpdateState.ABORTED,
@@ -383,8 +405,31 @@ def test_no_change_outcome_rejects_different_semantic_manifest() -> None:
         NoCorpusChangeOutcome(
             update,
             replace(active, manifest_digest="f" * 64),
+            _manifest(corpus_version=ACTIVE_ID),
             manifest,
         )
+
+
+def test_no_change_outcome_rejects_different_semantic_state() -> None:
+    manifest = _manifest()
+    update = _update(
+        state=CorpusUpdateState.ABORTED,
+        manifest=manifest,
+        expected=ACTIVE_ID,
+    )
+    active_manifest = _manifest(
+        corpus_version=ACTIVE_ID,
+        memberships=(MEMBERSHIP,),
+    )
+    active = _version(
+        active_manifest,
+        corpus_version=ACTIVE_ID,
+        sequence=2,
+        parent=OTHER_VERSION_ID,
+    )
+
+    with pytest.raises(InvalidCorpusVersionContractError, match="semantics"):
+        NoCorpusChangeOutcome(update, active, active_manifest, manifest)
 
 
 def test_conflict_outcome_records_bounded_fail_closed_context() -> None:

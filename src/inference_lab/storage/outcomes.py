@@ -158,6 +158,7 @@ class NoCorpusChangeOutcome:
 
     update: CorpusUpdate
     active_version: CorpusVersion
+    active_manifest: CorpusVersionManifest
     proposed_manifest: CorpusVersionManifest
     replayed: bool = False
 
@@ -170,6 +171,8 @@ class NoCorpusChangeOutcome:
             raise TypeError("update must be a CorpusUpdate.")
         if not isinstance(self.active_version, CorpusVersion):
             raise TypeError("active_version must be a CorpusVersion.")
+        if not isinstance(self.active_manifest, CorpusVersionManifest):
+            raise TypeError("active_manifest must be a CorpusVersionManifest.")
         if not isinstance(self.proposed_manifest, CorpusVersionManifest):
             raise TypeError("proposed_manifest must be a CorpusVersionManifest.")
         _validate_replayed(self.replayed)
@@ -186,12 +189,13 @@ class NoCorpusChangeOutcome:
             raise InvalidCorpusVersionContractError(
                 "the no-change active version must belong to the update corpus."
             )
-        if (
-            self.proposed_manifest.manifest_digest
-            != self.active_version.manifest_digest
-        ):
+        if not self.active_version.matches_manifest(self.active_manifest):
             raise InvalidCorpusVersionContractError(
-                "a no-change manifest must match the active manifest digest."
+                "the no-change active manifest must match the active version."
+            )
+        if not self.proposed_manifest.has_same_semantic_state(self.active_manifest):
+            raise InvalidCorpusVersionContractError(
+                "a no-change proposal must match the active manifest semantics."
             )
 
 

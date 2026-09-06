@@ -75,7 +75,9 @@ transaction.
 
 If sealing returns a no-change outcome, no version or sequence is created and
 the proposal becomes terminal. Treat this as a successful idempotent operation,
-not an error.
+not an error. Newly built component generations may have different generation
+IDs and still be unchanged when their implementation, compatibility,
+configuration, and source-manifest semantics match the active generations.
 
 An exact retry of begin, seal, abort, or commit returns the durable prior
 outcome. Reusing the same proposed version with different inputs is a conflict.
