@@ -52,11 +52,17 @@ file or environment take effect after a process restart.
 | `storage.source_dir` | `STORAGE__SOURCE_DIR` | Required managed original-source path; keep it separate from indexes and metadata. |
 | `logging.level` | `LOGGING__LEVEL` | Logging threshold; example default is `INFO`. |
 | `logging.format` | `LOGGING__FORMAT` | `console`, `json`, or `auto`; example default is `auto`. |
+| `ingest.max_source_bytes` | `INGEST__MAX_SOURCE_BYTES` | Maximum original-source size in bytes; defaults to `52428800` and must be greater than zero. |
 
 The configuration loader must reject missing required values and invalid types.
 It must not substitute guessed model paths, storage paths, or runtime values.
 Managed originals under `storage.source_dir` require a separate source-data
 backup; they are not part of corpus-state backups.
+The directory is repository-owned: do not rename, edit, move, or delete its
+contents directly. The service account needs permission to create, stage,
+atomically rename, lock, and read files there. See
+[source availability](source-availability.md) for integrity and recovery
+guidance.
 Backup-specific settings are defined but not yet available; see the
 [backup and restore runbook](backup-restore.md) for the selected contract and
 current implementation status.

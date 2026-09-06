@@ -24,6 +24,21 @@ exist. The operation using the path must still be able to create or access it,
 and the host must have sufficient storage. Check permissions, available space,
 and whether the path is shared with another active installation.
 
+## A managed source is unavailable or corrupt
+
+Do not inspect or repair files inside `storage.source_dir` by hand. A missing
+or non-member source may return no result without disclosing whether another
+corpus owns it. If a corpus-visible source fails its stored byte-count or
+SHA-256 check, storage reports the bounded `corrupt_state` category and returns
+no partial bytes.
+
+Preserve the affected metadata and source state, confirm the selected corpus,
+check filesystem permissions and capacity, and locate a known-good source-data
+backup. Restore only the exact immutable bytes expected by the metadata. The
+operator repair workflow is not implemented yet; see
+[source availability](source-availability.md) for current responsibilities and
+boundaries.
+
 ## No query result is available
 
 The current command is a skeleton and does not yet expose the query workflow.
@@ -37,7 +52,8 @@ not by itself evidence of a failed operation.
 Logs are written to stdout. Use `logging.format = "console"` for interactive
 inspection or `"json"` for scripts and tooling. Operational logs must remain
 privacy-safe: do not add queries, prompts, outputs, document text, source
-passages, credentials, or sensitive paths to diagnostic output.
+passages, filenames, publication identifiers, credentials, or sensitive paths
+to diagnostic output.
 
 For backup or restore failures, preserve the last known-good published backup,
 check the manifest and validation result, and follow the
