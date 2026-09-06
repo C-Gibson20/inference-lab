@@ -166,7 +166,8 @@ Corpus versions are immutable, corpus-owned consistency boundaries. Metadata
 and persistent indexes participating in a corpus snapshot must identify the
 same `corpus_id` and `corpus_version`. Version advancement is independent for
 each corpus. Backup and restore operations must preserve ownership and this
-boundary.
+boundary. Publication, component participation, and reader lifecycle follow
+the [storage conventions](storage.md).
 
 `RecordId` and `SourceSpanId` identify records; they do not contain or replace
 record lineage or resolvable source-location fields. Those records retain their

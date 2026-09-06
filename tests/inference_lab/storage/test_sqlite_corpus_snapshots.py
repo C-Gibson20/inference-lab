@@ -1,6 +1,9 @@
 """Tests for dedicated version-pinned SQLite corpus snapshot lifecycles."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
+from multiprocessing import get_context
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import cast
 
@@ -44,6 +47,7 @@ _CORPUS_B = CorpusMetadata(
 _VERSION_A1 = CorpusVersionId("33333333-3333-4333-8333-333333333333")
 _VERSION_A2 = CorpusVersionId("44444444-4444-4444-8444-444444444444")
 _UNKNOWN_VERSION = CorpusVersionId("55555555-5555-4555-8555-555555555555")
+_VERSION_B1 = CorpusVersionId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 _FIRST_DOCUMENT_ID = DocumentId("66666666-6666-4666-8666-666666666666")
 _SECOND_DOCUMENT_ID = DocumentId("77777777-7777-4777-8777-777777777777")
 _FIRST_DOCUMENT_VERSION = DocumentVersion(
@@ -66,6 +70,11 @@ _SECOND_MEMBERSHIP = CorpusDocumentVersionMembership(
     _SECOND_DOCUMENT_ID,
     _SECOND_DOCUMENT_VERSION.document_version_id,
 )
+_FIRST_MEMBERSHIP_B = CorpusDocumentVersionMembership(
+    _CORPUS_B.corpus_id,
+    _FIRST_DOCUMENT_ID,
+    _FIRST_DOCUMENT_VERSION.document_version_id,
+)
 _LEXICAL = ComponentKind("lexical")
 _LEXICAL_GENERATION = ComponentGenerationReference(
     component_kind=_LEXICAL,
@@ -79,6 +88,40 @@ _LEXICAL_GENERATION = ComponentGenerationReference(
     corpus_version=_VERSION_A1,
     state=ComponentGenerationState.PREPARING,
 )
+_DENSE = ComponentKind("dense")
+_DENSE_GENERATION_A1 = replace(
+    _LEXICAL_GENERATION,
+    component_kind=_DENSE,
+    generation_id="snapshot-dense-generation-a1",
+    configuration_digest="e" * 64,
+)
+_LEXICAL_GENERATION_A2 = replace(
+    _LEXICAL_GENERATION,
+    generation_id="snapshot-lexical-generation-a2",
+    configuration_digest="f" * 64,
+    corpus_version=_VERSION_A2,
+)
+_DENSE_GENERATION_A2 = replace(
+    _DENSE_GENERATION_A1,
+    generation_id="snapshot-dense-generation-a2",
+    configuration_digest="0" * 64,
+    corpus_version=_VERSION_A2,
+)
+_LEXICAL_GENERATION_B1 = replace(
+    _LEXICAL_GENERATION,
+    generation_id="snapshot-lexical-generation-b1",
+    configuration_digest="1" * 64,
+    corpus_id=_CORPUS_B.corpus_id,
+    corpus_version=_VERSION_B1,
+)
+_DENSE_GENERATION_B1 = replace(
+    _DENSE_GENERATION_A1,
+    generation_id="snapshot-dense-generation-b1",
+    configuration_digest="2" * 64,
+    corpus_id=_CORPUS_B.corpus_id,
+    corpus_version=_VERSION_B1,
+)
+_PROCESS_TIMEOUT_SECONDS = 15.0
 
 
 class _AcceptingValidator:
@@ -120,45 +163,134 @@ def _publish(
     repository: SQLiteMetadataRepository,
     corpus_version: CorpusVersionId,
     *,
+    corpus_id: CorpusId = _CORPUS_A.corpus_id,
     expected_corpus_version: CorpusVersionId | None,
     memberships: tuple[CorpusDocumentVersionMembership, ...],
-    component: ComponentGenerationReference | None = None,
+    components: tuple[ComponentGenerationReference, ...] = (),
 ) -> tuple[SealCorpusUpdateOutcome, CommitCorpusUpdateOutcome]:
     sealed: object = None
     committed: object = None
     with repository.transaction() as transaction:
         transaction.begin_corpus_update(
-            _CORPUS_A.corpus_id,
+            corpus_id,
             corpus_version,
             expected_corpus_version=expected_corpus_version,
-            required_component_kinds=(component.component_kind,)
-            if component is not None
-            else (),
+            required_component_kinds=tuple(
+                component.component_kind for component in components
+            ),
         )
         for membership in memberships:
             transaction.add_corpus_update_document_membership(
-                _CORPUS_A.corpus_id,
+                corpus_id,
                 corpus_version,
                 membership,
             )
-        if component is not None:
+        for component in components:
             transaction.register_corpus_update_component_generation(
-                _CORPUS_A.corpus_id,
+                corpus_id,
                 corpus_version,
                 component,
                 validator=_AcceptingValidator(),
             )
         sealed = transaction.seal_corpus_update(
-            _CORPUS_A.corpus_id,
+            corpus_id,
             corpus_version,
         )
         committed = transaction.commit_corpus_update(
-            _CORPUS_A.corpus_id,
+            corpus_id,
             corpus_version,
         )
     assert isinstance(sealed, SealCorpusUpdateOutcome)
     assert isinstance(committed, CommitCorpusUpdateOutcome)
     return sealed, committed
+
+
+def _snapshot_identity(
+    snapshot: CorpusSnapshot,
+) -> tuple[str, str, tuple[tuple[str, str], ...]]:
+    return (
+        snapshot.version.corpus_version.as_str(),
+        snapshot.version.manifest_digest,
+        tuple(
+            (
+                membership.document_id.as_str(),
+                membership.document_version_id.as_str(),
+            )
+            for membership in snapshot.manifest.document_memberships
+        ),
+    )
+
+
+def _published_snapshot_identity(
+    sealed: SealCorpusUpdateOutcome,
+    committed: CommitCorpusUpdateOutcome,
+) -> tuple[str, str, tuple[tuple[str, str], ...]]:
+    return (
+        committed.version.corpus_version.as_str(),
+        committed.version.manifest_digest,
+        tuple(
+            (
+                membership.document_id.as_str(),
+                membership.document_version_id.as_str(),
+            )
+            for membership in sealed.manifest.document_memberships
+        ),
+    )
+
+
+def _read_snapshot_across_external_publication(
+    database_path: str,
+    connection: Connection,
+) -> None:
+    repository = _open(Path(database_path))
+    try:
+        with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as original:
+            connection.send(("opened", _snapshot_identity(original)))
+            if not connection.poll(_PROCESS_TIMEOUT_SECONDS):
+                connection.send(("error", "publication signal timed out"))
+                return
+            if connection.recv() != "published":
+                connection.send(("error", "unexpected publication signal"))
+                return
+
+            original_after_publish = _snapshot_identity(original)
+            with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as current:
+                connection.send(
+                    (
+                        "observed",
+                        original_after_publish,
+                        _snapshot_identity(current),
+                    )
+                )
+    except Exception as error:  # pragma: no cover - reported to the parent process
+        connection.send(("error", type(error).__name__))
+    finally:
+        repository.close()
+        connection.close()
+
+
+def _select_active_snapshots_after_restart(
+    database_path: str,
+    connection: Connection,
+) -> None:
+    repository = _open(Path(database_path))
+    try:
+        selected = []
+        for corpus_id in (_CORPUS_A.corpus_id, _CORPUS_B.corpus_id):
+            with repository.open_active_corpus_snapshot(corpus_id) as snapshot:
+                selected.append(
+                    (
+                        corpus_id.as_str(),
+                        snapshot.version.sequence,
+                        _snapshot_identity(snapshot),
+                    )
+                )
+        connection.send(("selected", tuple(selected)))
+    except Exception as error:  # pragma: no cover - reported to the parent process
+        connection.send(("error", type(error).__name__))
+    finally:
+        repository.close()
+        connection.close()
 
 
 def test_active_snapshot_loads_exact_manifest_and_logs_owned_lifecycle(
@@ -172,7 +304,7 @@ def test_active_snapshot_loads_exact_manifest_and_logs_owned_lifecycle(
         _VERSION_A1,
         expected_corpus_version=None,
         memberships=(_FIRST_MEMBERSHIP,),
-        component=_LEXICAL_GENERATION,
+        components=(_LEXICAL_GENERATION,),
     )
     snapshot = repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id)
     try:
@@ -230,6 +362,108 @@ def test_active_snapshot_loads_exact_manifest_and_logs_owned_lifecycle(
         repository.close()
 
 
+def test_snapshots_select_only_matching_committed_component_manifest(
+    tmp_path: Path,
+) -> None:
+    repository = _open(tmp_path / "metadata.sqlite3")
+    _add_catalogue(repository)
+    with repository.transaction() as transaction:
+        transaction.add_corpus_document_version_membership(_FIRST_MEMBERSHIP_B)
+
+    first_seal, _ = _publish(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+        components=(_LEXICAL_GENERATION, _DENSE_GENERATION_A1),
+    )
+    foreign_seal, _ = _publish(
+        repository,
+        _VERSION_B1,
+        corpus_id=_CORPUS_B.corpus_id,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP_B,),
+        components=(_LEXICAL_GENERATION_B1, _DENSE_GENERATION_B1),
+    )
+    staged_seal: SealCorpusUpdateOutcome | None = None
+    with repository.transaction() as transaction:
+        transaction.begin_corpus_update(
+            _CORPUS_A.corpus_id,
+            _VERSION_A2,
+            expected_corpus_version=_VERSION_A1,
+            required_component_kinds=(_LEXICAL, _DENSE),
+        )
+        transaction.add_corpus_update_document_membership(
+            _CORPUS_A.corpus_id,
+            _VERSION_A2,
+            _SECOND_MEMBERSHIP,
+        )
+        for generation in (_LEXICAL_GENERATION_A2, _DENSE_GENERATION_A2):
+            transaction.register_corpus_update_component_generation(
+                _CORPUS_A.corpus_id,
+                _VERSION_A2,
+                generation,
+                validator=_AcceptingValidator(),
+            )
+        result = transaction.seal_corpus_update(
+            _CORPUS_A.corpus_id,
+            _VERSION_A2,
+        )
+        assert isinstance(result, SealCorpusUpdateOutcome)
+        staged_seal = result
+
+    assert staged_seal is not None
+    committed_ids = {
+        generation.generation_id
+        for generation in first_seal.manifest.component_generations
+    }
+    staged_ids = {
+        generation.generation_id
+        for generation in staged_seal.manifest.component_generations
+    }
+    foreign_ids = {
+        generation.generation_id
+        for generation in foreign_seal.manifest.component_generations
+    }
+    assert staged_ids.isdisjoint(foreign_ids)
+    try:
+        with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as original:
+            assert original.version.corpus_version == _VERSION_A1
+            assert original.manifest == first_seal.manifest
+            assert {
+                generation.generation_id
+                for generation in original.manifest.component_generations
+            } == committed_ids
+            assert committed_ids.isdisjoint(staged_ids)
+            assert committed_ids.isdisjoint(foreign_ids)
+
+            with repository.open_active_corpus_snapshot(_CORPUS_B.corpus_id) as foreign:
+                assert foreign.version.corpus_version == _VERSION_B1
+                assert foreign.manifest == foreign_seal.manifest
+
+            committed: CommitCorpusUpdateOutcome | None = None
+            with repository.transaction() as transaction:
+                result = transaction.commit_corpus_update(
+                    _CORPUS_A.corpus_id,
+                    _VERSION_A2,
+                )
+                assert isinstance(result, CommitCorpusUpdateOutcome)
+                committed = result
+
+            assert committed is not None
+            assert original.version.corpus_version == _VERSION_A1
+            assert original.manifest == first_seal.manifest
+            with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as current:
+                assert current.version == committed.version
+                assert current.manifest == staged_seal.manifest
+                assert {
+                    generation.generation_id
+                    for generation in current.manifest.component_generations
+                } == staged_ids
+    finally:
+        repository.close()
+
+
 def test_open_snapshot_stays_pinned_while_writer_advances_active_version(
     tmp_path: Path,
 ) -> None:
@@ -268,6 +502,127 @@ def test_open_snapshot_stays_pinned_while_writer_advances_active_version(
             assert historical.manifest == first_seal.manifest
     finally:
         repository.close()
+
+
+def test_cold_reader_process_stays_pinned_while_parent_process_publishes(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _add_catalogue(repository)
+    first_seal, first_commit = _publish(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    expected_original = _published_snapshot_identity(first_seal, first_commit)
+
+    process_context = get_context("spawn")
+    parent_connection, child_connection = process_context.Pipe()
+    reader = process_context.Process(
+        target=_read_snapshot_across_external_publication,
+        args=(str(database_path), child_connection),
+    )
+    reader.start()
+    child_connection.close()
+    try:
+        assert parent_connection.poll(_PROCESS_TIMEOUT_SECONDS)
+        assert parent_connection.recv() == ("opened", expected_original)
+
+        second_seal, second_commit = _publish(
+            repository,
+            _VERSION_A2,
+            expected_corpus_version=_VERSION_A1,
+            memberships=(_SECOND_MEMBERSHIP,),
+        )
+        expected_current = _published_snapshot_identity(
+            second_seal,
+            second_commit,
+        )
+        parent_connection.send("published")
+
+        assert parent_connection.poll(_PROCESS_TIMEOUT_SECONDS)
+        assert parent_connection.recv() == (
+            "observed",
+            expected_original,
+            expected_current,
+        )
+        reader.join(_PROCESS_TIMEOUT_SECONDS)
+        assert reader.exitcode == 0
+    finally:
+        if reader.is_alive():
+            reader.terminate()
+            reader.join(_PROCESS_TIMEOUT_SECONDS)
+        parent_connection.close()
+        reader.close()
+        repository.close()
+
+
+def test_cold_process_selects_each_corpus_latest_complete_active_snapshot(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _add_catalogue(repository)
+    with repository.transaction() as transaction:
+        transaction.add_corpus_document_version_membership(_FIRST_MEMBERSHIP_B)
+
+    _publish(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    second_seal, second_commit = _publish(
+        repository,
+        _VERSION_A2,
+        expected_corpus_version=_VERSION_A1,
+        memberships=(_SECOND_MEMBERSHIP,),
+    )
+    foreign_seal, foreign_commit = _publish(
+        repository,
+        _VERSION_B1,
+        corpus_id=_CORPUS_B.corpus_id,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP_B,),
+    )
+    repository.close()
+
+    expected = (
+        "selected",
+        (
+            (
+                _CORPUS_A.corpus_id.as_str(),
+                2,
+                _published_snapshot_identity(second_seal, second_commit),
+            ),
+            (
+                _CORPUS_B.corpus_id.as_str(),
+                1,
+                _published_snapshot_identity(foreign_seal, foreign_commit),
+            ),
+        ),
+    )
+    process_context = get_context("spawn")
+    parent_connection, child_connection = process_context.Pipe()
+    reader = process_context.Process(
+        target=_select_active_snapshots_after_restart,
+        args=(str(database_path), child_connection),
+    )
+    reader.start()
+    child_connection.close()
+    try:
+        assert parent_connection.poll(_PROCESS_TIMEOUT_SECONDS)
+        assert parent_connection.recv() == expected
+        reader.join(_PROCESS_TIMEOUT_SECONDS)
+        assert reader.exitcode == 0
+    finally:
+        if reader.is_alive():
+            reader.terminate()
+            reader.join(_PROCESS_TIMEOUT_SECONDS)
+        parent_connection.close()
+        reader.close()
 
 
 @pytest.mark.parametrize(
