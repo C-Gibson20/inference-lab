@@ -11,9 +11,9 @@ from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship
 from inference_lab.provenance.resolution import (
     ExternalIdentifierAssertion,
+    IdentityIdCollisionError,
     IdentityResolutionOutcome,
     IdentityResolutionRequest,
-    InvalidResolutionError,
     ResolutionReason,
 )
 from inference_lab.provenance.values import (
@@ -75,7 +75,7 @@ def _allocate_document_id(
     if not isinstance(document_id, DocumentId):
         raise TypeError("allocator.new_document_id() must return a DocumentId.")
     if document_id in existing_document_ids:
-        raise InvalidResolutionError("allocator returned an existing DocumentId.")
+        raise IdentityIdCollisionError("allocator returned an existing DocumentId.")
     return document_id
 
 
@@ -93,7 +93,7 @@ def _new_version(
             "allocator.new_document_version_id() must return a DocumentVersionId."
         )
     if version_id in context.existing_version_ids:
-        raise InvalidResolutionError(
+        raise IdentityIdCollisionError(
             "allocator returned an existing DocumentVersionId."
         )
     return DocumentVersion(

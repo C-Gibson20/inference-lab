@@ -65,6 +65,15 @@ from inference_lab.ingest.hashing import (
     StableReadFileSystem,
     hash_source_candidate,
 )
+from inference_lab.ingest.identity_application import (
+    IdentityApplicationResult,
+    apply_discovery_identity_outcome,
+)
+from inference_lab.ingest.identity_persistence import (
+    IdentityPersistenceUnit,
+    persist_discovered_source_identities,
+    persist_discovered_source_identity,
+)
 from inference_lab.ingest.identity_resolution import (
     DiscoveryIdentityIdAllocator,
     UuidDiscoveryIdentityIdAllocator,
@@ -135,6 +144,8 @@ __all__ = [
     "FileIdentityHint",
     "FileStatEvidence",
     "HiddenEntryPolicy",
+    "IdentityApplicationResult",
+    "IdentityPersistenceUnit",
     "LocalStableReadFileSystem",
     "LocalTraversalFileSystem",
     "NestedMountPolicy",
@@ -177,6 +188,7 @@ __all__ = [
     "UuidDiscoveryIdentityIdAllocator",
     "UuidSourceObservationIdAllocator",
     "VerifiedSourceSnapshot",
+    "apply_discovery_identity_outcome",
     "canonical_path_key",
     "classify_source_candidate",
     "classify_source_inventory",
@@ -187,6 +199,8 @@ __all__ = [
     "inventory_local_sources",
     "normalise_source_text",
     "parsed_document_payload",
+    "persist_discovered_source_identities",
+    "persist_discovered_source_identity",
     "prepare_text",
     "resolve_discovered_source_identity",
     "resolve_source_observation",
