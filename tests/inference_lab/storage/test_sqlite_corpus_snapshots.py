@@ -1,6 +1,8 @@
 """Tests for dedicated version-pinned SQLite corpus snapshot lifecycles."""
 
 from datetime import UTC, datetime
+from multiprocessing import get_context
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import cast
 
@@ -79,6 +81,7 @@ _LEXICAL_GENERATION = ComponentGenerationReference(
     corpus_version=_VERSION_A1,
     state=ComponentGenerationState.PREPARING,
 )
+_PROCESS_TIMEOUT_SECONDS = 15.0
 
 
 class _AcceptingValidator:
@@ -159,6 +162,53 @@ def _publish(
     assert isinstance(sealed, SealCorpusUpdateOutcome)
     assert isinstance(committed, CommitCorpusUpdateOutcome)
     return sealed, committed
+
+
+def _snapshot_identity(
+    snapshot: CorpusSnapshot,
+) -> tuple[str, str, tuple[tuple[str, str], ...]]:
+    return (
+        snapshot.version.corpus_version.as_str(),
+        snapshot.version.manifest_digest,
+        tuple(
+            (
+                membership.document_id.as_str(),
+                membership.document_version_id.as_str(),
+            )
+            for membership in snapshot.manifest.document_memberships
+        ),
+    )
+
+
+def _read_snapshot_across_external_publication(
+    database_path: str,
+    connection: Connection,
+) -> None:
+    repository = _open(Path(database_path))
+    try:
+        with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as original:
+            connection.send(("opened", _snapshot_identity(original)))
+            if not connection.poll(_PROCESS_TIMEOUT_SECONDS):
+                connection.send(("error", "publication signal timed out"))
+                return
+            if connection.recv() != "published":
+                connection.send(("error", "unexpected publication signal"))
+                return
+
+            original_after_publish = _snapshot_identity(original)
+            with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as current:
+                connection.send(
+                    (
+                        "observed",
+                        original_after_publish,
+                        _snapshot_identity(current),
+                    )
+                )
+    except Exception as error:  # pragma: no cover - reported to the parent process
+        connection.send(("error", type(error).__name__))
+    finally:
+        repository.close()
+        connection.close()
 
 
 def test_active_snapshot_loads_exact_manifest_and_logs_owned_lifecycle(
@@ -267,6 +317,78 @@ def test_open_snapshot_stays_pinned_while_writer_advances_active_version(
             assert historical.version == first_commit.version
             assert historical.manifest == first_seal.manifest
     finally:
+        repository.close()
+
+
+def test_cold_reader_process_stays_pinned_while_parent_process_publishes(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _add_catalogue(repository)
+    first_seal, first_commit = _publish(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    expected_original = (
+        first_commit.version.corpus_version.as_str(),
+        first_commit.version.manifest_digest,
+        tuple(
+            (
+                membership.document_id.as_str(),
+                membership.document_version_id.as_str(),
+            )
+            for membership in first_seal.manifest.document_memberships
+        ),
+    )
+
+    process_context = get_context("spawn")
+    parent_connection, child_connection = process_context.Pipe()
+    reader = process_context.Process(
+        target=_read_snapshot_across_external_publication,
+        args=(str(database_path), child_connection),
+    )
+    reader.start()
+    child_connection.close()
+    try:
+        assert parent_connection.poll(_PROCESS_TIMEOUT_SECONDS)
+        assert parent_connection.recv() == ("opened", expected_original)
+
+        second_seal, second_commit = _publish(
+            repository,
+            _VERSION_A2,
+            expected_corpus_version=_VERSION_A1,
+            memberships=(_SECOND_MEMBERSHIP,),
+        )
+        expected_current = (
+            second_commit.version.corpus_version.as_str(),
+            second_commit.version.manifest_digest,
+            tuple(
+                (
+                    membership.document_id.as_str(),
+                    membership.document_version_id.as_str(),
+                )
+                for membership in second_seal.manifest.document_memberships
+            ),
+        )
+        parent_connection.send("published")
+
+        assert parent_connection.poll(_PROCESS_TIMEOUT_SECONDS)
+        assert parent_connection.recv() == (
+            "observed",
+            expected_original,
+            expected_current,
+        )
+        reader.join(_PROCESS_TIMEOUT_SECONDS)
+        assert reader.exitcode == 0
+    finally:
+        if reader.is_alive():
+            reader.terminate()
+            reader.join(_PROCESS_TIMEOUT_SECONDS)
+        parent_connection.close()
+        reader.close()
         repository.close()
 
 
