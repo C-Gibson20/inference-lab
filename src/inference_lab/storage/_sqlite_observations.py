@@ -117,6 +117,49 @@ def get_source_observation(
         ) from None
 
 
+def find_source_observations_by_document_version(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    document_version_id: DocumentVersionId,
+) -> tuple[SourceObservationState, ...]:
+    """Return current observations of one version in canonical ID order."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if not isinstance(document_version_id, DocumentVersionId):
+        raise TypeError("document_version_id must be a DocumentVersionId.")
+    try:
+        rows = connection.execute(
+            """SELECT source_observation_id
+            FROM source_observations
+            WHERE corpus_id = ? AND current_document_version_id = ?
+            ORDER BY source_observation_id""",
+            (corpus_id.as_str(), document_version_id.as_str()),
+        ).fetchall()
+        observations: list[SourceObservationState] = []
+        for row in rows:
+            source_observation_id = SourceObservationId.from_str(
+                row["source_observation_id"]
+            )
+            observation = get_source_observation(
+                connection,
+                corpus_id,
+                source_observation_id,
+            )
+            if observation is None:
+                raise CorruptStorageError()
+            observations.append(observation)
+        return tuple(observations)
+    except CorruptStorageError:
+        raise
+    except (TypeError, ValueError, KeyError, IndexError):
+        raise CorruptStorageError() from None
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
 def add_source_observation(
     connection: sqlite3.Connection,
     state: SourceObservationState,

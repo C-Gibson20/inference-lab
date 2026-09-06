@@ -143,6 +143,20 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
         "source_observation_id",
     ),
     (
+        "source-by-version-corpus",
+        lambda owner: owner.find_source_observations_by_document_version(
+            _invalid(CorpusId), _VERSION_ID
+        ),
+        "corpus_id",
+    ),
+    (
+        "source-by-version-version",
+        lambda owner: owner.find_source_observations_by_document_version(
+            _CORPUS_ID, _invalid(DocumentVersionId)
+        ),
+        "document_version_id",
+    ),
+    (
         "locator-current-corpus",
         lambda owner: owner.get_source_locator(_invalid(CorpusId), _SOURCE_ID),
         "corpus_id",

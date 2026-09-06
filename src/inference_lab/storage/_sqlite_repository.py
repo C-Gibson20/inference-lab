@@ -56,6 +56,7 @@ from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_migration_execution import AppliedAtFactory
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_observations import (
+    find_source_observations_by_document_version,
     get_source_observation,
     list_source_observation_history,
 )
@@ -236,6 +237,18 @@ class SQLiteMetadataRepository:
             self._connection_or_raise(),
             corpus_id,
             source_observation_id,
+        )
+
+    def find_source_observations_by_document_version(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return current observations of one version in canonical ID order."""
+        return find_source_observations_by_document_version(
+            self._connection_or_raise(),
+            corpus_id,
+            document_version_id,
         )
 
     def get_source_locator(

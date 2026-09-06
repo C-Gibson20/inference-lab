@@ -101,6 +101,14 @@ class MetadataReader(Protocol):
         """Return an observed source's append-only state history."""
         ...
 
+    def find_source_observations_by_document_version(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return current observations of one version in canonical ID order."""
+        ...
+
     def get_source_locator(
         self,
         corpus_id: CorpusId,
