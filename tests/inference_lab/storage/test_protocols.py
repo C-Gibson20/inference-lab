@@ -29,13 +29,17 @@ from inference_lab.provenance import (
 from inference_lab.storage import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
+    ComponentGenerationReference,
+    ComponentGenerationValidator,
     ComponentKind,
     CorpusUpdate,
     MetadataRepository,
     MetadataTransaction,
+    NoCorpusChangeOutcome,
     ParsedRepresentation,
     ParseOutcome,
     ResolvedSourceSpan,
+    SealCorpusUpdateOutcome,
     SourceArtefact,
 )
 
@@ -78,6 +82,34 @@ class StructuralTransaction:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> AbortCorpusUpdateOutcome:
+        raise NotImplementedError
+
+    def register_corpus_update_component_generation(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        generation: ComponentGenerationReference,
+        *,
+        validator: ComponentGenerationValidator,
+    ) -> ComponentGenerationReference:
+        raise NotImplementedError
+
+    def replace_corpus_update_component_generation(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_generation: ComponentGenerationReference,
+        replacement_generation: ComponentGenerationReference,
+        *,
+        validator: ComponentGenerationValidator,
+    ) -> ComponentGenerationReference:
+        raise NotImplementedError
+
+    def seal_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
         raise NotImplementedError
 
     def add_corpus_update_document_membership(
@@ -184,6 +216,13 @@ class StructuralTransaction:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
     ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        return ()
+
+    def list_corpus_update_component_generations(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[ComponentGenerationReference, ...]:
         return ()
 
     def get_corpus_document_version_membership(
@@ -320,6 +359,18 @@ class StructuralTransaction:
         return ()
 
 
+class StructuralComponentValidator:
+    """Complete structural component validator without protocol inheritance."""
+
+    def validate_component_generation(
+        self,
+        generation: ComponentGenerationReference,
+        document_memberships: tuple[CorpusDocumentVersionMembership, ...],
+    ) -> bool:
+        del generation, document_memberships
+        return True
+
+
 class StructuralRepository(StructuralTransaction):
     """Complete structural repository without protocol inheritance."""
 
@@ -353,6 +404,7 @@ def test_storage_protocols_are_structural() -> None:
 
     assert isinstance(transaction, MetadataTransaction)
     assert isinstance(repository, MetadataRepository)
+    assert isinstance(StructuralComponentValidator(), ComponentGenerationValidator)
 
 
 def test_reader_without_writes_is_not_a_transaction() -> None:
@@ -362,6 +414,9 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_corpus_update = StructuralTransaction.get_corpus_update
         list_corpus_update_document_memberships = (
             StructuralTransaction.list_corpus_update_document_memberships
+        )
+        list_corpus_update_component_generations = (
+            StructuralTransaction.list_corpus_update_component_generations
         )
         get_corpus_document_version_membership = (
             StructuralTransaction.get_corpus_document_version_membership
@@ -422,6 +477,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "CommitCorpusUpdateOutcome",
         "ComponentGenerationReference",
         "ComponentGenerationState",
+        "ComponentGenerationValidator",
         "ComponentKind",
         "ContentOrigin",
         "CoordinateOrigin",

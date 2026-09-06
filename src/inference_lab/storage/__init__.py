@@ -43,6 +43,7 @@ from inference_lab.storage.parsed_serialisation import (
 )
 from inference_lab.storage.producers import ProducerIdentity
 from inference_lab.storage.protocols import (
+    ComponentGenerationValidator,
     MetadataReader,
     MetadataRepository,
     MetadataTransaction,
@@ -92,6 +93,7 @@ __all__ = [
     "CommitCorpusUpdateOutcome",
     "ComponentGenerationReference",
     "ComponentGenerationState",
+    "ComponentGenerationValidator",
     "ComponentKind",
     "ContentOrigin",
     "CoordinateOrigin",
