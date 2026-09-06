@@ -11,6 +11,8 @@ operational logs remain local in deployment.
   application.
 - [Configuration reference](configuration.md): typed settings, defaults, and
   environment overrides.
+- [Source availability](source-availability.md): managed-original integrity,
+  backup responsibility, and failure handling.
 - [Running queries](querying.md): current query status and the operator
   workflow as serving capabilities land.
 - [Corpus-version operations](corpus-versions.md): staging, atomic publication,

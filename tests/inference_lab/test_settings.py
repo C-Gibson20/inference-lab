@@ -27,6 +27,7 @@ def isolated_settings_environment(
         [storage]
         index_dir = "/data/indexes"
         metadata_db_path = "/data/metadata.db"
+        source_dir = "/source-data"
 
         [logging]
         level = "DEBUG"
@@ -86,6 +87,31 @@ def test_toml_configuration_loads() -> None:
 
     assert configured.models.generator_path == Path("/models/qwen3-27b-q4")
     assert configured.runtime.vram_budget_gb == 24
+    assert configured.storage.metadata_db_path == Path("/data/metadata.db")
+    assert configured.storage.source_dir == Path("/source-data")
+
+
+def test_explicit_source_directory_overrides_environment_and_toml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STORAGE__SOURCE_DIR", "/environment/source-data")
+
+    configured = Settings(  # pyright: ignore[reportCallIssue]
+        storage={"source_dir": "/tmp/source-data"}
+    )
+
+    assert configured.storage.source_dir == Path("/tmp/source-data")
+    assert configured.storage.index_dir == Path("/data/indexes")
+
+
+def test_source_directory_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STORAGE__SOURCE_DIR", "/mnt/source-data")
+
+    configured = get_settings()
+
+    assert configured.storage.source_dir == Path("/mnt/source-data")
     assert configured.storage.metadata_db_path == Path("/data/metadata.db")
 
 
@@ -159,6 +185,7 @@ def test_non_positive_runtime_setting_is_rejected(field: str, value: int) -> Non
         ("models", "generator_path"),
         ("storage", "index_dir"),
         ("storage", "metadata_db_path"),
+        ("storage", "source_dir"),
     ],
 )
 def test_empty_path_is_rejected(section: str, field: str) -> None:
@@ -173,6 +200,41 @@ def test_non_local_model_path_shapes_are_rejected(
         Settings(  # pyright: ignore[reportCallIssue]
             models={"generator_path": rejected_local_path_shape}
         )
+
+
+def test_non_local_source_directory_shapes_are_rejected(
+    rejected_local_path_shape: str | Path,
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(  # pyright: ignore[reportCallIssue]
+            storage={"source_dir": rejected_local_path_shape}
+        )
+
+
+def test_missing_source_directory_is_rejected(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+        [models]
+        embedder_path = "/models/embedder"
+        reranker_path = "/models/reranker"
+        generator_path = "/models/generator"
+
+        [runtime]
+        vram_budget_gb = 24
+
+        [storage]
+        index_dir = "/data/indexes"
+        metadata_db_path = "/data/metadata.db"
+        """
+    )
+
+    class TestSettings(Settings):
+        model_config = Settings.model_config.copy()
+        model_config["toml_file"] = config_file
+
+    with pytest.raises(ValidationError, match="source_dir"):
+        _load_settings(TestSettings)
 
 
 def test_unknown_nested_setting_is_rejected() -> None:
@@ -201,6 +263,7 @@ def test_unknown_nested_toml_setting_is_rejected(tmp_path: Path) -> None:
         [storage]
         index_dir = "/data/indexes"
         metadata_db_path = "/data/metadata.db"
+        source_dir = "/source-data"
         backup_dir = "/data/backups"
         """
     )
@@ -228,6 +291,7 @@ def test_logging_settings_default(tmp_path: Path) -> None:
         [storage]
         index_dir = "/data/indexes"
         metadata_db_path = "/data/metadata.db"
+        source_dir = "/source-data"
         """
     )
 
@@ -334,6 +398,7 @@ def test_ingest_size_setting_has_safe_default(tmp_path: Path) -> None:
         [storage]
         index_dir = "/data/indexes"
         metadata_db_path = "/data/metadata.db"
+        source_dir = "/source-data"
         """
     )
 
