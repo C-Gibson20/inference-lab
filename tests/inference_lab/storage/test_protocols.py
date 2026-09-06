@@ -10,6 +10,7 @@ from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -26,6 +27,10 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 from inference_lab.storage import (
+    AbortCorpusUpdateOutcome,
+    BeginCorpusUpdateOutcome,
+    ComponentKind,
+    CorpusUpdate,
     MetadataRepository,
     MetadataTransaction,
     ParsedRepresentation,
@@ -56,6 +61,49 @@ class StructuralTransaction:
         self, corpus_id: CorpusId, display_name: str
     ) -> CorpusMetadata:
         raise NotImplementedError
+
+    def begin_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        *,
+        expected_corpus_version: CorpusVersionId | None,
+        required_component_kinds: tuple[ComponentKind, ...] = (),
+        restores_corpus_version: CorpusVersionId | None = None,
+    ) -> BeginCorpusUpdateOutcome:
+        raise NotImplementedError
+
+    def abort_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> AbortCorpusUpdateOutcome:
+        raise NotImplementedError
+
+    def add_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        pass
+
+    def replace_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_membership: CorpusDocumentVersionMembership,
+        replacement_membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        pass
+
+    def remove_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        pass
 
     def add_corpus_document_version_membership(
         self, membership: CorpusDocumentVersionMembership
@@ -122,6 +170,20 @@ class StructuralTransaction:
         return None
 
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
+        return ()
+
+    def get_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusUpdate | None:
+        return None
+
+    def list_corpus_update_document_memberships(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
         return ()
 
     def get_corpus_document_version_membership(
@@ -297,6 +359,10 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
     class ReaderOnly:
         get_corpus = StructuralTransaction.get_corpus
         list_corpora = StructuralTransaction.list_corpora
+        get_corpus_update = StructuralTransaction.get_corpus_update
+        list_corpus_update_document_memberships = (
+            StructuralTransaction.list_corpus_update_document_memberships
+        )
         get_corpus_document_version_membership = (
             StructuralTransaction.get_corpus_document_version_membership
         )

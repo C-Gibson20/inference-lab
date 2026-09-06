@@ -149,7 +149,7 @@ class ComponentGenerationReference:
         return self.component_kind.as_str(), self.generation_id
 
 
-def _validate_component_kinds(kinds: object) -> tuple[ComponentKind, ...]:
+def canonicalise_component_kinds(kinds: object) -> tuple[ComponentKind, ...]:
     """Validate a unique canonical tuple of required component kinds."""
     if not isinstance(kinds, tuple):
         raise TypeError("required_component_kinds must be a tuple.")
@@ -163,6 +163,26 @@ def _validate_component_kinds(kinds: object) -> tuple[ComponentKind, ...]:
             "required_component_kinds must not contain duplicates."
         )
     return tuple(sorted(kinds, key=ComponentKind.as_str))
+
+
+def validate_corpus_update_identity(
+    corpus_version: CorpusVersionId,
+    expected_corpus_version: CorpusVersionId | None,
+    restores_corpus_version: CorpusVersionId | None,
+) -> None:
+    """Validate the relationships between one proposal and its history."""
+    if expected_corpus_version == corpus_version:
+        raise InvalidCorpusVersionContractError(
+            "a corpus update cannot propose its expected active version."
+        )
+    if restores_corpus_version == corpus_version:
+        raise InvalidCorpusVersionContractError(
+            "an update cannot restore its own proposed version."
+        )
+    if restores_corpus_version is not None and expected_corpus_version is None:
+        raise InvalidCorpusVersionContractError(
+            "a rollback update requires an expected active version."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,7 +330,7 @@ class CorpusVersionManifest:
         required_component_kinds: tuple[ComponentKind, ...],
     ) -> bool:
         """Return whether the manifest contains exactly the declared kinds."""
-        canonical_required = _validate_component_kinds(required_component_kinds)
+        canonical_required = canonicalise_component_kinds(required_component_kinds)
         actual = tuple(item.component_kind for item in self.component_generations)
         return actual == canonical_required
 
@@ -353,17 +373,18 @@ class CorpusUpdate:
             raise TypeError(
                 "expected_corpus_version must be a CorpusVersionId or None."
             )
-        if self.expected_corpus_version == self.corpus_version:
-            raise InvalidCorpusVersionContractError(
-                "a corpus update cannot propose its expected active version."
-            )
-        canonical_kinds = _validate_component_kinds(self.required_component_kinds)
+        self._validate_restore_target()
+        validate_corpus_update_identity(
+            self.corpus_version,
+            self.expected_corpus_version,
+            self.restores_corpus_version,
+        )
+        canonical_kinds = canonicalise_component_kinds(self.required_component_kinds)
         object.__setattr__(self, "required_component_kinds", canonical_kinds)
         if not isinstance(self.state, CorpusUpdateState):
             raise TypeError("state must be a CorpusUpdateState.")
         _validate_utc_datetime(self.created_at, "created_at")
         self._validate_manifest_digest()
-        self._validate_restore_target()
 
     def _validate_manifest_digest(self) -> None:
         """Require a sealed digest exactly when lifecycle state permits one."""
@@ -388,17 +409,6 @@ class CorpusUpdate:
         ):
             raise TypeError(
                 "restores_corpus_version must be a CorpusVersionId or None."
-            )
-        if self.restores_corpus_version == self.corpus_version:
-            raise InvalidCorpusVersionContractError(
-                "an update cannot restore its own proposed version."
-            )
-        if (
-            self.restores_corpus_version is not None
-            and self.expected_corpus_version is None
-        ):
-            raise InvalidCorpusVersionContractError(
-                "a rollback update requires an expected active version."
             )
 
 

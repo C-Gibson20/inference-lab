@@ -15,6 +15,7 @@ from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -48,6 +49,11 @@ from inference_lab.storage._sqlite_core import (
 from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
+)
+from inference_lab.storage._sqlite_corpus_updates import (
+    CreatedAtFactory,
+    get_corpus_update,
+    list_corpus_update_document_memberships,
 )
 from inference_lab.storage._sqlite_identifier_assertions import (
     list_external_identifier_assertions,
@@ -102,6 +108,7 @@ from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
+from inference_lab.storage.versioning import CorpusUpdate
 
 DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES: Final = 10_000
 
@@ -125,12 +132,15 @@ class SQLiteMetadataRepository:
         connection: sqlite3.Connection,
         migrations: tuple[MigrationDefinition, ...],
         *,
+        created_at_factory: CreatedAtFactory = utc_now,
         source_blob_store: ManagedSourceBlobStore | None = None,
     ) -> None:
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("connection must be a sqlite3.Connection.")
         if not isinstance(migrations, tuple):
             raise TypeError("migrations must be a tuple.")
+        if not callable(created_at_factory):
+            raise TypeError("created_at_factory must be callable.")
         if source_blob_store is not None and not isinstance(
             source_blob_store, ManagedSourceBlobStore
         ):
@@ -139,6 +149,7 @@ class SQLiteMetadataRepository:
             )
         self._connection: sqlite3.Connection | None = connection
         self._migrations = migrations
+        self._created_at_factory = created_at_factory
         self._source_blob_store = source_blob_store
         self._transaction_active = False
 
@@ -151,12 +162,15 @@ class SQLiteMetadataRepository:
         busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
         migrations: tuple[MigrationDefinition, ...] = MIGRATIONS,
         applied_at_factory: AppliedAtFactory = utc_now,
+        created_at_factory: CreatedAtFactory = utc_now,
         source_dir: Path | None = None,
         source_reconciliation_max_entries: int = (
             DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES
         ),
     ) -> Self:
         """Open a validated repository under the explicit schema policy."""
+        if not callable(created_at_factory):
+            raise TypeError("created_at_factory must be callable.")
         _validate_source_reconciliation_max_entries(
             source_reconciliation_max_entries,
             parameter_name="source_reconciliation_max_entries",
@@ -174,6 +188,7 @@ class SQLiteMetadataRepository:
         repository = cls(
             connection,
             migrations,
+            created_at_factory=created_at_factory,
             source_blob_store=source_blob_store,
         )
         if source_blob_store is not None:
@@ -206,6 +221,30 @@ class SQLiteMetadataRepository:
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora in canonical identifier order."""
         return list_corpora(self._connection_or_raise())
+
+    def get_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusUpdate | None:
+        """Return one owned durable corpus update, or ``None``."""
+        return get_corpus_update(
+            self._connection_or_raise(),
+            corpus_id,
+            corpus_version,
+        )
+
+    def list_corpus_update_document_memberships(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return deterministic proposed membership for one update."""
+        return list_corpus_update_document_memberships(
+            self._connection_or_raise(),
+            corpus_id,
+            corpus_version,
+        )
 
     def get_corpus_document_version_membership(
         self,

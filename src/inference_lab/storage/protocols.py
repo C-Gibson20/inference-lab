@@ -9,6 +9,7 @@ from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -24,10 +25,15 @@ from inference_lab.provenance import (
     SourceObservationState,
     SourceSpanId,
 )
+from inference_lab.storage.outcomes import (
+    AbortCorpusUpdateOutcome,
+    BeginCorpusUpdateOutcome,
+)
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
+from inference_lab.storage.versioning import ComponentKind, CorpusUpdate
 
 
 class MetadataReader(Protocol):
@@ -39,6 +45,22 @@ class MetadataReader(Protocol):
 
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora in canonical identifier order."""
+        ...
+
+    def get_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusUpdate | None:
+        """Return one owned durable corpus update, or ``None``."""
+        ...
+
+    def list_corpus_update_document_memberships(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return deterministic proposed membership for one update."""
         ...
 
     def get_corpus_document_version_membership(
@@ -212,6 +234,54 @@ class MetadataWriter(Protocol):
         display_name: str,
     ) -> CorpusMetadata:
         """Replace a corpus display name without changing its identity."""
+        ...
+
+    def begin_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        *,
+        expected_corpus_version: CorpusVersionId | None,
+        required_component_kinds: tuple[ComponentKind, ...] = (),
+        restores_corpus_version: CorpusVersionId | None = None,
+    ) -> BeginCorpusUpdateOutcome:
+        """Create and seed a preparing update or return its exact replay."""
+        ...
+
+    def abort_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> AbortCorpusUpdateOutcome:
+        """Abort a preparing update or return its exact abort replay."""
+        ...
+
+    def add_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Add a catalogue member to a preparing update or accept replay."""
+        ...
+
+    def replace_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_membership: CorpusDocumentVersionMembership,
+        replacement_membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Replace one explicitly agreeing logical-document membership."""
+        ...
+
+    def remove_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Remove one exact proposed membership or accept replay."""
         ...
 
     def add_corpus_document_version_membership(
