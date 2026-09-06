@@ -169,6 +169,11 @@ def test_normalisation_preserves_whitespace() -> None:
     assert normalise_source_text("  A \n\n B\t") == "  A \n\n B\t"
 
 
+def test_normalisation_rejects_non_text_input() -> None:
+    with pytest.raises(TypeError, match="source_text"):
+        normalise_source_text(b"text")  # type: ignore[arg-type]
+
+
 def test_malformed_source_bytes_are_rejected() -> None:
     source = ParserInput(
         document_id=DocumentId.generate(),

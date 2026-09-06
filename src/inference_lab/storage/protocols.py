@@ -1,5 +1,6 @@
 """Storage-neutral contracts for persistent corpus identity metadata."""
 
+from collections.abc import Iterable, Iterator
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
@@ -18,8 +19,11 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    KnownSourceSpan,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
@@ -27,6 +31,10 @@ from inference_lab.storage.outcomes import (
     NoCorpusChangeOutcome,
     SealCorpusUpdateOutcome,
 )
+from inference_lab.storage.parse_records import ParseOutcome
+from inference_lab.storage.parsed_records import ParsedRepresentation
+from inference_lab.storage.source_locations import ResolvedSourceSpan
+from inference_lab.storage.source_records import SourceArtefact
 from inference_lab.storage.versioning import (
     ComponentGenerationReference,
     ComponentKind,
@@ -117,6 +125,70 @@ class MetadataReader(Protocol):
         self, document_id: DocumentId
     ) -> tuple[DocumentVersion, ...]:
         """Return a document's versions in canonical identifier order."""
+        ...
+
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        """Return corpus-visible managed-source metadata, or ``None``."""
+        ...
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified corpus-visible source bytes, or ``None``."""
+        ...
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return fully verified, detached source chunks, or ``None``."""
+        ...
+
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
+        """Return a complete corpus-visible parser outcome, or ``None``."""
+        ...
+
+    def get_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        """Return a complete corpus-visible parsed record, or ``None``."""
+        ...
+
+    def list_parsed_representations(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ParsedRepresentation, ...]:
+        """Return a version's parsed records in canonical identity order."""
+        ...
+
+    def resolve_source_span(
+        self,
+        corpus_id: CorpusId,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
+        """Return a corpus-visible span and its coordinate descriptor."""
+        ...
+
+    def list_known_source_spans(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[KnownSourceSpan, ...]:
+        """Return a version's validated PROV-03 source-span catalogue."""
         ...
 
     def find_document_versions_by_content_hash(
@@ -289,6 +361,30 @@ class MetadataWriter(Protocol):
         """Create a version and its ordered external identifiers atomically."""
         ...
 
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
+        """Add managed-source metadata after proving corpus membership."""
+        ...
+
+    def add_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        representation: ParsedRepresentation,
+    ) -> None:
+        """Add one complete parsed aggregate after proving corpus membership."""
+        ...
+
+    def add_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        outcome: ParseOutcome,
+    ) -> None:
+        """Add one complete parser outcome after proving corpus membership."""
+        ...
+
     def add_source_observation(self, state: SourceObservationState) -> None:
         """Create an observed source at revision one or accept exact replay."""
         ...
@@ -354,6 +450,23 @@ class MetadataRepository(MetadataReader, Protocol):
 
     def transaction(self) -> MetadataTransaction:
         """Return a new transaction that starts on context entry."""
+        ...
+
+    def reconcile_source_storage(self, *, max_entries: int) -> None:
+        """Clean abandoned staging and report a bounded final-blob inventory."""
+        ...
+
+    def persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+        parse_outcome: ParseOutcome | None = None,
+        parsed_representation: ParsedRepresentation | None = None,
+    ) -> None:
+        """Publish bytes, source metadata, and optional parse records safely."""
         ...
 
     def close(self) -> None:
