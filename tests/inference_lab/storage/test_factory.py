@@ -23,6 +23,7 @@ def test_factory_opens_configured_repository_across_restart(tmp_path: Path) -> N
     config = StorageConfig(
         index_dir=tmp_path / "indexes",
         metadata_db_path=tmp_path / "metadata.sqlite3",
+        source_dir=tmp_path / "source-data",
     )
 
     first = open_metadata_repository(
