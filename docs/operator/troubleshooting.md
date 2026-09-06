@@ -31,6 +31,26 @@ was ingested, the persistent index is available, and the documented query
 command is being run from the correct deployment directory. An empty result is
 not by itself evidence of a failed operation.
 
+## A local source was skipped or failed
+
+Check the bounded `error_category`, `failure_stage`, and `retryable` fields in
+the structured logs. Common policy outcomes include unsupported or unknown
+format, symbolic link, special file, nested mount, oversized source, unstable
+read, ambiguous observation, and exhausted write contention. Paths are omitted
+from logs; use the private in-process result returned to the integrating local
+workflow to associate a source ordinal with its locator.
+
+An empty directory is a successful result. PDF files are currently recognised
+but unsupported, and only `.txt` files have a parser capability. Discovery does
+not follow links. Move detection is intentionally conservative when a scan is
+incomplete, the prior path is still live, or more than one candidate matches.
+See [local source discovery](source-discovery.md) for the complete policy.
+
+If `source_changed_during_read` occurs, stop the writer that is modifying the
+file and retry discovery from a stable snapshot. If a later managed-source copy
+cannot revalidate a discovery snapshot, rediscover the source rather than
+reusing the earlier identity decision.
+
 ## Logs need inspection
 
 Logs are written to stdout. Use `logging.format = "console"` for interactive
