@@ -52,6 +52,7 @@ from inference_lab.ingest.discovery_results import (
     DiscoveryResult,
     DiscoveryStatus,
 )
+from inference_lab.ingest.discovery_summary import build_discovery_result
 from inference_lab.ingest.errors import (
     ParserDecodeError,
     ParserFailure,
@@ -189,6 +190,7 @@ __all__ = [
     "UuidSourceObservationIdAllocator",
     "VerifiedSourceSnapshot",
     "apply_discovery_identity_outcome",
+    "build_discovery_result",
     "canonical_path_key",
     "classify_source_candidate",
     "classify_source_inventory",
