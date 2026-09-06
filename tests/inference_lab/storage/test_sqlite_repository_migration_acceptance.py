@@ -21,11 +21,29 @@ from inference_lab.provenance import (
     ExternalIdentifier,
     HashAlgorithm,
 )
-from inference_lab.storage import MigrationRequiredError, StorageMigrationError
+from inference_lab.storage import (
+    MetadataRepository,
+    MigrationRequiredError,
+    ParseOutcome,
+    ParseStatus,
+    SourceArtefact,
+    StorageMigrationError,
+    open_metadata_repository,
+)
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+from .source_fixtures import (  # noqa: TID252
+    DOCUMENT_ID,
+    DOCUMENT_VERSION_ID,
+    PARSE_ID,
+    PARSED_RECORD_ID,
+    PARSER,
+    SOURCE_BYTES,
+    SOURCE_HASH,
+    parsed_representation,
+)
 
 _CORPUS_ID = CorpusId("01014415-1989-449f-8824-cb13e418d92f")
 _FAMILY_ID = DocumentFamilyId("6a5a72ce-e82f-4168-adb4-36c090dd19f0")
@@ -53,6 +71,30 @@ _MEMBERSHIP = DocumentFamilyMembership(
     _FAMILY_ID,
     _FIRST_DOCUMENT_ID,
     _FIRST_VERSION_ID,
+)
+_SOURCE_VERSION = DocumentVersion(DOCUMENT_VERSION_ID, DOCUMENT_ID, SOURCE_HASH)
+_SOURCE_MEMBERSHIP = CorpusDocumentVersionMembership(
+    _CORPUS_ID,
+    DOCUMENT_ID,
+    DOCUMENT_VERSION_ID,
+)
+_SOURCE_ARTEFACT = SourceArtefact(
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    content_hash=SOURCE_HASH,
+    byte_count=len(SOURCE_BYTES),
+    media_type="application/pdf",
+    storage_key=f"sha256/{SOURCE_HASH.digest[:2]}/{SOURCE_HASH.digest}",
+)
+_SOURCE_OUTCOME = ParseOutcome(
+    parse_id=PARSE_ID,
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    status=ParseStatus.SUCCEEDED,
+    parser=PARSER,
+    normalisation_version="1.0.0",
+    parsed_record_id=PARSED_RECORD_ID,
+    failures=(),
 )
 
 
@@ -141,20 +183,31 @@ def _database_snapshot(path: Path) -> tuple[object, ...]:
         connection.close()
 
 
-def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
+def _assert_complete_graph(
+    repository: MetadataRepository,
+    *,
+    additional_memberships: tuple[CorpusDocumentVersionMembership, ...] = (),
+) -> None:
     assert repository.get_document_family(_FAMILY_ID) == _FAMILY_ID
     assert repository.get_document(_FIRST_DOCUMENT_ID) == DocumentIdentity(
         _FIRST_DOCUMENT_ID
     )
     assert repository.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
-    assert repository.list_corpus_document_version_memberships(_CORPUS_ID) == (
+    expected_memberships = (
         CorpusDocumentVersionMembership(
             _CORPUS_ID, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID
         ),
         CorpusDocumentVersionMembership(
             _CORPUS_ID, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID
         ),
+        *additional_memberships,
+    )
+    assert repository.list_corpus_document_version_memberships(_CORPUS_ID) == tuple(
+        sorted(
+            expected_memberships,
+            key=lambda membership: membership.document_version_id.as_str(),
+        )
     )
     assert repository.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
         _DUPLICATE,
@@ -338,3 +391,81 @@ def test_failed_source_migration_rolls_back_the_entire_revision(
         _assert_complete_graph(recovered)
     finally:
         recovered.close()
+
+
+def test_public_factory_upgrades_failed_revision_one_without_losing_prior_data(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "private-metadata" / "metadata.sqlite3"
+    source_dir = tmp_path / "private-source-data"
+    _create_complete_baseline(database_path)
+    revision_one_snapshot = _database_snapshot(database_path)
+
+    with pytest.raises(MigrationRequiredError) as migration_required:
+        open_metadata_repository(database_path, source_dir=source_dir)
+
+    assert _database_snapshot(database_path) == revision_one_snapshot
+    assert str(database_path) not in str(migration_required.value)
+    assert str(source_dir) not in str(migration_required.value)
+
+    with pytest.raises(StorageMigrationError):
+        SQLiteMetadataRepository.open(
+            database_path,
+            apply_migrations=True,
+            migrations=(MIGRATIONS[0], _failing_source_persistence_migration()),
+            applied_at_factory=_fixed_applied_at,
+        )
+
+    assert _database_snapshot(database_path) == revision_one_snapshot
+
+    migrated: MetadataRepository = open_metadata_repository(
+        database_path,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    try:
+        _assert_complete_graph(migrated)
+        with migrated.transaction() as transaction:
+            transaction.add_document(DocumentIdentity(DOCUMENT_ID))
+            transaction.add_document_version(_SOURCE_VERSION)
+            transaction.add_corpus_document_version_membership(_SOURCE_MEMBERSHIP)
+        migrated.persist_source_artefact(
+            _CORPUS_ID,
+            _SOURCE_ARTEFACT,
+            (SOURCE_BYTES,),
+            max_source_bytes=len(SOURCE_BYTES),
+            parse_outcome=_SOURCE_OUTCOME,
+            parsed_representation=parsed_representation(),
+        )
+    finally:
+        migrated.close()
+
+    reopened: MetadataRepository = open_metadata_repository(
+        database_path,
+        source_dir=source_dir,
+    )
+    try:
+        _assert_complete_graph(
+            reopened,
+            additional_memberships=(_SOURCE_MEMBERSHIP,),
+        )
+        assert (
+            reopened.get_source_artefact(_CORPUS_ID, DOCUMENT_VERSION_ID)
+            == _SOURCE_ARTEFACT
+        )
+        assert (
+            reopened.read_source_bytes(_CORPUS_ID, DOCUMENT_VERSION_ID) == SOURCE_BYTES
+        )
+        source_stream = reopened.stream_source_bytes(
+            _CORPUS_ID,
+            DOCUMENT_VERSION_ID,
+        )
+        assert source_stream is not None
+        assert b"".join(source_stream) == SOURCE_BYTES
+        assert (
+            reopened.get_parsed_representation(_CORPUS_ID, PARSED_RECORD_ID)
+            == parsed_representation()
+        )
+        assert reopened.get_parse_outcome(_CORPUS_ID, PARSE_ID) == _SOURCE_OUTCOME
+    finally:
+        reopened.close()

@@ -94,6 +94,9 @@ Required values are:
 - `storage.source_dir`
 
 `runtime.max_context_tokens` defaults to `8192`.
+`ingest.max_source_bytes` defaults to `52428800` bytes and must be greater than
+zero. Source publication enforces this limit while streaming into managed
+staging; it must not buffer or publish an oversized source first.
 
 `get_settings()` caches the validated settings for the process lifetime.
 Changes to `config.toml` or the environment take effect after a process
@@ -109,7 +112,11 @@ a missing or older schema.
 `storage.source_dir` is the deployment-owned root for managed copies of
 original source files. It must be separate from `storage.index_dir` and the
 metadata database. Original sources remain subject to the separate source-data
-backup policy; they are not included in corpus-state backups.
+backup policy; they are not included in corpus-state backups. The repository
+owns the directory layout, validates managed bytes on read, and must be the only
+component that modifies its contents. See the
+[storage conventions](storage.md) for lifecycle, integrity, and corpus
+visibility rules.
 
 Configuration errors must fail startup clearly. They must not be replaced with
 guessed model paths, storage paths, or runtime values.

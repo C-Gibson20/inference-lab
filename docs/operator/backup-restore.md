@@ -14,7 +14,9 @@ may cover the complete deployment. The normative policy is defined in the
 Recovery should restore a validated selected-corpus state that can serve
 queries without reconstructing unchanged data and without changing unrelated
 corpora. A complete recovery also requires the original source documents to be
-available through the separate source-data backup or availability policy.
+available through the separate source-data backup or availability policy. See
+[source availability](source-availability.md) for the current managed-original
+integrity and operator boundary.
 
 ## Backup procedure
 
