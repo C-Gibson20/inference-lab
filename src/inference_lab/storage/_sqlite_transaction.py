@@ -52,6 +52,7 @@ from inference_lab.storage._sqlite_observations import (
     get_source_observation,
     list_source_observation_history,
 )
+from inference_lab.storage._sqlite_parse_outcomes import add_parse_outcome
 from inference_lab.storage._sqlite_parsed_representations import (
     add_parsed_representation,
 )
@@ -80,6 +81,7 @@ from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
 )
+from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_records import SourceArtefact
 
@@ -362,6 +364,14 @@ class SQLiteMetadataTransaction:
     ) -> None:
         """Add one complete corpus-authorised parsed aggregate."""
         self._execute(add_parsed_representation, corpus_id, representation)
+
+    def add_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        outcome: ParseOutcome,
+    ) -> None:
+        """Add one complete corpus-authorised parser outcome."""
+        self._execute(add_parse_outcome, corpus_id, outcome)
 
     def add_source_observation(self, state: SourceObservationState) -> None:
         """Create an observed source at revision one."""

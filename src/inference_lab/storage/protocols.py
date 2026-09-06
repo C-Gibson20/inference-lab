@@ -21,6 +21,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_records import SourceArtefact
 
@@ -202,6 +203,14 @@ class MetadataWriter(Protocol):
         representation: ParsedRepresentation,
     ) -> None:
         """Add one complete parsed aggregate after proving corpus membership."""
+        ...
+
+    def add_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        outcome: ParseOutcome,
+    ) -> None:
+        """Add one complete parser outcome after proving corpus membership."""
         ...
 
     def add_source_observation(self, state: SourceObservationState) -> None:
