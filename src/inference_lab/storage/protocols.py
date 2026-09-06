@@ -28,6 +28,7 @@ from inference_lab.storage.outcomes import (
     NoCorpusChangeOutcome,
     SealCorpusUpdateOutcome,
 )
+from inference_lab.storage.snapshots import CorpusSnapshot
 from inference_lab.storage.versioning import (
     ComponentGenerationReference,
     ComponentKind,
@@ -386,6 +387,21 @@ class MetadataRepository(MetadataReader, Protocol):
 
     def transaction(self) -> MetadataTransaction:
         """Return a new transaction that starts on context entry."""
+        ...
+
+    def open_active_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusSnapshot:
+        """Return an unopened reader that will pin the active version."""
+        ...
+
+    def open_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusSnapshot:
+        """Return an unopened reader for one committed historical version."""
         ...
 
     def close(self) -> None:

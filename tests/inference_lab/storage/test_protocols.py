@@ -29,6 +29,7 @@ from inference_lab.storage import (
     ComponentGenerationReference,
     ComponentGenerationValidator,
     ComponentKind,
+    CorpusSnapshot,
     CorpusUpdate,
     CorpusVersion,
     MetadataRepository,
@@ -321,6 +322,19 @@ class StructuralRepository(StructuralTransaction):
 
     def transaction(self) -> MetadataTransaction:
         return StructuralTransaction()
+
+    def open_active_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusSnapshot:
+        raise NotImplementedError
+
+    def open_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusSnapshot:
+        raise NotImplementedError
 
     def close(self) -> None:
         pass

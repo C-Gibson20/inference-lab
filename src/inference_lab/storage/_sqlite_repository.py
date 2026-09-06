@@ -39,6 +39,11 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
 )
+from inference_lab.storage._sqlite_corpus_snapshots import (
+    SQLiteCorpusSnapshot,
+    create_active_corpus_snapshot,
+    create_corpus_snapshot,
+)
 from inference_lab.storage._sqlite_corpus_updates import (
     CreatedAtFactory,
     get_corpus_update,
@@ -383,6 +388,34 @@ class SQLiteMetadataRepository:
         """Return a new write transaction that starts on context entry."""
         self._connection_or_raise()
         return SQLiteMetadataTransaction(self)
+
+    def open_active_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+    ) -> SQLiteCorpusSnapshot:
+        """Return an unopened reader that will pin the active version."""
+        if self._transaction_active:
+            raise StorageTransactionError()
+        return create_active_corpus_snapshot(
+            self._connection_or_raise(),
+            self._migrations,
+            corpus_id,
+        )
+
+    def open_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> SQLiteCorpusSnapshot:
+        """Return an unopened reader for one committed historical version."""
+        if self._transaction_active:
+            raise StorageTransactionError()
+        return create_corpus_snapshot(
+            self._connection_or_raise(),
+            self._migrations,
+            corpus_id,
+            corpus_version,
+        )
 
     def _connection_or_raise(self) -> sqlite3.Connection:
         connection = self._connection
