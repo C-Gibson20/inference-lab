@@ -494,48 +494,49 @@ class SQLiteMetadataRepository:
         blob_store = self._source_blob_store
         if blob_store is None:
             raise RepositoryUnavailableError()
-        self._validate_parse_publication(
-            artefact,
-            parse_outcome,
-            parsed_representation,
-        )
+        with blob_store.publication_lock():
+            self._validate_parse_publication(
+                artefact,
+                parse_outcome,
+                parsed_representation,
+            )
 
-        membership = get_corpus_document_version_membership(
-            connection,
-            corpus_id,
-            artefact.document_version_id,
-        )
-        version = get_document_version(connection, artefact.document_version_id)
-        if (
-            membership is None
-            or membership.document_id != artefact.document_id
-            or version is None
-            or version.document_id != artefact.document_id
-            or version.content_hash != artefact.content_hash
-        ):
-            raise StorageConflictError()
-        stored = get_source_artefact(
-            connection,
-            corpus_id,
-            artefact.document_version_id,
-        )
-        if stored is not None and stored != artefact:
-            raise StorageConflictError()
+            membership = get_corpus_document_version_membership(
+                connection,
+                corpus_id,
+                artefact.document_version_id,
+            )
+            version = get_document_version(connection, artefact.document_version_id)
+            if (
+                membership is None
+                or membership.document_id != artefact.document_id
+                or version is None
+                or version.document_id != artefact.document_id
+                or version.content_hash != artefact.content_hash
+            ):
+                raise StorageConflictError()
+            stored = get_source_artefact(
+                connection,
+                corpus_id,
+                artefact.document_version_id,
+            )
+            if stored is not None and stored != artefact:
+                raise StorageConflictError()
 
-        blob_store.write_chunks(
-            artefact,
-            chunks,
-            max_source_bytes=max_source_bytes,
-        )
-        with self.transaction() as transaction:
-            transaction.add_source_artefact(corpus_id, artefact)
-            if parsed_representation is not None:
-                transaction.add_parsed_representation(
-                    corpus_id,
-                    parsed_representation,
-                )
-            if parse_outcome is not None:
-                transaction.add_parse_outcome(corpus_id, parse_outcome)
+            blob_store.write_chunks(
+                artefact,
+                chunks,
+                max_source_bytes=max_source_bytes,
+            )
+            with self.transaction() as transaction:
+                transaction.add_source_artefact(corpus_id, artefact)
+                if parsed_representation is not None:
+                    transaction.add_parsed_representation(
+                        corpus_id,
+                        parsed_representation,
+                    )
+                if parse_outcome is not None:
+                    transaction.add_parse_outcome(corpus_id, parse_outcome)
 
     @staticmethod
     def _validate_parse_publication(

@@ -18,8 +18,10 @@ from inference_lab.storage import (
     ParseOutcome,
     ParseStatus,
     SourceArtefact,
+    StorageConcurrencyError,
     StorageConflictError,
 )
+from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 from .source_fixtures import (  # noqa: TID252
@@ -321,6 +323,34 @@ def test_mismatched_parse_bundle_is_rejected_before_blob_publication(
                 parsed_representation=parsed_representation(),
             )
 
+        assert not (source_dir / _ARTEFACT.storage_key).exists()
+    finally:
+        repository.close()
+
+
+def test_publication_contention_fails_before_blob_or_metadata_visibility(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    repository = _open_repository(database_path, source_dir)
+    try:
+        with ManagedSourceBlobStore(source_dir).publication_lock():
+            with pytest.raises(StorageConcurrencyError):
+                repository.persist_source_artefact(
+                    _CORPUS.corpus_id,
+                    _ARTEFACT,
+                    (SOURCE_BYTES,),
+                    max_source_bytes=len(SOURCE_BYTES),
+                )
+
+        assert (
+            repository.get_source_artefact(
+                _CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            is None
+        )
         assert not (source_dir / _ARTEFACT.storage_key).exists()
     finally:
         repository.close()

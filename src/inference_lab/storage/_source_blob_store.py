@@ -1,10 +1,12 @@
 """Internal managed storage for immutable original-source blobs."""
 
+import fcntl
 import hashlib
 import os
 import secrets
 import stat
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
@@ -12,6 +14,7 @@ from inference_lab._validation import is_local_path_shape
 from inference_lab.provenance import ContentHash, HashAlgorithm
 from inference_lab.storage.errors import (
     CorruptStorageError,
+    StorageConcurrencyError,
     StorageConflictError,
     StorageTransactionError,
 )
@@ -21,6 +24,8 @@ DEFAULT_BLOB_READ_CHUNK_SIZE: Final = 64 * 1024
 _DIRECTORY_MODE: Final = 0o700
 _BLOB_MODE: Final = 0o400
 _STAGING_MODE: Final = 0o600
+_LOCK_MODE: Final = 0o600
+_LOCK_NAME: Final = ".publication.lock"
 _DIRECTORY_FLAGS: Final = (
     os.O_RDONLY
     | getattr(os, "O_CLOEXEC", 0)
@@ -36,6 +41,9 @@ _STAGING_FLAGS: Final = (
     | os.O_EXCL
     | getattr(os, "O_CLOEXEC", 0)
     | getattr(os, "O_NOFOLLOW", 0)
+)
+_LOCK_FLAGS: Final = (
+    os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 )
 _HAS_SECURE_DIRECTORY_OPEN: Final = (
     os.open in os.supports_dir_fd
@@ -130,6 +138,50 @@ class ManagedSourceBlobStore:
             content[offset : offset + chunk_size]
             for offset in range(0, len(content), chunk_size)
         )
+
+    @contextmanager
+    def publication_lock(self) -> Iterator[None]:
+        """Exclude concurrent publication and reconciliation across processes."""
+        root_descriptor: int | None = None
+        lock_descriptor: int | None = None
+        try:
+            self._source_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+                mode=_DIRECTORY_MODE,
+            )
+            if _HAS_SECURE_DIRECTORY_OPEN:
+                root_descriptor = os.open(self._source_dir, _DIRECTORY_FLAGS)
+                lock_descriptor = os.open(
+                    _LOCK_NAME,
+                    _LOCK_FLAGS,
+                    _LOCK_MODE,
+                    dir_fd=root_descriptor,
+                )
+            else:
+                root = self._prepare_fallback_directory(self._source_dir)
+                lock_descriptor = os.open(root / _LOCK_NAME, _LOCK_FLAGS, _LOCK_MODE)
+            if not stat.S_ISREG(os.fstat(lock_descriptor).st_mode):
+                raise OSError
+            fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
+        except BlockingIOError:
+            raise StorageConcurrencyError() from None
+        except (StorageConcurrencyError, StorageConflictError, TypeError, ValueError):
+            raise
+        except OSError:
+            raise StorageTransactionError() from None
+        finally:
+            if lock_descriptor is not None:
+                try:
+                    os.close(lock_descriptor)
+                except OSError:
+                    pass
+            if root_descriptor is not None:
+                try:
+                    os.close(root_descriptor)
+                except OSError:
+                    pass
 
     def write_chunks(
         self,
