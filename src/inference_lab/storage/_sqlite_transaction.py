@@ -84,6 +84,7 @@ from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_observations import (
     add_source_observation,
     advance_source_observation,
+    find_source_observations_by_document_version,
     get_source_observation,
     list_source_observation_history,
 )
@@ -718,6 +719,18 @@ class SQLiteMetadataTransaction:
             list_source_observation_history,
             corpus_id,
             source_observation_id,
+        )
+
+    def find_source_observations_by_document_version(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return current observations of one version in this transaction."""
+        return self._execute(
+            find_source_observations_by_document_version,
+            corpus_id,
+            document_version_id,
         )
 
     def get_source_locator(

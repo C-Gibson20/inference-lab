@@ -101,6 +101,10 @@ def test_explicit_regular_file_becomes_content_free_candidate(tmp_path: Path) ->
     assert candidate.stat_evidence.identity_hint is not None
     assert inventory.failures == ()
     assert inventory.complete_root_ordinals == (0,)
+    assert len(inventory.root_scopes) == 1
+    assert inventory.root_scopes[0].path == source.resolve()
+    assert inventory.root_scopes[0].kind is DiscoveryInputKind.FILE
+    assert str(source.resolve()) not in repr(inventory.root_scopes[0])
     assert set(TraversalCandidate.__dataclass_fields__) == {
         "ordinal",
         "locator",
@@ -146,6 +150,8 @@ def test_empty_directory_is_a_complete_zero_candidate_inventory(
     assert inventory.candidates == ()
     assert inventory.failures == ()
     assert inventory.complete_root_ordinals == (0,)
+    assert inventory.root_scopes[0].path == root.resolve()
+    assert inventory.root_scopes[0].kind is DiscoveryInputKind.DIRECTORY
 
 
 def test_overlapping_roots_deduplicate_resolved_entry(tmp_path: Path) -> None:

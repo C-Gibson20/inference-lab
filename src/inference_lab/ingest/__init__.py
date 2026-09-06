@@ -10,6 +10,13 @@ from inference_lab.ingest.classification import (
     classify_source_candidate,
     classify_source_inventory,
 )
+from inference_lab.ingest.continuity import (
+    ObservationMatchKind,
+    SourceObservationAssignment,
+    SourceObservationIdAllocator,
+    UuidSourceObservationIdAllocator,
+    resolve_source_observation,
+)
 from inference_lab.ingest.discovery import (
     CURRENT_DISCOVERY_POLICY,
     DirectorySnapshotPolicy,
@@ -58,6 +65,11 @@ from inference_lab.ingest.hashing import (
     StableReadFileSystem,
     hash_source_candidate,
 )
+from inference_lab.ingest.identity_resolution import (
+    DiscoveryIdentityIdAllocator,
+    UuidDiscoveryIdentityIdAllocator,
+    resolve_discovered_source_identity,
+)
 from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
 from inference_lab.ingest.parser import (
@@ -86,6 +98,7 @@ from inference_lab.ingest.traversal import (
     TraversalFileSystem,
     TraversalInventory,
     TraversalPathMetadata,
+    TraversalRootScope,
     canonical_path_key,
     inventory_local_sources,
 )
@@ -110,6 +123,7 @@ __all__ = [
     "DiscoveryFailureScope",
     "DiscoveryFailureStage",
     "DiscoveryFileKind",
+    "DiscoveryIdentityIdAllocator",
     "DiscoveryInput",
     "DiscoveryInputKind",
     "DiscoveryPolicy",
@@ -125,6 +139,7 @@ __all__ = [
     "LocalTraversalFileSystem",
     "NestedMountPolicy",
     "NormalisedText",
+    "ObservationMatchKind",
     "ParseOutcome",
     "ParseStatus",
     "ParsedDocument",
@@ -143,6 +158,8 @@ __all__ = [
     "SourceClassifierRule",
     "SourceFormatCount",
     "SourceLocator",
+    "SourceObservationAssignment",
+    "SourceObservationIdAllocator",
     "SourceSpan",
     "SourceSupport",
     "StableFileEvidence",
@@ -156,6 +173,9 @@ __all__ = [
     "TraversalFileSystem",
     "TraversalInventory",
     "TraversalPathMetadata",
+    "TraversalRootScope",
+    "UuidDiscoveryIdentityIdAllocator",
+    "UuidSourceObservationIdAllocator",
     "VerifiedSourceSnapshot",
     "canonical_path_key",
     "classify_source_candidate",
@@ -168,5 +188,7 @@ __all__ = [
     "normalise_source_text",
     "parsed_document_payload",
     "prepare_text",
+    "resolve_discovered_source_identity",
+    "resolve_source_observation",
     "serialise_parsed_document",
 ]

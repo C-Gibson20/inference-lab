@@ -158,6 +158,40 @@ class TraversalCandidate:
         _validate_family_candidates(self.family_candidates)
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class TraversalRootScope:
+    """Describe one resolved request root for later absence proofs."""
+
+    ordinal: int
+    path: Path = field(repr=False)
+    kind: DiscoveryInputKind
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the root ordinal, private path, and input kind."""
+        if not is_strict_integer(self.ordinal):
+            raise TypeError("ordinal must be an integer.")
+        if self.ordinal < 0:
+            raise ValueError("ordinal must be non-negative.")
+        if not isinstance(self.path, Path):
+            raise TypeError("path must be a Path.")
+        if not is_local_path_shape(self.path) or not self.path.is_absolute():
+            raise ValueError("path must be an absolute local filesystem path.")
+        if ".." in self.path.parts:
+            raise ValueError("path must be normalised.")
+        if not isinstance(self.kind, DiscoveryInputKind):
+            raise TypeError("kind must be a DiscoveryInputKind.")
+
+    def __repr__(self) -> str:
+        """Return a representation that does not disclose the private root."""
+        return (
+            "TraversalRootScope("
+            f"ordinal={self.ordinal}, kind={self.kind.value!r}, path=<private>)"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class TraversalInventory:
     """Retain ordered candidates, failures, and complete request-root scans."""
@@ -166,6 +200,7 @@ class TraversalInventory:
     candidates: tuple[TraversalCandidate, ...]
     failures: tuple[DiscoveryFailure, ...]
     complete_root_ordinals: tuple[int, ...]
+    root_scopes: tuple[TraversalRootScope, ...] = ()
 
     def __post_init__(self) -> None:
         self._validate()
@@ -187,8 +222,13 @@ class TraversalInventory:
             raise TypeError("failures must be a tuple.")
         if any(not isinstance(failure, DiscoveryFailure) for failure in self.failures):
             raise TypeError("failures must contain DiscoveryFailure values.")
+        if not isinstance(self.root_scopes, tuple):
+            raise TypeError("root_scopes must be a tuple.")
+        if any(not isinstance(scope, TraversalRootScope) for scope in self.root_scopes):
+            raise TypeError("root_scopes must contain TraversalRootScope values.")
         self._validate_ordinals()
         self._validate_complete_roots()
+        self._validate_root_scopes()
 
     def _validate_ordinals(self) -> None:
         candidate_ordinals = tuple(item.ordinal for item in self.candidates)
@@ -217,6 +257,13 @@ class TraversalInventory:
             for ordinal in self.complete_root_ordinals
         ):
             raise ValueError("complete root ordinal is outside the request roots.")
+
+    def _validate_root_scopes(self) -> None:
+        ordinals = tuple(scope.ordinal for scope in self.root_scopes)
+        if ordinals != tuple(sorted(set(ordinals))):
+            raise ValueError("root scope ordinals must be unique and ordered.")
+        if any(ordinal >= self.root_count for ordinal in ordinals):
+            raise ValueError("root scope ordinal is outside the request roots.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +384,7 @@ def _root_failure(
             ),
         ),
         complete_root_ordinals=(),
+        root_scopes=(),
     )
 
 
@@ -616,6 +664,7 @@ def _finalise_inventory(
     raw_candidates: dict[PathOrderingKey, _RawCandidate],
     raw_failures: list[_RawFailure],
     complete_root_ordinals: tuple[int, ...],
+    root_scopes: tuple[TraversalRootScope, ...],
 ) -> TraversalInventory:
     """Assign stable ordinals after the complete inventory pass."""
     unique_failures: dict[PathOrderingKey, _RawFailure] = {}
@@ -653,6 +702,7 @@ def _finalise_inventory(
         candidates=tuple(candidates),
         failures=tuple(failures),
         complete_root_ordinals=complete_root_ordinals,
+        root_scopes=root_scopes,
     )
 
 
@@ -700,4 +750,12 @@ def inventory_local_sources(
         raw_candidates=raw_candidates,
         raw_failures=raw_failures,
         complete_root_ordinals=tuple(complete_roots),
+        root_scopes=tuple(
+            TraversalRootScope(
+                ordinal=root.ordinal,
+                path=root.path,
+                kind=root.discovery_input.kind,
+            )
+            for root in roots
+        ),
     )

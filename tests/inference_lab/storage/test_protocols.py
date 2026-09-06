@@ -371,6 +371,13 @@ class StructuralTransaction:
     ) -> tuple[SourceObservationState, ...]:
         return ()
 
+    def find_source_observations_by_document_version(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[SourceObservationState, ...]:
+        return ()
+
     def get_source_locator(
         self,
         corpus_id: CorpusId,
@@ -544,6 +551,9 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_source_observation = StructuralTransaction.get_source_observation
         list_source_observation_history = (
             StructuralTransaction.list_source_observation_history
+        )
+        find_source_observations_by_document_version = (
+            StructuralTransaction.find_source_observations_by_document_version
         )
         get_source_locator = StructuralTransaction.get_source_locator
         list_source_locator_history = StructuralTransaction.list_source_locator_history
