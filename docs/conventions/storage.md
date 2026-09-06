@@ -399,6 +399,6 @@ messages.
 
 See the [configuration conventions](configuration.md),
 [provenance conventions](provenance.md),
- [logging conventions](logging.md), and
- [backup and restore conventions](backup-restore.md) for their respective
- cross-cutting policies.
+[logging conventions](logging.md), and
+[backup and restore conventions](backup-restore.md) for their respective
+cross-cutting policies.

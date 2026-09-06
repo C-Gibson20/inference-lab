@@ -111,13 +111,13 @@ close, commit, and rollback operations remain responsible for surfacing or
 translating their own errors when no primary failure exists.
 
 Managed-source publication binds opaque `corpus_id` and `document_id` values;
-`corpus_version` remains nullable until immutable corpus-version publication is
-available. Source storage may log bounded byte counts, algorithms, failure
-categories, and reconciliation counts. It must not log source bytes or text,
-filenames, original or managed paths, storage keys, content digests,
-publication identifiers, parser failure payloads, SQL, or raw exception
-messages. See the [storage conventions](storage.md) for the persistence
-boundary.
+`corpus_version` is nullable for source-publication operations not yet
+associated with a published version. Source storage may log bounded byte
+counts, algorithms, failure categories, and reconciliation counts. It must not
+log source bytes or text, filenames, original or managed paths, storage keys,
+content digests, publication identifiers, parser failure payloads, SQL, or raw
+exception messages. See the [storage conventions](storage.md) for the
+persistence boundary.
 
 ## Events and profiling
 
