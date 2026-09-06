@@ -4,7 +4,22 @@ from datetime import UTC, datetime
 from types import TracebackType
 from typing import Self
 
-from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.provenance import (
+    ContentHash,
+    CorpusId,
+    CorpusVersionId,
+    DocumentFamilyId,
+    DocumentFamilyMembership,
+    DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
+    DocumentVersionId,
+    DuplicateRelationship,
+    ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    SourceObservationId,
+    SourceObservationState,
+)
 from inference_lab.storage import CorpusSnapshot, CorpusVersion, CorpusVersionManifest
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
@@ -20,13 +35,88 @@ VERSION = CorpusVersion(
 )
 
 
-class StructuralSnapshot:
-    """Complete structural snapshot independent of concrete storage adapters."""
+class _SnapshotWithoutClose:
+    """Complete snapshot projection lacking only its ownership release."""
 
     corpus_id = CORPUS_ID
     version = VERSION
     manifest = MANIFEST
     is_closed = False
+
+    def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
+        raise NotImplementedError
+
+    def get_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> DocumentVersion | None:
+        raise NotImplementedError
+
+    def list_document_versions(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentVersion, ...]:
+        raise NotImplementedError
+
+    def find_document_versions_by_content_hash(
+        self,
+        content_hash: ContentHash,
+    ) -> tuple[DocumentVersion, ...]:
+        raise NotImplementedError
+
+    def find_document_versions_by_external_identifiers(
+        self,
+        external_identifiers: tuple[ExternalIdentifier, ...],
+    ) -> tuple[DocumentVersion, ...]:
+        raise NotImplementedError
+
+    def get_source_observation(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> SourceObservationState | None:
+        raise NotImplementedError
+
+    def list_source_observation_history(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceObservationState, ...]:
+        raise NotImplementedError
+
+    def list_external_identifier_assertions(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
+        raise NotImplementedError
+
+    def list_duplicate_relationships(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DuplicateRelationship, ...]:
+        raise NotImplementedError
+
+    def get_document_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> DocumentFamilyId | None:
+        raise NotImplementedError
+
+    def list_family_memberships_by_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        raise NotImplementedError
+
+    def list_family_memberships_by_document(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        raise NotImplementedError
+
+    def list_family_memberships_by_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        raise NotImplementedError
 
     def __enter__(self) -> Self:
         return self
@@ -39,6 +129,10 @@ class StructuralSnapshot:
     ) -> bool:
         return False
 
+
+class StructuralSnapshot(_SnapshotWithoutClose):
+    """Complete structural snapshot independent of concrete storage adapters."""
+
     def close(self) -> None:
         pass
 
@@ -48,21 +142,4 @@ def test_snapshot_protocol_is_structural_and_runtime_checkable() -> None:
 
 
 def test_object_without_owned_close_lifecycle_is_not_snapshot() -> None:
-    class SnapshotWithoutClose:
-        corpus_id = CORPUS_ID
-        version = VERSION
-        manifest = MANIFEST
-        is_closed = False
-
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(
-            self,
-            exception_type: type[BaseException] | None,
-            exception: BaseException | None,
-            traceback: TracebackType | None,
-        ) -> bool:
-            return False
-
-    assert not isinstance(SnapshotWithoutClose(), CorpusSnapshot)
+    assert not isinstance(_SnapshotWithoutClose(), CorpusSnapshot)

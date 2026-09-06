@@ -34,6 +34,7 @@ from inference_lab.storage.outcomes import (
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
+from inference_lab.storage.snapshots import CorpusSnapshot
 from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
 from inference_lab.storage.versioning import (
@@ -482,6 +483,21 @@ class MetadataRepository(MetadataReader, Protocol):
 
     def transaction(self) -> MetadataTransaction:
         """Return a new transaction that starts on context entry."""
+        ...
+
+    def open_active_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusSnapshot:
+        """Return an unopened reader that will pin the active version."""
+        ...
+
+    def open_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusSnapshot:
+        """Return an unopened reader for one committed historical version."""
         ...
 
     def reconcile_source_storage(self, *, max_entries: int) -> None:
