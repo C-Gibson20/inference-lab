@@ -57,6 +57,10 @@ from inference_lab.storage._sqlite_observations import (
     list_source_observation_history,
 )
 from inference_lab.storage._sqlite_parse_outcomes import get_parse_outcome
+from inference_lab.storage._sqlite_parsed_representations import (
+    get_parsed_representation,
+    list_parsed_representations,
+)
 from inference_lab.storage._sqlite_relationships import (
     list_duplicate_relationships,
     list_family_memberships_by_document,
@@ -81,6 +85,7 @@ from inference_lab.storage.errors import (
     StorageTransactionError,
 )
 from inference_lab.storage.parse_records import ParseOutcome
+from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_records import SourceArtefact
 
 
@@ -253,6 +258,30 @@ class SQLiteMetadataRepository:
     ) -> ParseOutcome | None:
         """Return a complete corpus-visible parser outcome, or ``None``."""
         return get_parse_outcome(self._connection_or_raise(), corpus_id, parse_id)
+
+    def get_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        """Return a complete corpus-visible parsed record, or ``None``."""
+        return get_parsed_representation(
+            self._connection_or_raise(),
+            corpus_id,
+            record_id,
+        )
+
+    def list_parsed_representations(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ParsedRepresentation, ...]:
+        """Return a version's parsed records in canonical identity order."""
+        return list_parsed_representations(
+            self._connection_or_raise(),
+            corpus_id,
+            document_version_id,
+        )
 
     def find_document_versions_by_content_hash(
         self,

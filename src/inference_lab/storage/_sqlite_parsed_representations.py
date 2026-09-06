@@ -1,18 +1,36 @@
-"""Internal SQLite writes for complete immutable parsed representations."""
+"""Internal SQLite persistence for complete parsed representations."""
 
 import sqlite3
 from dataclasses import replace
 
-from inference_lab.provenance import CorpusId
+from inference_lab.provenance import (
+    CorpusId,
+    DocumentId,
+    DocumentVersionId,
+    RecordId,
+    SourceSpanId,
+)
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage.errors import (
+    CorruptStorageError,
     RepositoryUnavailableError,
     StorageConflictError,
     StorageError,
 )
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.producers import ProducerIdentity
-from inference_lab.storage.source_locations import BoundingBox
+from inference_lab.storage.source_locations import (
+    BoundingBox,
+    CollectionAvailability,
+    ContentOrigin,
+    CoordinateOrigin,
+    CoordinateUnit,
+    PageLayoutDescriptor,
+    PageRotation,
+    SourceLocation,
+    StructuralBlock,
+    StructuralBlockKind,
+)
 
 
 def _producer_values(
@@ -38,6 +56,91 @@ def _bounding_box_values(
         float(bounding_box.top),
         float(bounding_box.right),
         float(bounding_box.bottom),
+    )
+
+
+def _reconstruct_producer(
+    implementation: str | None,
+    contract_version: str | None,
+    artefact_identity: str | None,
+    artefact_revision: str | None,
+) -> ProducerIdentity | None:
+    if implementation is None:
+        if any(
+            value is not None
+            for value in (contract_version, artefact_identity, artefact_revision)
+        ):
+            raise ValueError
+        return None
+    if contract_version is None:
+        raise ValueError
+    return ProducerIdentity(
+        implementation,
+        contract_version,
+        artefact_identity,
+        artefact_revision,
+    )
+
+
+def _reconstruct_layout(row: sqlite3.Row) -> PageLayoutDescriptor:
+    producer = _reconstruct_producer(
+        row["producer_implementation"],
+        row["producer_contract_version"],
+        row["producer_artefact_identity"],
+        row["producer_artefact_revision"],
+    )
+    if producer is None:
+        raise ValueError
+    return PageLayoutDescriptor(
+        page_number=row["page_number"],
+        coordinate_unit=CoordinateUnit(row["coordinate_unit"]),
+        coordinate_origin=CoordinateOrigin(row["coordinate_origin"]),
+        page_width=row["page_width"],
+        page_height=row["page_height"],
+        rotation=PageRotation(row["rotation"]),
+        content_origin=ContentOrigin(row["content_origin"]),
+        producer=producer,
+    )
+
+
+def _reconstruct_bounding_box(row: sqlite3.Row) -> BoundingBox | None:
+    values = (
+        row["bounding_box_left"],
+        row["bounding_box_top"],
+        row["bounding_box_right"],
+        row["bounding_box_bottom"],
+    )
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError
+    return BoundingBox(
+        left=values[0],
+        top=values[1],
+        right=values[2],
+        bottom=values[3],
+    )
+
+
+def _reconstruct_location(row: sqlite3.Row) -> SourceLocation:
+    return SourceLocation(
+        source_span_id=SourceSpanId.from_str(row["source_span_id"]),
+        document_version_id=DocumentVersionId.from_str(row["document_version_id"]),
+        parsed_record_id=RecordId.from_str(row["parsed_record_id"]),
+        start_offset=row["start_offset"],
+        end_offset=row["end_offset"],
+        content_origin=ContentOrigin(row["content_origin"]),
+        page_number=row["page_number"],
+        bounding_box=_reconstruct_bounding_box(row),
+    )
+
+
+def _reconstruct_block(row: sqlite3.Row) -> StructuralBlock:
+    return StructuralBlock(
+        ordinal=row["ordinal"],
+        kind=StructuralBlockKind(row["block_kind"]),
+        text=row["block_text"],
+        source_span_id=SourceSpanId.from_str(row["source_span_id"]),
     )
 
 
@@ -150,6 +253,204 @@ def _is_authorised(
         ),
     ).fetchone()
     return row is not None
+
+
+def _reconstruct_representation(
+    connection: sqlite3.Connection,
+    header: sqlite3.Row,
+) -> ParsedRepresentation:
+    record_id = header["record_id"]
+    layouts = connection.execute(
+        """SELECT page_number, coordinate_unit, coordinate_origin,
+            page_width, page_height, rotation, content_origin,
+            producer_implementation, producer_contract_version,
+            producer_artefact_identity, producer_artefact_revision
+        FROM page_layouts WHERE parsed_record_id = ? ORDER BY page_number""",
+        (record_id,),
+    ).fetchall()
+    locations = connection.execute(
+        """SELECT source_span_id, parsed_record_id, document_version_id,
+            start_offset, end_offset, content_origin, page_number,
+            bounding_box_left, bounding_box_top, bounding_box_right,
+            bounding_box_bottom
+        FROM source_spans WHERE parsed_record_id = ? ORDER BY source_span_id""",
+        (record_id,),
+    ).fetchall()
+    blocks = connection.execute(
+        """SELECT ordinal, block_kind, block_text, source_span_id
+        FROM structural_blocks WHERE parsed_record_id = ? ORDER BY ordinal""",
+        (record_id,),
+    ).fetchall()
+    parser = _reconstruct_producer(
+        header["parser_implementation"],
+        header["parser_contract_version"],
+        header["parser_artefact_identity"],
+        header["parser_artefact_revision"],
+    )
+    if parser is None:
+        raise ValueError
+    ocr_producer = _reconstruct_producer(
+        header["ocr_implementation"],
+        header["ocr_contract_version"],
+        header["ocr_artefact_identity"],
+        header["ocr_artefact_revision"],
+    )
+    supersedes_record_id = header["supersedes_record_id"]
+    representation = ParsedRepresentation(
+        record_id=RecordId.from_str(record_id),
+        document_id=DocumentId.from_str(header["document_id"]),
+        document_version_id=DocumentVersionId.from_str(header["document_version_id"]),
+        record_schema_version=header["record_schema_version"],
+        source_text=header["source_text"],
+        text=header["canonical_text"],
+        parser=parser,
+        normalisation_version=header["normalisation_version"],
+        ocr_producer=ocr_producer,
+        language=header["language"],
+        page_count=header["page_count"],
+        character_count=header["character_count"],
+        token_count=header["token_count"],
+        page_collection_availability=CollectionAvailability(
+            header["page_collection_availability"]
+        ),
+        section_collection_availability=CollectionAvailability(
+            header["section_collection_availability"]
+        ),
+        paragraph_collection_availability=CollectionAvailability(
+            header["paragraph_collection_availability"]
+        ),
+        page_layouts=tuple(_reconstruct_layout(row) for row in layouts),
+        source_locations=tuple(_reconstruct_location(row) for row in locations),
+        blocks=tuple(_reconstruct_block(row) for row in blocks),
+        supersedes_record_id=(
+            RecordId.from_str(supersedes_record_id)
+            if supersedes_record_id is not None
+            else None
+        ),
+    )
+    if (
+        header["output_digest_algorithm"]
+        != representation.output_digest.algorithm.value
+        or header["output_digest"] != representation.output_digest.digest
+    ):
+        raise CorruptStorageError()
+    return representation
+
+
+def _reconstruct_rows(
+    connection: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+) -> tuple[ParsedRepresentation, ...]:
+    try:
+        return tuple(_reconstruct_representation(connection, row) for row in rows)
+    except CorruptStorageError:
+        raise
+    except (TypeError, ValueError, KeyError, IndexError):
+        raise CorruptStorageError() from None
+
+
+def get_parsed_representation(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    record_id: RecordId,
+) -> ParsedRepresentation | None:
+    """Return a complete representation through explicit corpus membership."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if not isinstance(record_id, RecordId):
+        raise TypeError("record_id must be a RecordId.")
+    try:
+        row = connection.execute(
+            """SELECT representation.record_id, representation.document_id,
+                representation.document_version_id,
+                representation.record_schema_version,
+                representation.source_text, representation.canonical_text,
+                representation.parser_implementation,
+                representation.parser_contract_version,
+                representation.parser_artefact_identity,
+                representation.parser_artefact_revision,
+                representation.normalisation_version,
+                representation.ocr_implementation,
+                representation.ocr_contract_version,
+                representation.ocr_artefact_identity,
+                representation.ocr_artefact_revision,
+                representation.language, representation.page_count,
+                representation.character_count, representation.token_count,
+                representation.page_collection_availability,
+                representation.section_collection_availability,
+                representation.paragraph_collection_availability,
+                representation.output_digest_algorithm,
+                representation.output_digest,
+                representation.supersedes_record_id
+            FROM parsed_representations AS representation
+            JOIN corpus_document_version_memberships AS membership
+                ON membership.document_version_id = representation.document_version_id
+                AND membership.document_id = representation.document_id
+            WHERE membership.corpus_id = ? AND representation.record_id = ?""",
+            (corpus_id.as_str(), record_id.as_str()),
+        ).fetchone()
+        if row is None:
+            return None
+        return _reconstruct_rows(connection, [row])[0]
+    except CorruptStorageError:
+        raise
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
+
+
+def list_parsed_representations(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    document_version_id: DocumentVersionId,
+) -> tuple[ParsedRepresentation, ...]:
+    """Return corpus-visible representations in canonical identity order."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if not isinstance(document_version_id, DocumentVersionId):
+        raise TypeError("document_version_id must be a DocumentVersionId.")
+    try:
+        rows = connection.execute(
+            """SELECT representation.record_id, representation.document_id,
+                representation.document_version_id,
+                representation.record_schema_version,
+                representation.source_text, representation.canonical_text,
+                representation.parser_implementation,
+                representation.parser_contract_version,
+                representation.parser_artefact_identity,
+                representation.parser_artefact_revision,
+                representation.normalisation_version,
+                representation.ocr_implementation,
+                representation.ocr_contract_version,
+                representation.ocr_artefact_identity,
+                representation.ocr_artefact_revision,
+                representation.language, representation.page_count,
+                representation.character_count, representation.token_count,
+                representation.page_collection_availability,
+                representation.section_collection_availability,
+                representation.paragraph_collection_availability,
+                representation.output_digest_algorithm,
+                representation.output_digest,
+                representation.supersedes_record_id
+            FROM parsed_representations AS representation
+            JOIN corpus_document_version_memberships AS membership
+                ON membership.document_version_id = representation.document_version_id
+                AND membership.document_id = representation.document_id
+            WHERE membership.corpus_id = ?
+                AND representation.document_version_id = ?
+            ORDER BY representation.record_id""",
+            (corpus_id.as_str(), document_version_id.as_str()),
+        ).fetchall()
+        return _reconstruct_rows(connection, rows)
+    except CorruptStorageError:
+        raise
+    except sqlite3.Error as error:
+        raise translate_sqlite_error(
+            error,
+            default=RepositoryUnavailableError,
+        ) from None
 
 
 def _stored_aggregate_matches(

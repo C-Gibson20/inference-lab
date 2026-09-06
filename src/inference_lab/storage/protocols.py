@@ -107,6 +107,22 @@ class MetadataReader(Protocol):
         """Return a complete corpus-visible parser outcome, or ``None``."""
         ...
 
+    def get_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        """Return a complete corpus-visible parsed record, or ``None``."""
+        ...
+
+    def list_parsed_representations(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ParsedRepresentation, ...]:
+        """Return a version's parsed records in canonical identity order."""
+        ...
+
     def find_document_versions_by_content_hash(
         self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:

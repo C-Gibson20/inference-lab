@@ -59,6 +59,8 @@ from inference_lab.storage._sqlite_parse_outcomes import (
 )
 from inference_lab.storage._sqlite_parsed_representations import (
     add_parsed_representation,
+    get_parsed_representation,
+    list_parsed_representations,
 )
 from inference_lab.storage._sqlite_relationships import (
     add_duplicate_relationship,
@@ -296,6 +298,26 @@ class SQLiteMetadataTransaction:
     ) -> ParseOutcome | None:
         """Return a complete corpus-visible parser outcome in this transaction."""
         return self._execute(get_parse_outcome, corpus_id, parse_id)
+
+    def get_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        """Return a complete corpus-visible parsed record in this transaction."""
+        return self._execute(get_parsed_representation, corpus_id, record_id)
+
+    def list_parsed_representations(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ParsedRepresentation, ...]:
+        """Return a version's parsed records in this transaction."""
+        return self._execute(
+            list_parsed_representations,
+            corpus_id,
+            document_version_id,
+        )
 
     def find_document_versions_by_content_hash(
         self,
