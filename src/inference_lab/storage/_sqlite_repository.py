@@ -571,6 +571,7 @@ class SQLiteMetadataRepository:
         return create_active_corpus_snapshot(
             self._connection_or_raise(),
             self._migrations,
+            self._source_blob_store,
             corpus_id,
         )
 
@@ -585,6 +586,7 @@ class SQLiteMetadataRepository:
         return create_corpus_snapshot(
             self._connection_or_raise(),
             self._migrations,
+            self._source_blob_store,
             corpus_id,
             corpus_version,
         )

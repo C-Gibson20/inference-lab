@@ -40,6 +40,12 @@ a metadata write transaction while parsing documents, calling a model, or
 building an index. Build immutable component data outside the transaction and
 use a short transaction to validate and register it.
 
+Metadata transactions expose database-backed metadata reads but deliberately
+do not expose `read_source_bytes()` or `stream_source_bytes()`. Read managed
+source files through the repository outside a write transaction, or through a
+version-pinned snapshot for product-facing work. Commit any source metadata
+changes before reading their bytes through the repository.
+
 An error makes the transaction rollback-only. Never catch an operation error
 inside the context and continue issuing writes. Exit, let the transaction roll
 back, inspect durable state through a new unit, and then decide whether a safe
@@ -72,6 +78,11 @@ manifest, persists its SHA-256 digest, and makes the update `ready` and
 immutable. If the complete semantic manifest is unchanged from the expected
 active version, sealing returns `NoCorpusChangeOutcome`, marks the proposal
 terminal, creates no sequence, and leaves the active pointer unchanged.
+Semantic equality compares membership plus component implementation, format,
+contract, configuration, and source-manifest digests; it deliberately ignores
+the new generation IDs. The persisted manifest digest still covers those exact
+generation IDs so committed snapshots reopen the precise immutable artefacts
+that were published.
 
 `commit_corpus_update()` accepts only a ready ordinary update. In one database
 transaction it rechecks the expected active version, creates the immutable
@@ -139,6 +150,15 @@ manifest. Every read remains scoped to that membership. Relationships are
 visible only when their required endpoints are visible; global catalogue
 records and another corpus's records remain hidden.
 
+Source artefacts, original bytes, parsed representations, parse outcomes, and
+source spans are immutable records owned by a document version. Snapshot
+readers expose exact-identity lookups for those records only when the owning
+`DocumentVersionId` occurs in the pinned manifest. Catalogue enumeration of
+parser outputs remains an ingest and audit operation on `MetadataRepository`;
+it is not a product-facing snapshot selection mechanism. Persistent component
+generations record the exact source-manifest digest used to build their derived
+state.
+
 The selected version does not change during the snapshot, even when another
 writer publishes. Keep the snapshot open for one bounded request or job unit,
 then close it promptly so SQLite can reclaim reader resources and checkpoint
@@ -152,7 +172,9 @@ may prepare from the same parent, but exactly one can advance that corpus. The
 loser receives `StorageConflictError`; it must not be rebased or retried
 blindly because its membership and components were built for a stale parent.
 Start a fresh proposal only after the owning workflow re-evaluates the new
-active state.
+active state. Conflict subtypes are not a public result contract; bounded
+operational reasons such as an expected-active mismatch or reused version ID
+may appear only in privacy-safe structured logs.
 
 SQLite uses a bounded lock wait. Lock expiry becomes
 `StorageConcurrencyError`, the only retryable storage error. Callers may retry
@@ -256,9 +278,11 @@ repository explicitly; operations after closure are rejected.
 
 `DocumentId` and `DocumentVersionId` are deployment-global immutable
 identities. Physical source bytes and parsed records may be reused across
-corpora, but reuse never grants visibility. A public source or parsed-record
+corpora, but reuse never grants visibility. A catalogue source or parsed-record
 read returns data only when the requested version is explicitly present in the
-selected corpus catalogue.
+selected corpus catalogue. Product reads use the snapshot methods, which
+additionally require that version in the selected immutable corpus-version
+manifest.
 
 An absent record and a record outside the selected corpus both return `None`
 where the reader contract is nullable. This non-disclosure rule prevents a
@@ -375,6 +399,6 @@ messages.
 
 See the [configuration conventions](configuration.md),
 [provenance conventions](provenance.md),
- [logging conventions](logging.md), and
- [backup and restore conventions](backup-restore.md) for their respective
- cross-cutting policies.
+[logging conventions](logging.md), and
+[backup and restore conventions](backup-restore.md) for their respective
+cross-cutting policies.

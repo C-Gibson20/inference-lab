@@ -165,22 +165,6 @@ class MetadataReader(Protocol):
         """Return corpus-visible managed-source metadata, or ``None``."""
         ...
 
-    def read_source_bytes(
-        self,
-        corpus_id: CorpusId,
-        document_version_id: DocumentVersionId,
-    ) -> bytes | None:
-        """Return verified corpus-visible source bytes, or ``None``."""
-        ...
-
-    def stream_source_bytes(
-        self,
-        corpus_id: CorpusId,
-        document_version_id: DocumentVersionId,
-    ) -> Iterator[bytes] | None:
-        """Return fully verified, detached source chunks, or ``None``."""
-        ...
-
     def get_parse_outcome(
         self,
         corpus_id: CorpusId,
@@ -511,6 +495,22 @@ class MetadataRepository(MetadataReader, Protocol):
         corpus_version: CorpusVersionId,
     ) -> CorpusSnapshot:
         """Return an unopened reader for one committed historical version."""
+        ...
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        """Return verified corpus-visible source bytes, or ``None``."""
+        ...
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        """Return fully verified, detached source chunks, or ``None``."""
         ...
 
     def reconcile_source_storage(self, *, max_entries: int) -> None:

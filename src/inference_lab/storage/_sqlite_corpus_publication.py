@@ -8,6 +8,7 @@ from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage._sqlite_corpus_updates import (
     CreatedAtFactory,
     _active_corpus_version,
+    _CorpusVersionConflictKind,
     _created_at,
     _proposed_manifest,
     _raise_conflict,
@@ -25,7 +26,6 @@ from inference_lab.storage.errors import (
 )
 from inference_lab.storage.outcomes import (
     CommitCorpusUpdateOutcome,
-    CorpusVersionConflictKind,
     RollbackCorpusVersionOutcome,
 )
 from inference_lab.storage.versioning import (
@@ -166,7 +166,7 @@ def _advance_active_version(
         _raise_conflict(
             update.corpus_id,
             update.corpus_version,
-            CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
+            _CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
         )
 
 
@@ -219,7 +219,7 @@ def _commit_corpus_update(
             _raise_conflict(
                 corpus_id,
                 corpus_version,
-                CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
+                _CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
             )
         try:
             version = CorpusVersion(

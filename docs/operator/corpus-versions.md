@@ -75,7 +75,9 @@ transaction.
 
 If sealing returns a no-change outcome, no version or sequence is created and
 the proposal becomes terminal. Treat this as a successful idempotent operation,
-not an error.
+not an error. Newly built component generations may have different generation
+IDs and still be unchanged when their implementation, compatibility,
+configuration, and source-manifest semantics match the active generations.
 
 An exact retry of begin, seal, abort, or commit returns the durable prior
 outcome. Reusing the same proposed version with different inputs is a conflict.
@@ -113,6 +115,12 @@ an active snapshot resolves the pointer once. The snapshot then keeps one
 dedicated read transaction and one complete manifest pinned until it closes.
 A concurrent publication does not change what that open reader sees; a later
 snapshot sees the newly active version.
+
+Open source bytes, parsed records, parse outcomes, and source spans through the
+snapshot's exact-identity methods. They return no result when the owning
+document version is outside the pinned manifest, even if an ingest catalogue
+record for it remains in storage. Do not fall back to repository catalogue
+reads for product retrieval or citation navigation.
 
 Keep a snapshot for one bounded request or job unit and close it promptly.
 Never cache the snapshot object, use it after context exit, nest its context,

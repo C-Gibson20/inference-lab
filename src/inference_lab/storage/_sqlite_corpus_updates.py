@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import NoReturn
 
 from inference_lab.provenance import (
@@ -30,7 +31,6 @@ from inference_lab.storage.errors import (
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
-    CorpusVersionConflictKind,
     NoCorpusChangeOutcome,
     SealCorpusUpdateOutcome,
 )
@@ -49,6 +49,14 @@ from inference_lab.storage.versioning import (
 )
 
 CreatedAtFactory = Callable[[], datetime]
+
+
+class _CorpusVersionConflictKind(StrEnum):
+    """Bounded operational reasons why a corpus proposal cannot advance."""
+
+    EXPECTED_ACTIVE_MISMATCH = "expected_active_mismatch"
+    VERSION_ID_REUSED = "version_id_reused"
+    UPDATE_PAYLOAD_MISMATCH = "update_payload_mismatch"
 
 
 def _required_component_kinds(
@@ -292,7 +300,7 @@ def list_corpus_update_component_generations(
 def _raise_conflict(
     corpus_id: CorpusId,
     corpus_version: CorpusVersionId,
-    kind: CorpusVersionConflictKind | None = None,
+    kind: _CorpusVersionConflictKind | None = None,
 ) -> NoReturn:
     error = StorageConflictError()
     fields: dict[str, object] = {
@@ -702,19 +710,6 @@ def _store_update_state(
     return replace(update, state=state, manifest_digest=manifest_digest)
 
 
-def _component_rollback_semantics(
-    generation: ComponentGenerationReference,
-) -> tuple[object, ...]:
-    return (
-        generation.component_kind,
-        generation.implementation,
-        generation.format_version,
-        generation.contract_version,
-        generation.configuration_digest,
-        generation.source_manifest_digest,
-    )
-
-
 def _require_rollback_manifest_equivalence(
     connection: sqlite3.Connection,
     update: CorpusUpdate,
@@ -728,18 +723,9 @@ def _require_rollback_manifest_equivalence(
         update.corpus_id,
         target,
     )
-    proposed_components = tuple(
-        _component_rollback_semantics(generation)
-        for generation in proposed.component_generations
-    )
-    target_components = tuple(
-        _component_rollback_semantics(generation)
-        for generation in target_manifest.component_generations
-    )
     if (
         update.required_component_kinds != target_update.required_component_kinds
-        or proposed.document_memberships != target_manifest.document_memberships
-        or proposed_components != target_components
+        or not proposed.has_same_semantic_state(target_manifest)
     ):
         _raise_conflict(update.corpus_id, update.corpus_version)
 
@@ -786,7 +772,7 @@ def seal_corpus_update(
         if (
             update.restores_corpus_version is None
             and expected is not None
-            and manifest.manifest_digest == expected[1].manifest_digest
+            and manifest.has_same_semantic_state(expected[1])
         ):
             if update.state is CorpusUpdateState.PREPARING:
                 update = _store_update_state(
@@ -801,6 +787,7 @@ def seal_corpus_update(
                 update=update,
                 active_version=expected[0],
                 proposed_manifest=manifest,
+                active_manifest=expected[1],
                 replayed=persisted_seal,
             )
         if update.state is not CorpusUpdateState.PREPARING:
@@ -1130,9 +1117,9 @@ def begin_corpus_update(
             ):
                 return BeginCorpusUpdateOutcome(update=stored, replayed=True)
             kind = (
-                CorpusVersionConflictKind.UPDATE_PAYLOAD_MISMATCH
+                _CorpusVersionConflictKind.UPDATE_PAYLOAD_MISMATCH
                 if stored.corpus_id == corpus_id
-                else CorpusVersionConflictKind.VERSION_ID_REUSED
+                else _CorpusVersionConflictKind.VERSION_ID_REUSED
             )
             _raise_conflict(corpus_id, corpus_version, kind)
 
@@ -1141,7 +1128,7 @@ def begin_corpus_update(
             _raise_conflict(
                 corpus_id,
                 corpus_version,
-                CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
+                _CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
             )
 
         update = CorpusUpdate(

@@ -1,5 +1,6 @@
 """Tests for the structural corpus snapshot lifecycle protocol."""
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Self
@@ -17,10 +18,20 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
-from inference_lab.storage import CorpusSnapshot, CorpusVersion, CorpusVersionManifest
+from inference_lab.storage import (
+    CorpusSnapshot,
+    CorpusVersion,
+    CorpusVersionManifest,
+    ParsedRepresentation,
+    ParseOutcome,
+    ResolvedSourceSpan,
+    SourceArtefact,
+)
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
 VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000002")
@@ -56,6 +67,39 @@ class _SnapshotWithoutClose:
         self,
         document_id: DocumentId,
     ) -> tuple[DocumentVersion, ...]:
+        raise NotImplementedError
+
+    def get_source_artefact(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        raise NotImplementedError
+
+    def read_source_bytes(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        raise NotImplementedError
+
+    def stream_source_bytes(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        raise NotImplementedError
+
+    def get_parse_outcome(self, parse_id: RecordId) -> ParseOutcome | None:
+        raise NotImplementedError
+
+    def get_parsed_representation(
+        self,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        raise NotImplementedError
+
+    def resolve_source_span(
+        self,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
         raise NotImplementedError
 
     def find_document_versions_by_content_hash(

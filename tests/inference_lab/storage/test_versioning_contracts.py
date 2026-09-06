@@ -208,6 +208,35 @@ def test_manifest_digest_excludes_proposed_version_identity() -> None:
     assert first.manifest_digest == second.manifest_digest
 
 
+def test_manifest_semantic_state_ignores_generation_identity() -> None:
+    other_version = CorpusVersionId.generate()
+    first = _manifest(components=(_component(generation_id="generation-1"),))
+    second = _manifest(
+        corpus_version=other_version,
+        components=(
+            _component(
+                corpus_version=other_version,
+                generation_id="generation-2",
+            ),
+        ),
+    )
+
+    assert first.manifest_digest != second.manifest_digest
+    assert first.has_same_semantic_state(second)
+
+
+def test_manifest_semantic_state_detects_component_changes() -> None:
+    baseline_component = _component()
+    baseline = _manifest(components=(baseline_component,))
+    changed = _manifest(
+        components=(replace(baseline_component, configuration_digest="c" * 64),)
+    )
+
+    assert not baseline.has_same_semantic_state(changed)
+    with pytest.raises(TypeError, match="other"):
+        baseline.has_same_semantic_state(object())
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

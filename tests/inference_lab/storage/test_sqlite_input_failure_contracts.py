@@ -81,6 +81,7 @@ _COMPONENT_VALIDATOR = _AcceptingComponentValidator()
 
 type _ReadOwner = SQLiteMetadataRepository | SQLiteMetadataTransaction
 type _ReadOperation = Callable[[_ReadOwner], object]
+type _RepositoryReadOperation = Callable[[SQLiteMetadataRepository], object]
 type _WriteOperation = Callable[[SQLiteMetadataTransaction], object]
 
 
@@ -208,28 +209,6 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
         "document_version_id",
     ),
     (
-        "source-bytes-corpus",
-        lambda owner: owner.read_source_bytes(_invalid(CorpusId), _VERSION_ID),
-        "corpus_id",
-    ),
-    (
-        "source-bytes-version",
-        lambda owner: owner.read_source_bytes(_CORPUS_ID, _invalid(DocumentVersionId)),
-        "document_version_id",
-    ),
-    (
-        "source-stream-corpus",
-        lambda owner: owner.stream_source_bytes(_invalid(CorpusId), _VERSION_ID),
-        "corpus_id",
-    ),
-    (
-        "source-stream-version",
-        lambda owner: owner.stream_source_bytes(
-            _CORPUS_ID, _invalid(DocumentVersionId)
-        ),
-        "document_version_id",
-    ),
-    (
         "find-hash-corpus",
         lambda owner: owner.find_document_versions_by_content_hash(
             _invalid(CorpusId), _invalid(ContentHash)
@@ -348,6 +327,39 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
     ),
 )
 
+_REPOSITORY_READ_FAILURE_CASES: tuple[
+    tuple[str, _RepositoryReadOperation, str], ...
+] = (
+    (
+        "source-bytes-corpus",
+        lambda repository: repository.read_source_bytes(
+            _invalid(CorpusId), _VERSION_ID
+        ),
+        "corpus_id",
+    ),
+    (
+        "source-bytes-version",
+        lambda repository: repository.read_source_bytes(
+            _CORPUS_ID, _invalid(DocumentVersionId)
+        ),
+        "document_version_id",
+    ),
+    (
+        "source-stream-corpus",
+        lambda repository: repository.stream_source_bytes(
+            _invalid(CorpusId), _VERSION_ID
+        ),
+        "corpus_id",
+    ),
+    (
+        "source-stream-version",
+        lambda repository: repository.stream_source_bytes(
+            _CORPUS_ID, _invalid(DocumentVersionId)
+        ),
+        "document_version_id",
+    ),
+)
+
 
 @pytest.mark.parametrize(
     ("operation", "expected_field"),
@@ -357,6 +369,24 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
 def test_repository_reads_reject_wrong_identity_types(
     tmp_path: Path,
     operation: _ReadOperation,
+    expected_field: str,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    try:
+        with pytest.raises(TypeError, match=expected_field):
+            operation(repository)
+    finally:
+        repository.close()
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_field"),
+    [(operation, field) for _, operation, field in _REPOSITORY_READ_FAILURE_CASES],
+    ids=[name for name, _, _ in _REPOSITORY_READ_FAILURE_CASES],
+)
+def test_repository_source_reads_reject_wrong_identity_types(
+    tmp_path: Path,
+    operation: _RepositoryReadOperation,
     expected_field: str,
 ) -> None:
     repository = _open_repository(tmp_path / "metadata.sqlite3")
