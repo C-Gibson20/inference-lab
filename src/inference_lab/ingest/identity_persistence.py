@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import Final
 
-import structlog
 from structlog.contextvars import bound_contextvars
 
 from inference_lab.ingest.classification import ClassifiedSourceCandidate
@@ -12,6 +11,10 @@ from inference_lab.ingest.discovery_failures import (
     DiscoveryFailure,
     DiscoveryFailureCategory,
     DiscoveryFileKind,
+)
+from inference_lab.ingest.discovery_logging import (
+    emit_discovery_event,
+    failure_log_fields,
 )
 from inference_lab.ingest.identity_application import (
     IdentityApplicationResult,
@@ -28,8 +31,6 @@ from inference_lab.storage import (
     StorageConcurrencyError,
     StorageConflictError,
 )
-
-logger = structlog.get_logger(__name__)
 
 _MAX_IDENTITY_ATTEMPTS: Final = 2
 
@@ -57,14 +58,6 @@ class IdentityPersistenceUnit:
     def ordinal(self) -> int:
         """Return the source's deterministic discovery position."""
         return self.source.candidate.ordinal
-
-
-def _safe_log(method_name: str, event: str, **fields: object) -> None:
-    """Emit bounded identity metadata without changing persistence outcomes."""
-    try:
-        getattr(logger, method_name)(event, pipeline_stage="ingest", **fields)
-    except Exception:
-        pass
 
 
 def _persistence_failure(
@@ -116,7 +109,8 @@ def _log_retry(
         if isinstance(error, IdentityIdCollisionError)
         else error.category.value
     )
-    _safe_log(
+    emit_discovery_event(
+        __name__,
         "warning",
         "identity_persistence_retry",
         error_category=error_category,
@@ -125,13 +119,36 @@ def _log_retry(
 
 
 def _log_failure(failure: DiscoveryFailure) -> None:
-    _safe_log(
+    emit_discovery_event(
+        __name__,
         "error",
         "identity_persistence_failed",
-        error_category=failure.category.value,
-        retryable=failure.retryable,
-        source_ordinal=failure.ordinal,
+        **failure_log_fields(failure),
     )
+
+
+def _log_completion(
+    result: IdentityApplicationResult,
+    *,
+    attempt_count: int,
+) -> None:
+    source = result.source
+    outcome = source.identity_outcome
+    document_id = None
+    if outcome.document is not None:
+        document_id = outcome.document.document_id.as_str()
+    with bound_contextvars(document_id=document_id):
+        emit_discovery_event(
+            __name__,
+            "info",
+            "identity_persistence_completed",
+            source_ordinal=source.ordinal,
+            source_observation_id=source.source_observation_id.as_str(),
+            outcome_kind=outcome.kind.value,
+            outcome_reason=outcome.reason.value,
+            parse_eligible=result.parse_eligible,
+            attempt_count=attempt_count,
+        )
 
 
 def persist_discovered_source_identity(
@@ -149,10 +166,14 @@ def persist_discovered_source_identity(
     if not callable(getattr(repository, "transaction", None)):
         raise TypeError("repository must provide transaction().")
 
-    with bound_contextvars(corpus_id=request.corpus_id.as_str()):
+    with bound_contextvars(
+        corpus_id=request.corpus_id.as_str(),
+        corpus_version=None,
+        document_id=None,
+    ):
         for attempt in range(_MAX_IDENTITY_ATTEMPTS):
             try:
-                return _attempt_identity_persistence(
+                result = _attempt_identity_persistence(
                     source,
                     snapshot,
                     request=request,
@@ -176,6 +197,9 @@ def persist_discovered_source_identity(
                 failure = _persistence_failure(source, category)
                 _log_failure(failure)
                 return failure
+            if isinstance(result, IdentityApplicationResult):
+                _log_completion(result, attempt_count=attempt + 1)
+            return result
 
     raise AssertionError("identity attempt loop must return a result")
 
