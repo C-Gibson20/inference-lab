@@ -5,21 +5,70 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.provenance import (
+    ContentHash,
+    CorpusId,
+    CorpusVersionId,
+    DocumentFamilyId,
+    DocumentFamilyMembership,
+    DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
+    DocumentVersionId,
+    DuplicateRelationship,
+    ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    SourceObservationId,
+    SourceObservationState,
+)
 from inference_lab.storage._sqlite_cleanup import (
     close_preserving_primary,
     rollback_preserving_primary,
 )
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
+from inference_lab.storage._sqlite_core import get_document as read_document
+from inference_lab.storage._sqlite_core import (
+    get_document_family as read_document_family,
+)
 from inference_lab.storage._sqlite_corpus_publication import _published_manifest
 from inference_lab.storage._sqlite_corpus_updates import get_corpus_update
 from inference_lab.storage._sqlite_corpus_versions import (
     get_active_corpus_version,
     get_corpus_version,
 )
+from inference_lab.storage._sqlite_identifier_assertions import (
+    list_external_identifier_assertions as read_external_identifier_assertions,
+)
 from inference_lab.storage._sqlite_inspection import open_current_database
 from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_migrations import MigrationDefinition
+from inference_lab.storage._sqlite_observations import (
+    list_source_observation_history as read_source_observation_history,
+)
+from inference_lab.storage._sqlite_relationships import (
+    list_duplicate_relationships as read_duplicate_relationships,
+)
+from inference_lab.storage._sqlite_relationships import (
+    list_family_memberships_by_document as read_family_memberships_by_document,
+)
+from inference_lab.storage._sqlite_relationships import (
+    list_family_memberships_by_document_version as read_family_memberships_by_version,
+)
+from inference_lab.storage._sqlite_relationships import (
+    list_family_memberships_by_family as read_family_memberships_by_family,
+)
+from inference_lab.storage._sqlite_versions import (
+    find_document_versions_by_content_hash as read_versions_by_content_hash,
+)
+from inference_lab.storage._sqlite_versions import (
+    find_document_versions_by_external_identifiers as read_versions_by_identifiers,
+)
+from inference_lab.storage._sqlite_versions import (
+    get_document_version as read_document_version,
+)
+from inference_lab.storage._sqlite_versions import (
+    list_document_versions as read_document_versions,
+)
 from inference_lab.storage.errors import (
     CorruptStorageError,
     RepositoryClosedError,
@@ -97,6 +146,11 @@ class SQLiteCorpusSnapshot:
         self._connection: sqlite3.Connection | None = None
         self._version: CorpusVersion | None = None
         self._manifest: CorpusVersionManifest | None = None
+        self._visible_document_ids: frozenset[DocumentId] = frozenset()
+        self._visible_document_version_ids: frozenset[DocumentVersionId] = frozenset()
+        self._visible_membership_keys: frozenset[
+            tuple[DocumentId, DocumentVersionId]
+        ] = frozenset()
         self._closed = False
 
     @property
@@ -117,6 +171,208 @@ class SQLiteCorpusSnapshot:
         if manifest is None:
             raise StorageTransactionError()
         return manifest
+
+    def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
+        """Return a document only when the pinned manifest contains it."""
+        connection = self._reader_connection()
+        if not isinstance(document_id, DocumentId):
+            raise TypeError("document_id must be a DocumentId.")
+        if document_id not in self._visible_document_ids:
+            return None
+        document = read_document(connection, document_id)
+        if document is None:
+            raise CorruptStorageError()
+        return document
+
+    def get_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> DocumentVersion | None:
+        """Return a version only when the pinned manifest contains it."""
+        connection = self._reader_connection()
+        if not isinstance(document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")
+        if document_version_id not in self._visible_document_version_ids:
+            return None
+        document_version = read_document_version(connection, document_version_id)
+        if document_version is None or not self._is_visible_document_version(
+            document_version
+        ):
+            raise CorruptStorageError()
+        return document_version
+
+    def list_document_versions(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return only versions included in the pinned manifest."""
+        connection = self._reader_connection()
+        if not isinstance(document_id, DocumentId):
+            raise TypeError("document_id must be a DocumentId.")
+        if document_id not in self._visible_document_ids:
+            return ()
+        return tuple(
+            version
+            for version in read_document_versions(connection, document_id)
+            if self._is_visible_document_version(version)
+        )
+
+    def find_document_versions_by_content_hash(
+        self,
+        content_hash: ContentHash,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return exact-hash candidates included in the pinned manifest."""
+        connection = self._reader_connection()
+        return tuple(
+            version
+            for version in read_versions_by_content_hash(
+                connection,
+                self.corpus_id,
+                content_hash,
+            )
+            if self._is_visible_document_version(version)
+        )
+
+    def find_document_versions_by_external_identifiers(
+        self,
+        external_identifiers: tuple[ExternalIdentifier, ...],
+    ) -> tuple[DocumentVersion, ...]:
+        """Return identifier candidates included in the pinned manifest."""
+        connection = self._reader_connection()
+        return tuple(
+            version
+            for version in read_versions_by_identifiers(
+                connection,
+                self.corpus_id,
+                external_identifiers,
+            )
+            if self._is_visible_document_version(version)
+        )
+
+    def get_source_observation(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> SourceObservationState | None:
+        """Return the latest observation state visible in the pinned manifest."""
+        history = self.list_source_observation_history(source_observation_id)
+        return None if not history else history[-1]
+
+    def list_source_observation_history(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return only observation states whose exact version is visible."""
+        connection = self._reader_connection()
+        return tuple(
+            state
+            for state in read_source_observation_history(
+                connection,
+                self.corpus_id,
+                source_observation_id,
+            )
+            if (state.document_id, state.document_version_id)
+            in self._visible_membership_keys
+        )
+
+    def list_external_identifier_assertions(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
+        """Return assertions only for a version in the pinned manifest."""
+        connection = self._reader_connection()
+        if not isinstance(document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")
+        if document_version_id not in self._visible_document_version_ids:
+            return ()
+        return read_external_identifier_assertions(
+            connection,
+            self.corpus_id,
+            document_version_id,
+        )
+
+    def list_duplicate_relationships(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DuplicateRelationship, ...]:
+        """Return duplicate relationships with two visible endpoints."""
+        connection = self._reader_connection()
+        if not isinstance(document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")
+        if document_version_id not in self._visible_document_version_ids:
+            return ()
+        return tuple(
+            relationship
+            for relationship in read_duplicate_relationships(
+                connection,
+                self.corpus_id,
+                document_version_id,
+            )
+            if relationship.first_version_id in self._visible_document_version_ids
+            and relationship.second_version_id in self._visible_document_version_ids
+        )
+
+    def get_document_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> DocumentFamilyId | None:
+        """Return a family only when it has visible membership."""
+        connection = self._reader_connection()
+        if not isinstance(family_id, DocumentFamilyId):
+            raise TypeError("family_id must be a DocumentFamilyId.")
+        if not self._visible_family_memberships(
+            read_family_memberships_by_family(connection, self.corpus_id, family_id)
+        ):
+            return None
+        family = read_document_family(connection, family_id)
+        if family is None:
+            raise CorruptStorageError()
+        return family
+
+    def list_family_memberships_by_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return only a family's memberships visible in this version."""
+        connection = self._reader_connection()
+        return self._visible_family_memberships(
+            read_family_memberships_by_family(connection, self.corpus_id, family_id)
+        )
+
+    def list_family_memberships_by_document(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return family memberships only for a visible document."""
+        connection = self._reader_connection()
+        if not isinstance(document_id, DocumentId):
+            raise TypeError("document_id must be a DocumentId.")
+        if document_id not in self._visible_document_ids:
+            return ()
+        return self._visible_family_memberships(
+            read_family_memberships_by_document(
+                connection,
+                self.corpus_id,
+                document_id,
+            )
+        )
+
+    def list_family_memberships_by_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return family memberships only for a visible version."""
+        connection = self._reader_connection()
+        if not isinstance(document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")
+        if document_version_id not in self._visible_document_version_ids:
+            return ()
+        return self._visible_family_memberships(
+            read_family_memberships_by_version(
+                connection,
+                self.corpus_id,
+                document_version_id,
+            )
+        )
 
     @property
     def is_closed(self) -> bool:
@@ -187,6 +443,17 @@ class SQLiteCorpusSnapshot:
         self._connection = connection
         self._version = version
         self._manifest = manifest
+        self._visible_document_ids = frozenset(
+            membership.document_id for membership in manifest.document_memberships
+        )
+        self._visible_document_version_ids = frozenset(
+            membership.document_version_id
+            for membership in manifest.document_memberships
+        )
+        self._visible_membership_keys = frozenset(
+            (membership.document_id, membership.document_version_id)
+            for membership in manifest.document_memberships
+        )
         safe_log(
             "info",
             "corpus_snapshot_opened",
@@ -273,6 +540,37 @@ class SQLiteCorpusSnapshot:
         if self._connection is None or version is None:
             raise StorageTransactionError()
         return version
+
+    def _reader_connection(self) -> sqlite3.Connection:
+        self._open_version()
+        connection = self._connection
+        if connection is None:
+            raise StorageTransactionError()
+        return connection
+
+    def _is_visible_document_version(self, version: DocumentVersion) -> bool:
+        return (
+            version.document_id,
+            version.document_version_id,
+        ) in self._visible_membership_keys
+
+    def _visible_family_memberships(
+        self,
+        memberships: tuple[DocumentFamilyMembership, ...],
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        return tuple(
+            membership
+            for membership in memberships
+            if (
+                membership.document_id in self._visible_document_ids
+                if membership.document_version_id is None
+                else (
+                    membership.document_id,
+                    membership.document_version_id,
+                )
+                in self._visible_membership_keys
+            )
+        )
 
 
 def create_active_corpus_snapshot(

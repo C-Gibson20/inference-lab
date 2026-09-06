@@ -3,7 +3,21 @@
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
-from inference_lab.provenance import CorpusId
+from inference_lab.provenance import (
+    ContentHash,
+    CorpusId,
+    DocumentFamilyId,
+    DocumentFamilyMembership,
+    DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
+    DocumentVersionId,
+    DuplicateRelationship,
+    ExternalIdentifier,
+    ExternalIdentifierAssertion,
+    SourceObservationId,
+    SourceObservationState,
+)
 from inference_lab.storage.versioning import CorpusVersion, CorpusVersionManifest
 
 
@@ -24,6 +38,94 @@ class CorpusSnapshot(Protocol):
     @property
     def manifest(self) -> CorpusVersionManifest:
         """Return the complete materialised manifest selected on entry."""
+        ...
+
+    def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
+        """Return a document visible in this version, or ``None``."""
+        ...
+
+    def get_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> DocumentVersion | None:
+        """Return a document version visible in this version, or ``None``."""
+        ...
+
+    def list_document_versions(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return only versions of a document visible in this version."""
+        ...
+
+    def find_document_versions_by_content_hash(
+        self,
+        content_hash: ContentHash,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return matching document versions visible in this version."""
+        ...
+
+    def find_document_versions_by_external_identifiers(
+        self,
+        external_identifiers: tuple[ExternalIdentifier, ...],
+    ) -> tuple[DocumentVersion, ...]:
+        """Return identifier matches visible in this version."""
+        ...
+
+    def get_source_observation(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> SourceObservationState | None:
+        """Return the latest state visible in this version, or ``None``."""
+        ...
+
+    def list_source_observation_history(
+        self,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return only observation states visible in this version."""
+        ...
+
+    def list_external_identifier_assertions(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
+        """Return assertions only for a visible document version."""
+        ...
+
+    def list_duplicate_relationships(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DuplicateRelationship, ...]:
+        """Return relationships whose two endpoints are visible."""
+        ...
+
+    def get_document_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> DocumentFamilyId | None:
+        """Return a family related to visible membership, or ``None``."""
+        ...
+
+    def list_family_memberships_by_family(
+        self,
+        family_id: DocumentFamilyId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return a family's visible memberships."""
+        ...
+
+    def list_family_memberships_by_document(
+        self,
+        document_id: DocumentId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return visible family memberships for a visible document."""
+        ...
+
+    def list_family_memberships_by_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[DocumentFamilyMembership, ...]:
+        """Return visible family memberships for a visible version."""
         ...
 
     @property
