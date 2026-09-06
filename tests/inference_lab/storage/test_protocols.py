@@ -266,6 +266,9 @@ class StructuralRepository(StructuralTransaction):
     def transaction(self) -> MetadataTransaction:
         return StructuralTransaction()
 
+    def reconcile_source_storage(self, *, max_entries: int) -> None:
+        pass
+
     def persist_source_artefact(
         self,
         corpus_id: CorpusId,

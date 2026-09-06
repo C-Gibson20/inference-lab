@@ -324,6 +324,10 @@ class MetadataRepository(MetadataReader, Protocol):
         """Return a new transaction that starts on context entry."""
         ...
 
+    def reconcile_source_storage(self, *, max_entries: int) -> None:
+        """Clean abandoned staging and report a bounded final-blob inventory."""
+        ...
+
     def persist_source_artefact(
         self,
         corpus_id: CorpusId,

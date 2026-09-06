@@ -30,7 +30,10 @@ from inference_lab.provenance import (
     SourceObservationState,
     SourceSpanId,
 )
-from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
+from inference_lab.storage._source_blob_store import (
+    ManagedSourceBlobStore,
+    SourceBlobReconciliation,
+)
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
     translate_sqlite_error,
@@ -88,6 +91,7 @@ from inference_lab.storage._sqlite_versions import (
     list_document_versions,
 )
 from inference_lab.storage.errors import (
+    CorruptStorageError,
     RepositoryClosedError,
     RepositoryUnavailableError,
     StorageConflictError,
@@ -430,6 +434,58 @@ class SQLiteMetadataRepository:
         """Return a new write transaction that starts on context entry."""
         self._connection_or_raise()
         return SQLiteMetadataTransaction(self)
+
+    def reconcile_source_storage(self, *, max_entries: int) -> None:
+        """Remove abandoned staging and report bounded final-blob inventory."""
+        if not isinstance(max_entries, int) or isinstance(max_entries, bool):
+            raise TypeError("max_entries must be an integer.")
+        if max_entries <= 0:
+            raise ValueError("max_entries must be greater than zero.")
+        safe_log("info", "source_reconciliation_started")
+        try:
+            result = self._reconcile_source_storage(max_entries=max_entries)
+        except StorageError as error:
+            safe_log_failure("source_reconciliation_failed", error)
+            raise
+        safe_log(
+            "info",
+            "source_reconciliation_completed",
+            entries_examined=result.entries_examined,
+            staging_files_removed=result.staging_files_removed,
+            referenced_blobs_found=result.referenced_blobs_found,
+            orphan_blobs_found=result.orphan_blobs_found,
+            ambiguous_entries_retained=result.ambiguous_entries_retained,
+            limit_reached=result.limit_reached,
+        )
+
+    def _reconcile_source_storage(
+        self,
+        *,
+        max_entries: int,
+    ) -> SourceBlobReconciliation:
+        connection = self._connection_or_raise()
+        if self._transaction_active:
+            raise StorageTransactionError()
+        blob_store = self._source_blob_store
+        if blob_store is None:
+            raise RepositoryUnavailableError()
+        with blob_store.publication_lock():
+            try:
+                rows = connection.execute(
+                    "SELECT storage_key FROM source_artefacts ORDER BY storage_key"
+                ).fetchall()
+            except sqlite3.Error as error:
+                raise translate_sqlite_error(
+                    error,
+                    default=RepositoryUnavailableError,
+                ) from None
+            referenced_keys = frozenset(row["storage_key"] for row in rows)
+            if any(not isinstance(key, str) for key in referenced_keys):
+                raise CorruptStorageError()
+            return blob_store.reconcile_locked(
+                referenced_keys,
+                max_entries=max_entries,
+            )
 
     def persist_source_artefact(
         self,
