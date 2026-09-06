@@ -19,15 +19,18 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    KnownSourceSpan,
     RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
 from inference_lab.storage import (
     MetadataRepository,
     MetadataTransaction,
     ParsedRepresentation,
     ParseOutcome,
+    ResolvedSourceSpan,
     SourceArtefact,
 )
 
@@ -193,6 +196,20 @@ class StructuralTransaction:
     ) -> tuple[ParsedRepresentation, ...]:
         return ()
 
+    def resolve_source_span(
+        self,
+        corpus_id: CorpusId,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
+        return None
+
+    def list_known_source_spans(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[KnownSourceSpan, ...]:
+        return ()
+
     def find_document_versions_by_content_hash(
         self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:
@@ -281,6 +298,8 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_parse_outcome = StructuralTransaction.get_parse_outcome
         get_parsed_representation = StructuralTransaction.get_parsed_representation
         list_parsed_representations = StructuralTransaction.list_parsed_representations
+        resolve_source_span = StructuralTransaction.resolve_source_span
+        list_known_source_spans = StructuralTransaction.list_known_source_spans
         find_document_versions_by_content_hash = (
             StructuralTransaction.find_document_versions_by_content_hash
         )
@@ -339,6 +358,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "ProducerIdentity",
         "RepositoryClosedError",
         "RepositoryUnavailableError",
+        "ResolvedSourceSpan",
         "SourceArtefact",
         "SourceLocation",
         "StorageConcurrencyError",

@@ -22,9 +22,11 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    KnownSourceSpan,
     RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
 from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
 from inference_lab.storage._sqlite_connection import (
@@ -72,6 +74,10 @@ from inference_lab.storage._sqlite_source_artefacts import (
     read_source_bytes,
     stream_source_bytes,
 )
+from inference_lab.storage._sqlite_source_spans import (
+    list_known_source_spans,
+    resolve_source_span,
+)
 from inference_lab.storage._sqlite_transaction import SQLiteMetadataTransaction
 from inference_lab.storage._sqlite_versions import (
     find_document_versions_by_content_hash,
@@ -86,6 +92,7 @@ from inference_lab.storage.errors import (
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
+from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
 
 
@@ -278,6 +285,30 @@ class SQLiteMetadataRepository:
     ) -> tuple[ParsedRepresentation, ...]:
         """Return a version's parsed records in canonical identity order."""
         return list_parsed_representations(
+            self._connection_or_raise(),
+            corpus_id,
+            document_version_id,
+        )
+
+    def resolve_source_span(
+        self,
+        corpus_id: CorpusId,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
+        """Return a corpus-visible span and its coordinate descriptor."""
+        return resolve_source_span(
+            self._connection_or_raise(),
+            corpus_id,
+            source_span_id,
+        )
+
+    def list_known_source_spans(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[KnownSourceSpan, ...]:
+        """Return a version's validated PROV-03 source-span catalogue."""
+        return list_known_source_spans(
             self._connection_or_raise(),
             corpus_id,
             document_version_id,
