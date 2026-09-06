@@ -1,17 +1,24 @@
 """End-to-end acceptance tests for restart-safe source persistence."""
 
+import hashlib
 import json
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from inference_lab.provenance import (
+    ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    DocumentId,
     DocumentIdentity,
     DocumentVersion,
+    DocumentVersionId,
+    HashAlgorithm,
 )
 from inference_lab.storage import (
     BoundingBox,
@@ -25,6 +32,7 @@ from inference_lab.storage import (
     ParseOutcome,
     ParseStatus,
     SourceArtefact,
+    StorageConflictError,
     open_metadata_repository,
     serialise_parse_outcome,
     serialise_parsed_representation,
@@ -48,6 +56,10 @@ _CORPUS = CorpusMetadata(
     CorpusId("90000000-0000-4000-8000-000000000001"),
     "Cold-process acceptance corpus",
 )
+_OTHER_CORPUS = CorpusMetadata(
+    CorpusId("90000000-0000-4000-8000-000000000002"),
+    "Other acceptance corpus",
+)
 _VERSION = DocumentVersion(DOCUMENT_VERSION_ID, DOCUMENT_ID, SOURCE_HASH)
 _ARTEFACT = SourceArtefact(
     document_id=DOCUMENT_ID,
@@ -66,6 +78,46 @@ _OUTCOME = ParseOutcome(
     normalisation_version="1.0.0",
     parsed_record_id=PARSED_RECORD_ID,
     failures=(),
+)
+_FIRST_ONLY_BYTES = b"first corpus only"
+_FIRST_ONLY_DOCUMENT_ID = DocumentId("91000000-0000-4000-8000-000000000001")
+_FIRST_ONLY_VERSION_ID = DocumentVersionId("92000000-0000-4000-8000-000000000001")
+_FIRST_ONLY_HASH = ContentHash(
+    HashAlgorithm.SHA256,
+    hashlib.sha256(_FIRST_ONLY_BYTES).hexdigest(),
+)
+_FIRST_ONLY_VERSION = DocumentVersion(
+    _FIRST_ONLY_VERSION_ID,
+    _FIRST_ONLY_DOCUMENT_ID,
+    _FIRST_ONLY_HASH,
+)
+_FIRST_ONLY_ARTEFACT = SourceArtefact(
+    document_id=_FIRST_ONLY_DOCUMENT_ID,
+    document_version_id=_FIRST_ONLY_VERSION_ID,
+    content_hash=_FIRST_ONLY_HASH,
+    byte_count=len(_FIRST_ONLY_BYTES),
+    media_type="text/plain",
+    storage_key=(f"sha256/{_FIRST_ONLY_HASH.digest[:2]}/{_FIRST_ONLY_HASH.digest}"),
+)
+_SECOND_ONLY_BYTES = b"second corpus only"
+_SECOND_ONLY_DOCUMENT_ID = DocumentId("91000000-0000-4000-8000-000000000002")
+_SECOND_ONLY_VERSION_ID = DocumentVersionId("92000000-0000-4000-8000-000000000002")
+_SECOND_ONLY_HASH = ContentHash(
+    HashAlgorithm.SHA256,
+    hashlib.sha256(_SECOND_ONLY_BYTES).hexdigest(),
+)
+_SECOND_ONLY_VERSION = DocumentVersion(
+    _SECOND_ONLY_VERSION_ID,
+    _SECOND_ONLY_DOCUMENT_ID,
+    _SECOND_ONLY_HASH,
+)
+_SECOND_ONLY_ARTEFACT = SourceArtefact(
+    document_id=_SECOND_ONLY_DOCUMENT_ID,
+    document_version_id=_SECOND_ONLY_VERSION_ID,
+    content_hash=_SECOND_ONLY_HASH,
+    byte_count=len(_SECOND_ONLY_BYTES),
+    media_type="text/plain",
+    storage_key=(f"sha256/{_SECOND_ONLY_HASH.digest[:2]}/{_SECOND_ONLY_HASH.digest}"),
 )
 
 _COLD_PROCESS_READER = """
@@ -313,3 +365,229 @@ def test_fresh_process_recovers_complete_source_parse_and_locations(
             [DOCUMENT_VERSION_ID.as_str(), SECOND_SPAN_ID.as_str()],
         ],
     }
+
+
+def test_two_corpora_reuse_only_explicitly_shared_source_and_parse_records(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    representation = _representation_with_optional_page_region()
+    repository: MetadataRepository = open_metadata_repository(
+        database_path,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_corpus(_CORPUS)
+            transaction.add_corpus(_OTHER_CORPUS)
+            for document_id in (
+                DOCUMENT_ID,
+                _FIRST_ONLY_DOCUMENT_ID,
+                _SECOND_ONLY_DOCUMENT_ID,
+            ):
+                transaction.add_document(DocumentIdentity(document_id))
+            for version in (
+                _VERSION,
+                _FIRST_ONLY_VERSION,
+                _SECOND_ONLY_VERSION,
+            ):
+                transaction.add_document_version(version)
+            for corpus_id, document_id, version_id in (
+                (_CORPUS.corpus_id, DOCUMENT_ID, DOCUMENT_VERSION_ID),
+                (
+                    _CORPUS.corpus_id,
+                    _FIRST_ONLY_DOCUMENT_ID,
+                    _FIRST_ONLY_VERSION_ID,
+                ),
+                (
+                    _OTHER_CORPUS.corpus_id,
+                    _SECOND_ONLY_DOCUMENT_ID,
+                    _SECOND_ONLY_VERSION_ID,
+                ),
+            ):
+                transaction.add_corpus_document_version_membership(
+                    CorpusDocumentVersionMembership(
+                        corpus_id,
+                        document_id,
+                        version_id,
+                    )
+                )
+
+        repository.persist_source_artefact(
+            _CORPUS.corpus_id,
+            _ARTEFACT,
+            (SOURCE_BYTES,),
+            max_source_bytes=len(SOURCE_BYTES),
+            parse_outcome=_OUTCOME,
+            parsed_representation=representation,
+        )
+        repository.persist_source_artefact(
+            _CORPUS.corpus_id,
+            _FIRST_ONLY_ARTEFACT,
+            (_FIRST_ONLY_BYTES,),
+            max_source_bytes=len(_FIRST_ONLY_BYTES),
+        )
+        repository.persist_source_artefact(
+            _OTHER_CORPUS.corpus_id,
+            _SECOND_ONLY_ARTEFACT,
+            (_SECOND_ONLY_BYTES,),
+            max_source_bytes=len(_SECOND_ONLY_BYTES),
+        )
+
+        assert (
+            repository.get_source_artefact(
+                _OTHER_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            is None
+        )
+        assert (
+            repository.read_source_bytes(
+                _OTHER_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            is None
+        )
+        assert (
+            repository.get_parsed_representation(
+                _OTHER_CORPUS.corpus_id,
+                PARSED_RECORD_ID,
+            )
+            is None
+        )
+        assert (
+            repository.list_parsed_representations(
+                _OTHER_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == ()
+        )
+        assert repository.get_parse_outcome(_OTHER_CORPUS.corpus_id, PARSE_ID) is None
+        assert (
+            repository.resolve_source_span(
+                _OTHER_CORPUS.corpus_id,
+                FIRST_SPAN_ID,
+            )
+            is None
+        )
+        assert (
+            repository.list_known_source_spans(
+                _OTHER_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == ()
+        )
+        with pytest.raises(StorageConflictError):
+            repository.persist_source_artefact(
+                _OTHER_CORPUS.corpus_id,
+                _ARTEFACT,
+                (SOURCE_BYTES,),
+                max_source_bytes=len(SOURCE_BYTES),
+                parse_outcome=_OUTCOME,
+                parsed_representation=representation,
+            )
+
+        assert (
+            repository.read_source_bytes(
+                _CORPUS.corpus_id,
+                _SECOND_ONLY_VERSION_ID,
+            )
+            is None
+        )
+        assert (
+            repository.read_source_bytes(
+                _OTHER_CORPUS.corpus_id,
+                _FIRST_ONLY_VERSION_ID,
+            )
+            is None
+        )
+
+        with repository.transaction() as transaction:
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(
+                    _OTHER_CORPUS.corpus_id,
+                    DOCUMENT_ID,
+                    DOCUMENT_VERSION_ID,
+                )
+            )
+        repository.persist_source_artefact(
+            _OTHER_CORPUS.corpus_id,
+            _ARTEFACT,
+            (SOURCE_BYTES,),
+            max_source_bytes=len(SOURCE_BYTES),
+            parse_outcome=_OUTCOME,
+            parsed_representation=representation,
+        )
+    finally:
+        repository.close()
+
+    reopened: MetadataRepository = open_metadata_repository(
+        database_path,
+        source_dir=source_dir,
+    )
+    try:
+        for corpus_id in (_CORPUS.corpus_id, _OTHER_CORPUS.corpus_id):
+            assert (
+                reopened.get_source_artefact(corpus_id, DOCUMENT_VERSION_ID)
+                == _ARTEFACT
+            )
+            assert (
+                reopened.read_source_bytes(corpus_id, DOCUMENT_VERSION_ID)
+                == SOURCE_BYTES
+            )
+            assert (
+                reopened.get_parsed_representation(corpus_id, PARSED_RECORD_ID)
+                == representation
+            )
+            assert reopened.list_parsed_representations(
+                corpus_id,
+                DOCUMENT_VERSION_ID,
+            ) == (representation,)
+            assert reopened.get_parse_outcome(corpus_id, PARSE_ID) == _OUTCOME
+            assert reopened.resolve_source_span(corpus_id, FIRST_SPAN_ID) is not None
+            assert (
+                reopened.list_known_source_spans(
+                    corpus_id,
+                    DOCUMENT_VERSION_ID,
+                )
+                == representation.known_source_spans()
+            )
+
+        assert (
+            reopened.read_source_bytes(
+                _CORPUS.corpus_id,
+                _FIRST_ONLY_VERSION_ID,
+            )
+            == _FIRST_ONLY_BYTES
+        )
+        assert (
+            reopened.read_source_bytes(
+                _OTHER_CORPUS.corpus_id,
+                _SECOND_ONLY_VERSION_ID,
+            )
+            == _SECOND_ONLY_BYTES
+        )
+        assert (
+            reopened.read_source_bytes(
+                _CORPUS.corpus_id,
+                _SECOND_ONLY_VERSION_ID,
+            )
+            is None
+        )
+        assert (
+            reopened.read_source_bytes(
+                _OTHER_CORPUS.corpus_id,
+                _FIRST_ONLY_VERSION_ID,
+            )
+            is None
+        )
+    finally:
+        reopened.close()
+
+    managed_blobs = tuple(
+        path for path in (source_dir / "sha256").glob("*/*") if path.is_file()
+    )
+    assert len(managed_blobs) == 3
+    assert (source_dir / _ARTEFACT.storage_key).is_file()
