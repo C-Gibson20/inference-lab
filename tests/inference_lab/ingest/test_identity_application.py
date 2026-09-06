@@ -1,5 +1,6 @@
 """Acceptance tests for applying discovery identity outcomes atomically."""
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,10 @@ from inference_lab.storage import (
     SourceFileIdentityHint,
     SourceFingerprint,
     SourceLocatorRevision,
+    StorageConflictError,
 )
+from inference_lab.storage import _sqlite_transaction as sqlite_transaction_module
+from inference_lab.storage._sqlite_migrations import MIGRATIONS
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 _CORPUS_ID = CorpusId("11111111-1111-4111-8111-111111111111")
@@ -474,3 +478,267 @@ def test_unassigned_outcome_withholds_every_write_and_parse_eligibility(
         )
     finally:
         repository.close()
+
+
+def _new_document_source(path: Path) -> DiscoveredSource:
+    version = DocumentVersion(_NEW_VERSION_ID, _NEW_DOCUMENT_ID, _HASH_A)
+    return _source(
+        source_id=_NEW_SOURCE_ID,
+        path=path,
+        content_hash=_HASH_A,
+        outcome=IdentityResolutionOutcome(
+            kind=ResolutionKind.NEW_DOCUMENT,
+            reason=ResolutionReason.NO_MATCH,
+            document=DocumentIdentity(_NEW_DOCUMENT_ID),
+            version=version,
+        ),
+    )
+
+
+def _fail_write(
+    monkeypatch: pytest.MonkeyPatch,
+    operation_name: str,
+    primary: StorageConflictError,
+) -> None:
+    def fail_operation(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise primary
+
+    monkeypatch.setattr(sqlite_transaction_module, operation_name, fail_operation)
+
+
+def _assert_new_identity_absent(repository: SQLiteMetadataRepository) -> None:
+    assert repository.get_document(_NEW_DOCUMENT_ID) is None
+    assert repository.get_document_version(_NEW_VERSION_ID) is None
+    assert (
+        repository.get_corpus_document_version_membership(
+            _CORPUS_ID,
+            _NEW_VERSION_ID,
+        )
+        is None
+    )
+    assert repository.get_source_observation(_CORPUS_ID, _NEW_SOURCE_ID) is None
+    assert repository.get_source_locator(_CORPUS_ID, _NEW_SOURCE_ID) is None
+
+
+@pytest.mark.parametrize(
+    "operation_name",
+    [
+        "add_document",
+        "add_document_version",
+        "add_corpus_document_version_membership",
+        "add_source_observation",
+        "add_source_locator",
+    ],
+)
+def test_new_document_failure_at_each_write_rolls_back_complete_unit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_name: str,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    _add_corpus(repository)
+    source = _new_document_source((tmp_path / "new.txt").resolve())
+    primary = StorageConflictError()
+    _fail_write(monkeypatch, operation_name, primary)
+    try:
+        with pytest.raises(StorageConflictError) as raised:
+            _apply(repository, source)
+
+        assert raised.value is primary
+        _assert_new_identity_absent(repository)
+    finally:
+        repository.close()
+
+
+def test_new_version_observation_failure_rolls_back_version_and_membership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    _add_corpus(repository)
+    path = (tmp_path / "changed.txt").resolve()
+    _add_prior_observation(repository, path)
+    version = DocumentVersion(_NEXT_VERSION_ID, _DOCUMENT_ID, _HASH_B)
+    source = _source(
+        source_id=_SOURCE_ID,
+        path=path,
+        content_hash=_HASH_B,
+        outcome=IdentityResolutionOutcome(
+            kind=ResolutionKind.NEW_VERSION,
+            reason=ResolutionReason.SOURCE_CONTINUITY_MATCH,
+            document=DocumentIdentity(_DOCUMENT_ID),
+            version=version,
+            matched_version_ids=(_PRIOR_VERSION_ID,),
+        ),
+    )
+    primary = StorageConflictError()
+    _fail_write(monkeypatch, "advance_source_observation", primary)
+    try:
+        with pytest.raises(StorageConflictError) as raised:
+            _apply(repository, source)
+
+        assert raised.value is primary
+        assert repository.get_document_version(_NEXT_VERSION_ID) is None
+        assert (
+            repository.get_corpus_document_version_membership(
+                _CORPUS_ID,
+                _NEXT_VERSION_ID,
+            )
+            is None
+        )
+        assert repository.list_source_observation_history(
+            _CORPUS_ID,
+            _SOURCE_ID,
+        ) == (
+            SourceObservationState(
+                _CORPUS_ID,
+                _SOURCE_ID,
+                1,
+                _DOCUMENT_ID,
+                _PRIOR_VERSION_ID,
+            ),
+        )
+        assert len(repository.list_source_locator_history(_CORPUS_ID, _SOURCE_ID)) == 1
+    finally:
+        repository.close()
+
+
+@pytest.mark.parametrize(
+    "operation_name",
+    ["add_duplicate_relationship", "add_source_locator"],
+)
+def test_duplicate_failure_rolls_back_relationship_and_independent_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_name: str,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    _add_corpus(repository)
+    _add_prior_observation(repository, (tmp_path / "prior.txt").resolve())
+    version = DocumentVersion(_NEW_VERSION_ID, _NEW_DOCUMENT_ID, _HASH_A)
+    relationship = DuplicateRelationship(
+        _PRIOR_VERSION_ID,
+        _NEW_VERSION_ID,
+        DuplicateClass.BYTE_IDENTICAL,
+    )
+    source = _source(
+        source_id=_NEW_SOURCE_ID,
+        path=(tmp_path / "duplicate.txt").resolve(),
+        content_hash=_HASH_A,
+        outcome=IdentityResolutionOutcome(
+            kind=ResolutionKind.DUPLICATE,
+            reason=ResolutionReason.DUPLICATE_HASH_MATCH,
+            document=DocumentIdentity(_NEW_DOCUMENT_ID),
+            version=version,
+            matched_version_ids=(_PRIOR_VERSION_ID,),
+            duplicate_relationships=(relationship,),
+        ),
+    )
+    primary = StorageConflictError()
+    _fail_write(monkeypatch, operation_name, primary)
+    try:
+        with pytest.raises(StorageConflictError) as raised:
+            _apply(repository, source)
+
+        assert raised.value is primary
+        _assert_new_identity_absent(repository)
+        assert (
+            repository.list_duplicate_relationships(
+                _CORPUS_ID,
+                _PRIOR_VERSION_ID,
+            )
+            == ()
+        )
+    finally:
+        repository.close()
+
+
+@pytest.mark.parametrize(
+    "operation_name",
+    ["add_external_identifier_assertions", "advance_source_locator"],
+)
+def test_unchanged_failure_rolls_back_assertion_and_locator_advance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_name: str,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    _add_corpus(repository)
+    old_path = (tmp_path / "old.txt").resolve()
+    _add_prior_observation(repository, old_path)
+    assertion = ExternalIdentifierAssertion(_SOURCE_ID, _PRIOR_VERSION_ID, _PMID)
+    source = _source(
+        source_id=_SOURCE_ID,
+        path=(tmp_path / "moved.txt").resolve(),
+        content_hash=_HASH_A,
+        external_identifiers=(_DOI, _PMID),
+        outcome=IdentityResolutionOutcome(
+            kind=ResolutionKind.UNCHANGED,
+            reason=ResolutionReason.EXACT_HASH_MATCH,
+            document=DocumentIdentity(_DOCUMENT_ID),
+            version=_PRIOR_VERSION,
+            matched_version_ids=(_PRIOR_VERSION_ID,),
+            identifier_assertions_to_add=(assertion,),
+        ),
+    )
+    primary = StorageConflictError()
+    _fail_write(monkeypatch, operation_name, primary)
+    try:
+        with pytest.raises(StorageConflictError) as raised:
+            _apply(repository, source)
+
+        assert raised.value is primary
+        assert (
+            repository.list_external_identifier_assertions(
+                _CORPUS_ID,
+                _PRIOR_VERSION_ID,
+            )
+            == ()
+        )
+        assert (
+            len(repository.list_source_observation_history(_CORPUS_ID, _SOURCE_ID)) == 1
+        )
+        assert repository.list_source_locator_history(
+            _CORPUS_ID,
+            _SOURCE_ID,
+        ) == (_locator(old_path),)
+    finally:
+        repository.close()
+
+
+def test_rollback_failure_does_not_replace_identity_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RollbackFailingConnection(sqlite3.Connection):
+        def rollback(self) -> None:
+            raise sqlite3.OperationalError("private-rollback-payload")
+
+    database_path = tmp_path / "metadata.sqlite3"
+    initial = _open_repository(database_path)
+    _add_corpus(initial)
+    initial.close()
+    connection = sqlite3.connect(
+        database_path,
+        isolation_level=None,
+        factory=RollbackFailingConnection,
+    )
+    connection.row_factory = sqlite3.Row
+    repository = SQLiteMetadataRepository(connection, MIGRATIONS)
+    source = _new_document_source((tmp_path / "new.txt").resolve())
+    primary = StorageConflictError()
+    _fail_write(monkeypatch, "add_source_locator", primary)
+    try:
+        with pytest.raises(StorageConflictError) as raised:
+            _apply(repository, source)
+
+        assert raised.value is primary
+    finally:
+        repository.close()
+
+    reopened = SQLiteMetadataRepository.open(database_path)
+    try:
+        _assert_new_identity_absent(reopened)
+    finally:
+        reopened.close()
