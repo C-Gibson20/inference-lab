@@ -46,6 +46,11 @@ def test_every_failure_category_has_one_fixed_policy() -> None:
         DiscoveryFailureStage.PERSISTENCE,
         True,
     )
+    assert policies[DiscoveryFailureCategory.ROOT_INACCESSIBLE] == (
+        DiscoveryFailureScope.REQUEST,
+        DiscoveryFailureStage.INPUT,
+        True,
+    )
 
 
 def test_failure_factory_uses_category_owned_policy() -> None:

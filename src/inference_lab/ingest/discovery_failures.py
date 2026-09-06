@@ -13,6 +13,8 @@ class DiscoveryFailureCategory(StrEnum):
 
     INVALID_REQUEST = "invalid_request"
     INVALID_ROOT = "invalid_root"
+    ROOT_NOT_FOUND = "root_not_found"
+    ROOT_INACCESSIBLE = "root_inaccessible"
     STORAGE_ROOT_OVERLAP = "storage_root_overlap"
     SOURCE_NOT_FOUND = "source_not_found"
     SOURCE_INACCESSIBLE = "source_inaccessible"
@@ -73,6 +75,16 @@ _FAILURE_POLICIES: Final[dict[DiscoveryFailureCategory, _FailurePolicy]] = {
         DiscoveryFailureScope.REQUEST,
         DiscoveryFailureStage.INPUT,
         False,
+    ),
+    DiscoveryFailureCategory.ROOT_NOT_FOUND: (
+        DiscoveryFailureScope.REQUEST,
+        DiscoveryFailureStage.INPUT,
+        True,
+    ),
+    DiscoveryFailureCategory.ROOT_INACCESSIBLE: (
+        DiscoveryFailureScope.REQUEST,
+        DiscoveryFailureStage.INPUT,
+        True,
     ),
     DiscoveryFailureCategory.STORAGE_ROOT_OVERLAP: (
         DiscoveryFailureScope.REQUEST,
