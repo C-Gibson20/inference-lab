@@ -23,7 +23,7 @@ The current sections are:
 | --- | --- |
 | `[models]` | Local embedder, reranker, and generator paths |
 | `[runtime]` | VRAM budget and maximum context size |
-| `[storage]` | Persistent index and metadata database paths |
+| `[storage]` | Persistent index, metadata database, and managed source paths |
 | `[logging]` | Log level and output format |
 | `[ingest]` | Controls safety limits for batch ingestion |
 
@@ -63,6 +63,7 @@ sections and fields:
 ```sh
 MODELS__GENERATOR_PATH=/mnt/models/generator \
 STORAGE__INDEX_DIR=/mnt/data/indexes \
+STORAGE__SOURCE_DIR=/mnt/source-data \
 uv run inference-lab
 ```
 
@@ -90,8 +91,12 @@ Required values are:
 - `runtime.vram_budget_gb`
 - `storage.index_dir`
 - `storage.metadata_db_path`
+- `storage.source_dir`
 
 `runtime.max_context_tokens` defaults to `8192`.
+`ingest.max_source_bytes` defaults to `52428800` bytes and must be greater than
+zero. Source publication enforces this limit while streaming into managed
+staging; it must not buffer or publish an oversized source first.
 
 `get_settings()` caches the validated settings for the process lifetime.
 Changes to `config.toml` or the environment take effect after a process
@@ -99,9 +104,19 @@ restart. Tests and other controlled callers may clear the cache explicitly.
 
 Application composition opens metadata through
 `inference_lab.storage.open_metadata_repository()`, passing the validated
-`settings.storage.metadata_db_path`. Schema creation and supported forward
-migrations occur only when the caller explicitly sets `apply_migrations=True`;
-the default open policy is non-mutating and rejects a missing or older schema.
+`settings.storage.metadata_db_path` and `settings.storage.source_dir`. Schema
+creation and supported forward migrations occur only when the caller explicitly
+sets `apply_migrations=True`; the default open policy is non-mutating and rejects
+a missing or older schema.
+
+`storage.source_dir` is the deployment-owned root for managed copies of
+original source files. It must be separate from `storage.index_dir` and the
+metadata database. Original sources remain subject to the separate source-data
+backup policy; they are not included in corpus-state backups. The repository
+owns the directory layout, validates managed bytes on read, and must be the only
+component that modifies its contents. See the
+[storage conventions](storage.md) for lifecycle, integrity, and corpus
+visibility rules.
 
 Configuration errors must fail startup clearly. They must not be replaced with
 guessed model paths, storage paths, or runtime values.

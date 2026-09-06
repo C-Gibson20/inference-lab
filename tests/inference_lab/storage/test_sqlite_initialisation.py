@@ -46,11 +46,11 @@ def test_initialisation_atomically_publishes_current_revision(tmp_path: Path) ->
         assert connection.execute("PRAGMA application_id").fetchone()[0] == (
             SQLITE_APPLICATION_ID
         )
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
         schema_row = connection.execute(
             "SELECT schema_name, current_revision FROM metadata_schema"
         ).fetchone()
-        assert tuple(schema_row) == ("inference_lab_metadata", 2)
+        assert tuple(schema_row) == ("inference_lab_metadata", 4)
         history_rows = connection.execute(
             """SELECT revision, migration_id, checksum, applied_at_utc
             FROM migration_history ORDER BY revision"""
@@ -68,6 +68,18 @@ def test_initialisation_atomically_publishes_current_revision(tmp_path: Path) ->
                 MIGRATIONS[1].checksum,
                 "2026-09-01T12:30:00.000000+00:00",
             ),
+            (
+                3,
+                "source_persistence",
+                MIGRATIONS[2].checksum,
+                "2026-09-01T12:30:00.000000+00:00",
+            ),
+            (
+                4,
+                "corpus_version_publication",
+                MIGRATIONS[3].checksum,
+                "2026-09-01T12:30:00.000000+00:00",
+            ),
         ]
     finally:
         connection.close()
@@ -77,12 +89,12 @@ def test_initialisation_atomically_publishes_current_revision(tmp_path: Path) ->
         assert reopened.execute("PRAGMA application_id").fetchone()[0] == (
             SQLITE_APPLICATION_ID
         )
-        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 4
         assert (
             reopened.execute("SELECT current_revision FROM metadata_schema").fetchone()[
                 0
             ]
-            == 2
+            == 4
         )
     finally:
         reopened.close()

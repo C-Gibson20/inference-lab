@@ -1,9 +1,5 @@
-"""Canonical text transformations for ingest source content."""
+"""Public ingest access to canonical source-text normalisation."""
 
-import unicodedata
+from inference_lab._normalisation import normalise_source_text
 
-
-def normalise_source_text(source_text: str) -> str:
-    """Normalise decoded source text without changing its whitespace semantics."""
-    newline_normalised = source_text.replace("\r\n", "\n").replace("\r", "\n")
-    return unicodedata.normalize("NFC", newline_normalised)
+__all__ = ["normalise_source_text"]

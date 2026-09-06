@@ -21,11 +21,29 @@ from inference_lab.provenance import (
     ExternalIdentifier,
     HashAlgorithm,
 )
-from inference_lab.storage import MigrationRequiredError, StorageMigrationError
+from inference_lab.storage import (
+    MetadataRepository,
+    MigrationRequiredError,
+    ParseOutcome,
+    ParseStatus,
+    SourceArtefact,
+    StorageMigrationError,
+    open_metadata_repository,
+)
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 from .fixtures import fixed_applied_at as _fixed_applied_at  # noqa: TID252
+from .source_fixtures import (  # noqa: TID252
+    DOCUMENT_ID,
+    DOCUMENT_VERSION_ID,
+    PARSE_ID,
+    PARSED_RECORD_ID,
+    PARSER,
+    SOURCE_BYTES,
+    SOURCE_HASH,
+    parsed_representation,
+)
 
 _CORPUS_ID = CorpusId("01014415-1989-449f-8824-cb13e418d92f")
 _FAMILY_ID = DocumentFamilyId("6a5a72ce-e82f-4168-adb4-36c090dd19f0")
@@ -54,32 +72,63 @@ _MEMBERSHIP = DocumentFamilyMembership(
     _FIRST_DOCUMENT_ID,
     _FIRST_VERSION_ID,
 )
+_SOURCE_VERSION = DocumentVersion(DOCUMENT_VERSION_ID, DOCUMENT_ID, SOURCE_HASH)
+_SOURCE_MEMBERSHIP = CorpusDocumentVersionMembership(
+    _CORPUS_ID,
+    DOCUMENT_ID,
+    DOCUMENT_VERSION_ID,
+)
+_SOURCE_ARTEFACT = SourceArtefact(
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    content_hash=SOURCE_HASH,
+    byte_count=len(SOURCE_BYTES),
+    media_type="application/pdf",
+    storage_key=f"sha256/{SOURCE_HASH.digest[:2]}/{SOURCE_HASH.digest}",
+)
+_SOURCE_OUTCOME = ParseOutcome(
+    parse_id=PARSE_ID,
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    status=ParseStatus.SUCCEEDED,
+    parser=PARSER,
+    normalisation_version="1.0.0",
+    parsed_record_id=PARSED_RECORD_ID,
+    failures=(),
+)
 
 
-def _revision_two() -> MigrationDefinition:
-    return MigrationDefinition(
-        revision=2,
-        migration_id="test_add_corpus_note",
-        statements=("ALTER TABLE corpora ADD COLUMN migration_note TEXT",),
-    )
-
-
-def _failing_revision_three() -> MigrationDefinition:
+def _failing_source_persistence_migration() -> MigrationDefinition:
     return MigrationDefinition(
         revision=3,
-        migration_id="test_failing_revision_three",
+        migration_id="test_failing_source_persistence",
         statements=(
-            "CREATE TABLE revision_three_marker (value TEXT) STRICT",
+            *MIGRATIONS[2].statements,
             "CREATE TABLE documents (conflicting_value TEXT)",
         ),
     )
 
 
-def _create_complete_baseline(path: Path) -> None:
+def _failing_revision_five() -> MigrationDefinition:
+    return MigrationDefinition(
+        revision=5,
+        migration_id="test_failing_revision_five",
+        statements=(
+            "CREATE TABLE revision_five_marker (value TEXT) STRICT",
+            "CREATE TABLE documents (conflicting_value TEXT)",
+        ),
+    )
+
+
+def _create_complete_baseline(
+    path: Path,
+    *,
+    migrations: tuple[MigrationDefinition, ...] = (MIGRATIONS[0],),
+) -> None:
     repository = SQLiteMetadataRepository.open(
         path,
         apply_migrations=True,
-        migrations=(MIGRATIONS[0],),
+        migrations=migrations,
         applied_at_factory=_fixed_applied_at,
     )
     with repository.transaction() as transaction:
@@ -134,27 +183,53 @@ def _database_snapshot(path: Path) -> tuple[object, ...]:
         connection.close()
 
 
-def _assert_complete_graph(repository: SQLiteMetadataRepository) -> None:
+def _assert_complete_graph(
+    repository: MetadataRepository,
+    *,
+    additional_memberships: tuple[CorpusDocumentVersionMembership, ...] = (),
+) -> None:
     assert repository.get_document_family(_FAMILY_ID) == _FAMILY_ID
     assert repository.get_document(_FIRST_DOCUMENT_ID) == DocumentIdentity(
         _FIRST_DOCUMENT_ID
     )
     assert repository.get_document_version(_FIRST_VERSION_ID) == _FIRST_VERSION
     assert repository.get_document_version(_SECOND_VERSION_ID) == _SECOND_VERSION
+    expected_memberships = (
+        CorpusDocumentVersionMembership(
+            _CORPUS_ID, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID
+        ),
+        CorpusDocumentVersionMembership(
+            _CORPUS_ID, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID
+        ),
+        *additional_memberships,
+    )
+    assert repository.list_corpus_document_version_memberships(_CORPUS_ID) == tuple(
+        sorted(
+            expected_memberships,
+            key=lambda membership: membership.document_version_id.as_str(),
+        )
+    )
+    assert repository.list_duplicate_relationships(_CORPUS_ID, _FIRST_VERSION_ID) == (
+        _DUPLICATE,
+    )
+    assert repository.list_family_memberships_by_family(_CORPUS_ID, _FAMILY_ID) == (
+        _MEMBERSHIP,
+    )
 
 
-def test_revision_one_baseline_persists_complete_multi_corpus_graph(
+def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_baseline(database_path)
+    _create_complete_baseline(database_path, migrations=MIGRATIONS[:2])
 
     reopened = SQLiteMetadataRepository.open(
         database_path,
-        migrations=(MIGRATIONS[0],),
+        apply_migrations=True,
+        applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert reopened.schema_inspection.current_revision == 1
+        assert reopened.schema_inspection.current_revision == 4
         assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
             _CORPUS_ID, "Primary corpus"
         )
@@ -176,19 +251,97 @@ def test_revision_one_baseline_persists_complete_multi_corpus_graph(
     finally:
         reopened.close()
 
+    connection = sqlite3.connect(database_path)
+    try:
+        assert connection.execute(
+            """SELECT corpus_id, corpus_version
+            FROM corpus_active_versions"""
+        ).fetchall() == [(_CORPUS_ID.as_str(), None)]
+        assert connection.execute(
+            """SELECT revision, migration_id, checksum, applied_at_utc
+            FROM migration_history
+            WHERE revision = 4"""
+        ).fetchone() == (
+            4,
+            "corpus_version_publication",
+            MIGRATIONS[3].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        )
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        connection.close()
+
+    reopened_without_permission = SQLiteMetadataRepository.open(database_path)
+    try:
+        assert reopened_without_permission.schema_inspection.current_revision == 4
+        _assert_complete_graph(reopened_without_permission)
+    finally:
+        reopened_without_permission.close()
+
 
 def test_non_empty_repository_requires_explicit_upgrade_without_mutation(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _create_complete_baseline(database_path)
-    migrations = (MIGRATIONS[0], _revision_two())
     before = _database_snapshot(database_path)
 
     with pytest.raises(MigrationRequiredError):
-        SQLiteMetadataRepository.open(database_path, migrations=migrations)
+        SQLiteMetadataRepository.open(database_path)
 
     assert _database_snapshot(database_path) == before
+
+
+def test_failed_corpus_version_migration_rolls_back_all_schema_and_data_changes(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_complete_baseline(database_path, migrations=MIGRATIONS[:3])
+    before = _database_snapshot(database_path)
+    failing_migration = MigrationDefinition(
+        revision=4,
+        migration_id="test_failing_corpus_version_publication",
+        statements=(
+            *MIGRATIONS[3].statements[:-1],
+            "CREATE TABLE documents (conflicting_value TEXT)",
+        ),
+    )
+
+    with pytest.raises(StorageMigrationError):
+        SQLiteMetadataRepository.open(
+            database_path,
+            apply_migrations=True,
+            migrations=(*MIGRATIONS[:3], failing_migration),
+            applied_at_factory=_fixed_applied_at,
+        )
+
+    assert _database_snapshot(database_path) == before
+    connection = sqlite3.connect(database_path)
+    try:
+        assert (
+            connection.execute(
+                """SELECT name
+            FROM sqlite_schema
+            WHERE name IN (
+                'corpus_updates',
+                'corpus_versions',
+                'corpus_active_versions'
+            )"""
+            ).fetchall()
+            == []
+        )
+    finally:
+        connection.close()
+
+    recovered = SQLiteMetadataRepository.open(
+        database_path,
+        migrations=MIGRATIONS[:3],
+    )
+    try:
+        assert recovered.schema_inspection.current_revision == 3
+        _assert_complete_graph(recovered)
+    finally:
+        recovered.close()
 
 
 def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
@@ -196,26 +349,50 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _create_complete_baseline(database_path)
-    migrations = (MIGRATIONS[0], _revision_two())
 
     migrated = SQLiteMetadataRepository.open(
         database_path,
         apply_migrations=True,
-        migrations=migrations,
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert migrated.schema_inspection.current_revision == 2
+        assert migrated.schema_inspection.current_revision == 4
         _assert_complete_graph(migrated)
     finally:
         migrated.close()
 
+    assert _database_snapshot(database_path)[2] == (
+        (
+            1,
+            "multi_corpus_metadata_baseline",
+            MIGRATIONS[0].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        ),
+        (
+            2,
+            "source_locator_continuity",
+            MIGRATIONS[1].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        ),
+        (
+            3,
+            "source_persistence",
+            MIGRATIONS[2].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        ),
+        (
+            4,
+            "corpus_version_publication",
+            MIGRATIONS[3].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        ),
+    )
+
     reopened = SQLiteMetadataRepository.open(
         database_path,
-        migrations=migrations,
     )
     try:
-        assert reopened.schema_inspection.current_revision == 2
+        assert reopened.schema_inspection.current_revision == 4
         _assert_complete_graph(reopened)
     finally:
         reopened.close()
@@ -224,7 +401,6 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
     idempotent = SQLiteMetadataRepository.open(
         database_path,
         apply_migrations=True,
-        migrations=migrations,
         applied_at_factory=_fixed_applied_at,
     )
     idempotent.close()
@@ -237,22 +413,20 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _create_complete_baseline(database_path)
-    revision_two = _revision_two()
 
     with pytest.raises(StorageMigrationError):
         SQLiteMetadataRepository.open(
             database_path,
             apply_migrations=True,
-            migrations=(MIGRATIONS[0], revision_two, _failing_revision_three()),
+            migrations=(*MIGRATIONS, _failing_revision_five()),
             applied_at_factory=_fixed_applied_at,
         )
 
     recovered = SQLiteMetadataRepository.open(
         database_path,
-        migrations=(MIGRATIONS[0], revision_two),
     )
     try:
-        assert recovered.schema_inspection.current_revision == 2
+        assert recovered.schema_inspection.current_revision == 4
         _assert_complete_graph(recovered)
     finally:
         recovered.close()
@@ -262,12 +436,131 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         assert (
             connection.execute(
                 """SELECT 1 FROM sqlite_schema
-            WHERE name = 'revision_three_marker'"""
+            WHERE name = 'revision_five_marker'"""
             ).fetchone()
             is None
         )
         assert connection.execute(
             "SELECT count(*) FROM migration_history"
-        ).fetchone() == (2,)
+        ).fetchone() == (4,)
     finally:
         connection.close()
+
+
+def test_failed_source_migration_rolls_back_the_entire_revision(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_complete_baseline(database_path, migrations=MIGRATIONS[:2])
+    before = _database_snapshot(database_path)
+
+    with pytest.raises(StorageMigrationError):
+        SQLiteMetadataRepository.open(
+            database_path,
+            apply_migrations=True,
+            migrations=(*MIGRATIONS[:2], _failing_source_persistence_migration()),
+            applied_at_factory=_fixed_applied_at,
+        )
+
+    assert _database_snapshot(database_path) == before
+    connection = sqlite3.connect(database_path)
+    try:
+        assert (
+            connection.execute(
+                """SELECT 1 FROM sqlite_schema
+            WHERE name = 'source_artefacts'"""
+            ).fetchone()
+            is None
+        )
+        assert connection.execute(
+            "SELECT revision FROM migration_history ORDER BY revision"
+        ).fetchall() == [(1,), (2,)]
+    finally:
+        connection.close()
+
+    recovered = SQLiteMetadataRepository.open(
+        database_path,
+        migrations=MIGRATIONS[:2],
+    )
+    try:
+        _assert_complete_graph(recovered)
+    finally:
+        recovered.close()
+
+
+def test_public_factory_upgrades_failed_revision_two_without_losing_prior_data(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "private-metadata" / "metadata.sqlite3"
+    source_dir = tmp_path / "private-source-data"
+    _create_complete_baseline(database_path, migrations=MIGRATIONS[:2])
+    revision_two_snapshot = _database_snapshot(database_path)
+
+    with pytest.raises(MigrationRequiredError) as migration_required:
+        open_metadata_repository(database_path, source_dir=source_dir)
+
+    assert _database_snapshot(database_path) == revision_two_snapshot
+    assert str(database_path) not in str(migration_required.value)
+    assert str(source_dir) not in str(migration_required.value)
+
+    with pytest.raises(StorageMigrationError):
+        SQLiteMetadataRepository.open(
+            database_path,
+            apply_migrations=True,
+            migrations=(*MIGRATIONS[:2], _failing_source_persistence_migration()),
+            applied_at_factory=_fixed_applied_at,
+        )
+
+    assert _database_snapshot(database_path) == revision_two_snapshot
+
+    migrated: MetadataRepository = open_metadata_repository(
+        database_path,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    try:
+        _assert_complete_graph(migrated)
+        with migrated.transaction() as transaction:
+            transaction.add_document(DocumentIdentity(DOCUMENT_ID))
+            transaction.add_document_version(_SOURCE_VERSION)
+            transaction.add_corpus_document_version_membership(_SOURCE_MEMBERSHIP)
+        migrated.persist_source_artefact(
+            _CORPUS_ID,
+            _SOURCE_ARTEFACT,
+            (SOURCE_BYTES,),
+            max_source_bytes=len(SOURCE_BYTES),
+            parse_outcome=_SOURCE_OUTCOME,
+            parsed_representation=parsed_representation(),
+        )
+    finally:
+        migrated.close()
+
+    reopened: MetadataRepository = open_metadata_repository(
+        database_path,
+        source_dir=source_dir,
+    )
+    try:
+        _assert_complete_graph(
+            reopened,
+            additional_memberships=(_SOURCE_MEMBERSHIP,),
+        )
+        assert (
+            reopened.get_source_artefact(_CORPUS_ID, DOCUMENT_VERSION_ID)
+            == _SOURCE_ARTEFACT
+        )
+        assert (
+            reopened.read_source_bytes(_CORPUS_ID, DOCUMENT_VERSION_ID) == SOURCE_BYTES
+        )
+        source_stream = reopened.stream_source_bytes(
+            _CORPUS_ID,
+            DOCUMENT_VERSION_ID,
+        )
+        assert source_stream is not None
+        assert b"".join(source_stream) == SOURCE_BYTES
+        assert (
+            reopened.get_parsed_representation(_CORPUS_ID, PARSED_RECORD_ID)
+            == parsed_representation()
+        )
+        assert reopened.get_parse_outcome(_CORPUS_ID, PARSE_ID) == _SOURCE_OUTCOME
+    finally:
+        reopened.close()

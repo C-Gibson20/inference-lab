@@ -11,8 +11,12 @@ operational logs remain local in deployment.
   application.
 - [Configuration reference](configuration.md): typed settings, defaults, and
   environment overrides.
+- [Source availability](source-availability.md): managed-original integrity,
+  backup responsibility, and failure handling.
 - [Running queries](querying.md): current query status and the operator
   workflow as serving capabilities land.
+- [Corpus-version operations](corpus-versions.md): staging, atomic publication,
+  reader snapshots, restart recovery, and rollback.
 - [Evaluation dataset operations](evaluation.md): local validation,
   deterministic writing, held-out governance, and privacy boundaries.
 - [Backup and restore](backup-restore.md): recover persistent corpus state.
@@ -23,9 +27,10 @@ to apply that policy.
 
 ## Documentation status
 
-The command-line entry point currently starts a skeleton application. The
-first executable ingest-and-search workflow will be documented when it is
-implemented.
+The command-line entry point currently starts a skeleton application. Durable
+corpus-version operations are available to Python integrations but do not yet
+have operator-facing commands. The first executable ingest-and-search workflow
+will be documented when it is implemented.
 Answer generation, citation verification, sessions, chat, named-corpus
 creation/selection and updates, and privacy checks will extend these pages as
 those capabilities become available.
