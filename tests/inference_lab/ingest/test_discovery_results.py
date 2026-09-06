@@ -4,6 +4,8 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
+from structlog.contextvars import get_contextvars
+from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     CURRENT_DISCOVERY_POLICY,
@@ -26,6 +28,7 @@ from inference_lab.ingest import (
     StableFileEvidence,
     VerifiedSourceSnapshot,
     build_discovery_result,
+    observe_discovery,
 )
 from inference_lab.provenance import (
     ContentHash,
@@ -281,6 +284,123 @@ def test_builder_rejects_incomplete_file_accounting() -> None:
             stage_failures=(),
             identity_results=(_applied_source(0, ResolutionKind.NEW_DOCUMENT),),
         )
+
+
+def test_lifecycle_binds_context_and_logs_privacy_safe_partial_summary() -> None:
+    request = _request()
+    failure = DiscoveryFailure.for_category(
+        ordinal=1,
+        category=DiscoveryFailureCategory.SOURCE_INACCESSIBLE,
+    )
+    clock_values = iter((1_000_000_000, 1_025_000_000))
+
+    with capture_logs() as logs:
+        with observe_discovery(request, clock=clock_values.__next__) as lifecycle:
+            assert get_contextvars() == {
+                "corpus_id": request.corpus_id.as_str(),
+                "corpus_version": None,
+                "document_id": None,
+            }
+            result = lifecycle.complete(
+                files_seen=2,
+                stage_failures=(failure,),
+                identity_results=(_applied_source(0, ResolutionKind.NEW_DOCUMENT),),
+            )
+
+    assert result.status is DiscoveryStatus.PARTIAL
+    assert get_contextvars() == {}
+    assert [(record["event"], record["log_level"]) for record in logs] == [
+        ("discovery_started", "info"),
+        ("discovery_completed", "warning"),
+    ]
+    assert logs[0] == {
+        "pipeline_stage": "ingest",
+        "policy_name": CURRENT_DISCOVERY_POLICY.policy_name,
+        "policy_version": CURRENT_DISCOVERY_POLICY.policy_version,
+        "input_count": 1,
+        "event": "discovery_started",
+        "log_level": "info",
+    }
+    assert logs[1]["status"] == "partial"
+    assert logs[1]["duration_ms"] == 25.0
+    assert logs[1]["files_seen"] == 2
+    assert logs[1]["supported"] == 1
+    assert logs[1]["failed"] == 1
+    log_payload = repr(logs)
+    assert "source-0.txt" not in log_payload
+    assert _DIGEST not in log_payload
+
+
+@pytest.mark.parametrize(
+    ("stage_failures", "files_seen", "expected_status", "expected_level"),
+    (
+        ((), 0, DiscoveryStatus.COMPLETED, "info"),
+        (
+            (
+                DiscoveryFailure.for_category(
+                    ordinal=0,
+                    category=DiscoveryFailureCategory.ROOT_NOT_FOUND,
+                ),
+            ),
+            0,
+            DiscoveryStatus.FAILED,
+            "error",
+        ),
+    ),
+)
+def test_lifecycle_completion_level_matches_result_status(
+    stage_failures: tuple[DiscoveryFailure, ...],
+    files_seen: int,
+    expected_status: DiscoveryStatus,
+    expected_level: str,
+) -> None:
+    clock_values = iter((10, 20))
+
+    with capture_logs() as logs:
+        with observe_discovery(
+            _request(),
+            clock=clock_values.__next__,
+        ) as lifecycle:
+            result = lifecycle.complete(
+                files_seen=files_seen,
+                stage_failures=stage_failures,
+                identity_results=(),
+            )
+
+    assert result.status is expected_status
+    assert logs[-1]["log_level"] == expected_level
+
+
+def test_lifecycle_requires_a_terminal_result_without_masking_primary_errors() -> None:
+    with pytest.raises(RuntimeError, match="without a terminal result"):
+        with observe_discovery(_request(), clock=lambda: 0):
+            pass
+
+    primary = RuntimeError("private-primary-error")
+    with pytest.raises(RuntimeError, match="private-primary-error") as caught:
+        with observe_discovery(_request(), clock=lambda: 0):
+            raise primary
+
+    assert caught.value is primary
+    assert get_contextvars() == {}
+
+
+def test_lifecycle_rejects_a_clock_that_moves_backwards() -> None:
+    clock_values = iter((20, 10))
+
+    with capture_logs() as logs:
+        with pytest.raises(ValueError, match="must not move backwards"):
+            with observe_discovery(
+                _request(),
+                clock=clock_values.__next__,
+            ) as lifecycle:
+                lifecycle.complete(
+                    files_seen=0,
+                    stage_failures=(),
+                    identity_results=(),
+                )
+
+    assert [record["event"] for record in logs] == ["discovery_started"]
 
 
 def test_empty_directory_is_a_successful_zero_source_result() -> None:

@@ -47,6 +47,7 @@ from inference_lab.ingest.discovery_failures import (
     DiscoveryFileKind,
     discovery_failure_policy,
 )
+from inference_lab.ingest.discovery_observability import observe_discovery
 from inference_lab.ingest.discovery_results import (
     DiscoveryCounts,
     DiscoveryResult,
@@ -200,6 +201,7 @@ __all__ = [
     "hash_source_candidate",
     "inventory_local_sources",
     "normalise_source_text",
+    "observe_discovery",
     "parsed_document_payload",
     "persist_discovered_source_identities",
     "persist_discovered_source_identity",
