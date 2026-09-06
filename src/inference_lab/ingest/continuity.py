@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Final, Protocol
 
 from inference_lab._validation import is_strict_integer
 from inference_lab.ingest.discovery import (
@@ -98,6 +98,22 @@ class _PriorPathStatus(StrEnum):
     UNPROVEN = "unproven"
 
 
+_OBSERVED_PRESENT_FAILURE_CATEGORIES: Final = frozenset(
+    {
+        DiscoveryFailureCategory.SOURCE_SYMLINK,
+        DiscoveryFailureCategory.SOURCE_SPECIAL_FILE,
+        DiscoveryFailureCategory.NESTED_MOUNT,
+    }
+)
+
+_UNTRAVERSED_FAILURE_KINDS: Final = frozenset(
+    {
+        DiscoveryFileKind.DIRECTORY,
+        DiscoveryFileKind.SYMLINK,
+    }
+)
+
+
 def _identity_hint(snapshot: VerifiedSourceSnapshot) -> SourceFileIdentityHint | None:
     hint = snapshot.file_evidence.opened_after_read.identity_hint
     if hint is None:
@@ -128,6 +144,31 @@ def _prior_path_status(
         for candidate in inventory.candidates
     ):
         return _PriorPathStatus.LIVE
+
+    located_failures = tuple(
+        (failure, failure.locator)
+        for failure in inventory.failures
+        if failure.locator is not None
+    )
+    exact_failures = tuple(
+        failure
+        for failure, locator in located_failures
+        if canonical_path_key(locator.path) == path_key
+    )
+    if exact_failures:
+        if any(
+            failure.category in _OBSERVED_PRESENT_FAILURE_CATEGORIES
+            for failure in exact_failures
+        ):
+            return _PriorPathStatus.LIVE
+        return _PriorPathStatus.UNPROVEN
+
+    if any(
+        failure.file_kind in _UNTRAVERSED_FAILURE_KINDS
+        and path.is_relative_to(locator.path)
+        for failure, locator in located_failures
+    ):
+        return _PriorPathStatus.UNPROVEN
 
     containing_scopes = tuple(
         scope
