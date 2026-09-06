@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
@@ -11,11 +12,13 @@ import pytest
 from inference_lab.logging.logging_config import configure_logging
 from inference_lab.provenance import (
     ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
+    DocumentIdentity,
     DocumentVersion,
     DocumentVersionId,
     DuplicateClass,
@@ -25,9 +28,20 @@ from inference_lab.provenance import (
 )
 from inference_lab.settings import LoggingConfig
 from inference_lab.storage import (
+    CorruptStorageError,
+    MetadataRepository,
+    ParseFailureCategory,
+    ParseFailureRecord,
+    ParseFailureSeverity,
+    ParseFailureStage,
+    ParseFailureUnitKind,
+    ParseOutcome,
+    ParseStatus,
     RepositoryUnavailableError,
+    SourceArtefact,
     StorageConflictError,
     StorageMigrationError,
+    open_metadata_repository,
 )
 from inference_lab.storage._sqlite_migrations import MIGRATIONS, MigrationDefinition
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
@@ -39,6 +53,17 @@ from .fixtures import (  # noqa: TID252
 )
 from .fixtures import (  # noqa: TID252
     fixed_applied_at as _fixed_applied_at,
+)
+from .source_fixtures import (  # noqa: TID252
+    DOCUMENT_ID,
+    DOCUMENT_VERSION_ID,
+    PARSE_ID,
+    PARSED_RECORD_ID,
+    PARSER,
+    SOURCE_BYTES,
+    SOURCE_HASH,
+    SOURCE_TEXT,
+    parsed_representation,
 )
 
 _CORPUS_ID = CorpusId("ea304c92-db98-4112-9976-38d2d67a28d4")
@@ -81,6 +106,43 @@ _REQUIRED_LOG_FIELDS = {
     "corpus_id",
     "corpus_version",
 }
+_SOURCE_CORPUS = CorpusMetadata(
+    CorpusId("ca000000-0000-4000-8000-000000000001"),
+    "Private source observability corpus",
+)
+_SOURCE_EXTERNAL_IDENTIFIER = "10.1000/private-source-publication"
+_SOURCE_VERSION = DocumentVersion(
+    DOCUMENT_VERSION_ID,
+    DOCUMENT_ID,
+    SOURCE_HASH,
+    (ExternalIdentifier("doi", _SOURCE_EXTERNAL_IDENTIFIER),),
+)
+_SOURCE_ARTEFACT = SourceArtefact(
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    content_hash=SOURCE_HASH,
+    byte_count=len(SOURCE_BYTES),
+    media_type="application/pdf",
+    storage_key=f"sha256/{SOURCE_HASH.digest[:2]}/{SOURCE_HASH.digest}",
+)
+_PRIVATE_FAILURE_UNIT_INDEX = 987_654_321
+_SOURCE_FAILURE = ParseFailureRecord(
+    category=ParseFailureCategory.MALFORMED_UNIT,
+    severity=ParseFailureSeverity.RECOVERABLE,
+    stage=ParseFailureStage.STRUCTURE,
+    unit_kind=ParseFailureUnitKind.PAGE,
+    unit_index=_PRIVATE_FAILURE_UNIT_INDEX,
+)
+_SOURCE_OUTCOME = ParseOutcome(
+    parse_id=PARSE_ID,
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    status=ParseStatus.COMPLETED_WITH_RECOVERABLE_FAILURES,
+    parser=PARSER,
+    normalisation_version="1.0.0",
+    parsed_record_id=PARSED_RECORD_ID,
+    failures=(_SOURCE_FAILURE,),
+)
 
 
 def _records(stream: StringIO) -> list[dict[str, object]]:
@@ -187,6 +249,134 @@ def test_configured_logs_are_complete_and_payload_free_across_restart(
         _FIRST_VERSION_ID.as_str(),
     )
     assert all(canary not in rendered for canary in canaries)
+
+
+def test_source_publication_logs_and_errors_exclude_private_payloads(
+    tmp_path: Path,
+) -> None:
+    private_database_filename = "private-metadata-filename.sqlite3"
+    private_source_path = "private-source-path"
+    private_exception = "private-source-iterator-exception"
+    database_path = tmp_path / private_database_filename
+    source_dir = tmp_path / private_source_path
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="INFO", format="json"), stream=stream)
+
+    repository = open_metadata_repository(
+        database_path,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    assert isinstance(repository, MetadataRepository)
+    corrupt_error: CorruptStorageError | None = None
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_corpus(_SOURCE_CORPUS)
+            transaction.add_document(DocumentIdentity(DOCUMENT_ID))
+            transaction.add_document_version(_SOURCE_VERSION)
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(
+                    _SOURCE_CORPUS.corpus_id,
+                    DOCUMENT_ID,
+                    DOCUMENT_VERSION_ID,
+                )
+            )
+
+        def interrupted_chunks() -> Iterator[bytes]:
+            yield SOURCE_BYTES[:3]
+            raise RuntimeError(private_exception)
+
+        with pytest.raises(RuntimeError, match=private_exception):
+            repository.persist_source_artefact(
+                _SOURCE_CORPUS.corpus_id,
+                _SOURCE_ARTEFACT,
+                interrupted_chunks(),
+                max_source_bytes=len(SOURCE_BYTES),
+                parse_outcome=_SOURCE_OUTCOME,
+                parsed_representation=parsed_representation(),
+            )
+
+        for _ in range(2):
+            repository.persist_source_artefact(
+                _SOURCE_CORPUS.corpus_id,
+                _SOURCE_ARTEFACT,
+                (SOURCE_BYTES,),
+                max_source_bytes=len(SOURCE_BYTES),
+                parse_outcome=_SOURCE_OUTCOME,
+                parsed_representation=parsed_representation(),
+            )
+
+        blob_path = source_dir / _SOURCE_ARTEFACT.storage_key
+        blob_path.chmod(0o600)
+        blob_path.write_bytes(b"x" * len(SOURCE_BYTES))
+        with pytest.raises(CorruptStorageError) as raised:
+            repository.read_source_bytes(
+                _SOURCE_CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+        corrupt_error = raised.value
+    finally:
+        repository.close()
+
+    records = _records(stream)
+    assert records
+    for record in records:
+        assert _REQUIRED_LOG_FIELDS <= record.keys()
+        assert record["pipeline_stage"] == "storage"
+        assert record["corpus_version"] is None
+        assert isinstance(record["module"], str)
+        assert str(record["module"]).startswith("inference_lab.storage.")
+        assert isinstance(record["timestamp"], str)
+        assert datetime.fromisoformat(str(record["timestamp"])).utcoffset() == (
+            UTC.utcoffset(APPLIED_AT)
+        )
+
+    source_records = [
+        record
+        for record in records
+        if str(record["event"]).startswith("source_persistence_")
+    ]
+    assert [(record["event"], record["level"]) for record in source_records] == [
+        ("source_persistence_started", "info"),
+        ("source_persistence_failed", "error"),
+        ("source_persistence_started", "info"),
+        ("source_persistence_completed", "info"),
+        ("source_persistence_started", "info"),
+        ("source_persistence_completed", "info"),
+    ]
+    assert all(
+        record["corpus_id"] == _SOURCE_CORPUS.corpus_id.as_str()
+        and record["document_id"] == DOCUMENT_ID.as_str()
+        for record in source_records
+    )
+    assert source_records[1]["error_category"] == "transaction"
+    assert source_records[1]["retryable"] is False
+    assert [
+        record["byte_count"]
+        for record in source_records
+        if record["event"] == "source_persistence_completed"
+    ] == [len(SOURCE_BYTES), len(SOURCE_BYTES)]
+
+    assert corrupt_error is not None
+    rendered_error = str(corrupt_error)
+    rendered_logs = stream.getvalue()
+    canaries = (
+        str(database_path),
+        private_database_filename,
+        str(source_dir),
+        private_source_path,
+        private_exception,
+        SOURCE_BYTES.decode(),
+        SOURCE_TEXT,
+        parsed_representation().text,
+        SOURCE_HASH.digest,
+        _SOURCE_ARTEFACT.storage_key,
+        _SOURCE_EXTERNAL_IDENTIFIER,
+        _SOURCE_CORPUS.display_name,
+        str(_PRIVATE_FAILURE_UNIT_INDEX),
+    )
+    assert all(canary not in rendered_logs for canary in canaries)
+    assert all(canary not in rendered_error for canary in canaries)
 
 
 def test_configured_migration_failure_logs_exclude_sql_and_raw_errors(

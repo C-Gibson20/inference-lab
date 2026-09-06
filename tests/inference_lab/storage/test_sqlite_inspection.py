@@ -60,9 +60,9 @@ def test_current_database_inspection_is_read_only(tmp_path: Path) -> None:
         inspection = validate_database_schema(connection)
 
         assert inspection == SchemaInspection(
-            current_revision=2,
-            latest_supported_revision=2,
-            applied_migration_count=2,
+            current_revision=3,
+            latest_supported_revision=3,
+            applied_migration_count=3,
         )
         assert connection.total_changes == changes_before
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
