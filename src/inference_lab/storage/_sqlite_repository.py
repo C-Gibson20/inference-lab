@@ -22,6 +22,7 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
 )
@@ -55,6 +56,7 @@ from inference_lab.storage._sqlite_observations import (
     get_source_observation,
     list_source_observation_history,
 )
+from inference_lab.storage._sqlite_parse_outcomes import get_parse_outcome
 from inference_lab.storage._sqlite_relationships import (
     list_duplicate_relationships,
     list_family_memberships_by_document,
@@ -78,6 +80,7 @@ from inference_lab.storage.errors import (
     RepositoryUnavailableError,
     StorageTransactionError,
 )
+from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.source_records import SourceArtefact
 
 
@@ -242,6 +245,14 @@ class SQLiteMetadataRepository:
             corpus_id,
             document_version_id,
         )
+
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
+        """Return a complete corpus-visible parser outcome, or ``None``."""
+        return get_parse_outcome(self._connection_or_raise(), corpus_id, parse_id)
 
     def find_document_versions_by_content_hash(
         self,

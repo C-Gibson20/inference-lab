@@ -19,6 +19,7 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
 )
@@ -26,6 +27,7 @@ from inference_lab.storage import (
     MetadataRepository,
     MetadataTransaction,
     ParsedRepresentation,
+    ParseOutcome,
     SourceArtefact,
 )
 
@@ -77,6 +79,13 @@ class StructuralTransaction:
         self,
         corpus_id: CorpusId,
         representation: ParsedRepresentation,
+    ) -> None:
+        pass
+
+    def add_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        outcome: ParseOutcome,
     ) -> None:
         pass
 
@@ -161,6 +170,13 @@ class StructuralTransaction:
         corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> Iterator[bytes] | None:
+        return None
+
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
         return None
 
     def find_document_versions_by_content_hash(
@@ -248,6 +264,7 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_source_artefact = StructuralTransaction.get_source_artefact
         read_source_bytes = StructuralTransaction.read_source_bytes
         stream_source_bytes = StructuralTransaction.stream_source_bytes
+        get_parse_outcome = StructuralTransaction.get_parse_outcome
         find_document_versions_by_content_hash = (
             StructuralTransaction.find_document_versions_by_content_hash
         )

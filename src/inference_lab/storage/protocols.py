@@ -18,9 +18,11 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_records import SourceArtefact
 
@@ -95,6 +97,14 @@ class MetadataReader(Protocol):
         document_version_id: DocumentVersionId,
     ) -> Iterator[bytes] | None:
         """Return fully verified, detached source chunks, or ``None``."""
+        ...
+
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
+        """Return a complete corpus-visible parser outcome, or ``None``."""
         ...
 
     def find_document_versions_by_content_hash(
@@ -202,6 +212,14 @@ class MetadataWriter(Protocol):
         representation: ParsedRepresentation,
     ) -> None:
         """Add one complete parsed aggregate after proving corpus membership."""
+        ...
+
+    def add_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        outcome: ParseOutcome,
+    ) -> None:
+        """Add one complete parser outcome after proving corpus membership."""
         ...
 
     def add_source_observation(self, state: SourceObservationState) -> None:
