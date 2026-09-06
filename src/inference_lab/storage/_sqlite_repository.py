@@ -438,8 +438,10 @@ class SQLiteMetadataRepository:
         chunks: Iterable[bytes],
         *,
         max_source_bytes: int,
+        parse_outcome: ParseOutcome | None = None,
+        parsed_representation: ParsedRepresentation | None = None,
     ) -> None:
-        """Publish verified source bytes before atomically exposing metadata."""
+        """Publish bytes, source metadata, and optional parse records safely."""
         if not isinstance(corpus_id, CorpusId):
             raise TypeError("corpus_id must be a CorpusId.")
         if not isinstance(artefact, SourceArtefact):
@@ -456,6 +458,8 @@ class SQLiteMetadataRepository:
                     artefact,
                     chunks,
                     max_source_bytes=max_source_bytes,
+                    parse_outcome=parse_outcome,
+                    parsed_representation=parsed_representation,
                 )
             except StorageError as error:
                 safe_log_failure("source_persistence_failed", error)
@@ -480,6 +484,8 @@ class SQLiteMetadataRepository:
         chunks: Iterable[bytes],
         *,
         max_source_bytes: int,
+        parse_outcome: ParseOutcome | None,
+        parsed_representation: ParsedRepresentation | None,
     ) -> None:
         """Execute the preflight, blob promotion, and metadata commit sequence."""
         connection = self._connection_or_raise()
@@ -488,6 +494,11 @@ class SQLiteMetadataRepository:
         blob_store = self._source_blob_store
         if blob_store is None:
             raise RepositoryUnavailableError()
+        self._validate_parse_publication(
+            artefact,
+            parse_outcome,
+            parsed_representation,
+        )
 
         membership = get_corpus_document_version_membership(
             connection,
@@ -518,6 +529,58 @@ class SQLiteMetadataRepository:
         )
         with self.transaction() as transaction:
             transaction.add_source_artefact(corpus_id, artefact)
+            if parsed_representation is not None:
+                transaction.add_parsed_representation(
+                    corpus_id,
+                    parsed_representation,
+                )
+            if parse_outcome is not None:
+                transaction.add_parse_outcome(corpus_id, parse_outcome)
+
+    @staticmethod
+    def _validate_parse_publication(
+        artefact: SourceArtefact,
+        parse_outcome: ParseOutcome | None,
+        parsed_representation: ParsedRepresentation | None,
+    ) -> None:
+        """Reject an incomplete or mismatched parse bundle before promotion."""
+        if parse_outcome is not None and not isinstance(parse_outcome, ParseOutcome):
+            raise TypeError("parse_outcome must be a ParseOutcome or None.")
+        if parsed_representation is not None and not isinstance(
+            parsed_representation,
+            ParsedRepresentation,
+        ):
+            raise TypeError(
+                "parsed_representation must be a ParsedRepresentation or None."
+            )
+        if parse_outcome is None:
+            if parsed_representation is not None:
+                raise StorageConflictError()
+            return
+
+        expected_representation = parse_outcome.parsed_record_id is not None
+        if expected_representation != (parsed_representation is not None):
+            raise StorageConflictError()
+        if (
+            parse_outcome.document_id != artefact.document_id
+            or parse_outcome.document_version_id != artefact.document_version_id
+        ):
+            raise StorageConflictError()
+        if parsed_representation is None:
+            return
+        if (
+            parsed_representation.record_id != parse_outcome.parsed_record_id
+            or parsed_representation.document_id != parse_outcome.document_id
+            or parsed_representation.document_version_id
+            != parse_outcome.document_version_id
+            or parsed_representation.record_schema_version
+            != parse_outcome.record_schema_version
+            or parsed_representation.parser != parse_outcome.parser
+            or parsed_representation.normalisation_version
+            != parse_outcome.normalisation_version
+            or parsed_representation.ocr_producer != parse_outcome.ocr_producer
+        ):
+            raise StorageConflictError()
 
     def _connection_or_raise(self) -> sqlite3.Connection:
         connection = self._connection

@@ -273,6 +273,8 @@ class StructuralRepository(StructuralTransaction):
         chunks: Iterable[bytes],
         *,
         max_source_bytes: int,
+        parse_outcome: ParseOutcome | None = None,
+        parsed_representation: ParsedRepresentation | None = None,
     ) -> None:
         pass
 

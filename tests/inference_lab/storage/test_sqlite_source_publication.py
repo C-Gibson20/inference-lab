@@ -14,14 +14,23 @@ from inference_lab.provenance import (
     DocumentIdentity,
     DocumentVersion,
 )
-from inference_lab.storage import SourceArtefact, StorageConflictError
+from inference_lab.storage import (
+    ParseOutcome,
+    ParseStatus,
+    SourceArtefact,
+    StorageConflictError,
+)
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 from .source_fixtures import (  # noqa: TID252
     DOCUMENT_ID,
     DOCUMENT_VERSION_ID,
+    PARSE_ID,
+    PARSED_RECORD_ID,
+    PARSER,
     SOURCE_BYTES,
     SOURCE_HASH,
+    parsed_representation,
 )
 
 _CORPUS = CorpusMetadata(
@@ -36,6 +45,16 @@ _ARTEFACT = SourceArtefact(
     byte_count=len(SOURCE_BYTES),
     media_type="application/pdf",
     storage_key=f"sha256/{SOURCE_HASH.digest[:2]}/{SOURCE_HASH.digest}",
+)
+_PARSE_OUTCOME = ParseOutcome(
+    parse_id=PARSE_ID,
+    document_id=DOCUMENT_ID,
+    document_version_id=DOCUMENT_VERSION_ID,
+    status=ParseStatus.SUCCEEDED,
+    parser=PARSER,
+    normalisation_version="1.0.0",
+    parsed_record_id=PARSED_RECORD_ID,
+    failures=(),
 )
 _PRIVATE_DATABASE_PAYLOAD = "private-source-publication-trigger"
 
@@ -171,6 +190,135 @@ def test_invalid_membership_is_rejected_before_blob_publication(tmp_path: Path) 
                 _ARTEFACT,
                 (SOURCE_BYTES,),
                 max_source_bytes=len(SOURCE_BYTES),
+            )
+
+        assert not (source_dir / _ARTEFACT.storage_key).exists()
+    finally:
+        repository.close()
+
+
+def test_source_and_complete_parse_records_commit_together_across_restart(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    repository = _open_repository(database_path, source_dir)
+    representation = parsed_representation()
+    repository.persist_source_artefact(
+        _CORPUS.corpus_id,
+        _ARTEFACT,
+        (SOURCE_BYTES,),
+        max_source_bytes=len(SOURCE_BYTES),
+        parse_outcome=_PARSE_OUTCOME,
+        parsed_representation=representation,
+    )
+    repository.close()
+
+    reopened = SQLiteMetadataRepository.open(database_path, source_dir=source_dir)
+    try:
+        assert (
+            reopened.get_source_artefact(
+                _CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == _ARTEFACT
+        )
+        assert (
+            reopened.get_parsed_representation(
+                _CORPUS.corpus_id,
+                PARSED_RECORD_ID,
+            )
+            == representation
+        )
+        assert (
+            reopened.get_parse_outcome(
+                _CORPUS.corpus_id,
+                PARSE_ID,
+            )
+            == _PARSE_OUTCOME
+        )
+    finally:
+        reopened.close()
+
+
+def test_parse_outcome_failure_rolls_back_all_metadata_after_blob_promotion(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    repository = _open_repository(database_path, source_dir)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            f"""CREATE TRIGGER reject_parse_publication
+            BEFORE INSERT ON parse_outcomes
+            BEGIN
+                SELECT RAISE(ABORT, '{_PRIVATE_DATABASE_PAYLOAD}');
+            END"""
+        )
+
+    try:
+        with pytest.raises(StorageConflictError):
+            repository.persist_source_artefact(
+                _CORPUS.corpus_id,
+                _ARTEFACT,
+                (SOURCE_BYTES,),
+                max_source_bytes=len(SOURCE_BYTES),
+                parse_outcome=_PARSE_OUTCOME,
+                parsed_representation=parsed_representation(),
+            )
+
+        assert (
+            repository.get_source_artefact(
+                _CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            is None
+        )
+        assert (
+            repository.get_parsed_representation(
+                _CORPUS.corpus_id,
+                PARSED_RECORD_ID,
+            )
+            is None
+        )
+        assert (
+            repository.get_parse_outcome(
+                _CORPUS.corpus_id,
+                PARSE_ID,
+            )
+            is None
+        )
+        assert repository.get_corpus(_CORPUS.corpus_id) == _CORPUS
+        assert (source_dir / _ARTEFACT.storage_key).is_file()
+    finally:
+        repository.close()
+
+
+def test_mismatched_parse_bundle_is_rejected_before_blob_publication(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    repository = _open_repository(database_path, source_dir)
+    mismatched = ParseOutcome(
+        parse_id=PARSE_ID,
+        document_id=DOCUMENT_ID,
+        document_version_id=DOCUMENT_VERSION_ID,
+        status=ParseStatus.SUCCEEDED,
+        parser=PARSER,
+        normalisation_version="2.0.0",
+        parsed_record_id=PARSED_RECORD_ID,
+        failures=(),
+    )
+    try:
+        with pytest.raises(StorageConflictError):
+            repository.persist_source_artefact(
+                _CORPUS.corpus_id,
+                _ARTEFACT,
+                (SOURCE_BYTES,),
+                max_source_bytes=len(SOURCE_BYTES),
+                parse_outcome=mismatched,
+                parsed_representation=parsed_representation(),
             )
 
         assert not (source_dir / _ARTEFACT.storage_key).exists()

@@ -331,8 +331,10 @@ class MetadataRepository(MetadataReader, Protocol):
         chunks: Iterable[bytes],
         *,
         max_source_bytes: int,
+        parse_outcome: ParseOutcome | None = None,
+        parsed_representation: ParsedRepresentation | None = None,
     ) -> None:
-        """Publish verified source bytes before atomically exposing metadata."""
+        """Publish bytes, source metadata, and optional parse records safely."""
         ...
 
     def close(self) -> None:
