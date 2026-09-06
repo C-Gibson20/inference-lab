@@ -69,6 +69,9 @@ from inference_lab.ingest.identity_application import (
     IdentityApplicationResult,
     apply_discovery_identity_outcome,
 )
+from inference_lab.ingest.identity_persistence import (
+    persist_discovered_source_identity,
+)
 from inference_lab.ingest.identity_resolution import (
     DiscoveryIdentityIdAllocator,
     UuidDiscoveryIdentityIdAllocator,
@@ -193,6 +196,7 @@ __all__ = [
     "inventory_local_sources",
     "normalise_source_text",
     "parsed_document_payload",
+    "persist_discovered_source_identity",
     "prepare_text",
     "resolve_discovered_source_identity",
     "resolve_source_observation",
