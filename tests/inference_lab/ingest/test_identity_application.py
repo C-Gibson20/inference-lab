@@ -200,7 +200,10 @@ def test_new_document_persists_complete_identity_unit(tmp_path: Path) -> None:
     try:
         result = _apply(repository, source)
 
-        assert result == IdentityApplicationResult(source, parse_eligible=True)
+        assert result == IdentityApplicationResult(
+            source,
+            created_document_version=True,
+        )
         assert repository.get_document(_NEW_DOCUMENT_ID) == DocumentIdentity(
             _NEW_DOCUMENT_ID
         )
@@ -258,7 +261,7 @@ def test_continuity_new_version_advances_observation_and_locator(
     try:
         result = _apply(repository, source)
 
-        assert result.parse_eligible
+        assert result.created_document_version
         assert repository.list_source_observation_history(
             _CORPUS_ID,
             _SOURCE_ID,
@@ -320,7 +323,7 @@ def test_external_identifier_new_version_creates_new_observation(
     try:
         result = _apply(repository, source)
 
-        assert result.parse_eligible
+        assert result.created_document_version
         assert repository.get_source_observation(
             _CORPUS_ID,
             _NEW_SOURCE_ID,
@@ -365,7 +368,10 @@ def test_unchanged_adds_assertion_without_observation_or_locator_revision(
     try:
         result = _apply(repository, source)
 
-        assert result == IdentityApplicationResult(source, parse_eligible=False)
+        assert result == IdentityApplicationResult(
+            source,
+            created_document_version=False,
+        )
         assert repository.list_external_identifier_assertions(
             _CORPUS_ID,
             _PRIOR_VERSION_ID,
@@ -408,7 +414,7 @@ def test_duplicate_persists_independent_identity_and_relationship(
     try:
         result = _apply(repository, source)
 
-        assert result.parse_eligible
+        assert result.created_document_version
         assert (
             repository.get_source_observation(
                 _CORPUS_ID,
@@ -438,7 +444,7 @@ def test_duplicate_persists_independent_identity_and_relationship(
         (ResolutionKind.CONFLICT, ResolutionReason.CONFLICTING_EVIDENCE),
     ],
 )
-def test_unassigned_outcome_withholds_every_write_and_parse_eligibility(
+def test_unassigned_outcome_withholds_every_write_and_version_creation(
     tmp_path: Path,
     kind: ResolutionKind,
     reason: ResolutionReason,
@@ -460,7 +466,10 @@ def test_unassigned_outcome_withholds_every_write_and_parse_eligibility(
     try:
         result = _apply(repository, source)
 
-        assert result == IdentityApplicationResult(source, parse_eligible=False)
+        assert result == IdentityApplicationResult(
+            source,
+            created_document_version=False,
+        )
         assert repository.list_corpus_document_version_memberships(_CORPUS_ID) == ()
         assert (
             repository.get_source_observation(

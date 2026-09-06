@@ -180,7 +180,7 @@ def _applied_source(
 ) -> IdentityApplicationResult:
     return IdentityApplicationResult(
         source=_source(ordinal, kind),
-        parse_eligible=kind
+        created_document_version=kind
         in {
             ResolutionKind.NEW_VERSION,
             ResolutionKind.NEW_DOCUMENT,

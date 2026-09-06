@@ -304,7 +304,7 @@ def test_real_repository_resolves_and_persists_one_atomic_source(
         )
 
         assert isinstance(result, IdentityApplicationResult)
-        assert result.parse_eligible
+        assert result.created_document_version
         outcome = result.source.identity_outcome
         assert outcome.document is not None
         assert outcome.version is not None
@@ -352,7 +352,7 @@ def test_repeated_discovery_is_a_complete_durable_identity_noop(
             allocator=allocator,
         )
         assert isinstance(first, IdentityApplicationResult)
-        assert first.parse_eligible
+        assert first.created_document_version
         assert first.source.source_observation_id == _SOURCE_ID
         assert first.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
         assert first.source.identity_outcome.document == DocumentIdentity(
@@ -390,7 +390,7 @@ def test_repeated_discovery_is_a_complete_durable_identity_noop(
         )
 
         assert isinstance(repeated, IdentityApplicationResult)
-        assert not repeated.parse_eligible
+        assert not repeated.created_document_version
         assert repeated.source.source_observation_id == _SOURCE_ID
         assert repeated.source.identity_outcome.kind is ResolutionKind.UNCHANGED
         assert (
@@ -426,7 +426,7 @@ def test_resolution_and_application_share_one_transaction(
 ) -> None:
     source, snapshot, request, inventory = _case(tmp_path)
     resolved = _resolved(source, snapshot, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID)
-    expected = IdentityApplicationResult(resolved, parse_eligible=True)
+    expected = IdentityApplicationResult(resolved, created_document_version=True)
     transaction = _Transaction()
     repository = _Repository(transaction)
     resolver = Mock(return_value=resolved)
@@ -456,7 +456,7 @@ def test_resolution_and_application_share_one_transaction(
             "source_observation_id": _SOURCE_ID.as_str(),
             "outcome_kind": "new_document",
             "outcome_reason": "no_match",
-            "parse_eligible": True,
+            "created_document_version": True,
             "attempt_count": 1,
             "event": "identity_persistence_completed",
             "log_level": "info",
@@ -472,7 +472,7 @@ def test_completion_is_emitted_after_commit_with_identity_context(
 ) -> None:
     source, snapshot, request, inventory = _case(tmp_path)
     resolved = _resolved(source, snapshot, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID)
-    expected = IdentityApplicationResult(resolved, parse_eligible=True)
+    expected = IdentityApplicationResult(resolved, created_document_version=True)
     transaction = _Transaction()
     repository = _Repository(transaction)
     captured_context: dict[str, object] = {}
@@ -531,7 +531,7 @@ def test_conflict_retry_rebuilds_resolution_in_a_new_transaction(
     source, snapshot, request, inventory = _case(tmp_path)
     first = _resolved(source, snapshot, _FIRST_DOCUMENT_ID, _FIRST_VERSION_ID)
     rebuilt = _resolved(source, snapshot, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID)
-    expected = IdentityApplicationResult(rebuilt, parse_eligible=True)
+    expected = IdentityApplicationResult(rebuilt, created_document_version=True)
     transactions = (_Transaction(), _Transaction())
     repository = _Repository(*transactions)
     contexts: list[dict[str, object]] = []
@@ -590,7 +590,7 @@ def test_allocator_collision_retries_resolution_before_any_application(
 ) -> None:
     source, snapshot, request, inventory = _case(tmp_path)
     rebuilt = _resolved(source, snapshot, _SECOND_DOCUMENT_ID, _SECOND_VERSION_ID)
-    expected = IdentityApplicationResult(rebuilt, parse_eligible=True)
+    expected = IdentityApplicationResult(rebuilt, created_document_version=True)
     collision = IdentityIdCollisionError("private-allocator-payload")
     transactions = (_Transaction(), _Transaction())
     repository = _Repository(*transactions)
@@ -672,7 +672,7 @@ def test_real_observation_id_collision_recovers_with_fresh_allocation(
         )
 
         assert isinstance(result, IdentityApplicationResult)
-        assert result.parse_eligible
+        assert result.created_document_version
         assert result.source.source_observation_id == _SECOND_SOURCE_ID
         assert result.source.identity_outcome.document == DocumentIdentity(
             _SECOND_DOCUMENT_ID
@@ -833,10 +833,10 @@ def test_concurrent_discovery_rebuilds_to_one_unchanged_identity(
         contender_result = contender_future.result(timeout=5)
 
     assert isinstance(holder_result, IdentityApplicationResult)
-    assert holder_result.parse_eligible
+    assert holder_result.created_document_version
     assert holder_result.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
     assert isinstance(contender_result, IdentityApplicationResult)
-    assert not contender_result.parse_eligible
+    assert not contender_result.created_document_version
     assert contender_result.source.identity_outcome.kind is ResolutionKind.UNCHANGED
     assert contender_result.source.source_observation_id == _SOURCE_ID
     assert (
@@ -935,11 +935,11 @@ def test_identity_batch_rolls_back_one_failure_and_continues_siblings(
 
         assert len(results) == 3
         assert isinstance(results[0], IdentityApplicationResult)
-        assert results[0].parse_eligible
+        assert results[0].created_document_version
         assert isinstance(results[1], DiscoveryFailure)
         assert results[1].category is DiscoveryFailureCategory.IDENTITY_WRITE_FAILED
         assert isinstance(results[2], IdentityApplicationResult)
-        assert results[2].parse_eligible
+        assert results[2].created_document_version
         assert tuple(
             result.source.ordinal
             if isinstance(result, IdentityApplicationResult)

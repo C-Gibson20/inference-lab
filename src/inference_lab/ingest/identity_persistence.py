@@ -146,7 +146,7 @@ def _log_completion(
             source_observation_id=source.source_observation_id.as_str(),
             outcome_kind=outcome.kind.value,
             outcome_reason=outcome.reason.value,
-            parse_eligible=result.parse_eligible,
+            created_document_version=result.created_document_version,
             attempt_count=attempt_count,
         )
 

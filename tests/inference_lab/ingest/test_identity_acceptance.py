@@ -159,7 +159,7 @@ def test_rename_after_restart_preserves_identity_and_advances_locator(
         assert len(first_results) == 1
         first = first_results[0]
         assert isinstance(first, IdentityApplicationResult)
-        assert first.parse_eligible
+        assert first.created_document_version
         assert first.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
     finally:
         initial.close()
@@ -172,7 +172,7 @@ def test_rename_after_restart_preserves_identity_and_advances_locator(
         assert len(renamed_results) == 1
         renamed = renamed_results[0]
         assert isinstance(renamed, IdentityApplicationResult)
-        assert not renamed.parse_eligible
+        assert not renamed.created_document_version
         assert renamed.source.identity_outcome.kind is ResolutionKind.UNCHANGED
         assert (
             renamed.source.source_observation_id == first.source.source_observation_id
@@ -239,7 +239,7 @@ def test_in_place_change_after_restart_creates_one_continuous_version(
         assert len(first_results) == 1
         first = first_results[0]
         assert isinstance(first, IdentityApplicationResult)
-        assert first.parse_eligible
+        assert first.created_document_version
         assert first.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
     finally:
         initial.close()
@@ -252,7 +252,7 @@ def test_in_place_change_after_restart_creates_one_continuous_version(
         assert len(changed_results) == 1
         changed = changed_results[0]
         assert isinstance(changed, IdentityApplicationResult)
-        assert changed.parse_eligible
+        assert changed.created_document_version
         assert changed.source.identity_outcome.kind is ResolutionKind.NEW_VERSION
         assert (
             changed.source.identity_outcome.reason
@@ -346,7 +346,7 @@ def test_copy_delete_move_after_restart_uses_hash_continuity(
         assert len(first_results) == 1
         first = first_results[0]
         assert isinstance(first, IdentityApplicationResult)
-        assert first.parse_eligible
+        assert first.created_document_version
         assert first.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
     finally:
         initial.close()
@@ -360,7 +360,7 @@ def test_copy_delete_move_after_restart_uses_hash_continuity(
         assert len(moved_results) == 1
         moved = moved_results[0]
         assert isinstance(moved, IdentityApplicationResult)
-        assert not moved.parse_eligible
+        assert not moved.created_document_version
         assert moved.source.identity_outcome.kind is ResolutionKind.UNCHANGED
         assert moved.source.source_observation_id == first.source.source_observation_id
         assert (
@@ -470,7 +470,7 @@ def test_live_identical_source_is_an_independent_duplicate_after_restart(
         assert original.source.snapshot.locator.path == original_path.resolve()
         assert duplicate.source.snapshot.locator.path == duplicate_path.resolve()
 
-        assert not original.parse_eligible
+        assert not original.created_document_version
         assert original.source.identity_outcome.kind is ResolutionKind.UNCHANGED
         assert (
             original.source.source_observation_id == first.source.source_observation_id
@@ -484,7 +484,7 @@ def test_live_identical_source_is_an_independent_duplicate_after_restart(
             == first.source.identity_outcome.version
         )
 
-        assert duplicate.parse_eligible
+        assert duplicate.created_document_version
         assert duplicate.source.identity_outcome.kind is ResolutionKind.DUPLICATE
         assert (
             duplicate.source.identity_outcome.reason
@@ -760,7 +760,7 @@ def test_overlapping_roots_repeat_in_stable_order_as_an_exact_noop(
             if isinstance(result, IdentityApplicationResult)
         )
         assert len(first_successes) == len(first_units)
-        assert all(result.parse_eligible for result in first_successes)
+        assert all(result.created_document_version for result in first_successes)
         assert all(
             result.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
             for result in first_successes
@@ -834,7 +834,7 @@ def test_overlapping_roots_repeat_in_stable_order_as_an_exact_noop(
             tuple(result.source.snapshot.locator.path for result in repeated_successes)
             == expected_paths
         )
-        assert all(not result.parse_eligible for result in repeated_successes)
+        assert all(not result.created_document_version for result in repeated_successes)
         assert all(
             result.source.identity_outcome.kind is ResolutionKind.UNCHANGED
             for result in repeated_successes
@@ -1095,7 +1095,7 @@ def test_two_corpora_isolate_shared_candidates_observations_and_relationships(
         )
         duplicate = final_by_path[duplicate_path.resolve()]
         duplicate_outcome = duplicate.source.identity_outcome
-        assert duplicate.parse_eligible
+        assert duplicate.created_document_version
         assert duplicate_outcome.kind is ResolutionKind.DUPLICATE
         assert duplicate_outcome.reason is ResolutionReason.DUPLICATE_HASH_MATCH
         assert duplicate_outcome.document is not None
