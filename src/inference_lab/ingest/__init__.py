@@ -70,6 +70,8 @@ from inference_lab.ingest.identity_application import (
     apply_discovery_identity_outcome,
 )
 from inference_lab.ingest.identity_persistence import (
+    IdentityPersistenceUnit,
+    persist_discovered_source_identities,
     persist_discovered_source_identity,
 )
 from inference_lab.ingest.identity_resolution import (
@@ -143,6 +145,7 @@ __all__ = [
     "FileStatEvidence",
     "HiddenEntryPolicy",
     "IdentityApplicationResult",
+    "IdentityPersistenceUnit",
     "LocalStableReadFileSystem",
     "LocalTraversalFileSystem",
     "NestedMountPolicy",
@@ -196,6 +199,7 @@ __all__ = [
     "inventory_local_sources",
     "normalise_source_text",
     "parsed_document_payload",
+    "persist_discovered_source_identities",
     "persist_discovered_source_identity",
     "prepare_text",
     "resolve_discovered_source_identity",

@@ -1,5 +1,6 @@
 """Per-source identity resolution and persistence coordination."""
 
+from dataclasses import dataclass
 from typing import Final
 
 import structlog
@@ -31,6 +32,31 @@ from inference_lab.storage import (
 logger = structlog.get_logger(__name__)
 
 _MAX_IDENTITY_ATTEMPTS: Final = 2
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityPersistenceUnit:
+    """Pair one classified source with its verified bytes snapshot."""
+
+    source: ClassifiedSourceCandidate
+    snapshot: VerifiedSourceSnapshot
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate that the source and snapshot are compatible."""
+        if not isinstance(self.source, ClassifiedSourceCandidate):
+            raise TypeError("source must be a ClassifiedSourceCandidate.")
+        if not isinstance(self.snapshot, VerifiedSourceSnapshot):
+            raise TypeError("snapshot must be a VerifiedSourceSnapshot.")
+        if self.source.candidate.locator != self.snapshot.locator:
+            raise ValueError("snapshot locator must match the classified candidate.")
+
+    @property
+    def ordinal(self) -> int:
+        """Return the source's deterministic discovery position."""
+        return self.source.candidate.ordinal
 
 
 def _safe_log(method_name: str, event: str, **fields: object) -> None:
@@ -152,3 +178,41 @@ def persist_discovered_source_identity(
                 return failure
 
     raise AssertionError("identity attempt loop must return a result")
+
+
+def _validate_persistence_units(units: object) -> None:
+    if not isinstance(units, tuple):
+        raise TypeError("units must be a tuple.")
+    if any(not isinstance(unit, IdentityPersistenceUnit) for unit in units):
+        raise TypeError("units must contain IdentityPersistenceUnit values.")
+    ordinals = tuple(unit.ordinal for unit in units)
+    if ordinals != tuple(sorted(set(ordinals))):
+        raise ValueError("persistence units must have unique ordered ordinals.")
+
+
+def persist_discovered_source_identities(
+    units: tuple[IdentityPersistenceUnit, ...],
+    *,
+    request: DiscoveryRequest,
+    inventory: TraversalInventory,
+    repository: MetadataRepository,
+    allocator: DiscoveryIdentityIdAllocator,
+) -> tuple[IdentityApplicationResult | DiscoveryFailure, ...]:
+    """Persist ordered sources as independently atomic identity units."""
+    _validate_persistence_units(units)
+    if not isinstance(request, DiscoveryRequest):
+        raise TypeError("request must be a DiscoveryRequest.")
+    if not callable(getattr(repository, "transaction", None)):
+        raise TypeError("repository must provide transaction().")
+
+    return tuple(
+        persist_discovered_source_identity(
+            unit.source,
+            unit.snapshot,
+            request=request,
+            inventory=inventory,
+            repository=repository,
+            allocator=allocator,
+        )
+        for unit in units
+    )
