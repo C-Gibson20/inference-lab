@@ -19,6 +19,7 @@ from inference_lab.provenance import (
     DocumentVersion,
 )
 from inference_lab.storage import (
+    CorruptStorageError,
     ParseOutcome,
     ParseStatus,
     SourceArtefact,
@@ -32,9 +33,11 @@ from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from .source_fixtures import (  # noqa: TID252
     DOCUMENT_ID,
     DOCUMENT_VERSION_ID,
+    FIRST_SPAN_ID,
     PARSE_ID,
     PARSED_RECORD_ID,
     PARSER,
+    SECOND_SPAN_ID,
     SOURCE_BYTES,
     SOURCE_HASH,
     parsed_representation,
@@ -67,6 +70,10 @@ _PRIVATE_DATABASE_PAYLOAD = "private-source-publication-trigger"
 _PRIVATE_FILESYSTEM_PAYLOAD = "private-source-filesystem-failure"
 
 type _PrePromotionFailure = Literal["write", "flush", "hash", "rename"]
+type _PublishedBlobCorruption = Literal[
+    "missing", "truncated", "replaced", "mismatched"
+]
+type _ParsedOutputCorruption = Literal["digest", "payload"]
 
 
 class _FailingBinaryWriter:
@@ -119,6 +126,51 @@ def _open_repository(database_path: Path, source_dir: Path) -> SQLiteMetadataRep
             )
         )
     return repository
+
+
+def _corrupt_published_blob(
+    blob_path: Path,
+    corruption: _PublishedBlobCorruption,
+    *,
+    replacement_path: Path,
+) -> None:
+    if corruption == "missing":
+        blob_path.unlink()
+    elif corruption == "truncated":
+        blob_path.chmod(0o600)
+        blob_path.write_bytes(SOURCE_BYTES[:-1])
+    elif corruption == "replaced":
+        replacement_path.write_bytes(SOURCE_BYTES)
+        blob_path.unlink()
+        blob_path.symlink_to(replacement_path)
+    else:
+        blob_path.chmod(0o600)
+        blob_path.write_bytes(b"x" * len(SOURCE_BYTES))
+
+
+def _corrupt_parsed_output(
+    database_path: Path,
+    corruption: _ParsedOutputCorruption,
+) -> None:
+    connection = sqlite3.connect(database_path)
+    try:
+        if corruption == "digest":
+            connection.execute(
+                """UPDATE parsed_representations
+                SET output_digest = ?
+                WHERE record_id = ?""",
+                ("0" * 64, PARSED_RECORD_ID.as_str()),
+            )
+        else:
+            connection.execute(
+                """UPDATE parsed_representations
+                SET token_count = token_count + 1
+                WHERE record_id = ?""",
+                (PARSED_RECORD_ID.as_str(),),
+            )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _inject_pre_promotion_failure(
@@ -642,3 +694,138 @@ def test_publication_contention_fails_before_blob_or_metadata_visibility(
         assert not (source_dir / _ARTEFACT.storage_key).exists()
     finally:
         repository.close()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ("missing", "truncated", "replaced", "mismatched"),
+)
+def test_published_blob_corruption_fails_closed_without_poisoning_metadata(
+    tmp_path: Path,
+    corruption: _PublishedBlobCorruption,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "private-source-data"
+    repository = _open_repository(database_path, source_dir)
+    representation = parsed_representation()
+    repository.persist_source_artefact(
+        _CORPUS.corpus_id,
+        _ARTEFACT,
+        (SOURCE_BYTES,),
+        max_source_bytes=len(SOURCE_BYTES),
+        parse_outcome=_PARSE_OUTCOME,
+        parsed_representation=representation,
+    )
+    repository.close()
+    _corrupt_published_blob(
+        source_dir / _ARTEFACT.storage_key,
+        corruption,
+        replacement_path=tmp_path / "private-replacement-source",
+    )
+
+    reopened = SQLiteMetadataRepository.open(database_path, source_dir=source_dir)
+    try:
+        with capture_logs() as logs:
+            with pytest.raises(CorruptStorageError) as read_error:
+                reopened.read_source_bytes(
+                    _CORPUS.corpus_id,
+                    DOCUMENT_VERSION_ID,
+                )
+            with pytest.raises(CorruptStorageError) as stream_error:
+                reopened.stream_source_bytes(
+                    _CORPUS.corpus_id,
+                    DOCUMENT_VERSION_ID,
+                )
+
+        assert reopened.get_corpus(_CORPUS.corpus_id) == _CORPUS
+        assert (
+            reopened.get_source_artefact(
+                _CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == _ARTEFACT
+        )
+        assert (
+            reopened.get_parsed_representation(
+                _CORPUS.corpus_id,
+                PARSED_RECORD_ID,
+            )
+            == representation
+        )
+        assert reopened.get_parse_outcome(_CORPUS.corpus_id, PARSE_ID) == (
+            _PARSE_OUTCOME
+        )
+        assert logs == []
+        for private_value in (
+            str(source_dir),
+            _ARTEFACT.storage_key,
+            SOURCE_HASH.digest,
+            SOURCE_BYTES.decode(),
+        ):
+            assert private_value not in str(read_error.value)
+            assert private_value not in str(stream_error.value)
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("corruption", ("digest", "payload"))
+def test_parsed_output_corruption_fails_closed_without_poisoning_source_reads(
+    tmp_path: Path,
+    corruption: _ParsedOutputCorruption,
+) -> None:
+    database_path = tmp_path / "private-database" / "metadata.sqlite3"
+    source_dir = tmp_path / "private-source-data"
+    repository = _open_repository(database_path, source_dir)
+    repository.persist_source_artefact(
+        _CORPUS.corpus_id,
+        _ARTEFACT,
+        (SOURCE_BYTES,),
+        max_source_bytes=len(SOURCE_BYTES),
+        parse_outcome=_PARSE_OUTCOME,
+        parsed_representation=parsed_representation(),
+    )
+    repository.close()
+    _corrupt_parsed_output(database_path, corruption)
+
+    reopened = SQLiteMetadataRepository.open(database_path, source_dir=source_dir)
+    try:
+        errors: list[CorruptStorageError] = []
+        with capture_logs() as logs:
+            with pytest.raises(CorruptStorageError) as get_error:
+                reopened.get_parsed_representation(
+                    _CORPUS.corpus_id,
+                    PARSED_RECORD_ID,
+                )
+            errors.append(get_error.value)
+            with pytest.raises(CorruptStorageError) as list_error:
+                reopened.list_parsed_representations(
+                    _CORPUS.corpus_id,
+                    DOCUMENT_VERSION_ID,
+                )
+            errors.append(list_error.value)
+            for source_span_id in (FIRST_SPAN_ID, SECOND_SPAN_ID):
+                with pytest.raises(CorruptStorageError) as span_error:
+                    reopened.resolve_source_span(
+                        _CORPUS.corpus_id,
+                        source_span_id,
+                    )
+                errors.append(span_error.value)
+
+        assert (
+            reopened.read_source_bytes(
+                _CORPUS.corpus_id,
+                DOCUMENT_VERSION_ID,
+            )
+            == SOURCE_BYTES
+        )
+        assert reopened.get_corpus(_CORPUS.corpus_id) == _CORPUS
+        assert reopened.get_parse_outcome(_CORPUS.corpus_id, PARSE_ID) == (
+            _PARSE_OUTCOME
+        )
+        assert logs == []
+        for error in errors:
+            assert str(database_path) not in str(error)
+            assert str(source_dir) not in str(error)
+            assert SOURCE_HASH.digest not in str(error)
+    finally:
+        reopened.close()
