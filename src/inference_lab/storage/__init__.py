@@ -14,6 +14,14 @@ from inference_lab.storage.errors import (
     StorageTransactionError,
 )
 from inference_lab.storage.factory import open_metadata_repository
+from inference_lab.storage.outcomes import (
+    AbortCorpusUpdateOutcome,
+    BeginCorpusUpdateOutcome,
+    CommitCorpusUpdateOutcome,
+    NoCorpusChangeOutcome,
+    RollbackCorpusVersionOutcome,
+    SealCorpusUpdateOutcome,
+)
 from inference_lab.storage.parse_records import (
     ParseFailureCategory,
     ParseFailureRecord,
@@ -33,11 +41,13 @@ from inference_lab.storage.parsed_serialisation import (
 )
 from inference_lab.storage.producers import ProducerIdentity
 from inference_lab.storage.protocols import (
+    ComponentGenerationValidator,
     MetadataReader,
     MetadataRepository,
     MetadataTransaction,
     MetadataWriter,
 )
+from inference_lab.storage.snapshots import CorpusSnapshot
 from inference_lab.storage.source_locations import (
     BoundingBox,
     CollectionAvailability,
@@ -58,22 +68,48 @@ from inference_lab.storage.source_versioning import (
     SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS,
     validate_source_record_schema_version,
 )
+from inference_lab.storage.versioning import (
+    CORPUS_MANIFEST_CONTRACT_VERSION,
+    ComponentGenerationReference,
+    ComponentGenerationState,
+    ComponentKind,
+    CorpusUpdate,
+    CorpusUpdateState,
+    CorpusVersion,
+    CorpusVersionManifest,
+    InvalidCorpusVersionContractError,
+)
 
 __all__ = [
+    "CORPUS_MANIFEST_CONTRACT_VERSION",
     "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
     "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
+    "AbortCorpusUpdateOutcome",
+    "BeginCorpusUpdateOutcome",
     "BoundingBox",
     "CollectionAvailability",
+    "CommitCorpusUpdateOutcome",
+    "ComponentGenerationReference",
+    "ComponentGenerationState",
+    "ComponentGenerationValidator",
+    "ComponentKind",
     "ContentOrigin",
     "CoordinateOrigin",
     "CoordinateUnit",
+    "CorpusSnapshot",
+    "CorpusUpdate",
+    "CorpusUpdateState",
+    "CorpusVersion",
+    "CorpusVersionManifest",
     "CorruptStorageError",
     "IncompatibleSchemaError",
+    "InvalidCorpusVersionContractError",
     "MetadataReader",
     "MetadataRepository",
     "MetadataTransaction",
     "MetadataWriter",
     "MigrationRequiredError",
+    "NoCorpusChangeOutcome",
     "PageLayoutDescriptor",
     "PageRotation",
     "ParseFailureCategory",
@@ -88,6 +124,8 @@ __all__ = [
     "RepositoryClosedError",
     "RepositoryUnavailableError",
     "ResolvedSourceSpan",
+    "RollbackCorpusVersionOutcome",
+    "SealCorpusUpdateOutcome",
     "SourceArtefact",
     "SourceLocation",
     "StorageConcurrencyError",

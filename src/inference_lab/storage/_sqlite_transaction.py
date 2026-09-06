@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
 from types import TracebackType
-from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar
+from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar, cast
 
 from inference_lab.provenance import (
     ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -44,6 +44,29 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     get_corpus_document_version_membership,
     list_corpus_document_version_memberships,
 )
+from inference_lab.storage._sqlite_corpus_publication import (
+    commit_corpus_rollback,
+    commit_corpus_update,
+)
+from inference_lab.storage._sqlite_corpus_updates import (
+    abort_corpus_update,
+    add_corpus_update_document_membership,
+    begin_corpus_update,
+    get_corpus_update,
+    list_corpus_update_component_generations,
+    list_corpus_update_document_memberships,
+    list_non_terminal_corpus_updates,
+    register_corpus_update_component_generation,
+    remove_corpus_update_document_membership,
+    replace_corpus_update_component_generation,
+    replace_corpus_update_document_membership,
+    seal_corpus_update,
+)
+from inference_lab.storage._sqlite_corpus_versions import (
+    get_active_corpus_version,
+    get_corpus_version,
+    list_corpus_versions,
+)
 from inference_lab.storage._sqlite_identifier_assertions import (
     add_external_identifier_assertions,
     list_external_identifier_assertions,
@@ -75,8 +98,6 @@ from inference_lab.storage._sqlite_relationships import (
 from inference_lab.storage._sqlite_source_artefacts import (
     add_source_artefact,
     get_source_artefact,
-    read_source_bytes,
-    stream_source_bytes,
 )
 from inference_lab.storage._sqlite_source_spans import (
     list_known_source_spans,
@@ -93,10 +114,25 @@ from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
 )
+from inference_lab.storage.outcomes import (
+    AbortCorpusUpdateOutcome,
+    BeginCorpusUpdateOutcome,
+    CommitCorpusUpdateOutcome,
+    NoCorpusChangeOutcome,
+    RollbackCorpusVersionOutcome,
+    SealCorpusUpdateOutcome,
+)
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
+from inference_lab.storage.protocols import ComponentGenerationValidator
 from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
+from inference_lab.storage.versioning import (
+    ComponentGenerationReference,
+    ComponentKind,
+    CorpusUpdate,
+    CorpusVersion,
+)
 
 if TYPE_CHECKING:
     from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
@@ -113,6 +149,7 @@ class SQLiteMetadataTransaction:
         self._active = False
         self._finished = False
         self._failed = False
+        self._pending_success_logs: list[tuple[str, dict[str, object]]] = []
 
     def __enter__(self) -> Self:
         """Acquire the write transaction, rejecting nesting and reuse."""
@@ -181,7 +218,10 @@ class SQLiteMetadataTransaction:
             safe_log_failure("transaction_failed", error)
             raise error from None
 
+        pending_success_logs = tuple(self._pending_success_logs)
         self._finish()
+        for event, fields in pending_success_logs:
+            safe_log("info", event, **fields)
         safe_log("info", "transaction_completed")
         return False
 
@@ -192,6 +232,64 @@ class SQLiteMetadataTransaction:
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return all named corpora within this transaction."""
         return self._execute(list_corpora)
+
+    def get_active_corpus_version(
+        self,
+        corpus_id: CorpusId,
+    ) -> CorpusVersion | None:
+        """Return a corpus's active committed version within this transaction."""
+        return self._execute(get_active_corpus_version, corpus_id)
+
+    def get_corpus_version(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusVersion | None:
+        """Return one owned committed version within this transaction."""
+        return self._execute(get_corpus_version, corpus_id, corpus_version)
+
+    def list_corpus_versions(
+        self,
+        corpus_id: CorpusId,
+    ) -> tuple[CorpusVersion, ...]:
+        """Return committed history within this transaction."""
+        return self._execute(list_corpus_versions, corpus_id)
+
+    def get_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CorpusUpdate | None:
+        """Return one owned durable corpus update within this transaction."""
+        return self._execute(get_corpus_update, corpus_id, corpus_version)
+
+    def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
+        """Return durable preparing and ready work within this transaction."""
+        return self._execute(list_non_terminal_corpus_updates)
+
+    def list_corpus_update_document_memberships(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[CorpusDocumentVersionMembership, ...]:
+        """Return deterministic proposed membership within this transaction."""
+        return self._execute(
+            list_corpus_update_document_memberships,
+            corpus_id,
+            corpus_version,
+        )
+
+    def list_corpus_update_component_generations(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> tuple[ComponentGenerationReference, ...]:
+        """Return deterministic ready generations within this transaction."""
+        return self._execute(
+            list_corpus_update_component_generations,
+            corpus_id,
+            corpus_version,
+        )
 
     def add_corpus(self, corpus: CorpusMetadata) -> None:
         """Create a named corpus within this transaction."""
@@ -204,6 +302,243 @@ class SQLiteMetadataTransaction:
     ) -> CorpusMetadata:
         """Replace a corpus display name within this transaction."""
         return self._execute(set_corpus_display_name, corpus_id, display_name)
+
+    def begin_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        *,
+        expected_corpus_version: CorpusVersionId | None,
+        required_component_kinds: tuple[ComponentKind, ...] = (),
+        restores_corpus_version: CorpusVersionId | None = None,
+    ) -> BeginCorpusUpdateOutcome:
+        """Create and seed an update, deriving rollback requirements from its target."""
+        outcome = self._execute(
+            begin_corpus_update,
+            corpus_id,
+            corpus_version,
+            expected_corpus_version=expected_corpus_version,
+            required_component_kinds=required_component_kinds,
+            restores_corpus_version=restores_corpus_version,
+            created_at_factory=self._repository._created_at_factory,
+        )
+        fields: dict[str, object] = {
+            "corpus_id": outcome.update.corpus_id.as_str(),
+            "corpus_version": outcome.update.corpus_version.as_str(),
+            "update_state": outcome.update.state.value,
+            "required_component_count": len(outcome.update.required_component_kinds),
+            "replayed": outcome.replayed,
+        }
+        if outcome.update.restores_corpus_version is not None:
+            fields["restores_corpus_version"] = (
+                outcome.update.restores_corpus_version.as_str()
+            )
+        self._pending_success_logs.append(
+            (
+                "corpus_update_started",
+                fields,
+            )
+        )
+        return outcome
+
+    def abort_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> AbortCorpusUpdateOutcome:
+        """Abort preparing or ready work or return its exact abort replay."""
+        outcome = self._execute(
+            abort_corpus_update,
+            corpus_id,
+            corpus_version,
+        )
+        self._pending_success_logs.append(
+            (
+                "corpus_update_aborted",
+                {
+                    "corpus_id": outcome.update.corpus_id.as_str(),
+                    "corpus_version": outcome.update.corpus_version.as_str(),
+                    "update_state": outcome.update.state.value,
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
+
+    def register_corpus_update_component_generation(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        generation: ComponentGenerationReference,
+        *,
+        validator: ComponentGenerationValidator,
+    ) -> ComponentGenerationReference:
+        """Validate and register one required immutable generation."""
+        return self._execute(
+            register_corpus_update_component_generation,
+            corpus_id,
+            corpus_version,
+            generation,
+            validator=validator,
+        )
+
+    def replace_corpus_update_component_generation(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_generation: ComponentGenerationReference,
+        replacement_generation: ComponentGenerationReference,
+        *,
+        validator: ComponentGenerationValidator,
+    ) -> ComponentGenerationReference:
+        """Validate and replace one explicitly expected generation."""
+        return self._execute(
+            replace_corpus_update_component_generation,
+            corpus_id,
+            corpus_version,
+            expected_generation,
+            replacement_generation,
+            validator=validator,
+        )
+
+    def seal_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> SealCorpusUpdateOutcome | NoCorpusChangeOutcome:
+        """Seal a complete manifest or terminate an unchanged proposal."""
+        outcome = self._execute(
+            seal_corpus_update,
+            corpus_id,
+            corpus_version,
+        )
+        fields: dict[str, object] = {
+            "corpus_id": outcome.update.corpus_id.as_str(),
+            "corpus_version": outcome.update.corpus_version.as_str(),
+            "update_state": outcome.update.state.value,
+            "document_count": len(outcome.manifest.document_memberships)
+            if isinstance(outcome, SealCorpusUpdateOutcome)
+            else len(outcome.proposed_manifest.document_memberships),
+            "component_count": len(outcome.manifest.component_generations)
+            if isinstance(outcome, SealCorpusUpdateOutcome)
+            else len(outcome.proposed_manifest.component_generations),
+            "replayed": outcome.replayed,
+        }
+        if isinstance(outcome, SealCorpusUpdateOutcome):
+            event = "corpus_update_ready"
+        else:
+            event = "corpus_update_aborted"
+            fields["abort_reason"] = "no_change"
+        if outcome.update.restores_corpus_version is not None:
+            fields["restores_corpus_version"] = (
+                outcome.update.restores_corpus_version.as_str()
+            )
+        self._pending_success_logs.append((event, fields))
+        return outcome
+
+    def commit_corpus_update(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> CommitCorpusUpdateOutcome:
+        """Atomically compare, advance, and publish one ready update."""
+        outcome = self._execute(
+            commit_corpus_update,
+            corpus_id,
+            corpus_version,
+            created_at_factory=self._repository._created_at_factory,
+        )
+        self._pending_success_logs.append(
+            (
+                "corpus_version_committed",
+                {
+                    "corpus_id": outcome.version.corpus_id.as_str(),
+                    "corpus_version": outcome.version.corpus_version.as_str(),
+                    "sequence": outcome.version.sequence,
+                    "document_count": len(outcome.manifest.document_memberships),
+                    "component_count": len(outcome.manifest.component_generations),
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
+
+    def commit_corpus_rollback(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> RollbackCorpusVersionOutcome:
+        """Publish one ready rollback as a new monotonic corpus version."""
+        outcome = self._execute(
+            commit_corpus_rollback,
+            corpus_id,
+            corpus_version,
+            created_at_factory=self._repository._created_at_factory,
+        )
+        publication = outcome.publication
+        restores_corpus_version = cast(
+            CorpusVersionId,
+            publication.version.restores_corpus_version,
+        )
+        self._pending_success_logs.append(
+            (
+                "corpus_version_rollback_committed",
+                {
+                    "corpus_id": publication.version.corpus_id.as_str(),
+                    "corpus_version": publication.version.corpus_version.as_str(),
+                    "restores_corpus_version": restores_corpus_version.as_str(),
+                    "sequence": publication.version.sequence,
+                    "document_count": len(publication.manifest.document_memberships),
+                    "component_count": len(publication.manifest.component_generations),
+                    "replayed": publication.replayed,
+                },
+            )
+        )
+        return outcome
+
+    def add_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Add a catalogue member to a preparing update."""
+        self._execute(
+            add_corpus_update_document_membership,
+            corpus_id,
+            corpus_version,
+            membership,
+        )
+
+    def replace_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        expected_membership: CorpusDocumentVersionMembership,
+        replacement_membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Replace one agreeing logical-document membership."""
+        self._execute(
+            replace_corpus_update_document_membership,
+            corpus_id,
+            corpus_version,
+            expected_membership,
+            replacement_membership,
+        )
+
+    def remove_corpus_update_document_membership(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Remove one exact proposed membership."""
+        self._execute(
+            remove_corpus_update_document_membership,
+            corpus_id,
+            corpus_version,
+            membership,
+        )
 
     def get_corpus_document_version_membership(
         self,
@@ -272,32 +607,6 @@ class SQLiteMetadataTransaction:
         """Return corpus-visible managed-source metadata in this transaction."""
         return self._execute(
             get_source_artefact,
-            corpus_id,
-            document_version_id,
-        )
-
-    def read_source_bytes(
-        self,
-        corpus_id: CorpusId,
-        document_version_id: DocumentVersionId,
-    ) -> bytes | None:
-        """Return verified corpus-visible bytes in this transaction."""
-        return self._execute(
-            read_source_bytes,
-            self._repository._source_blob_store,
-            corpus_id,
-            document_version_id,
-        )
-
-    def stream_source_bytes(
-        self,
-        corpus_id: CorpusId,
-        document_version_id: DocumentVersionId,
-    ) -> Iterator[bytes] | None:
-        """Return fully verified, detached chunks in this transaction."""
-        return self._execute(
-            stream_source_bytes,
-            self._repository._source_blob_store,
             corpus_id,
             document_version_id,
         )
@@ -555,4 +864,5 @@ class SQLiteMetadataTransaction:
     def _finish(self) -> None:
         self._active = False
         self._finished = True
+        self._pending_success_logs.clear()
         self._repository._transaction_active = False

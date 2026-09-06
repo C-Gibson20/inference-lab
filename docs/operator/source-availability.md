@@ -5,9 +5,9 @@
 Inference Lab now has a restart-safe storage boundary for managed original
 bytes, parsed representations, parser outcomes, and source locations. The
 current command-line entry point does not yet expose ingest, source-opening, or
-repair commands. ING-03 will connect parser output to this boundary, STOR-03
-will publish immutable corpus versions, and SERV-04 will provide citation
-opening and navigation.
+repair commands. STOR-03 now publishes immutable corpus versions through this
+boundary. ING-03 will connect parser output to it, and SERV-04 will provide
+citation opening and navigation.
 
 This page describes the operator responsibilities that already apply to the
 persistent source store. The normative contract is in the

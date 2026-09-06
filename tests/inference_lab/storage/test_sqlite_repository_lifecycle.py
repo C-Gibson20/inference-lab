@@ -19,9 +19,9 @@ def test_repository_owns_validated_schema_state(tmp_path: Path) -> None:
     )
     try:
         assert repository.is_closed is False
-        assert repository.schema_inspection.current_revision == 2
-        assert repository.schema_inspection.latest_supported_revision == 2
-        assert repository.schema_inspection.applied_migration_count == 2
+        assert repository.schema_inspection.current_revision == 3
+        assert repository.schema_inspection.latest_supported_revision == 3
+        assert repository.schema_inspection.applied_migration_count == 3
     finally:
         repository.close()
 
@@ -40,7 +40,7 @@ def test_repository_reopens_persisted_schema_with_a_fresh_owner(
     second = SQLiteMetadataRepository.open(database_path)
     try:
         assert second.is_closed is False
-        assert second.schema_inspection.current_revision == 2
+        assert second.schema_inspection.current_revision == 3
     finally:
         second.close()
 
