@@ -64,8 +64,9 @@ post-activation check fails.
 - Treat incomplete, corrupt, mixed-version, and incompatible backups as
   unusable.
 - Keep the previous active state available until activation succeeds.
-- Roll back to the previous state if activation or post-activation checks
-  fail.
+- Restore prior corpus state by publishing a new rollback version if activation
+  or post-activation checks fail; never rewind the active pointer. Follow the
+  [corpus-version runbook](corpus-versions.md).
 - Keep the last known-good published backup available.
 - Make retries idempotent and do not publish partial state.
 - Report whether recovery remains available after every failed operation.

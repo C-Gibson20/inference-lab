@@ -27,6 +27,11 @@ and shared document storage must not make a document visible outside explicit
 membership. Cross-corpus comparison requires separate queries until a future
 federated-query contract is added.
 
+Serving integrations must hold a context-managed corpus snapshot for the
+request so every metadata and index read uses one immutable manifest. See the
+[corpus-version runbook](corpus-versions.md) for snapshot lifetime and
+historical selection.
+
 The baseline is lexical search. It is not yet a generated answer and should
 not be described as supporting citation verification, abstention, sessions, or
 follow-up questions until the relevant serving issues land.
