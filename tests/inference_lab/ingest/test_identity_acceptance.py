@@ -1,6 +1,9 @@
 """Cold-process acceptance tests for persistent discovery identity."""
 
+import os
 from pathlib import Path
+
+import pytest
 
 from inference_lab.ingest import (
     DiscoveryFailure,
@@ -19,6 +22,7 @@ from inference_lab.ingest import (
 from inference_lab.provenance import (
     CorpusId,
     CorpusMetadata,
+    DuplicateClass,
     ResolutionKind,
     ResolutionReason,
 )
@@ -332,5 +336,134 @@ def test_copy_delete_move_after_restart_uses_hash_continuity(
             == locator_history[1].fingerprint.content_hash
             == outcome.version.content_hash
         )
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize(
+    ("use_hard_link", "shares_identity_hint"),
+    ((False, False), (True, True)),
+    ids=("byte-identical-copy", "hard-link"),
+)
+def test_live_identical_source_is_an_independent_duplicate_after_restart(
+    tmp_path: Path,
+    *,
+    use_hard_link: bool,
+    shares_identity_hint: bool,
+) -> None:
+    source_root = tmp_path / "sources"
+    source_root.mkdir()
+    original_path = source_root / "a-original.txt"
+    duplicate_path = source_root / "b-duplicate.txt"
+    source_bytes = b"simultaneously live duplicate bytes\n"
+    original_path.write_bytes(source_bytes)
+    request = DiscoveryRequest(
+        corpus_id=_CORPUS_ID,
+        inputs=(DiscoveryInput(source_root, DiscoveryInputKind.DIRECTORY),),
+    )
+    database_path = tmp_path / "metadata.sqlite3"
+
+    initial = open_metadata_repository(database_path, apply_migrations=True)
+    with initial.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Acceptance corpus"))
+    try:
+        first_results = _persist_supported_sources(request, initial)
+        assert len(first_results) == 1
+        first = first_results[0]
+        assert isinstance(first, IdentityApplicationResult)
+        assert first.source.identity_outcome.kind is ResolutionKind.NEW_DOCUMENT
+    finally:
+        initial.close()
+
+    if use_hard_link:
+        try:
+            os.link(original_path, duplicate_path)
+        except OSError as error:
+            pytest.skip(f"hard links unavailable: {type(error).__name__}")
+    else:
+        duplicate_path.write_bytes(source_bytes)
+
+    reopened = open_metadata_repository(database_path)
+    try:
+        repeated_results = _persist_supported_sources(request, reopened)
+        assert len(repeated_results) == 2
+        original, duplicate = repeated_results
+        assert isinstance(original, IdentityApplicationResult)
+        assert isinstance(duplicate, IdentityApplicationResult)
+        assert original.source.snapshot.locator.path == original_path.resolve()
+        assert duplicate.source.snapshot.locator.path == duplicate_path.resolve()
+
+        assert not original.parse_eligible
+        assert original.source.identity_outcome.kind is ResolutionKind.UNCHANGED
+        assert (
+            original.source.source_observation_id == first.source.source_observation_id
+        )
+        assert (
+            original.source.identity_outcome.document
+            == first.source.identity_outcome.document
+        )
+        assert (
+            original.source.identity_outcome.version
+            == first.source.identity_outcome.version
+        )
+
+        assert duplicate.parse_eligible
+        assert duplicate.source.identity_outcome.kind is ResolutionKind.DUPLICATE
+        assert (
+            duplicate.source.identity_outcome.reason
+            is ResolutionReason.DUPLICATE_HASH_MATCH
+        )
+        assert (
+            duplicate.source.source_observation_id != first.source.source_observation_id
+        )
+
+        first_outcome = first.source.identity_outcome
+        duplicate_outcome = duplicate.source.identity_outcome
+        assert first_outcome.document is not None
+        assert first_outcome.version is not None
+        assert duplicate_outcome.document is not None
+        assert duplicate_outcome.version is not None
+        assert duplicate_outcome.document != first_outcome.document
+        assert duplicate_outcome.version != first_outcome.version
+        assert (
+            duplicate_outcome.version.content_hash == first_outcome.version.content_hash
+        )
+        assert duplicate_outcome.matched_version_ids == (
+            first_outcome.version.document_version_id,
+        )
+        assert len(duplicate_outcome.duplicate_relationships) == 1
+        relationship = duplicate_outcome.duplicate_relationships[0]
+        assert relationship.duplicate_class is DuplicateClass.BYTE_IDENTICAL
+        assert {
+            relationship.first_version_id,
+            relationship.second_version_id,
+        } == {
+            first_outcome.version.document_version_id,
+            duplicate_outcome.version.document_version_id,
+        }
+        assert reopened.list_duplicate_relationships(
+            _CORPUS_ID,
+            first_outcome.version.document_version_id,
+        ) == (relationship,)
+        assert reopened.list_duplicate_relationships(
+            _CORPUS_ID,
+            duplicate_outcome.version.document_version_id,
+        ) == (relationship,)
+        assert len(reopened.list_corpus_document_version_memberships(_CORPUS_ID)) == 2
+
+        original_locators = reopened.list_source_locator_history(
+            _CORPUS_ID,
+            first.source.source_observation_id,
+        )
+        duplicate_locators = reopened.list_source_locator_history(
+            _CORPUS_ID,
+            duplicate.source.source_observation_id,
+        )
+        assert len(original_locators) == len(duplicate_locators) == 1
+        original_hint = original_locators[0].identity_hint
+        duplicate_hint = duplicate_locators[0].identity_hint
+        assert original_hint is not None
+        assert duplicate_hint is not None
+        assert (original_hint == duplicate_hint) is shares_identity_hint
     finally:
         reopened.close()
