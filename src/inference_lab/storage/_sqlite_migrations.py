@@ -403,11 +403,633 @@ _BASELINE_STATEMENTS: Final = (
     *_DUPLICATE_INTEGRITY_STATEMENTS,
 )
 
+_SOURCE_PERSISTENCE_STATEMENTS: Final = (
+    """CREATE UNIQUE INDEX document_versions_source_artefact_owner_idx
+ON document_versions (
+    document_version_id,
+    document_id,
+    content_hash_algorithm,
+    content_hash_digest
+)""",
+    """CREATE TABLE source_artefacts (
+    storage_id INTEGER PRIMARY KEY,
+    document_version_id TEXT NOT NULL UNIQUE,
+    document_id TEXT NOT NULL,
+    record_schema_version TEXT NOT NULL
+        CHECK (record_schema_version = '1.0.0'),
+    content_hash_algorithm TEXT NOT NULL
+        CHECK (content_hash_algorithm = 'sha256'),
+    content_hash_digest TEXT NOT NULL
+        CHECK (
+            length(content_hash_digest) = 64
+            AND content_hash_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+    byte_count INTEGER NOT NULL CHECK (byte_count >= 0),
+    media_type TEXT NOT NULL
+        CHECK (
+            instr(media_type, '/') > 1
+            AND instr(substr(media_type, instr(media_type, '/') + 1), '/') = 0
+            AND media_type = lower(media_type)
+            AND substr(media_type, 1, 1) GLOB '[a-z0-9]'
+            AND substr(media_type, instr(media_type, '/') + 1, 1)
+                GLOB '[a-z0-9]'
+            AND media_type NOT GLOB '*[^a-z0-9!#$&^_.+/-]*'
+        ),
+    storage_key TEXT NOT NULL
+        CHECK (
+            storage_key = 'sha256/'
+                || substr(content_hash_digest, 1, 2)
+                || '/'
+                || content_hash_digest
+        ),
+    FOREIGN KEY (
+        document_version_id,
+        document_id,
+        content_hash_algorithm,
+        content_hash_digest
+    ) REFERENCES document_versions (
+        document_version_id,
+        document_id,
+        content_hash_algorithm,
+        content_hash_digest
+    )
+) STRICT""",
+    """CREATE INDEX source_artefacts_blob_reconciliation_idx
+ON source_artefacts (storage_key, document_version_id)""",
+    """CREATE TABLE parsed_representations (
+    storage_id INTEGER PRIMARY KEY,
+    record_id TEXT NOT NULL UNIQUE
+        CHECK (
+            length(record_id) = 36
+            AND record_id = lower(record_id)
+            AND substr(record_id, 9, 1) = '-'
+            AND substr(record_id, 14, 1) = '-'
+            AND substr(record_id, 19, 1) = '-'
+            AND substr(record_id, 24, 1) = '-'
+            AND length(replace(record_id, '-', '')) = 32
+            AND record_id NOT GLOB '*[^0-9a-f-]*'
+        ),
+    document_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    record_schema_version TEXT NOT NULL
+        CHECK (record_schema_version = '1.0.0'),
+    source_text TEXT NOT NULL,
+    canonical_text TEXT NOT NULL,
+    parser_implementation TEXT NOT NULL
+        CHECK (
+            length(parser_implementation) > 0
+            AND substr(parser_implementation, 1, 1) GLOB '[a-z]'
+            AND parser_implementation = lower(parser_implementation)
+            AND parser_implementation NOT GLOB '*[^a-z0-9-]*'
+            AND parser_implementation NOT GLOB '*--*'
+            AND substr(parser_implementation, -1, 1) != '-'
+        ),
+    parser_contract_version TEXT NOT NULL
+        CHECK (
+            length(trim(parser_contract_version)) > 0
+            AND instr(parser_contract_version, char(0)) = 0
+        ),
+    parser_artefact_identity TEXT,
+    parser_artefact_revision TEXT,
+    normalisation_version TEXT NOT NULL
+        CHECK (
+            length(trim(normalisation_version)) > 0
+            AND instr(normalisation_version, char(0)) = 0
+        ),
+    ocr_implementation TEXT,
+    ocr_contract_version TEXT,
+    ocr_artefact_identity TEXT,
+    ocr_artefact_revision TEXT,
+    language TEXT
+        CHECK (
+            language IS NULL
+            OR (
+                length(trim(language)) > 0
+                AND instr(language, char(0)) = 0
+            )
+        ),
+    page_count INTEGER CHECK (page_count IS NULL OR page_count >= 0),
+    character_count INTEGER NOT NULL CHECK (character_count >= 0),
+    token_count INTEGER CHECK (token_count IS NULL OR token_count >= 0),
+    page_collection_availability TEXT NOT NULL
+        CHECK (page_collection_availability IN ('available', 'unavailable')),
+    section_collection_availability TEXT NOT NULL
+        CHECK (section_collection_availability IN ('available', 'unavailable')),
+    paragraph_collection_availability TEXT NOT NULL
+        CHECK (paragraph_collection_availability IN ('available', 'unavailable')),
+    output_digest_algorithm TEXT NOT NULL
+        CHECK (output_digest_algorithm = 'sha256'),
+    output_digest TEXT NOT NULL
+        CHECK (
+            length(output_digest) = 64
+            AND output_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+    supersedes_record_id TEXT,
+    FOREIGN KEY (document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    FOREIGN KEY (supersedes_record_id)
+        REFERENCES parsed_representations (record_id),
+    UNIQUE (record_id, document_version_id),
+    CHECK (supersedes_record_id IS NULL OR supersedes_record_id != record_id),
+    CHECK (
+        (parser_artefact_identity IS NULL)
+            = (parser_artefact_revision IS NULL)
+    ),
+    CHECK (
+        parser_artefact_identity IS NULL
+        OR (
+            length(trim(parser_artefact_identity)) > 0
+            AND instr(parser_artefact_identity, char(0)) = 0
+            AND length(trim(parser_artefact_revision)) > 0
+            AND instr(parser_artefact_revision, char(0)) = 0
+        )
+    ),
+    CHECK (
+        (ocr_implementation IS NULL)
+            = (ocr_contract_version IS NULL)
+        AND (ocr_artefact_identity IS NULL)
+            = (ocr_artefact_revision IS NULL)
+        AND (ocr_implementation IS NOT NULL OR ocr_artefact_identity IS NULL)
+    ),
+    CHECK (
+        ocr_implementation IS NULL
+        OR (
+            length(ocr_implementation) > 0
+            AND substr(ocr_implementation, 1, 1) GLOB '[a-z]'
+            AND ocr_implementation = lower(ocr_implementation)
+            AND ocr_implementation NOT GLOB '*[^a-z0-9-]*'
+            AND ocr_implementation NOT GLOB '*--*'
+            AND substr(ocr_implementation, -1, 1) != '-'
+            AND length(trim(ocr_contract_version)) > 0
+            AND instr(ocr_contract_version, char(0)) = 0
+        )
+    ),
+    CHECK (
+        ocr_artefact_identity IS NULL
+        OR (
+            length(trim(ocr_artefact_identity)) > 0
+            AND instr(ocr_artefact_identity, char(0)) = 0
+            AND length(trim(ocr_artefact_revision)) > 0
+            AND instr(ocr_artefact_revision, char(0)) = 0
+        )
+    )
+) STRICT""",
+    """CREATE UNIQUE INDEX parsed_representations_natural_identity_idx
+ON parsed_representations (
+    document_version_id,
+    parser_implementation,
+    parser_contract_version,
+    coalesce(parser_artefact_identity, char(0)),
+    coalesce(parser_artefact_revision, char(0)),
+    normalisation_version,
+    coalesce(ocr_implementation, char(0)),
+    coalesce(ocr_contract_version, char(0)),
+    coalesce(ocr_artefact_identity, char(0)),
+    coalesce(ocr_artefact_revision, char(0))
+)""",
+    """CREATE INDEX parsed_representations_version_idx
+ON parsed_representations (document_version_id, record_id)""",
+    """CREATE TABLE page_layouts (
+    storage_id INTEGER PRIMARY KEY,
+    parsed_record_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    page_number INTEGER NOT NULL CHECK (page_number >= 1),
+    coordinate_unit TEXT NOT NULL
+        CHECK (coordinate_unit IN ('pdf_points', 'image_pixels')),
+    coordinate_origin TEXT NOT NULL
+        CHECK (coordinate_origin IN ('top_left', 'bottom_left')),
+    page_width REAL NOT NULL
+        CHECK (page_width > 0 AND page_width <= 1.7976931348623157e308),
+    page_height REAL NOT NULL
+        CHECK (page_height > 0 AND page_height <= 1.7976931348623157e308),
+    rotation INTEGER NOT NULL CHECK (rotation IN (0, 90, 180, 270)),
+    content_origin TEXT NOT NULL CHECK (content_origin IN ('native', 'ocr')),
+    producer_implementation TEXT NOT NULL,
+    producer_contract_version TEXT NOT NULL,
+    producer_artefact_identity TEXT,
+    producer_artefact_revision TEXT,
+    FOREIGN KEY (parsed_record_id, document_version_id)
+        REFERENCES parsed_representations (record_id, document_version_id),
+    UNIQUE (parsed_record_id, page_number),
+    CHECK (
+        length(producer_implementation) > 0
+        AND substr(producer_implementation, 1, 1) GLOB '[a-z]'
+        AND producer_implementation = lower(producer_implementation)
+        AND producer_implementation NOT GLOB '*[^a-z0-9-]*'
+        AND producer_implementation NOT GLOB '*--*'
+        AND substr(producer_implementation, -1, 1) != '-'
+    ),
+    CHECK (
+        length(trim(producer_contract_version)) > 0
+        AND instr(producer_contract_version, char(0)) = 0
+    ),
+    CHECK (
+        (producer_artefact_identity IS NULL)
+            = (producer_artefact_revision IS NULL)
+    ),
+    CHECK (
+        producer_artefact_identity IS NULL
+        OR (
+            length(trim(producer_artefact_identity)) > 0
+            AND instr(producer_artefact_identity, char(0)) = 0
+            AND length(trim(producer_artefact_revision)) > 0
+            AND instr(producer_artefact_revision, char(0)) = 0
+        )
+    )
+) STRICT""",
+    """CREATE INDEX page_layouts_traversal_idx
+ON page_layouts (parsed_record_id, page_number)""",
+    """CREATE TABLE source_spans (
+    storage_id INTEGER PRIMARY KEY,
+    source_span_id TEXT NOT NULL UNIQUE
+        CHECK (
+            length(source_span_id) = 36
+            AND source_span_id = lower(source_span_id)
+            AND substr(source_span_id, 9, 1) = '-'
+            AND substr(source_span_id, 14, 1) = '-'
+            AND substr(source_span_id, 19, 1) = '-'
+            AND substr(source_span_id, 24, 1) = '-'
+            AND length(replace(source_span_id, '-', '')) = 32
+            AND source_span_id NOT GLOB '*[^0-9a-f-]*'
+        ),
+    parsed_record_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    start_offset INTEGER NOT NULL CHECK (start_offset >= 0),
+    end_offset INTEGER NOT NULL CHECK (end_offset >= start_offset),
+    content_origin TEXT NOT NULL CHECK (content_origin IN ('native', 'ocr')),
+    page_number INTEGER CHECK (page_number IS NULL OR page_number >= 1),
+    bounding_box_left REAL,
+    bounding_box_top REAL,
+    bounding_box_right REAL,
+    bounding_box_bottom REAL,
+    FOREIGN KEY (parsed_record_id, document_version_id)
+        REFERENCES parsed_representations (record_id, document_version_id),
+    UNIQUE (parsed_record_id, source_span_id),
+    CHECK (
+        (bounding_box_left IS NULL)
+            = (bounding_box_top IS NULL)
+        AND (bounding_box_left IS NULL)
+            = (bounding_box_right IS NULL)
+        AND (bounding_box_left IS NULL)
+            = (bounding_box_bottom IS NULL)
+    ),
+    CHECK (bounding_box_left IS NULL OR page_number IS NOT NULL),
+    CHECK (
+        bounding_box_left IS NULL
+        OR (
+            bounding_box_left >= 0
+            AND bounding_box_top >= 0
+            AND bounding_box_right >= bounding_box_left
+            AND bounding_box_bottom >= bounding_box_top
+            AND bounding_box_right <= 1.7976931348623157e308
+            AND bounding_box_bottom <= 1.7976931348623157e308
+        )
+    )
+) STRICT""",
+    """CREATE INDEX source_spans_resolution_idx
+ON source_spans (document_version_id, source_span_id)""",
+    """CREATE TABLE structural_blocks (
+    storage_id INTEGER PRIMARY KEY,
+    parsed_record_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    block_kind TEXT NOT NULL
+        CHECK (
+            block_kind IN (
+                'page',
+                'section',
+                'paragraph',
+                'table',
+                'figure_caption',
+                'other'
+            )
+        ),
+    block_text TEXT NOT NULL,
+    source_span_id TEXT NOT NULL,
+    FOREIGN KEY (parsed_record_id, document_version_id)
+        REFERENCES parsed_representations (record_id, document_version_id),
+    FOREIGN KEY (parsed_record_id, source_span_id)
+        REFERENCES source_spans (parsed_record_id, source_span_id),
+    UNIQUE (parsed_record_id, ordinal),
+    UNIQUE (parsed_record_id, source_span_id)
+) STRICT""",
+    """CREATE INDEX structural_blocks_traversal_idx
+ON structural_blocks (parsed_record_id, ordinal)""",
+    """CREATE TABLE parse_outcomes (
+    storage_id INTEGER PRIMARY KEY,
+    parse_id TEXT NOT NULL UNIQUE
+        CHECK (
+            length(parse_id) = 36
+            AND parse_id = lower(parse_id)
+            AND substr(parse_id, 9, 1) = '-'
+            AND substr(parse_id, 14, 1) = '-'
+            AND substr(parse_id, 19, 1) = '-'
+            AND substr(parse_id, 24, 1) = '-'
+            AND length(replace(parse_id, '-', '')) = 32
+            AND parse_id NOT GLOB '*[^0-9a-f-]*'
+        ),
+    document_id TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    record_schema_version TEXT NOT NULL
+        CHECK (record_schema_version = '1.0.0'),
+    parse_status TEXT NOT NULL
+        CHECK (
+            parse_status IN (
+                'succeeded',
+                'completed_with_recoverable_failures',
+                'failed'
+            )
+        ),
+    parser_implementation TEXT NOT NULL,
+    parser_contract_version TEXT NOT NULL,
+    parser_artefact_identity TEXT,
+    parser_artefact_revision TEXT,
+    normalisation_version TEXT NOT NULL,
+    ocr_implementation TEXT,
+    ocr_contract_version TEXT,
+    ocr_artefact_identity TEXT,
+    ocr_artefact_revision TEXT,
+    parsed_record_id TEXT,
+    FOREIGN KEY (document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    FOREIGN KEY (parsed_record_id, document_version_id)
+        REFERENCES parsed_representations (record_id, document_version_id),
+    CHECK (
+        (parse_status = 'failed' AND parsed_record_id IS NULL)
+        OR (
+            parse_status IN (
+                'succeeded',
+                'completed_with_recoverable_failures'
+            )
+            AND parsed_record_id IS NOT NULL
+        )
+    ),
+    CHECK (
+        length(parser_implementation) > 0
+        AND substr(parser_implementation, 1, 1) GLOB '[a-z]'
+        AND parser_implementation = lower(parser_implementation)
+        AND parser_implementation NOT GLOB '*[^a-z0-9-]*'
+        AND parser_implementation NOT GLOB '*--*'
+        AND substr(parser_implementation, -1, 1) != '-'
+    ),
+    CHECK (
+        length(trim(parser_contract_version)) > 0
+        AND instr(parser_contract_version, char(0)) = 0
+        AND length(trim(normalisation_version)) > 0
+        AND instr(normalisation_version, char(0)) = 0
+    ),
+    CHECK (
+        (parser_artefact_identity IS NULL)
+            = (parser_artefact_revision IS NULL)
+    ),
+    CHECK (
+        parser_artefact_identity IS NULL
+        OR (
+            length(trim(parser_artefact_identity)) > 0
+            AND instr(parser_artefact_identity, char(0)) = 0
+            AND length(trim(parser_artefact_revision)) > 0
+            AND instr(parser_artefact_revision, char(0)) = 0
+        )
+    ),
+    CHECK (
+        (ocr_implementation IS NULL)
+            = (ocr_contract_version IS NULL)
+        AND (ocr_artefact_identity IS NULL)
+            = (ocr_artefact_revision IS NULL)
+        AND (ocr_implementation IS NOT NULL OR ocr_artefact_identity IS NULL)
+    ),
+    CHECK (
+        ocr_implementation IS NULL
+        OR (
+            length(ocr_implementation) > 0
+            AND substr(ocr_implementation, 1, 1) GLOB '[a-z]'
+            AND ocr_implementation = lower(ocr_implementation)
+            AND ocr_implementation NOT GLOB '*[^a-z0-9-]*'
+            AND ocr_implementation NOT GLOB '*--*'
+            AND substr(ocr_implementation, -1, 1) != '-'
+            AND length(trim(ocr_contract_version)) > 0
+            AND instr(ocr_contract_version, char(0)) = 0
+        )
+    ),
+    CHECK (
+        ocr_artefact_identity IS NULL
+        OR (
+            length(trim(ocr_artefact_identity)) > 0
+            AND instr(ocr_artefact_identity, char(0)) = 0
+            AND length(trim(ocr_artefact_revision)) > 0
+            AND instr(ocr_artefact_revision, char(0)) = 0
+        )
+    )
+) STRICT""",
+    """CREATE INDEX parse_outcomes_version_idx
+ON parse_outcomes (document_version_id, parse_id)""",
+    """CREATE TABLE parse_failures (
+    storage_id INTEGER PRIMARY KEY,
+    parse_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    failure_category TEXT NOT NULL
+        CHECK (
+            failure_category IN (
+                'invalid_input',
+                'unsupported_format',
+                'invalid_encoding',
+                'decode_failed',
+                'malformed_source',
+                'malformed_unit',
+                'unsupported_structure',
+                'invalid_output',
+                'source_too_large'
+            )
+        ),
+    failure_severity TEXT NOT NULL
+        CHECK (failure_severity IN ('fatal', 'recoverable')),
+    failure_stage TEXT NOT NULL
+        CHECK (failure_stage IN ('input', 'decode', 'structure', 'output')),
+    unit_kind TEXT
+        CHECK (
+            unit_kind IS NULL
+            OR unit_kind IN (
+                'page',
+                'section',
+                'paragraph',
+                'table',
+                'figure_caption',
+                'other'
+            )
+        ),
+    unit_index INTEGER CHECK (unit_index IS NULL OR unit_index >= 0),
+    FOREIGN KEY (parse_id) REFERENCES parse_outcomes (parse_id),
+    UNIQUE (parse_id, ordinal),
+    CHECK ((unit_kind IS NULL) = (unit_index IS NULL)),
+    CHECK (
+        (failure_severity = 'fatal' AND unit_kind IS NULL)
+        OR (failure_severity = 'recoverable' AND unit_kind IS NOT NULL)
+    ),
+    CHECK (
+        (failure_category = 'invalid_input'
+            AND failure_severity = 'fatal'
+            AND failure_stage = 'input')
+        OR (failure_category = 'unsupported_format'
+            AND failure_severity = 'fatal'
+            AND failure_stage = 'input')
+        OR (failure_category = 'invalid_encoding'
+            AND failure_severity = 'fatal'
+            AND failure_stage = 'input')
+        OR (failure_category = 'source_too_large'
+            AND failure_severity = 'fatal'
+            AND failure_stage = 'input')
+        OR (failure_category = 'decode_failed'
+            AND failure_severity = 'fatal'
+            AND failure_stage = 'decode')
+        OR (failure_category = 'malformed_source'
+            AND failure_severity = 'fatal'
+            AND failure_stage = 'structure')
+        OR (failure_category = 'malformed_unit'
+            AND failure_severity = 'recoverable'
+            AND failure_stage = 'structure')
+        OR (failure_category = 'unsupported_structure'
+            AND failure_severity = 'recoverable'
+            AND failure_stage = 'structure')
+        OR (failure_category = 'invalid_output'
+            AND failure_severity = 'fatal'
+            AND failure_stage = 'output')
+    )
+) STRICT""",
+    """CREATE INDEX parse_failures_traversal_idx
+ON parse_failures (parse_id, ordinal)""",
+    """CREATE TRIGGER page_layouts_representation_insert
+BEFORE INSERT ON page_layouts
+WHEN EXISTS (
+    SELECT 1
+    FROM parsed_representations AS representation
+    WHERE representation.record_id = NEW.parsed_record_id
+        AND (
+            (representation.page_count IS NOT NULL
+                AND NEW.page_number > representation.page_count)
+            OR (NEW.content_origin = 'ocr'
+                AND (
+                    representation.ocr_implementation IS NULL
+                    OR NEW.producer_implementation
+                        != representation.ocr_implementation
+                    OR NEW.producer_contract_version
+                        != representation.ocr_contract_version
+                    OR NEW.producer_artefact_identity IS NOT
+                        representation.ocr_artefact_identity
+                    OR NEW.producer_artefact_revision IS NOT
+                        representation.ocr_artefact_revision
+                ))
+        )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'page layout conflicts with parsed representation');
+END""",
+    """CREATE TRIGGER source_spans_representation_insert
+BEFORE INSERT ON source_spans
+WHEN EXISTS (
+    SELECT 1
+    FROM parsed_representations AS representation
+    WHERE representation.record_id = NEW.parsed_record_id
+        AND (
+            NEW.end_offset > length(representation.source_text)
+            OR (NEW.content_origin = 'ocr'
+                AND representation.ocr_implementation IS NULL)
+            OR (representation.page_count IS NOT NULL
+                AND NEW.page_number > representation.page_count)
+        )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'source span conflicts with parsed representation');
+END""",
+    """CREATE TRIGGER source_spans_layout_insert
+BEFORE INSERT ON source_spans
+WHEN NEW.bounding_box_left IS NOT NULL
+    AND NOT EXISTS (
+        SELECT 1
+        FROM page_layouts AS layout
+        WHERE layout.parsed_record_id = NEW.parsed_record_id
+            AND layout.page_number = NEW.page_number
+            AND NEW.bounding_box_right <= layout.page_width
+            AND NEW.bounding_box_bottom <= layout.page_height
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'source span bounding box requires matching layout');
+END""",
+    """CREATE TRIGGER structural_blocks_contiguous_insert
+BEFORE INSERT ON structural_blocks
+WHEN NEW.ordinal != (
+    SELECT count(*)
+    FROM structural_blocks
+    WHERE parsed_record_id = NEW.parsed_record_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'structural block ordinals must be contiguous');
+END""",
+    """CREATE TRIGGER structural_blocks_availability_insert
+BEFORE INSERT ON structural_blocks
+WHEN EXISTS (
+    SELECT 1
+    FROM parsed_representations AS representation
+    WHERE representation.record_id = NEW.parsed_record_id
+        AND (
+            (NEW.block_kind = 'page'
+                AND representation.page_collection_availability = 'unavailable')
+            OR (NEW.block_kind = 'section'
+                AND representation.section_collection_availability = 'unavailable')
+            OR (NEW.block_kind = 'paragraph'
+                AND representation.paragraph_collection_availability = 'unavailable')
+        )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'structural block collection is unavailable');
+END""",
+    """CREATE TRIGGER structural_blocks_page_insert
+BEFORE INSERT ON structural_blocks
+WHEN NEW.block_kind = 'page'
+    AND NOT EXISTS (
+        SELECT 1
+        FROM source_spans AS span
+        WHERE span.parsed_record_id = NEW.parsed_record_id
+            AND span.source_span_id = NEW.source_span_id
+            AND span.page_number IS NOT NULL
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'page block requires a page source span');
+END""",
+    """CREATE TRIGGER parse_failures_contiguous_insert
+BEFORE INSERT ON parse_failures
+WHEN NEW.ordinal != (
+    SELECT count(*) FROM parse_failures WHERE parse_id = NEW.parse_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'parse failure ordinals must be contiguous');
+END""",
+    """CREATE TRIGGER parse_failures_status_insert
+BEFORE INSERT ON parse_failures
+WHEN EXISTS (
+    SELECT 1
+    FROM parse_outcomes AS outcome
+    WHERE outcome.parse_id = NEW.parse_id
+        AND (
+            outcome.parse_status = 'succeeded'
+            OR (outcome.parse_status = 'completed_with_recoverable_failures'
+                AND NEW.failure_severity != 'recoverable')
+        )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'parse failure conflicts with outcome status');
+END""",
+)
+
 MIGRATIONS: Final = (
     MigrationDefinition(
         revision=1,
         migration_id="multi_corpus_metadata_baseline",
         statements=_BASELINE_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=2,
+        migration_id="source_persistence",
+        statements=_SOURCE_PERSISTENCE_STATEMENTS,
     ),
 )
 

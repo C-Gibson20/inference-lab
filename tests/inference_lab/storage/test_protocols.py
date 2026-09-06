@@ -1,5 +1,6 @@
 """Tests for metadata storage protocols."""
 
+from collections.abc import Iterable, Iterator
 from types import TracebackType
 from typing import Self
 
@@ -18,10 +19,20 @@ from inference_lab.provenance import (
     DuplicateRelationship,
     ExternalIdentifier,
     ExternalIdentifierAssertion,
+    KnownSourceSpan,
+    RecordId,
     SourceObservationId,
     SourceObservationState,
+    SourceSpanId,
 )
-from inference_lab.storage import MetadataRepository, MetadataTransaction
+from inference_lab.storage import (
+    MetadataRepository,
+    MetadataTransaction,
+    ParsedRepresentation,
+    ParseOutcome,
+    ResolvedSourceSpan,
+    SourceArtefact,
+)
 
 
 class StructuralTransaction:
@@ -58,6 +69,27 @@ class StructuralTransaction:
         pass
 
     def add_document_version(self, document_version: DocumentVersion) -> None:
+        pass
+
+    def add_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+    ) -> None:
+        pass
+
+    def add_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        representation: ParsedRepresentation,
+    ) -> None:
+        pass
+
+    def add_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        outcome: ParseOutcome,
+    ) -> None:
         pass
 
     def add_source_observation(self, state: SourceObservationState) -> None:
@@ -122,6 +154,62 @@ class StructuralTransaction:
     ) -> tuple[DocumentVersion, ...]:
         return ()
 
+    def get_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> SourceArtefact | None:
+        return None
+
+    def read_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> bytes | None:
+        return None
+
+    def stream_source_bytes(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> Iterator[bytes] | None:
+        return None
+      
+    def get_parse_outcome(
+        self,
+        corpus_id: CorpusId,
+        parse_id: RecordId,
+    ) -> ParseOutcome | None:
+        return None
+
+    def get_parsed_representation(
+        self,
+        corpus_id: CorpusId,
+        record_id: RecordId,
+    ) -> ParsedRepresentation | None:
+        return None
+
+    def list_parsed_representations(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ParsedRepresentation, ...]:
+        return ()
+
+    def resolve_source_span(
+        self,
+        corpus_id: CorpusId,
+        source_span_id: SourceSpanId,
+    ) -> ResolvedSourceSpan | None:
+        return None
+
+    def list_known_source_spans(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[KnownSourceSpan, ...]:
+        return ()
+
     def find_document_versions_by_content_hash(
         self, corpus_id: CorpusId, content_hash: ContentHash
     ) -> tuple[DocumentVersion, ...]:
@@ -178,6 +266,21 @@ class StructuralRepository(StructuralTransaction):
     def transaction(self) -> MetadataTransaction:
         return StructuralTransaction()
 
+    def reconcile_source_storage(self, *, max_entries: int) -> None:
+        pass
+
+    def persist_source_artefact(
+        self,
+        corpus_id: CorpusId,
+        artefact: SourceArtefact,
+        chunks: Iterable[bytes],
+        *,
+        max_source_bytes: int,
+        parse_outcome: ParseOutcome | None = None,
+        parsed_representation: ParsedRepresentation | None = None,
+    ) -> None:
+        pass
+
     def close(self) -> None:
         pass
 
@@ -204,6 +307,14 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
         get_document = StructuralTransaction.get_document
         get_document_version = StructuralTransaction.get_document_version
         list_document_versions = StructuralTransaction.list_document_versions
+        get_source_artefact = StructuralTransaction.get_source_artefact
+        read_source_bytes = StructuralTransaction.read_source_bytes
+        stream_source_bytes = StructuralTransaction.stream_source_bytes
+        get_parse_outcome = StructuralTransaction.get_parse_outcome
+        get_parsed_representation = StructuralTransaction.get_parsed_representation
+        list_parsed_representations = StructuralTransaction.list_parsed_representations
+        resolve_source_span = StructuralTransaction.resolve_source_span
+        list_known_source_spans = StructuralTransaction.list_known_source_spans
         find_document_versions_by_content_hash = (
             StructuralTransaction.find_document_versions_by_content_hash
         )
@@ -236,13 +347,19 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
 def test_public_storage_api_contains_only_contract_boundary() -> None:
     expected_exports = {
         "CORPUS_MANIFEST_CONTRACT_VERSION",
+        "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
+        "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSION",
         "AbortCorpusUpdateOutcome",
         "BeginCorpusUpdateOutcome",
+        "BoundingBox",
+        "CollectionAvailability",
         "CommitCorpusUpdateOutcome",
         "ComponentGenerationReference",
         "ComponentGenerationState",
         "ComponentKind",
-        "CorruptStorageError",
+        "ContentOrigin",
+        "CoordinateOrigin",
+        "CoordinateUnit",
         "CorpusSnapshot",
         "CorpusUpdate",
         "CorpusUpdateState",
@@ -250,6 +367,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "CorpusVersionConflictKind",
         "CorpusVersionConflictOutcome",
         "CorpusVersionManifest",
+        "CorruptStorageError",
         "IncompatibleSchemaError",
         "InvalidCorpusVersionContractError",
         "MetadataReader",
@@ -258,17 +376,38 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "MetadataWriter",
         "MigrationRequiredError",
         "NoCorpusChangeOutcome",
+        "PageLayoutDescriptor",
+        "PageRotation",
+        "ParseFailureCategory",
+        "ParseFailureRecord",
+        "ParseFailureSeverity",
+        "ParseFailureStage",
+        "ParseFailureUnitKind",
+        "ParseOutcome",
+        "ParseStatus",
+        "ParsedRepresentation",
+        "ProducerIdentity",
         "RepositoryClosedError",
         "RepositoryUnavailableError",
+        "ResolvedSourceSpan",
         "RollbackCorpusVersionOutcome",
         "SealCorpusUpdateOutcome",
+        "SourceArtefact",
+        "SourceLocation",
         "StorageConcurrencyError",
         "StorageConflictError",
         "StorageError",
         "StorageErrorCategory",
         "StorageMigrationError",
         "StorageTransactionError",
+        "StructuralBlock",
+        "StructuralBlockKind",
+        "build_parsed_representation_output_digest",
         "open_metadata_repository",
+        "serialise_parse_outcome",
+        "serialise_parsed_representation",
+        "serialise_source_artefact",
+        "validate_source_record_schema_version",
     }
 
     assert set(storage.__all__) == expected_exports
