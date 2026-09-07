@@ -42,6 +42,7 @@ def test_text_native_emits_exact_canonical_output_deterministically() -> None:
     assert document.blocks == document.paragraphs
     assert document.pages is None
     assert document.sections is None
+    assert document.page_layouts == ()
     assert document.language is None
     assert document.page_count is None
     assert document.token_count is None

@@ -641,6 +641,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "StructuralBlock",
         "StructuralBlockKind",
         "build_parsed_representation_output_digest",
+        "build_source_blob_storage_key",
         "open_metadata_repository",
         "serialise_parse_outcome",
         "serialise_parsed_representation",
