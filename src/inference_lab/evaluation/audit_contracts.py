@@ -20,7 +20,11 @@ from inference_lab.ingest.classification import (
     ClassificationInventory,
     SourceFormatCount,
 )
-from inference_lab.ingest.discovery import DiscoveryPolicy, FamilyCandidate
+from inference_lab.ingest.discovery import (
+    DiscoveryPolicy,
+    FamilyCandidate,
+    SourceSupport,
+)
 from inference_lab.ingest.discovery_failures import (
     DiscoveryFailure,
     DiscoveryFailureCategory,
@@ -150,9 +154,12 @@ class AuditParsedDocumentFacts:
     structure_counts: tuple[AuditStructureCount, ...]
     available_structure_kinds: frozenset[AuditStructureKind]
     source_span_count: int
+    page_number_count: int
     page_character_counts: tuple[int, ...] | None
     page_layout_count: int
+    page_layout_page_count: int
     bounding_box_count: int
+    bounding_box_page_count: int
 
     def __post_init__(self) -> None:
         self._validate()
@@ -196,6 +203,10 @@ class AuditParsedDocumentFacts:
             self.source_span_count,
             field_name="source_span_count",
         )
+        _validate_non_negative_int(
+            self.page_number_count,
+            field_name="page_number_count",
+        )
         if self.page_character_counts is not None:
             if not isinstance(self.page_character_counts, tuple):
                 raise TypeError("page_character_counts must be a tuple or None.")
@@ -206,8 +217,16 @@ class AuditParsedDocumentFacts:
             field_name="page_layout_count",
         )
         _validate_non_negative_int(
+            self.page_layout_page_count,
+            field_name="page_layout_page_count",
+        )
+        _validate_non_negative_int(
             self.bounding_box_count,
             field_name="bounding_box_count",
+        )
+        _validate_non_negative_int(
+            self.bounding_box_page_count,
+            field_name="bounding_box_page_count",
         )
 
     @classmethod
@@ -248,9 +267,22 @@ class AuditParsedDocumentFacts:
             structure_counts=structure_counts,
             available_structure_kinds=available_structure_kinds,
             source_span_count=len(document.blocks),
+            page_number_count=sum(
+                block.source_span.page_number is not None for block in document.blocks
+            ),
             page_character_counts=page_character_counts,
             page_layout_count=len(document.page_layouts),
+            page_layout_page_count=len(
+                {layout.page_number for layout in document.page_layouts}
+            ),
             bounding_box_count=bounding_box_count,
+            bounding_box_page_count=len(
+                {
+                    block.source_span.page_number
+                    for block in document.blocks
+                    if block.source_span.bounding_box is not None
+                }
+            ),
         )
 
 
@@ -439,6 +471,44 @@ class AuditSourceFailure:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class AuditSourceFormatCoverage:
+    """Retain per-format intake, hashing, and identity coverage counts."""
+
+    media_type: str
+    support: SourceSupport
+    file_count: int
+    total_bytes: int
+    hashed_count: int
+    identity_count: int
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate that the coverage counts are well-formed and consistent."""
+        _validate_media_type(self.media_type)
+        if not isinstance(self.support, SourceSupport):
+            raise TypeError("support must be a SourceSupport.")
+        for field_name, value in (
+            ("file_count", self.file_count),
+            ("total_bytes", self.total_bytes),
+            ("hashed_count", self.hashed_count),
+            ("identity_count", self.identity_count),
+        ):
+            _validate_non_negative_int(value, field_name=field_name)
+        if self.file_count == 0:
+            raise ValueError("file_count must be positive.")
+        if self.hashed_count > self.file_count:
+            raise ValueError("hashed_count must not exceed file_count.")
+        if self.identity_count > self.hashed_count:
+            raise ValueError("identity_count must not exceed hashed_count.")
+
+    def key(self) -> tuple[str, str]:
+        """Return the canonical format key."""
+        return self.media_type, self.support.value
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class AuditSourceInventory:
     """Store sanitised ING-02 intake aggregates for one audit corpus."""
@@ -448,6 +518,8 @@ class AuditSourceInventory:
     format_counts: tuple[SourceFormatCount, ...]
     discovery_counts: DiscoveryCounts
     failures: tuple[AuditSourceFailure, ...]
+    format_coverage: tuple[AuditSourceFormatCoverage, ...] = ()
+    known_source_byte_counts: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         self._validate()
@@ -468,6 +540,43 @@ class AuditSourceInventory:
             raise TypeError("failures must be a tuple.")
         if any(not isinstance(item, AuditSourceFailure) for item in self.failures):
             raise TypeError("failures must contain AuditSourceFailure values.")
+        if not isinstance(self.format_coverage, tuple):
+            raise TypeError("format_coverage must be a tuple.")
+        if any(
+            not isinstance(item, AuditSourceFormatCoverage)
+            for item in self.format_coverage
+        ):
+            raise TypeError(
+                "format_coverage must contain AuditSourceFormatCoverage values."
+            )
+        coverage_keys = tuple(item.key() for item in self.format_coverage)
+        format_keys = tuple(
+            (item.media_type, item.support.value) for item in self.format_counts
+        )
+        if coverage_keys != tuple(sorted(coverage_keys)) or len(coverage_keys) != len(
+            set(coverage_keys)
+        ):
+            raise AuditContractError(AuditErrorCategory.INVALID_ORDERING)
+        if coverage_keys != format_keys:
+            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+        if any(
+            coverage.file_count != format_count.file_count
+            or coverage.total_bytes != format_count.total_bytes
+            for coverage, format_count in zip(
+                self.format_coverage,
+                self.format_counts,
+                strict=True,
+            )
+        ):
+            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+        if not isinstance(self.known_source_byte_counts, tuple):
+            raise TypeError("known_source_byte_counts must be a tuple.")
+        for value in self.known_source_byte_counts:
+            _validate_non_negative_int(value, field_name="source_byte_count")
+        if len(self.known_source_byte_counts) != sum(
+            item.file_count for item in self.format_coverage
+        ):
+            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
         failure_ordinals = tuple(item.ordinal for item in self.failures)
         if failure_ordinals != tuple(sorted(failure_ordinals)) or len(
             failure_ordinals
@@ -526,6 +635,52 @@ class AuditSourceInventory:
             ):
                 raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
 
+        hashed_ordinals = {source.ordinal for source in discovery.sources} | {
+            failure.ordinal
+            for failure in discovery.failures
+            if failure.stage
+            in {
+                DiscoveryFailureStage.CONTINUITY,
+                DiscoveryFailureStage.RESOLUTION,
+                DiscoveryFailureStage.PERSISTENCE,
+            }
+        }
+        identity_ordinals = {source.ordinal for source in discovery.sources} | {
+            failure.ordinal
+            for failure in discovery.failures
+            if failure.stage
+            in {
+                DiscoveryFailureStage.RESOLUTION,
+                DiscoveryFailureStage.PERSISTENCE,
+            }
+        }
+        coverage_by_key: dict[tuple[str, SourceSupport], list[int]] = {}
+        for item in classification.classified_candidates:
+            key = (item.classification.media_type, item.classification.support)
+            counts = coverage_by_key.setdefault(key, [0, 0, 0])
+            counts[0] += 1
+            if item.candidate.ordinal in hashed_ordinals:
+                counts[1] += 1
+            if item.candidate.ordinal in identity_ordinals:
+                counts[2] += 1
+        format_coverage = tuple(
+            AuditSourceFormatCoverage(
+                media_type=media_type,
+                support=support,
+                file_count=counts[0],
+                total_bytes=next(
+                    item.total_bytes
+                    for item in classification.format_counts
+                    if item.media_type == media_type and item.support is support
+                ),
+                hashed_count=counts[1],
+                identity_count=counts[2],
+            )
+            for (media_type, support), counts in sorted(
+                coverage_by_key.items(),
+                key=lambda item: (item[0][0], item[0][1].value),
+            )
+        )
         return cls(
             corpus_id=discovery.corpus_id,
             policy=discovery.policy,
@@ -534,6 +689,13 @@ class AuditSourceInventory:
             failures=tuple(
                 AuditSourceFailure.from_discovery_failure(failure)
                 for failure in discovery.failures
+            ),
+            format_coverage=format_coverage,
+            known_source_byte_counts=tuple(
+                sorted(
+                    item.candidate.stat_evidence.byte_count
+                    for item in classification.classified_candidates
+                )
             ),
         )
 
