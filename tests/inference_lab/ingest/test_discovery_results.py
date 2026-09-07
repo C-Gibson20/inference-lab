@@ -304,7 +304,7 @@ def test_builder_orders_outcomes_and_derives_partial_summary() -> None:
         files_seen=4,
         supported=3,
         unsupported=1,
-        hashed=2,
+        hashed=3,
         unchanged=1,
         changed=0,
         new=1,
@@ -636,6 +636,56 @@ def test_counts_factory_maps_every_identity_outcome_exactly() -> None:
     assert counts.conflicting == 1
 
 
+@pytest.mark.parametrize(
+    "category",
+    (
+        DiscoveryFailureCategory.OBSERVATION_AMBIGUOUS,
+        DiscoveryFailureCategory.CANDIDATE_METADATA_INVALID,
+        DiscoveryFailureCategory.REPOSITORY_UNAVAILABLE,
+        DiscoveryFailureCategory.CONCURRENT_WRITE_CONFLICT,
+        DiscoveryFailureCategory.IDENTITY_WRITE_FAILED,
+    ),
+)
+def test_counts_include_post_hash_failures_as_hashed(
+    category: DiscoveryFailureCategory,
+) -> None:
+    failure = DiscoveryFailure.for_category(ordinal=0, category=category)
+
+    counts = DiscoveryCounts.from_outcomes(
+        files_seen=1,
+        sources=(),
+        failures=(failure,),
+    )
+
+    assert counts.supported == 1
+    assert counts.hashed == 1
+    assert counts.failed == 1
+
+
+@pytest.mark.parametrize(
+    "category",
+    (
+        DiscoveryFailureCategory.SOURCE_TOO_LARGE,
+        DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+        DiscoveryFailureCategory.SOURCE_READ_FAILED,
+    ),
+)
+def test_counts_exclude_hashing_failures_from_hashed(
+    category: DiscoveryFailureCategory,
+) -> None:
+    failure = DiscoveryFailure.for_category(ordinal=0, category=category)
+
+    counts = DiscoveryCounts.from_outcomes(
+        files_seen=1,
+        sources=(),
+        failures=(failure,),
+    )
+
+    assert counts.supported == 1
+    assert counts.hashed == 0
+    assert counts.failed == 1
+
+
 def test_partial_result_combines_usable_source_and_isolated_failure() -> None:
     source = _source(0, ResolutionKind.NEW_DOCUMENT)
     failure = DiscoveryFailure.for_category(
@@ -714,7 +764,7 @@ def test_request_failure_requires_failed_status_and_no_usable_source() -> None:
         category=DiscoveryFailureCategory.REPOSITORY_UNAVAILABLE,
     )
     counts = DiscoveryCounts.from_outcomes(
-        files_seen=1,
+        files_seen=2,
         sources=(source,),
         failures=(failure,),
     )
@@ -811,15 +861,15 @@ def test_result_rejects_unordered_or_reused_ordinals() -> None:
 
 
 def test_counts_reject_invalid_totals_and_implicit_numbers() -> None:
-    with pytest.raises(ValueError, match="outcome counts must equal hashed"):
+    with pytest.raises(ValueError, match="outcome counts cannot exceed hashed"):
         DiscoveryCounts(
             files_seen=1,
             supported=1,
             unsupported=0,
-            hashed=1,
+            hashed=0,
             unchanged=0,
             changed=0,
-            new=0,
+            new=1,
             duplicate=0,
             ambiguous=0,
             conflicting=0,
