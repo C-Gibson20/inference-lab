@@ -88,6 +88,18 @@ from inference_lab.ingest.parse_mapping import (
     map_parse_persistence_request,
 )
 from inference_lab.ingest.parse_persistence import ParsePersistenceRequest
+from inference_lab.ingest.parse_preflight import (
+    ParsePersistencePreflight,
+    ParsePreflightError,
+    ParsePreflightErrorCategory,
+    ParsePreflightReader,
+    preflight_parse_persistence,
+)
+from inference_lab.ingest.parse_publication import (
+    ParsePersistenceResult,
+    ParsePublicationRepository,
+    persist_parse_request,
+)
 from inference_lab.ingest.parse_reconstruction import (
     ParseReconstructionError,
     ParseReconstructionErrorCategory,
@@ -174,7 +186,13 @@ __all__ = [
     "PageLayoutDescriptor",
     "PageRotation",
     "ParseOutcome",
+    "ParsePersistencePreflight",
     "ParsePersistenceRequest",
+    "ParsePersistenceResult",
+    "ParsePreflightError",
+    "ParsePreflightErrorCategory",
+    "ParsePreflightReader",
+    "ParsePublicationRepository",
     "ParseReconstructionError",
     "ParseReconstructionErrorCategory",
     "ParseStatus",
@@ -230,6 +248,8 @@ __all__ = [
     "parsed_document_payload",
     "persist_discovered_source_identities",
     "persist_discovered_source_identity",
+    "persist_parse_request",
+    "preflight_parse_persistence",
     "prepare_text",
     "reconstruct_parse_outcome",
     "resolve_discovered_source_identity",
