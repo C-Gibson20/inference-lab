@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import pytest
+from structlog.contextvars import get_contextvars
+from structlog.testing import capture_logs
 
+import inference_lab.ingest.parse_publication as publication_module
 from inference_lab.ingest import (
     CURRENT_PARSER_VERSION,
     ParseOutcome,
@@ -32,6 +35,7 @@ from inference_lab.storage import (
     SourceArtefact,
     StorageConcurrencyError,
     StorageConflictError,
+    StorageError,
     build_source_blob_storage_key,
 )
 from inference_lab.storage import (
@@ -64,6 +68,7 @@ class _Repository:
         self.failure = failure
         self.calls: list[str] = []
         self.publications: list[_Publication] = []
+        self.publication_context: dict[str, object] | None = None
 
     def get_corpus_document_version_membership(
         self,
@@ -112,6 +117,7 @@ class _Repository:
         parsed_representation: ParsedRepresentation | None = None,
     ) -> None:
         self.calls.append("publication")
+        self.publication_context = get_contextvars()
         self.publications.append(
             _Publication(
                 corpus_id=corpus_id,
@@ -187,12 +193,17 @@ def test_publishes_one_exact_mapped_bundle_after_all_preflight_reads() -> None:
     case = _case()
     settings = fixture_settings(max_source_bytes=1234)
     expected = map_parse_persistence_request(case.request)
+    expected_representation = expected.representation
+    parsed_record_id = case.request.parsed_record_id
+    assert expected_representation is not None
+    assert parsed_record_id is not None
 
-    result = persist_parse_request(
-        case.repository,
-        case.request,
-        settings=settings,
-    )
+    with capture_logs() as logs:
+        result = persist_parse_request(
+            case.repository,
+            case.request,
+            settings=settings,
+        )
 
     assert result.parse_id == case.request.parse_id
     assert result.parsed_record_id == case.request.parsed_record_id
@@ -218,16 +229,48 @@ def test_publishes_one_exact_mapped_bundle_after_all_preflight_reads() -> None:
     assert publication.max_source_bytes == settings.ingest.max_source_bytes
     assert publication.parse_outcome == expected.outcome
     assert publication.parsed_representation == expected.representation
+    assert case.repository.publication_context is not None
+    assert case.repository.publication_context["corpus_id"] == (
+        case.request.corpus_id.as_str()
+    )
+    assert case.repository.publication_context["document_id"] == (
+        case.request.parser_input.document_id.as_str()
+    )
+    assert case.repository.publication_context["corpus_version"] is None
+    assert [record["event"] for record in logs] == [
+        "parse_persistence_started",
+        "parse_persistence_completed",
+    ]
+    assert logs[0] == {
+        "pipeline_stage": "ingest",
+        "parser_implementation": case.request.parser_version.implementation,
+        "parser_contract_version": case.request.parser_version.contract_version,
+        "normalisation_version": (case.request.parser_version.normalisation_version),
+        "parse_status": "succeeded",
+        "parse_id": case.request.parse_id.as_str(),
+        "parsed_record_id": parsed_record_id.as_str(),
+        "event": "parse_persistence_started",
+        "log_level": "info",
+    }
+    assert logs[1]["pipeline_stage"] == "ingest"
+    assert logs[1]["parse_status"] == "succeeded"
+    assert logs[1]["source_byte_count"] == len(case.request.parser_input.content)
+    assert logs[1]["record_count"] == 3
+    assert logs[1]["block_count"] == len(expected_representation.blocks)
+    assert logs[1]["span_count"] == len(expected_representation.source_locations)
+    assert logs[1]["failure_count"] == 0
+    assert logs[1]["log_level"] == "info"
 
 
 def test_fatal_parse_publishes_source_and_outcome_without_representation() -> None:
     case = _case(failed=True)
 
-    result = persist_parse_request(
-        case.repository,
-        case.request,
-        settings=fixture_settings(),
-    )
+    with capture_logs() as logs:
+        result = persist_parse_request(
+            case.repository,
+            case.request,
+            settings=fixture_settings(),
+        )
 
     assert result.status == "failed"
     assert result.parsed_record_id is None
@@ -236,6 +279,16 @@ def test_fatal_parse_publishes_source_and_outcome_without_representation() -> No
     assert publication.parse_outcome is not None
     assert publication.parse_outcome.status.value == "failed"
     assert publication.parsed_representation is None
+    assert [record["event"] for record in logs] == [
+        "parse_persistence_started",
+        "parse_persistence_completed",
+    ]
+    assert logs[-1]["parse_status"] == "failed"
+    assert logs[-1]["record_count"] == 2
+    assert logs[-1]["block_count"] == 0
+    assert logs[-1]["span_count"] == 0
+    assert logs[-1]["failure_count"] == 1
+    assert logs[-1]["log_level"] == "info"
 
 
 @pytest.mark.parametrize(
@@ -246,18 +299,44 @@ def test_fatal_parse_publishes_source_and_outcome_without_representation() -> No
         RepositoryUnavailableError(),
     ],
 )
-def test_storage_errors_propagate_unchanged(failure: Exception) -> None:
+def test_storage_errors_propagate_unchanged(failure: StorageError) -> None:
     case = _case(failure=failure)
 
-    with pytest.raises(type(failure)) as error:
-        persist_parse_request(
-            case.repository,
-            case.request,
-            settings=fixture_settings(),
-        )
+    with capture_logs() as logs:
+        with pytest.raises(type(failure)) as error:
+            persist_parse_request(
+                case.repository,
+                case.request,
+                settings=fixture_settings(),
+            )
 
     assert error.value is failure
     assert len(case.repository.publications) == 1
+    assert [record["event"] for record in logs] == [
+        "parse_persistence_started",
+        "parse_persistence_failed",
+    ]
+    assert logs[-1]["error_category"] == failure.category.value
+    assert logs[-1]["retryable"] is failure.retryable
+    assert logs[-1]["log_level"] == "error"
+
+
+def test_unexpected_failure_log_does_not_expose_exception_text() -> None:
+    primary = RuntimeError("/private/canary/source.txt")
+    case = _case(failure=primary)
+
+    with capture_logs() as logs:
+        with pytest.raises(RuntimeError) as error:
+            persist_parse_request(
+                case.repository,
+                case.request,
+                settings=fixture_settings(),
+            )
+
+    assert error.value is primary
+    assert logs[-1]["error_category"] == "unexpected_error"
+    assert logs[-1]["retryable"] is False
+    assert "/private/canary/source.txt" not in repr(logs)
 
 
 def test_preflight_failure_prevents_publication() -> None:
@@ -268,46 +347,88 @@ def test_preflight_failure_prevents_publication() -> None:
         document_version_id=case.document_version.document_version_id,
     )
 
-    with pytest.raises(ParsePreflightError):
-        persist_parse_request(
-            case.repository,
-            case.request,
-            settings=fixture_settings(),
-        )
+    with capture_logs() as logs:
+        with pytest.raises(ParsePreflightError):
+            persist_parse_request(
+                case.repository,
+                case.request,
+                settings=fixture_settings(),
+            )
 
     assert case.repository.publications == []
+    assert [record["event"] for record in logs] == [
+        "parse_persistence_started",
+        "parse_persistence_failed",
+    ]
+    assert logs[-1]["error_category"] == "source_identity_mismatch"
+    assert logs[-1]["retryable"] is False
 
 
 def test_result_representation_contains_no_source_details() -> None:
     case = _case()
 
-    result = persist_parse_request(
-        case.repository,
-        case.request,
-        settings=fixture_settings(),
-    )
+    with capture_logs() as logs:
+        result = persist_parse_request(
+            case.repository,
+            case.request,
+            settings=fixture_settings(),
+        )
 
     rendered = repr(result)
     assert case.request.parser_input.content.decode() not in rendered
     assert case.document_version.content_hash.digest not in rendered
     assert "storage_key" not in rendered
     assert "parser_input" not in rendered
+    rendered_logs = repr(logs)
+    assert case.request.parser_input.content.decode() not in rendered_logs
+    assert case.document_version.content_hash.digest not in rendered_logs
+    assert "storage_key" not in rendered_logs
 
 
 def test_dependencies_are_validated_before_repository_reads() -> None:
     case = _case()
 
-    with pytest.raises(TypeError, match="request must be"):
-        persist_parse_request(
-            case.repository,
-            object(),  # type: ignore[arg-type]
-            settings=fixture_settings(),
-        )
-    with pytest.raises(TypeError, match="settings must be"):
+    with capture_logs() as logs:
+        with pytest.raises(TypeError, match="request must be"):
+            persist_parse_request(
+                case.repository,
+                object(),  # type: ignore[arg-type]
+                settings=fixture_settings(),
+            )
+        with pytest.raises(TypeError, match="settings must be"):
+            persist_parse_request(
+                case.repository,
+                case.request,
+                settings=object(),  # type: ignore[arg-type]
+            )
+
+    assert case.repository.calls == []
+    assert logs == []
+
+
+class _BrokenLogger:
+    def info(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("logging failed")
+
+    def error(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("logging failed")
+
+
+def test_logging_failure_does_not_replace_publication_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = StorageConcurrencyError()
+    case = _case(failure=primary)
+    monkeypatch.setattr(publication_module, "_LOGGER", _BrokenLogger())
+
+    with pytest.raises(StorageConcurrencyError) as error:
         persist_parse_request(
             case.repository,
             case.request,
-            settings=object(),  # type: ignore[arg-type]
+            settings=fixture_settings(),
         )
 
-    assert case.repository.calls == []
+    assert error.value is primary
+    assert len(case.repository.publications) == 1
