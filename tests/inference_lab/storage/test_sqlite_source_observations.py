@@ -135,6 +135,50 @@ def test_source_observation_and_history_round_trip_after_restart(
         second.close()
 
 
+def test_current_observations_are_found_by_version_with_corpus_isolation(
+    tmp_path: Path,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    _populate_versions(repository)
+    other_corpus_state = SourceObservationState(
+        _OTHER_CORPUS_ID,
+        _OTHER_SOURCE_OBSERVATION_ID,
+        1,
+        _DOCUMENT_ID,
+        _FIRST_VERSION_ID,
+    )
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_corpus_document_version_membership(
+                CorpusDocumentVersionMembership(
+                    _OTHER_CORPUS_ID,
+                    _DOCUMENT_ID,
+                    _FIRST_VERSION_ID,
+                )
+            )
+            transaction.add_source_observation(_INITIAL_STATE)
+            transaction.add_source_observation(other_corpus_state)
+
+            assert transaction.find_source_observations_by_document_version(
+                _CORPUS_ID,
+                _FIRST_VERSION_ID,
+            ) == (_INITIAL_STATE,)
+
+        assert repository.find_source_observations_by_document_version(
+            _CORPUS_ID,
+            _FIRST_VERSION_ID,
+        ) == (_INITIAL_STATE,)
+        assert (
+            repository.find_source_observations_by_document_version(
+                _CORPUS_ID,
+                _SECOND_VERSION_ID,
+            )
+            == ()
+        )
+    finally:
+        repository.close()
+
+
 def test_source_observation_read_rejects_current_pointer_history_divergence(
     tmp_path: Path,
 ) -> None:

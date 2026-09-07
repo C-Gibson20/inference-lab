@@ -100,21 +100,21 @@ _SOURCE_OUTCOME = ParseOutcome(
 
 def _failing_source_persistence_migration() -> MigrationDefinition:
     return MigrationDefinition(
-        revision=2,
+        revision=3,
         migration_id="test_failing_source_persistence",
         statements=(
-            *MIGRATIONS[1].statements,
+            *MIGRATIONS[2].statements,
             "CREATE TABLE documents (conflicting_value TEXT)",
         ),
     )
 
 
-def _failing_revision_four() -> MigrationDefinition:
+def _failing_revision_five() -> MigrationDefinition:
     return MigrationDefinition(
-        revision=4,
-        migration_id="test_failing_revision_four",
+        revision=5,
+        migration_id="test_failing_revision_five",
         statements=(
-            "CREATE TABLE revision_four_marker (value TEXT) STRICT",
+            "CREATE TABLE revision_five_marker (value TEXT) STRICT",
             "CREATE TABLE documents (conflicting_value TEXT)",
         ),
     )
@@ -229,7 +229,7 @@ def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert reopened.schema_inspection.current_revision == 3
+        assert reopened.schema_inspection.current_revision == 4
         assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
             _CORPUS_ID, "Primary corpus"
         )
@@ -260,11 +260,11 @@ def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
         assert connection.execute(
             """SELECT revision, migration_id, checksum, applied_at_utc
             FROM migration_history
-            WHERE revision = 3"""
+            WHERE revision = 4"""
         ).fetchone() == (
-            3,
+            4,
             "corpus_version_publication",
-            MIGRATIONS[2].checksum,
+            MIGRATIONS[3].checksum,
             "2026-09-01T12:30:00.000000+00:00",
         )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -273,7 +273,7 @@ def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
 
     reopened_without_permission = SQLiteMetadataRepository.open(database_path)
     try:
-        assert reopened_without_permission.schema_inspection.current_revision == 3
+        assert reopened_without_permission.schema_inspection.current_revision == 4
         _assert_complete_graph(reopened_without_permission)
     finally:
         reopened_without_permission.close()
@@ -296,13 +296,13 @@ def test_failed_corpus_version_migration_rolls_back_all_schema_and_data_changes(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_baseline(database_path, migrations=MIGRATIONS[:2])
+    _create_complete_baseline(database_path, migrations=MIGRATIONS[:3])
     before = _database_snapshot(database_path)
     failing_migration = MigrationDefinition(
-        revision=3,
+        revision=4,
         migration_id="test_failing_corpus_version_publication",
         statements=(
-            *MIGRATIONS[2].statements[:-1],
+            *MIGRATIONS[3].statements[:-1],
             "CREATE TABLE documents (conflicting_value TEXT)",
         ),
     )
@@ -311,7 +311,7 @@ def test_failed_corpus_version_migration_rolls_back_all_schema_and_data_changes(
         SQLiteMetadataRepository.open(
             database_path,
             apply_migrations=True,
-            migrations=(*MIGRATIONS[:2], failing_migration),
+            migrations=(*MIGRATIONS[:3], failing_migration),
             applied_at_factory=_fixed_applied_at,
         )
 
@@ -335,10 +335,10 @@ def test_failed_corpus_version_migration_rolls_back_all_schema_and_data_changes(
 
     recovered = SQLiteMetadataRepository.open(
         database_path,
-        migrations=MIGRATIONS[:2],
+        migrations=MIGRATIONS[:3],
     )
     try:
-        assert recovered.schema_inspection.current_revision == 2
+        assert recovered.schema_inspection.current_revision == 3
         _assert_complete_graph(recovered)
     finally:
         recovered.close()
@@ -356,7 +356,7 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert migrated.schema_inspection.current_revision == 3
+        assert migrated.schema_inspection.current_revision == 4
         _assert_complete_graph(migrated)
     finally:
         migrated.close()
@@ -370,14 +370,20 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
         ),
         (
             2,
-            "source_persistence",
+            "source_locator_continuity",
             MIGRATIONS[1].checksum,
             "2026-09-01T12:30:00.000000+00:00",
         ),
         (
             3,
-            "corpus_version_publication",
+            "source_persistence",
             MIGRATIONS[2].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        ),
+        (
+            4,
+            "corpus_version_publication",
+            MIGRATIONS[3].checksum,
             "2026-09-01T12:30:00.000000+00:00",
         ),
     )
@@ -386,7 +392,7 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
         database_path,
     )
     try:
-        assert reopened.schema_inspection.current_revision == 3
+        assert reopened.schema_inspection.current_revision == 4
         _assert_complete_graph(reopened)
     finally:
         reopened.close()
@@ -412,7 +418,7 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         SQLiteMetadataRepository.open(
             database_path,
             apply_migrations=True,
-            migrations=(*MIGRATIONS, _failing_revision_four()),
+            migrations=(*MIGRATIONS, _failing_revision_five()),
             applied_at_factory=_fixed_applied_at,
         )
 
@@ -420,7 +426,7 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         database_path,
     )
     try:
-        assert recovered.schema_inspection.current_revision == 3
+        assert recovered.schema_inspection.current_revision == 4
         _assert_complete_graph(recovered)
     finally:
         recovered.close()
@@ -430,13 +436,13 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         assert (
             connection.execute(
                 """SELECT 1 FROM sqlite_schema
-            WHERE name = 'revision_four_marker'"""
+            WHERE name = 'revision_five_marker'"""
             ).fetchone()
             is None
         )
         assert connection.execute(
             "SELECT count(*) FROM migration_history"
-        ).fetchone() == (3,)
+        ).fetchone() == (4,)
     finally:
         connection.close()
 
@@ -445,14 +451,14 @@ def test_failed_source_migration_rolls_back_the_entire_revision(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
-    _create_complete_baseline(database_path)
+    _create_complete_baseline(database_path, migrations=MIGRATIONS[:2])
     before = _database_snapshot(database_path)
 
     with pytest.raises(StorageMigrationError):
         SQLiteMetadataRepository.open(
             database_path,
             apply_migrations=True,
-            migrations=(MIGRATIONS[0], _failing_source_persistence_migration()),
+            migrations=(*MIGRATIONS[:2], _failing_source_persistence_migration()),
             applied_at_factory=_fixed_applied_at,
         )
 
@@ -468,13 +474,13 @@ def test_failed_source_migration_rolls_back_the_entire_revision(
         )
         assert connection.execute(
             "SELECT revision FROM migration_history ORDER BY revision"
-        ).fetchall() == [(1,)]
+        ).fetchall() == [(1,), (2,)]
     finally:
         connection.close()
 
     recovered = SQLiteMetadataRepository.open(
         database_path,
-        migrations=(MIGRATIONS[0],),
+        migrations=MIGRATIONS[:2],
     )
     try:
         _assert_complete_graph(recovered)
@@ -482,18 +488,18 @@ def test_failed_source_migration_rolls_back_the_entire_revision(
         recovered.close()
 
 
-def test_public_factory_upgrades_failed_revision_one_without_losing_prior_data(
+def test_public_factory_upgrades_failed_revision_two_without_losing_prior_data(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "private-metadata" / "metadata.sqlite3"
     source_dir = tmp_path / "private-source-data"
-    _create_complete_baseline(database_path)
-    revision_one_snapshot = _database_snapshot(database_path)
+    _create_complete_baseline(database_path, migrations=MIGRATIONS[:2])
+    revision_two_snapshot = _database_snapshot(database_path)
 
     with pytest.raises(MigrationRequiredError) as migration_required:
         open_metadata_repository(database_path, source_dir=source_dir)
 
-    assert _database_snapshot(database_path) == revision_one_snapshot
+    assert _database_snapshot(database_path) == revision_two_snapshot
     assert str(database_path) not in str(migration_required.value)
     assert str(source_dir) not in str(migration_required.value)
 
@@ -501,11 +507,11 @@ def test_public_factory_upgrades_failed_revision_one_without_losing_prior_data(
         SQLiteMetadataRepository.open(
             database_path,
             apply_migrations=True,
-            migrations=(MIGRATIONS[0], _failing_source_persistence_migration()),
+            migrations=(*MIGRATIONS[:2], _failing_source_persistence_migration()),
             applied_at_factory=_fixed_applied_at,
         )
 
-    assert _database_snapshot(database_path) == revision_one_snapshot
+    assert _database_snapshot(database_path) == revision_two_snapshot
 
     migrated: MetadataRepository = open_metadata_repository(
         database_path,

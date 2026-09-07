@@ -14,6 +14,11 @@ from inference_lab.storage.errors import (
     StorageTransactionError,
 )
 from inference_lab.storage.factory import open_metadata_repository
+from inference_lab.storage.locator_continuity import (
+    SourceFileIdentityHint,
+    SourceFingerprint,
+    SourceLocatorRevision,
+)
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
     BeginCorpusUpdateOutcome,
@@ -127,7 +132,10 @@ __all__ = [
     "RollbackCorpusVersionOutcome",
     "SealCorpusUpdateOutcome",
     "SourceArtefact",
+    "SourceFileIdentityHint",
+    "SourceFingerprint",
     "SourceLocation",
+    "SourceLocatorRevision",
     "StorageConcurrencyError",
     "StorageConflictError",
     "StorageError",

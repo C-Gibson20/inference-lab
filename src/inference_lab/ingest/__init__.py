@@ -1,5 +1,59 @@
 """Document ingestion contracts and pipeline stages."""
 
+from inference_lab.ingest.classification import (
+    CURRENT_SOURCE_CLASSIFIER,
+    ClassificationInventory,
+    ClassifiedSourceCandidate,
+    SourceClassifierRegistry,
+    SourceClassifierRule,
+    SourceFormatCount,
+    classify_source_candidate,
+    classify_source_inventory,
+)
+from inference_lab.ingest.continuity import (
+    ObservationMatchKind,
+    SourceObservationAssignment,
+    SourceObservationIdAllocator,
+    UuidSourceObservationIdAllocator,
+    resolve_source_observation,
+)
+from inference_lab.ingest.discovery import (
+    CURRENT_DISCOVERY_POLICY,
+    DirectorySnapshotPolicy,
+    DiscoveredSource,
+    DiscoveryInput,
+    DiscoveryInputKind,
+    DiscoveryPolicy,
+    DiscoveryRequest,
+    FamilyCandidate,
+    FamilyEvidenceKind,
+    FileIdentityHint,
+    FileStatEvidence,
+    HiddenEntryPolicy,
+    NestedMountPolicy,
+    SourceClassification,
+    SourceLocator,
+    SourceSupport,
+    StableFileEvidence,
+    StableReadPolicy,
+    SymlinkPolicy,
+    VerifiedSourceSnapshot,
+)
+from inference_lab.ingest.discovery_failures import (
+    DiscoveryFailure,
+    DiscoveryFailureCategory,
+    DiscoveryFailureScope,
+    DiscoveryFailureStage,
+    DiscoveryFileKind,
+    discovery_failure_policy,
+)
+from inference_lab.ingest.discovery_observability import observe_discovery
+from inference_lab.ingest.discovery_results import (
+    DiscoveryCounts,
+    DiscoveryResult,
+    DiscoveryStatus,
+)
+from inference_lab.ingest.discovery_summary import build_discovery_result
 from inference_lab.ingest.errors import (
     ParserDecodeError,
     ParserFailure,
@@ -7,6 +61,25 @@ from inference_lab.ingest.errors import (
     ParserFailureSeverity,
     ParserFailureStage,
     ParserFailureUnitKind,
+)
+from inference_lab.ingest.hashing import (
+    LocalStableReadFileSystem,
+    StableReadFileSystem,
+    hash_source_candidate,
+)
+from inference_lab.ingest.identity_application import (
+    IdentityApplicationResult,
+    apply_discovery_identity_outcome,
+)
+from inference_lab.ingest.identity_persistence import (
+    IdentityPersistenceUnit,
+    persist_discovered_source_identities,
+    persist_discovered_source_identity,
+)
+from inference_lab.ingest.identity_resolution import (
+    DiscoveryIdentityIdAllocator,
+    UuidDiscoveryIdentityIdAllocator,
+    resolve_discovered_source_identity,
 )
 from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
@@ -30,6 +103,16 @@ from inference_lab.ingest.sources import (
     StructuralBlockKind,
 )
 from inference_lab.ingest.text_native import TextNativeParser
+from inference_lab.ingest.traversal import (
+    LocalTraversalFileSystem,
+    TraversalCandidate,
+    TraversalFileSystem,
+    TraversalInventory,
+    TraversalPathMetadata,
+    TraversalRootScope,
+    canonical_path_key,
+    inventory_local_sources,
+)
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,
@@ -37,9 +120,39 @@ from inference_lab.ingest.versioning import (
 )
 
 __all__ = [
+    "CURRENT_DISCOVERY_POLICY",
     "CURRENT_PARSER_VERSION",
+    "CURRENT_SOURCE_CLASSIFIER",
     "BoundingBox",
+    "ClassificationInventory",
+    "ClassifiedSourceCandidate",
+    "DirectorySnapshotPolicy",
+    "DiscoveredSource",
+    "DiscoveryCounts",
+    "DiscoveryFailure",
+    "DiscoveryFailureCategory",
+    "DiscoveryFailureScope",
+    "DiscoveryFailureStage",
+    "DiscoveryFileKind",
+    "DiscoveryIdentityIdAllocator",
+    "DiscoveryInput",
+    "DiscoveryInputKind",
+    "DiscoveryPolicy",
+    "DiscoveryRequest",
+    "DiscoveryResult",
+    "DiscoveryStatus",
+    "FamilyCandidate",
+    "FamilyEvidenceKind",
+    "FileIdentityHint",
+    "FileStatEvidence",
+    "HiddenEntryPolicy",
+    "IdentityApplicationResult",
+    "IdentityPersistenceUnit",
+    "LocalStableReadFileSystem",
+    "LocalTraversalFileSystem",
+    "NestedMountPolicy",
     "NormalisedText",
+    "ObservationMatchKind",
     "ParseOutcome",
     "ParseStatus",
     "ParsedDocument",
@@ -53,14 +166,47 @@ __all__ = [
     "ParserInput",
     "ParserInputError",
     "ParserVersion",
+    "SourceClassification",
+    "SourceClassifierRegistry",
+    "SourceClassifierRule",
+    "SourceFormatCount",
+    "SourceLocator",
+    "SourceObservationAssignment",
+    "SourceObservationIdAllocator",
     "SourceSpan",
+    "SourceSupport",
+    "StableFileEvidence",
+    "StableReadFileSystem",
+    "StableReadPolicy",
     "StructuralBlock",
     "StructuralBlockKind",
+    "SymlinkPolicy",
     "TextNativeParser",
+    "TraversalCandidate",
+    "TraversalFileSystem",
+    "TraversalInventory",
+    "TraversalPathMetadata",
+    "TraversalRootScope",
+    "UuidDiscoveryIdentityIdAllocator",
+    "UuidSourceObservationIdAllocator",
+    "VerifiedSourceSnapshot",
+    "apply_discovery_identity_outcome",
+    "build_discovery_result",
+    "canonical_path_key",
+    "classify_source_candidate",
+    "classify_source_inventory",
     "decode_source",
+    "discovery_failure_policy",
     "generate_source_span_id",
+    "hash_source_candidate",
+    "inventory_local_sources",
     "normalise_source_text",
+    "observe_discovery",
     "parsed_document_payload",
+    "persist_discovered_source_identities",
+    "persist_discovered_source_identity",
     "prepare_text",
+    "resolve_discovered_source_identity",
+    "resolve_source_observation",
     "serialise_parsed_document",
 ]

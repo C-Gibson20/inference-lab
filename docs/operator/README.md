@@ -11,6 +11,8 @@ operational logs remain local in deployment.
   application.
 - [Configuration reference](configuration.md): typed settings, defaults, and
   environment overrides.
+- [Local source discovery](source-discovery.md): supported formats, traversal
+  policy, identity outcomes, privacy boundaries, and original-source hand-off.
 - [Source availability](source-availability.md): managed-original integrity,
   backup responsibility, and failure handling.
 - [Running queries](querying.md): current query status and the operator
@@ -27,13 +29,14 @@ to apply that policy.
 
 ## Documentation status
 
-The command-line entry point currently starts a skeleton application. Durable
-corpus-version operations are available to Python integrations but do not yet
-have operator-facing commands. The first executable ingest-and-search workflow
-will be documented when it is implemented.
+The command-line entry point currently starts a skeleton application. Discovery
+is available as a library contract, and durable corpus-version operations are
+available to Python integrations; neither has operator-facing commands. The
+first executable ingest-and-search workflow will be documented when it is
+implemented.
 Answer generation, citation verification, sessions, chat, named-corpus
-creation/selection and updates, and privacy checks will extend these pages as
-those capabilities become available.
+creation/selection and updates, and deployment-wide privacy checks will extend
+these pages as those capabilities become available.
 
 When an operator-facing command or setting changes, update the relevant page in
 the same change and verify the examples from a clean local configuration.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar, cast
 
@@ -71,10 +72,19 @@ from inference_lab.storage._sqlite_identifier_assertions import (
     add_external_identifier_assertions,
     list_external_identifier_assertions,
 )
+from inference_lab.storage._sqlite_locator_continuity import (
+    add_source_locator,
+    advance_source_locator,
+    find_source_locator_by_path,
+    find_source_locators_by_identity_hint,
+    get_source_locator,
+    list_source_locator_history,
+)
 from inference_lab.storage._sqlite_logging import safe_log, safe_log_failure
 from inference_lab.storage._sqlite_observations import (
     add_source_observation,
     advance_source_observation,
+    find_source_observations_by_document_version,
     get_source_observation,
     list_source_observation_history,
 )
@@ -113,6 +123,10 @@ from inference_lab.storage._sqlite_versions import (
 from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
+)
+from inference_lab.storage.locator_continuity import (
+    SourceFileIdentityHint,
+    SourceLocatorRevision,
 )
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
@@ -707,6 +721,62 @@ class SQLiteMetadataTransaction:
             source_observation_id,
         )
 
+    def find_source_observations_by_document_version(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return current observations of one version in this transaction."""
+        return self._execute(
+            find_source_observations_by_document_version,
+            corpus_id,
+            document_version_id,
+        )
+
+    def get_source_locator(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> SourceLocatorRevision | None:
+        """Return an observed source's current private locator."""
+        return self._execute(
+            get_source_locator,
+            corpus_id,
+            source_observation_id,
+        )
+
+    def list_source_locator_history(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        """Return an observed source's private locator history."""
+        return self._execute(
+            list_source_locator_history,
+            corpus_id,
+            source_observation_id,
+        )
+
+    def find_source_locator_by_path(
+        self,
+        corpus_id: CorpusId,
+        path: Path,
+    ) -> SourceLocatorRevision | None:
+        """Return an exact private-locator match within this transaction."""
+        return self._execute(find_source_locator_by_path, corpus_id, path)
+
+    def find_source_locators_by_identity_hint(
+        self,
+        corpus_id: CorpusId,
+        identity_hint: SourceFileIdentityHint,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        """Return filesystem-hint candidates within this transaction."""
+        return self._execute(
+            find_source_locators_by_identity_hint,
+            corpus_id,
+            identity_hint,
+        )
+
     def list_external_identifier_assertions(
         self,
         corpus_id: CorpusId,
@@ -767,6 +837,17 @@ class SQLiteMetadataTransaction:
             expected_version_id=expected_version_id,
             new_version_id=new_version_id,
         )
+
+    def add_source_locator(self, revision: SourceLocatorRevision) -> None:
+        """Create a private source locator at revision one."""
+        self._execute(add_source_locator, revision)
+
+    def advance_source_locator(
+        self,
+        revision: SourceLocatorRevision,
+    ) -> SourceLocatorRevision:
+        """Append and select the next private source-locator revision."""
+        return self._execute(advance_source_locator, revision)
 
     def add_external_identifier_assertions(
         self,
