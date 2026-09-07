@@ -5,6 +5,7 @@ from inference_lab.evaluation import (
     AcquisitionStatus,
     AuditAcquisitionObservation,
     AuditMissingReason,
+    AuditOverallStatus,
     AuditParsedDocumentFacts,
     AuditParseEvidence,
     AuditParseObservation,
@@ -13,6 +14,7 @@ from inference_lab.evaluation import (
     AuditSourceInventory,
     AuditStructureCount,
     AuditStructureKind,
+    CorpusAuditReport,
     CorpusAuditRequest,
     CorpusAuditScope,
     aggregate_corpus_audit,
@@ -325,3 +327,48 @@ def test_structure_and_capability_limitations_are_explicit() -> None:
     assert structures[AuditStructureKind.TABLE].coverage.coverage.unavailable == 1
     assert "structure_capability_unavailable" in result.limitations
     assert "ocr_indicators_unavailable" in result.limitations
+
+
+def test_report_projects_aggregates_and_reconciles_both_populations() -> None:
+    membership = _membership(_DOCUMENT_ONE, _VERSION_ONE)
+    report = CorpusAuditReport.from_request(
+        _request((membership,), (_observation(membership),))
+    )
+
+    assert report.schema_version == "1.0.0"
+    assert report.input_digest.startswith("sha256:")
+    assert report.report_id.startswith("sha256:")
+    assert report.populations.member_versions == 1
+    assert report.populations.source_files_seen == 0
+    assert report.reconciliation.member_versions_reconcile is True
+    assert report.reconciliation.section_populations_reconcile is True
+    assert report.overall_status is AuditOverallStatus.PARTIAL
+    assert report.parse.field_coverage[2][1].coverage.observed == 1
+
+
+def test_report_identity_changes_when_semantic_policy_changes() -> None:
+    membership = _membership(_DOCUMENT_ONE, _VERSION_ONE)
+    request = _request((membership,), (_observation(membership),))
+    first = CorpusAuditReport.from_request(request)
+    changed = CorpusAuditReport.from_request(
+        request.__class__(
+            scope=request.scope,
+            source_inventory=request.source_inventory,
+            parse_observations=request.parse_observations,
+            acquisition_observations=request.acquisition_observations,
+            relationships=request.relationships,
+            capability_profiles=request.capability_profiles,
+            policy=request.policy.__class__(rate_decimal_places=3),
+        )
+    )
+
+    assert changed.input_digest != first.input_digest
+    assert changed.report_id != first.report_id
+
+
+def test_empty_report_is_explicitly_no_observations_and_payload_free() -> None:
+    report = CorpusAuditReport.from_request(_request((), ()))
+
+    assert report.overall_status is AuditOverallStatus.NO_OBSERVATIONS
+    assert report.populations.member_versions == 0
+    assert "private source text" not in repr(report)
