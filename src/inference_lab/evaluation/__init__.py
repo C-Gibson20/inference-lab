@@ -74,6 +74,7 @@ from inference_lab.evaluation.audit_reports import (
     CorpusAuditReport,
     report_content_digest,
 )
+from inference_lab.evaluation.audit_runner import AuditRunResult, run_and_publish_audit
 from inference_lab.evaluation.cases import EvaluationCase, QuestionType
 from inference_lab.evaluation.contracts import HELD_OUT_SPLIT, SplitName
 from inference_lab.evaluation.coverage import (
@@ -148,6 +149,7 @@ __all__ = [
     "AuditRelationshipInventory",
     "AuditRelationshipReport",
     "AuditReportManifest",
+    "AuditRunResult",
     "AuditSourceFailure",
     "AuditSourceFormatCoverage",
     "AuditSourceInventory",
@@ -193,6 +195,7 @@ __all__ = [
     "publish_audit_report",
     "render_audit_report",
     "report_content_digest",
+    "run_and_publish_audit",
     "run_corpus_audit",
     "serialise_audit_report",
     "serialise_audit_report_manifest",
