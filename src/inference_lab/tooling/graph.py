@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import structlog
@@ -19,6 +20,7 @@ OUTPUT_DIR = OUTPUT_ROOT / "graphify-out"
 GRAPHIFY_ROOT = REPO_ROOT
 GRAPHIFY_SCOPE = ("src", "tests")
 GRAPHIFY_TIMEOUT_SECONDS = 300
+GRAPHIFY_VIZ_NODE_LIMIT = "20000"
 REPOSITORY_IDENTIFIER = "."
 OUTPUT_IDENTIFIER = ".dev/graphify-out"
 
@@ -81,15 +83,26 @@ def run_graphify_command(
     arguments: list[str],
     *,
     stage: str = "command",
+    environment: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run Graphify from the repository root with a bounded execution time."""
     try:
+        command = ["graphify", *arguments]
+        if environment is None:
+            return subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                cwd=REPO_ROOT,
+                timeout=GRAPHIFY_TIMEOUT_SECONDS,
+            )
         return subprocess.run(
-            ["graphify", *arguments],
+            command,
             capture_output=True,
             text=True,
             cwd=REPO_ROOT,
             timeout=GRAPHIFY_TIMEOUT_SECONDS,
+            env=dict(environment),
         )
     except subprocess.TimeoutExpired as exc:
         raise GraphifyFailure("timeout", stage=stage) from exc
@@ -101,9 +114,10 @@ def run_graphify_stage(
     arguments: list[str],
     *,
     stage: str,
+    environment: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one Graphify stage and discard diagnostics from failed commands."""
-    result = run_graphify_command(arguments, stage=stage)
+    result = run_graphify_command(arguments, stage=stage, environment=environment)
     if result.returncode != 0:
         raise GraphifyFailure(
             "subprocess_failed",
@@ -179,6 +193,10 @@ def build_staged_graph(
                 "--no-label",
             ],
             stage="cluster",
+            environment={
+                **os.environ,
+                "GRAPHIFY_VIZ_NODE_LIMIT": GRAPHIFY_VIZ_NODE_LIMIT,
+            },
         )
 
         report_path = staged_dir / "graph.html"
