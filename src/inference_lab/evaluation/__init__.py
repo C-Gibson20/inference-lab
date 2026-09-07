@@ -38,10 +38,12 @@ from inference_lab.evaluation.audit_contracts import (
     CorpusAuditScope,
 )
 from inference_lab.evaluation.audit_errors import (
+    AuditAggregationError,
     AuditContractError,
     AuditErrorCategory,
     AuditPublicationError,
 )
+from inference_lab.evaluation.audit_observability import run_corpus_audit
 from inference_lab.evaluation.audit_report_publication import publish_audit_report
 from inference_lab.evaluation.audit_report_serialisation import (
     AuditReportManifest,
@@ -123,6 +125,7 @@ __all__ = [
     "AnswerClaim",
     "AuditAcquisitionObservation",
     "AuditAcquisitionReport",
+    "AuditAggregationError",
     "AuditContractError",
     "AuditCoverage",
     "AuditCoverageSummary",
@@ -190,6 +193,7 @@ __all__ = [
     "publish_audit_report",
     "render_audit_report",
     "report_content_digest",
+    "run_corpus_audit",
     "serialise_audit_report",
     "serialise_audit_report_manifest",
     "serialise_cases",
