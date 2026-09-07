@@ -11,7 +11,6 @@ from inference_lab._validation import is_canonical_semantic_version, is_strict_i
 from inference_lab.evaluation.audit_capabilities import (
     ParserCapabilityProfile,
     parser_capability_profile,
-    validate_parsed_document_capabilities,
 )
 from inference_lab.evaluation.audit_errors import (
     AuditContractError,
@@ -30,7 +29,15 @@ from inference_lab.ingest.discovery_failures import (
     discovery_failure_policy,
 )
 from inference_lab.ingest.discovery_results import DiscoveryCounts, DiscoveryResult
-from inference_lab.ingest.outcomes import ParseOutcome
+from inference_lab.ingest.errors import (
+    ParserFailure,
+    ParserFailureCategory,
+    ParserFailureSeverity,
+    ParserFailureStage,
+    ParserFailureUnitKind,
+)
+from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
+from inference_lab.ingest.parser import ParsedDocument
 from inference_lab.ingest.versioning import ParserVersion
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
@@ -80,6 +87,229 @@ class AuditStructureKind(StrEnum):
     EXAMPLE = "example"
     REFERENCE = "reference"
     OTHER = "other"
+
+
+@dataclass(frozen=True, slots=True)
+class AuditParseFailure:
+    """Retain bounded parser-failure metadata without parser payloads."""
+
+    category: ParserFailureCategory
+    severity: ParserFailureSeverity
+    stage: ParserFailureStage
+    unit_kind: ParserFailureUnitKind | None = None
+    unit_index: int | None = None
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate failure metadata using the ING-01 failure policy."""
+        ParserFailure(
+            category=self.category,
+            severity=self.severity,
+            stage=self.stage,
+            unit_kind=self.unit_kind,
+            unit_index=self.unit_index,
+        )
+
+    @classmethod
+    def from_ingest(cls, failure: ParserFailure) -> "AuditParseFailure":
+        """Copy only bounded failure fields from ING-01."""
+        if not isinstance(failure, ParserFailure):
+            raise TypeError("failure must be a ParserFailure.")
+        return cls(
+            category=failure.category,
+            severity=failure.severity,
+            stage=failure.stage,
+            unit_kind=failure.unit_kind,
+            unit_index=failure.unit_index,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AuditStructureCount:
+    """Count one parser structure kind without retaining its text."""
+
+    kind: AuditStructureKind
+    count: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, AuditStructureKind):
+            raise TypeError("kind must be an AuditStructureKind.")
+        _validate_non_negative_int(self.count, field_name="count")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditParsedDocumentFacts:
+    """Store only aggregate facts extracted from one parsed document."""
+
+    language: str | None
+    page_count: int | None
+    character_count: int
+    token_count: int | None
+    structure_counts: tuple[AuditStructureCount, ...]
+    available_structure_kinds: frozenset[AuditStructureKind]
+    source_span_count: int
+    page_character_counts: tuple[int, ...] | None
+    page_layout_count: int
+    bounding_box_count: int
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate sanitised parser metrics and their explicit availability."""
+        if self.language is not None:
+            if not isinstance(self.language, str):
+                raise TypeError("language must be a string or None.")
+            if not self.language.strip():
+                raise ValueError("language must not be blank.")
+        if self.page_count is not None:
+            _validate_non_negative_int(self.page_count, field_name="page_count")
+        _validate_non_negative_int(
+            self.character_count,
+            field_name="character_count",
+        )
+        if self.token_count is not None:
+            _validate_non_negative_int(self.token_count, field_name="token_count")
+        if not isinstance(self.structure_counts, tuple):
+            raise TypeError("structure_counts must be a tuple.")
+        if any(
+            not isinstance(item, AuditStructureCount) for item in self.structure_counts
+        ):
+            raise TypeError("structure_counts must contain AuditStructureCount values.")
+        structure_keys = tuple(item.kind.value for item in self.structure_counts)
+        if structure_keys != tuple(sorted(structure_keys)) or len(
+            structure_keys
+        ) != len(set(structure_keys)):
+            raise AuditContractError(AuditErrorCategory.INVALID_ORDERING)
+        if not isinstance(self.available_structure_kinds, frozenset):
+            raise TypeError("available_structure_kinds must be a frozenset.")
+        if any(
+            not isinstance(item, AuditStructureKind)
+            for item in self.available_structure_kinds
+        ):
+            raise TypeError(
+                "available_structure_kinds must contain AuditStructureKind values."
+            )
+        _validate_non_negative_int(
+            self.source_span_count,
+            field_name="source_span_count",
+        )
+        if self.page_character_counts is not None:
+            if not isinstance(self.page_character_counts, tuple):
+                raise TypeError("page_character_counts must be a tuple or None.")
+            for count in self.page_character_counts:
+                _validate_non_negative_int(count, field_name="page_character_count")
+        _validate_non_negative_int(
+            self.page_layout_count,
+            field_name="page_layout_count",
+        )
+        _validate_non_negative_int(
+            self.bounding_box_count,
+            field_name="bounding_box_count",
+        )
+
+    @classmethod
+    def from_ingest(cls, document: ParsedDocument) -> "AuditParsedDocumentFacts":
+        """Extract safe counts and discard parsed text and source spans."""
+        if not isinstance(document, ParsedDocument):
+            raise TypeError("document must be a ParsedDocument.")
+        counts: dict[AuditStructureKind, int] = {}
+        bounding_box_count = 0
+        for block in document.blocks:
+            kind = AuditStructureKind(block.kind)
+            counts[kind] = counts.get(kind, 0) + 1
+            if block.source_span.bounding_box is not None:
+                bounding_box_count += 1
+        structure_counts = tuple(
+            AuditStructureCount(kind=kind, count=counts[kind])
+            for kind in sorted(counts, key=lambda item: item.value)
+        )
+        available_structure_kinds = frozenset(
+            kind
+            for kind, collection in (
+                (AuditStructureKind.PAGE, document.pages),
+                (AuditStructureKind.SECTION, document.sections),
+                (AuditStructureKind.PARAGRAPH, document.paragraphs),
+            )
+            if collection is not None
+        )
+        page_character_counts = (
+            None
+            if document.pages is None
+            else tuple(len(page.text) for page in document.pages)
+        )
+        return cls(
+            language=document.language,
+            page_count=document.page_count,
+            character_count=document.character_count,
+            token_count=document.token_count,
+            structure_counts=structure_counts,
+            available_structure_kinds=available_structure_kinds,
+            source_span_count=len(document.blocks),
+            page_character_counts=page_character_counts,
+            page_layout_count=len(document.page_layouts),
+            bounding_box_count=bounding_box_count,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AuditParseEvidence:
+    """Store a complete, payload-free summary of one parser outcome."""
+
+    status: ParseStatus
+    document: AuditParsedDocumentFacts | None
+    failures: tuple[AuditParseFailure, ...]
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the sanitised equivalent of ING-01 outcome invariants."""
+        if not isinstance(self.status, str) or self.status not in {
+            "succeeded",
+            "completed_with_recoverable_failures",
+            "failed",
+        }:
+            raise ValueError("invalid parse status.")
+        if self.document is not None and not isinstance(
+            self.document, AuditParsedDocumentFacts
+        ):
+            raise TypeError("document must be AuditParsedDocumentFacts or None.")
+        if not isinstance(self.failures, tuple):
+            raise TypeError("failures must be a tuple.")
+        if any(not isinstance(item, AuditParseFailure) for item in self.failures):
+            raise TypeError("failures must contain AuditParseFailure values.")
+        if self.status == "succeeded":
+            if self.document is None or self.failures:
+                raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+        elif self.status == "completed_with_recoverable_failures":
+            if self.document is None or not self.failures:
+                raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+            if any(item.severity == "fatal" for item in self.failures):
+                raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+        elif self.document is not None or not self.failures:
+            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+        elif not any(item.severity == "fatal" for item in self.failures):
+            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+
+    @classmethod
+    def from_ingest(cls, outcome: ParseOutcome) -> "AuditParseEvidence":
+        """Project an ING-01 outcome into payload-free audit-owned values."""
+        if not isinstance(outcome, ParseOutcome):
+            raise TypeError("outcome must be a ParseOutcome.")
+        return cls(
+            status=outcome.status,
+            document=(
+                None
+                if outcome.document is None
+                else AuditParsedDocumentFacts.from_ingest(outcome.document)
+            ),
+            failures=tuple(
+                AuditParseFailure.from_ingest(failure) for failure in outcome.failures
+            ),
+        )
 
 
 def _validate_media_type(value: object) -> None:
@@ -324,7 +554,7 @@ class AuditParseObservation:
     parser_version: ParserVersion | None = None
     media_type: str | None = None
     source_byte_count: int | None = None
-    outcome: ParseOutcome | None = None
+    evidence: AuditParseEvidence | None = None
     missing_reason: AuditMissingReason | None = None
 
     def __post_init__(self) -> None:
@@ -345,30 +575,23 @@ class AuditParseObservation:
                 self.source_byte_count,
                 field_name="source_byte_count",
             )
-        if self.outcome is not None and not isinstance(self.outcome, ParseOutcome):
-            raise TypeError("outcome must be a ParseOutcome or None.")
+        if self.evidence is not None and not isinstance(
+            self.evidence, AuditParseEvidence
+        ):
+            raise TypeError("evidence must be an AuditParseEvidence or None.")
         if self.missing_reason is not None and not isinstance(
             self.missing_reason, AuditMissingReason
         ):
             raise TypeError("missing_reason must be an AuditMissingReason or None.")
-        if (self.outcome is None) == (self.missing_reason is None):
+        if (self.evidence is None) == (self.missing_reason is None):
             raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
-        if self.outcome is not None:
+        if self.evidence is not None:
             if self.parser_version is None:
                 raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
-            document = self.outcome.document
-            if document is not None:
-                if (
-                    document.document_id != self.membership.document_id
-                    or document.document_version_id
-                    != self.membership.document_version_id
-                    or document.parser_version != self.parser_version
-                ):
-                    raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
 
     def __repr__(self) -> str:
         """Return a representation without parser output or source payload."""
-        status = self.outcome.status if self.outcome is not None else "missing"
+        status = self.evidence.status if self.evidence is not None else "missing"
         return (
             "AuditParseObservation("
             f"document_version_id={self.membership.document_version_id.as_str()!r}, "
@@ -754,11 +977,11 @@ class CorpusAuditRequest:
             if profile is None:
                 raise AuditContractError(AuditErrorCategory.UNKNOWN_PARSER_CAPABILITY)
             if (
-                observation.outcome is not None
-                and observation.outcome.document is not None
+                observation.evidence is not None
+                and observation.evidence.document is not None
             ):
-                validate_parsed_document_capabilities(
-                    observation.outcome.document,
+                _validate_audit_document_capabilities(
+                    observation.evidence.document,
                     profile,
                 )
             for acquisition in self.acquisition_observations:
@@ -780,3 +1003,38 @@ class CorpusAuditRequest:
             f"member_count={len(self.scope.memberships)}, "
             f"source_files_seen={self.source_inventory.discovery_counts.files_seen})"
         )
+
+
+def _validate_audit_document_capabilities(
+    document: AuditParsedDocumentFacts,
+    profile: ParserCapabilityProfile,
+) -> None:
+    """Validate safe document facts against a parser capability profile."""
+    if not profile.language and document.language is not None:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if not profile.page_count and document.page_count is not None:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if profile.page_count and document.page_count is None:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if not profile.page_text and document.page_character_counts is not None:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if profile.page_text and document.page_character_counts is None:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if not profile.token_count and document.token_count is not None:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if not profile.source_spans and document.source_span_count:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if not profile.layout and document.page_layout_count:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if not profile.bounding_boxes and document.bounding_box_count:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+
+    observed_kinds = {
+        item.kind.value for item in document.structure_counts if item.count
+    }
+    if not observed_kinds <= profile.structure_kinds:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    available_kinds = {item.value for item in document.available_structure_kinds}
+    for kind in ("page", "section", "paragraph"):
+        if (kind in profile.structure_kinds) != (kind in available_kinds):
+            raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)

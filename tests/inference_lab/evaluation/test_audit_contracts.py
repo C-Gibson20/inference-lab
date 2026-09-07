@@ -13,6 +13,7 @@ from inference_lab.evaluation import (
     AuditDistribution,
     AuditErrorCategory,
     AuditMissingReason,
+    AuditParseEvidence,
     AuditParseObservation,
     AuditRate,
     AuditRelationshipInventory,
@@ -102,7 +103,7 @@ def _empty_document(membership: CorpusDocumentVersionMembership) -> ParsedDocume
     return ParsedDocument(
         document_id=membership.document_id,
         document_version_id=membership.document_version_id,
-        text=NormalisedText(""),
+        text=NormalisedText("private source text"),
         blocks=(),
         pages=None,
         sections=None,
@@ -110,7 +111,7 @@ def _empty_document(membership: CorpusDocumentVersionMembership) -> ParsedDocume
         page_layouts=(),
         language=None,
         page_count=None,
-        character_count=0,
+        character_count=19,
         token_count=None,
         parser_version=CURRENT_PARSER_VERSION,
     )
@@ -125,7 +126,9 @@ def _successful_observation(
         parser_version=CURRENT_PARSER_VERSION,
         media_type="text/plain",
         source_byte_count=0,
-        outcome=ParseOutcome("succeeded", document, ()),
+        evidence=AuditParseEvidence.from_ingest(
+            ParseOutcome("succeeded", document, ())
+        ),
     )
 
 
@@ -193,7 +196,9 @@ def test_successful_parse_is_checked_against_member_and_capability() -> None:
     invalid_document = replace(_empty_document(membership), token_count=3)
     invalid_observation = replace(
         observation,
-        outcome=ParseOutcome("succeeded", invalid_document, ()),
+        evidence=AuditParseEvidence.from_ingest(
+            ParseOutcome("succeeded", invalid_document, ())
+        ),
     )
     with pytest.raises(AuditContractError) as error:
         _request(membership, observation=invalid_observation)
@@ -206,17 +211,19 @@ def test_fatal_parse_retains_wrapper_attribution_without_a_document() -> None:
         membership=membership,
         parser_version=CURRENT_PARSER_VERSION,
         media_type="text/plain",
-        outcome=ParseOutcome(
-            "failed",
-            None,
-            (ParserFailure("decode_failed", "fatal", "decode"),),
+        evidence=AuditParseEvidence.from_ingest(
+            ParseOutcome(
+                "failed",
+                None,
+                (ParserFailure("decode_failed", "fatal", "decode"),),
+            )
         ),
     )
 
     request = _request(membership, observation=observation)
 
-    assert request.parse_observations[0].outcome is not None
-    assert request.parse_observations[0].outcome.document is None
+    assert request.parse_observations[0].evidence is not None
+    assert request.parse_observations[0].evidence.document is None
 
 
 def test_parser_field_absence_keeps_capability_attribution() -> None:
@@ -341,6 +348,17 @@ def test_contract_representations_do_not_copy_private_payloads() -> None:
     assert "corpus-name" not in rendered
     assert not hasattr(request.source_inventory, "classification")
     assert not hasattr(request.source_inventory, "discovery")
+    assert request.parse_observations[0].evidence is None
+
+    parsed_request = _request(
+        membership,
+        observation=_successful_observation(membership),
+    )
+    evidence = parsed_request.parse_observations[0].evidence
+    assert evidence is not None
+    assert evidence.document is not None
+    assert "private source text" not in repr(evidence)
+    assert not hasattr(evidence.document, "text")
 
 
 def test_wrong_corpus_source_inventory_is_rejected() -> None:
