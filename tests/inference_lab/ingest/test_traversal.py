@@ -88,13 +88,15 @@ def test_explicit_regular_file_becomes_content_free_candidate(tmp_path: Path) ->
     source = tmp_path / "private-name.txt"
     source.write_bytes(b"private payload")
     identifier = ExternalIdentifier("doi", "10.1000/private")
+    request = _request(_file_input(source, external_identifiers=(identifier,)))
 
     with capture_logs() as logs:
         inventory = inventory_local_sources(
-            _request(_file_input(source, external_identifiers=(identifier,))),
+            request,
             excluded_paths=(),
         )
 
+    assert inventory.corpus_id == request.corpus_id
     assert len(inventory.candidates) == 1
     candidate = inventory.candidates[0]
     assert candidate.ordinal == 0

@@ -110,6 +110,8 @@ def _source(
 ) -> DiscoveredSource:
     return DiscoveredSource(
         ordinal=0,
+        corpus_id=_CORPUS_ID,
+        policy=CURRENT_DISCOVERY_POLICY,
         source_observation_id=source_id,
         snapshot=_snapshot(path, content_hash),
         external_identifiers=external_identifiers,
@@ -179,6 +181,25 @@ def _apply(
         )
     assert result is not None
     return result
+
+
+def test_identity_application_rejects_a_different_target_corpus() -> None:
+    source = _source(
+        source_id=_SOURCE_ID,
+        path=Path("source.txt"),
+        content_hash=_HASH_A,
+        outcome=IdentityResolutionOutcome(
+            kind=ResolutionKind.CONFLICT,
+            reason=ResolutionReason.CONFLICTING_EVIDENCE,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="source corpus must match"):
+        apply_discovery_identity_outcome(
+            source,
+            corpus_id=CorpusId.generate(),
+            transaction=object(),  # pyright: ignore[reportArgumentType]
+        )
 
 
 def test_new_document_persists_complete_identity_unit(tmp_path: Path) -> None:

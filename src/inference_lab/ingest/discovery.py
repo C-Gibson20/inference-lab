@@ -157,6 +157,25 @@ class DiscoveryPolicy:
             field_name="classifier_version",
         )
 
+    def with_classifier_identity(
+        self,
+        *,
+        classifier_name: str,
+        classifier_version: str,
+    ) -> "DiscoveryPolicy":
+        """Return this traversal policy with the classifier actually used."""
+        return DiscoveryPolicy(
+            policy_name=self.policy_name,
+            policy_version=self.policy_version,
+            symlink_policy=self.symlink_policy,
+            nested_mount_policy=self.nested_mount_policy,
+            hidden_entry_policy=self.hidden_entry_policy,
+            directory_snapshot_policy=self.directory_snapshot_policy,
+            stable_read_policy=self.stable_read_policy,
+            classifier_name=classifier_name,
+            classifier_version=classifier_version,
+        )
+
 
 CURRENT_DISCOVERY_POLICY: Final = DiscoveryPolicy(
     policy_name="local-source-discovery",
@@ -492,6 +511,8 @@ class DiscoveredSource:
     """Retain one ordered, hashed source and its identity decision."""
 
     ordinal: int
+    corpus_id: CorpusId
+    policy: DiscoveryPolicy
     source_observation_id: SourceObservationId
     snapshot: VerifiedSourceSnapshot
     external_identifiers: tuple[ExternalIdentifier, ...]
@@ -508,6 +529,10 @@ class DiscoveredSource:
             raise TypeError("ordinal must be an integer.")
         if self.ordinal < 0:
             raise ValueError("ordinal must be non-negative.")
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(self.policy, DiscoveryPolicy):
+            raise TypeError("policy must be a DiscoveryPolicy.")
         if not isinstance(self.source_observation_id, SourceObservationId):
             raise TypeError("source_observation_id must be a SourceObservationId.")
         if not isinstance(self.snapshot, VerifiedSourceSnapshot):
@@ -518,6 +543,11 @@ class DiscoveredSource:
             raise TypeError("classification must be a SourceClassification.")
         if self.classification.support is not SourceSupport.SUPPORTED:
             raise ValueError("a discovered source must have parser support.")
+        if (
+            self.classification.classifier_name != self.policy.classifier_name
+            or self.classification.classifier_version != self.policy.classifier_version
+        ):
+            raise ValueError("classification must match the discovery policy.")
         if self.snapshot.media_type != self.classification.media_type:
             raise ValueError("snapshot and classification media types must agree.")
         if self.snapshot.encoding != self.classification.encoding:

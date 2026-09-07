@@ -241,6 +241,8 @@ def apply_discovery_identity_outcome(
         raise TypeError("source must be a DiscoveredSource.")
     if not isinstance(corpus_id, CorpusId):
         raise TypeError("corpus_id must be a CorpusId.")
+    if source.corpus_id != corpus_id:
+        raise ValueError("source corpus must match the persistence corpus.")
 
     with bound_contextvars(corpus_id=corpus_id.as_str()):
         return _apply_with_bound_corpus(

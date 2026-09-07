@@ -10,6 +10,7 @@ from inference_lab.ingest.continuity import (
     resolve_source_observation,
 )
 from inference_lab.ingest.discovery import (
+    CURRENT_DISCOVERY_POLICY,
     DiscoveredSource,
     DiscoveryRequest,
     SourceSupport,
@@ -202,6 +203,11 @@ def _resolve_with_bound_corpus(
     )
     return DiscoveredSource(
         ordinal=source.candidate.ordinal,
+        corpus_id=request.corpus_id,
+        policy=CURRENT_DISCOVERY_POLICY.with_classifier_identity(
+            classifier_name=source.classification.classifier_name,
+            classifier_version=source.classification.classifier_version,
+        ),
         source_observation_id=assignment.source_observation_id,
         snapshot=snapshot,
         external_identifiers=source.candidate.external_identifiers,
@@ -266,6 +272,8 @@ def resolve_discovered_source_identity(
         raise TypeError("request must be a DiscoveryRequest.")
     if not isinstance(inventory, TraversalInventory):
         raise TypeError("inventory must be a TraversalInventory.")
+    if inventory.corpus_id != request.corpus_id:
+        raise ValueError("inventory corpus must match the discovery request.")
     for method_name in (
         "new_source_observation_id",
         "new_document_id",

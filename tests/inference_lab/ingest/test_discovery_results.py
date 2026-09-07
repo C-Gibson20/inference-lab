@@ -1,6 +1,6 @@
 """Tests for discovery result status, ordering, and aggregate invariants."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -9,6 +9,7 @@ from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     CURRENT_DISCOVERY_POLICY,
+    ClassificationInventory,
     DiscoveredSource,
     DiscoveryCounts,
     DiscoveryFailure,
@@ -23,11 +24,16 @@ from inference_lab.ingest import (
     FileStatEvidence,
     IdentityApplicationResult,
     SourceClassification,
+    SourceClassifierRegistry,
+    SourceClassifierRule,
     SourceLocator,
     SourceSupport,
     StableFileEvidence,
+    TraversalCandidate,
+    TraversalInventory,
     VerifiedSourceSnapshot,
     build_discovery_result,
+    classify_source_inventory,
     observe_discovery,
 )
 from inference_lab.provenance import (
@@ -47,6 +53,7 @@ from inference_lab.provenance import (
 )
 
 _DIGEST = "b" * 64
+_CORPUS_ID = CorpusId("11111111-1111-4111-8111-111111111111")
 
 
 def _classification() -> SourceClassification:
@@ -57,6 +64,22 @@ def _classification() -> SourceClassification:
         classifier_version=CURRENT_DISCOVERY_POLICY.classifier_version,
         parser_capability="text-native",
         encoding="utf-8",
+    )
+
+
+def _custom_registry() -> SourceClassifierRegistry:
+    classification = SourceClassification(
+        media_type="text/plain",
+        support=SourceSupport.SUPPORTED,
+        classifier_name="custom-classifier",
+        classifier_version="2.0.0",
+        parser_capability="text-native",
+        encoding="utf-8",
+    )
+    return SourceClassifierRegistry(
+        classifier_name="custom-classifier",
+        classifier_version="2.0.0",
+        rules=(SourceClassifierRule(".txt", classification),),
     )
 
 
@@ -155,9 +178,16 @@ def _outcome(kind: ResolutionKind) -> IdentityResolutionOutcome:
     )
 
 
-def _source(ordinal: int, kind: ResolutionKind) -> DiscoveredSource:
+def _source(
+    ordinal: int,
+    kind: ResolutionKind,
+    *,
+    corpus_id: CorpusId | None = None,
+) -> DiscoveredSource:
     return DiscoveredSource(
         ordinal=ordinal,
+        corpus_id=_CORPUS_ID if corpus_id is None else corpus_id,
+        policy=CURRENT_DISCOVERY_POLICY,
         source_observation_id=SourceObservationId.generate(),
         snapshot=_snapshot(ordinal),
         external_identifiers=(),
@@ -177,9 +207,11 @@ def _request() -> DiscoveryRequest:
 def _applied_source(
     ordinal: int,
     kind: ResolutionKind,
+    *,
+    corpus_id: CorpusId,
 ) -> IdentityApplicationResult:
     return IdentityApplicationResult(
-        source=_source(ordinal, kind),
+        source=_source(ordinal, kind, corpus_id=corpus_id),
         created_document_version=kind
         in {
             ResolutionKind.NEW_VERSION,
@@ -189,12 +221,57 @@ def _applied_source(
     )
 
 
+def _classified_inventory(
+    corpus_id: CorpusId,
+    *,
+    supported_ordinals: tuple[int, ...] = (),
+    unknown_ordinals: tuple[int, ...] = (),
+    traversal_failures: tuple[DiscoveryFailure, ...] = (),
+    registry: SourceClassifierRegistry | None = None,
+) -> ClassificationInventory:
+    candidates = tuple(
+        sorted(
+            (
+                TraversalCandidate(
+                    ordinal=ordinal,
+                    locator=_snapshot(ordinal).locator,
+                    stat_evidence=_snapshot(ordinal).file_evidence.pre_open,
+                )
+                for ordinal in supported_ordinals
+            ),
+            key=lambda candidate: candidate.ordinal,
+        )
+    ) + tuple(
+        TraversalCandidate(
+            ordinal=ordinal,
+            locator=SourceLocator(
+                path=Path("private") / f"source-{ordinal}.bin",
+                request_root_ordinal=0,
+                relative_path=Path(f"source-{ordinal}.bin"),
+            ),
+            stat_evidence=_snapshot(ordinal).file_evidence.pre_open,
+        )
+        for ordinal in unknown_ordinals
+    )
+    candidates = tuple(sorted(candidates, key=lambda candidate: candidate.ordinal))
+    traversal = TraversalInventory(
+        corpus_id=corpus_id,
+        root_count=1,
+        candidates=candidates,
+        failures=traversal_failures,
+        complete_root_ordinals=(0,) if not traversal_failures else (),
+    )
+    if registry is None:
+        return classify_source_inventory(traversal)
+    return classify_source_inventory(traversal, registry=registry)
+
+
 def test_builder_orders_outcomes_and_derives_partial_summary() -> None:
     request = _request()
-    unsupported = DiscoveryFailure.for_category(
-        ordinal=1,
-        category=DiscoveryFailureCategory.UNKNOWN_FORMAT,
-        media_type="application/octet-stream",
+    classification = _classified_inventory(
+        request.corpus_id,
+        supported_ordinals=(0, 2, 3),
+        unknown_ordinals=(1,),
     )
     persistence_failure = DiscoveryFailure.for_category(
         ordinal=3,
@@ -202,13 +279,19 @@ def test_builder_orders_outcomes_and_derives_partial_summary() -> None:
     )
 
     result = build_discovery_result(
-        request,
-        files_seen=4,
-        stage_failures=(unsupported,),
+        classification,
         identity_results=(
             persistence_failure,
-            _applied_source(2, ResolutionKind.NEW_DOCUMENT),
-            _applied_source(0, ResolutionKind.UNCHANGED),
+            _applied_source(
+                2,
+                ResolutionKind.NEW_DOCUMENT,
+                corpus_id=request.corpus_id,
+            ),
+            _applied_source(
+                0,
+                ResolutionKind.UNCHANGED,
+                corpus_id=request.corpus_id,
+            ),
         ),
     )
 
@@ -234,11 +317,10 @@ def test_builder_orders_outcomes_and_derives_partial_summary() -> None:
 
 def test_builder_treats_empty_directory_as_completed() -> None:
     request = _request()
+    classification = _classified_inventory(request.corpus_id)
 
     result = build_discovery_result(
-        request,
-        files_seen=0,
-        stage_failures=(),
+        classification,
         identity_results=(),
     )
 
@@ -265,24 +347,124 @@ def test_builder_derives_failed_status_without_usable_sources(
     failure: DiscoveryFailure,
 ) -> None:
     files_seen = 1 if failure.scope is DiscoveryFailureScope.SOURCE else 0
+    request = _request()
+    classification = _classified_inventory(
+        request.corpus_id,
+        traversal_failures=(failure,),
+    )
 
     result = build_discovery_result(
-        _request(),
-        files_seen=files_seen,
-        stage_failures=(failure,),
+        classification,
         identity_results=(),
     )
 
     assert result.status is DiscoveryStatus.FAILED
+    assert result.counts.files_seen == files_seen
 
 
-def test_builder_rejects_incomplete_file_accounting() -> None:
-    with pytest.raises(ValueError, match="files_seen must exactly match"):
+def test_builder_rejects_incomplete_hashable_candidate_accounting() -> None:
+    request = _request()
+    classification = _classified_inventory(
+        request.corpus_id,
+        supported_ordinals=(0, 1),
+    )
+    with pytest.raises(ValueError, match="must exactly match hashable"):
         build_discovery_result(
-            _request(),
-            files_seen=2,
-            stage_failures=(),
-            identity_results=(_applied_source(0, ResolutionKind.NEW_DOCUMENT),),
+            classification,
+            identity_results=(
+                _applied_source(
+                    0,
+                    ResolutionKind.NEW_DOCUMENT,
+                    corpus_id=request.corpus_id,
+                ),
+            ),
+        )
+
+
+def test_builder_derives_effective_policy_from_the_classification_inventory() -> None:
+    registry = _custom_registry()
+    corpus_id = CorpusId.generate()
+    classification = _classified_inventory(
+        corpus_id,
+        unknown_ordinals=(0,),
+        registry=registry,
+    )
+
+    result = build_discovery_result(classification, identity_results=())
+
+    assert result.corpus_id == corpus_id
+    assert result.policy.classifier_name == "custom-classifier"
+    assert result.policy.classifier_version == "2.0.0"
+
+
+def test_lifecycle_uses_and_validates_the_selected_classifier_policy() -> None:
+    request = _request()
+    registry = _custom_registry()
+    classification = _classified_inventory(
+        request.corpus_id,
+        unknown_ordinals=(0,),
+        registry=registry,
+    )
+    clock_values = iter((10, 20))
+
+    with capture_logs() as logs:
+        with observe_discovery(
+            request,
+            classifier=registry,
+            clock=clock_values.__next__,
+        ) as lifecycle:
+            result = lifecycle.complete(
+                classification=classification,
+                identity_results=(),
+            )
+
+    assert result.policy == classification.policy
+    assert logs[0]["classifier_name"] == "custom-classifier"
+    assert logs[0]["classifier_version"] == "2.0.0"
+    assert logs[-1]["classifier_name"] == "custom-classifier"
+    assert logs[-1]["classifier_version"] == "2.0.0"
+
+    with pytest.raises(ValueError, match="classification policy must match"):
+        with observe_discovery(request, clock=lambda: 0) as lifecycle:
+            lifecycle.complete(
+                classification=classification,
+                identity_results=(),
+            )
+
+
+def test_builder_rejects_cross_corpus_or_cross_policy_source_outcomes() -> None:
+    corpus_id = CorpusId.generate()
+    classification = _classified_inventory(
+        corpus_id,
+        supported_ordinals=(0,),
+    )
+    applied = _applied_source(
+        0,
+        ResolutionKind.NEW_DOCUMENT,
+        corpus_id=corpus_id,
+    )
+
+    with pytest.raises(ValueError, match="source corpus must match"):
+        build_discovery_result(
+            classification,
+            identity_results=(
+                replace(
+                    applied,
+                    source=replace(applied.source, corpus_id=CorpusId.generate()),
+                ),
+            ),
+        )
+
+    mismatched_policy = replace(CURRENT_DISCOVERY_POLICY, policy_version="1.0.1")
+    with pytest.raises(ValueError, match="source policy must match"):
+        build_discovery_result(
+            classification,
+            identity_results=(
+                replace(
+                    applied,
+                    source=replace(applied.source, policy=mismatched_policy),
+                ),
+            ),
         )
 
 
@@ -293,6 +475,11 @@ def test_lifecycle_binds_context_and_logs_privacy_safe_partial_summary() -> None
         category=DiscoveryFailureCategory.SOURCE_INACCESSIBLE,
     )
     clock_values = iter((1_000_000_000, 1_025_000_000))
+    classification = _classified_inventory(
+        request.corpus_id,
+        supported_ordinals=(0,),
+        traversal_failures=(failure,),
+    )
 
     with capture_logs() as logs:
         with observe_discovery(request, clock=clock_values.__next__) as lifecycle:
@@ -302,9 +489,14 @@ def test_lifecycle_binds_context_and_logs_privacy_safe_partial_summary() -> None
                 "document_id": None,
             }
             result = lifecycle.complete(
-                files_seen=2,
-                stage_failures=(failure,),
-                identity_results=(_applied_source(0, ResolutionKind.NEW_DOCUMENT),),
+                classification=classification,
+                identity_results=(
+                    _applied_source(
+                        0,
+                        ResolutionKind.NEW_DOCUMENT,
+                        corpus_id=request.corpus_id,
+                    ),
+                ),
             )
 
     assert result.status is DiscoveryStatus.PARTIAL
@@ -317,6 +509,8 @@ def test_lifecycle_binds_context_and_logs_privacy_safe_partial_summary() -> None
         "pipeline_stage": "ingest",
         "policy_name": CURRENT_DISCOVERY_POLICY.policy_name,
         "policy_version": CURRENT_DISCOVERY_POLICY.policy_version,
+        "classifier_name": CURRENT_DISCOVERY_POLICY.classifier_name,
+        "classifier_version": CURRENT_DISCOVERY_POLICY.classifier_version,
         "input_count": 1,
         "event": "discovery_started",
         "log_level": "info",
@@ -355,19 +549,24 @@ def test_lifecycle_completion_level_matches_result_status(
     expected_level: str,
 ) -> None:
     clock_values = iter((10, 20))
+    request = _request()
+    classification = _classified_inventory(
+        request.corpus_id,
+        traversal_failures=stage_failures,
+    )
 
     with capture_logs() as logs:
         with observe_discovery(
-            _request(),
+            request,
             clock=clock_values.__next__,
         ) as lifecycle:
             result = lifecycle.complete(
-                files_seen=files_seen,
-                stage_failures=stage_failures,
+                classification=classification,
                 identity_results=(),
             )
 
     assert result.status is expected_status
+    assert result.counts.files_seen == files_seen
     assert logs[-1]["log_level"] == expected_level
 
 
@@ -387,16 +586,17 @@ def test_lifecycle_requires_a_terminal_result_without_masking_primary_errors() -
 
 def test_lifecycle_rejects_a_clock_that_moves_backwards() -> None:
     clock_values = iter((20, 10))
+    request = _request()
+    classification = _classified_inventory(request.corpus_id)
 
     with capture_logs() as logs:
         with pytest.raises(ValueError, match="must not move backwards"):
             with observe_discovery(
-                _request(),
+                request,
                 clock=clock_values.__next__,
             ) as lifecycle:
                 lifecycle.complete(
-                    files_seen=0,
-                    stage_failures=(),
+                    classification=classification,
                     identity_results=(),
                 )
 
@@ -443,7 +643,7 @@ def test_partial_result_combines_usable_source_and_isolated_failure() -> None:
         category=DiscoveryFailureCategory.SOURCE_TOO_LARGE,
     )
     result = DiscoveryResult(
-        corpus_id=CorpusId.generate(),
+        corpus_id=source.corpus_id,
         policy=CURRENT_DISCOVERY_POLICY,
         status=DiscoveryStatus.PARTIAL,
         sources=(source,),
@@ -492,7 +692,7 @@ def test_failed_result_can_retain_an_unusable_conflict_outcome() -> None:
         category=DiscoveryFailureCategory.SOURCE_INACCESSIBLE,
     )
     result = DiscoveryResult(
-        corpus_id=CorpusId.generate(),
+        corpus_id=source.corpus_id,
         policy=CURRENT_DISCOVERY_POLICY,
         status=DiscoveryStatus.FAILED,
         sources=(source,),
@@ -521,7 +721,7 @@ def test_request_failure_requires_failed_status_and_no_usable_source() -> None:
 
     with pytest.raises(ValueError, match="request failure requires a failed"):
         DiscoveryResult(
-            CorpusId.generate(),
+            source.corpus_id,
             CURRENT_DISCOVERY_POLICY,
             DiscoveryStatus.PARTIAL,
             (source,),
@@ -543,7 +743,7 @@ def test_completed_partial_and_failed_status_invariants_are_enforced() -> None:
     )
     with pytest.raises(ValueError, match="completed discovery must not"):
         DiscoveryResult(
-            CorpusId.generate(),
+            source.corpus_id,
             CURRENT_DISCOVERY_POLICY,
             DiscoveryStatus.COMPLETED,
             (source,),
@@ -552,7 +752,7 @@ def test_completed_partial_and_failed_status_invariants_are_enforced() -> None:
         )
     with pytest.raises(ValueError, match="failed discovery must not contain usable"):
         DiscoveryResult(
-            CorpusId.generate(),
+            source.corpus_id,
             CURRENT_DISCOVERY_POLICY,
             DiscoveryStatus.FAILED,
             (source,),
@@ -579,7 +779,7 @@ def test_result_rejects_unordered_or_reused_ordinals() -> None:
     second = _source(0, ResolutionKind.NEW_DOCUMENT)
     with pytest.raises(ValueError, match="sources must be in discovery ordinal order"):
         DiscoveryResult(
-            corpus_id=CorpusId.generate(),
+            corpus_id=first.corpus_id,
             policy=CURRENT_DISCOVERY_POLICY,
             status=DiscoveryStatus.COMPLETED,
             sources=(first, second),
@@ -597,7 +797,7 @@ def test_result_rejects_unordered_or_reused_ordinals() -> None:
     )
     with pytest.raises(ValueError, match="ordinals must be unique"):
         DiscoveryResult(
-            corpus_id=CorpusId.generate(),
+            corpus_id=second.corpus_id,
             policy=CURRENT_DISCOVERY_POLICY,
             status=DiscoveryStatus.PARTIAL,
             sources=(second,),
@@ -659,12 +859,41 @@ def test_result_rejects_aggregate_mismatch() -> None:
 
     with pytest.raises(ValueError, match="counts must match result outcomes"):
         DiscoveryResult(
-            corpus_id=CorpusId.generate(),
+            corpus_id=source.corpus_id,
             policy=CURRENT_DISCOVERY_POLICY,
             status=DiscoveryStatus.COMPLETED,
             sources=(source,),
             failures=(),
             counts=incorrect,
+        )
+
+
+def test_result_rejects_cross_corpus_or_cross_policy_sources() -> None:
+    source = _source(0, ResolutionKind.NEW_DOCUMENT)
+    counts = DiscoveryCounts.from_outcomes(
+        files_seen=1,
+        sources=(source,),
+        failures=(),
+    )
+
+    with pytest.raises(ValueError, match="source corpus must match"):
+        DiscoveryResult(
+            corpus_id=CorpusId.generate(),
+            policy=source.policy,
+            status=DiscoveryStatus.COMPLETED,
+            sources=(source,),
+            failures=(),
+            counts=counts,
+        )
+
+    with pytest.raises(ValueError, match="source policy must match"):
+        DiscoveryResult(
+            corpus_id=source.corpus_id,
+            policy=replace(source.policy, policy_version="1.0.1"),
+            status=DiscoveryStatus.COMPLETED,
+            sources=(source,),
+            failures=(),
+            counts=counts,
         )
 
 

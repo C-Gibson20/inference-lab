@@ -234,6 +234,7 @@ def _case(
         inputs=(DiscoveryInput(root, DiscoveryInputKind.DIRECTORY),),
     )
     inventory = TraversalInventory(
+        corpus_id=request.corpus_id,
         root_count=1,
         candidates=(unit.source.candidate,),
         failures=(),
@@ -252,6 +253,8 @@ def _resolved(
     version = DocumentVersion(version_id, document_id, _HASH)
     return DiscoveredSource(
         ordinal=source.candidate.ordinal,
+        corpus_id=_CORPUS_ID,
+        policy=CURRENT_DISCOVERY_POLICY,
         source_observation_id=_SOURCE_ID,
         snapshot=snapshot,
         external_identifiers=(),
@@ -895,6 +898,7 @@ def test_identity_batch_rolls_back_one_failure_and_continues_siblings(
         inputs=(DiscoveryInput(root, DiscoveryInputKind.DIRECTORY),),
     )
     inventory = TraversalInventory(
+        corpus_id=request.corpus_id,
         root_count=1,
         candidates=tuple(unit.source.candidate for unit in units),
         failures=(),

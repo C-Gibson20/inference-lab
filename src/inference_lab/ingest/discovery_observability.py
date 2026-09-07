@@ -8,6 +8,11 @@ from typing import Final
 from structlog.contextvars import bound_contextvars
 
 from inference_lab._validation import is_strict_integer
+from inference_lab.ingest.classification import (
+    CURRENT_SOURCE_CLASSIFIER,
+    ClassificationInventory,
+    SourceClassifierRegistry,
+)
 from inference_lab.ingest.discovery import (
     CURRENT_DISCOVERY_POLICY,
     DiscoveryPolicy,
@@ -76,20 +81,23 @@ class _DiscoveryLifecycle:
     def complete(
         self,
         *,
-        files_seen: int,
-        stage_failures: tuple[DiscoveryFailure, ...],
+        classification: ClassificationInventory,
         identity_results: tuple[IdentityApplicationResult | DiscoveryFailure, ...],
     ) -> DiscoveryResult:
         """Build and emit the single terminal discovery result."""
         if self._completed:
             raise RuntimeError("discovery lifecycle has already been completed.")
 
+        if not isinstance(classification, ClassificationInventory):
+            raise TypeError("classification must be a ClassificationInventory.")
+        if classification.traversal.corpus_id != self._request.corpus_id:
+            raise ValueError("classification corpus must match the observed request.")
+        if classification.policy != self._policy:
+            raise ValueError("classification policy must match the observed policy.")
+
         result = build_discovery_result(
-            self._request,
-            files_seen=files_seen,
-            stage_failures=stage_failures,
+            classification,
             identity_results=identity_results,
-            policy=self._policy,
         )
         finished_ns = _read_clock(self._clock)
         if finished_ns < self._started_ns:
@@ -107,6 +115,8 @@ class _DiscoveryLifecycle:
             "discovery_completed",
             policy_name=result.policy.policy_name,
             policy_version=result.policy.policy_version,
+            classifier_name=result.policy.classifier_name,
+            classifier_version=result.policy.classifier_version,
             status=result.status.value,
             duration_ms=duration_ms,
             **count_fields,
@@ -118,17 +128,21 @@ class _DiscoveryLifecycle:
 def observe_discovery(
     request: DiscoveryRequest,
     *,
-    policy: DiscoveryPolicy = CURRENT_DISCOVERY_POLICY,
+    classifier: SourceClassifierRegistry = CURRENT_SOURCE_CLASSIFIER,
     clock: Clock = time.monotonic_ns,
 ) -> Iterator[_DiscoveryLifecycle]:
     """Bind and log one discovery operation until its result is complete."""
     if not isinstance(request, DiscoveryRequest):
         raise TypeError("request must be a DiscoveryRequest.")
-    if not isinstance(policy, DiscoveryPolicy):
-        raise TypeError("policy must be a DiscoveryPolicy.")
+    if not isinstance(classifier, SourceClassifierRegistry):
+        raise TypeError("classifier must be a SourceClassifierRegistry.")
     if not callable(clock):
         raise TypeError("clock must be callable.")
 
+    policy = CURRENT_DISCOVERY_POLICY.with_classifier_identity(
+        classifier_name=classifier.classifier_name,
+        classifier_version=classifier.classifier_version,
+    )
     started_ns = _read_clock(clock)
     lifecycle = _DiscoveryLifecycle(
         request,
@@ -147,6 +161,8 @@ def observe_discovery(
             "discovery_started",
             policy_name=policy.policy_name,
             policy_version=policy.policy_version,
+            classifier_name=policy.classifier_name,
+            classifier_version=policy.classifier_version,
             input_count=len(request.inputs),
         )
         try:

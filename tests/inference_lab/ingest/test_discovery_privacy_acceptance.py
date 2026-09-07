@@ -82,8 +82,7 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
                     allocator=UuidDiscoveryIdentityIdAllocator(),
                 )
                 result = lifecycle.complete(
-                    files_seen=1,
-                    stage_failures=classification.failures,
+                    classification=classification,
                     identity_results=identity_results,
                 )
     finally:

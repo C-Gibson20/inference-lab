@@ -193,6 +193,10 @@ class DiscoveryResult:
             raise TypeError("status must be a DiscoveryStatus.")
         _validate_sources(self.sources)
         _validate_failures(self.failures)
+        if any(source.corpus_id != self.corpus_id for source in self.sources):
+            raise ValueError("source corpus must match the discovery result.")
+        if any(source.policy != self.policy for source in self.sources):
+            raise ValueError("source policy must match the discovery result.")
         if not isinstance(self.counts, DiscoveryCounts):
             raise TypeError("counts must be DiscoveryCounts.")
         self._validate_ordering()

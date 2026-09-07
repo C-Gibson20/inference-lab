@@ -9,6 +9,7 @@ from typing import Final
 from inference_lab._validation import is_strict_integer
 from inference_lab.ingest.discovery import (
     CURRENT_DISCOVERY_POLICY,
+    DiscoveryPolicy,
     SourceClassification,
     SourceSupport,
     _validate_media_type,
@@ -202,6 +203,14 @@ class ClassificationInventory:
     classified_candidates: tuple[ClassifiedSourceCandidate, ...]
     failures: tuple[DiscoveryFailure, ...]
     format_counts: tuple[SourceFormatCount, ...]
+
+    @property
+    def policy(self) -> DiscoveryPolicy:
+        """Return the traversal policy with this inventory's classifier identity."""
+        return CURRENT_DISCOVERY_POLICY.with_classifier_identity(
+            classifier_name=self.classifier_name,
+            classifier_version=self.classifier_version,
+        )
 
     def __post_init__(self) -> None:
         self._validate()
