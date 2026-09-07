@@ -23,6 +23,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
+from inference_lab.storage import ParsedRepresentation, SourceArtefact
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from inference_lab.storage._sqlite_transaction import SQLiteMetadataTransaction
 
@@ -93,6 +94,40 @@ _READ_FAILURE_CASES: tuple[tuple[str, _ReadOperation, str], ...] = (
         "list-versions",
         lambda owner: owner.list_document_versions(_invalid(DocumentId)),
         "document_id",
+    ),
+    (
+        "source-artefact-corpus",
+        lambda owner: owner.get_source_artefact(_invalid(CorpusId), _VERSION_ID),
+        "corpus_id",
+    ),
+    (
+        "source-artefact-version",
+        lambda owner: owner.get_source_artefact(
+            _CORPUS_ID, _invalid(DocumentVersionId)
+        ),
+        "document_version_id",
+    ),
+    (
+        "source-bytes-corpus",
+        lambda owner: owner.read_source_bytes(_invalid(CorpusId), _VERSION_ID),
+        "corpus_id",
+    ),
+    (
+        "source-bytes-version",
+        lambda owner: owner.read_source_bytes(_CORPUS_ID, _invalid(DocumentVersionId)),
+        "document_version_id",
+    ),
+    (
+        "source-stream-corpus",
+        lambda owner: owner.stream_source_bytes(_invalid(CorpusId), _VERSION_ID),
+        "corpus_id",
+    ),
+    (
+        "source-stream-version",
+        lambda owner: owner.stream_source_bytes(
+            _CORPUS_ID, _invalid(DocumentVersionId)
+        ),
+        "document_version_id",
     ),
     (
         "find-hash-corpus",
@@ -288,6 +323,34 @@ _WRITE_FAILURE_CASES: tuple[tuple[str, _WriteOperation, str], ...] = (
         "version",
         lambda transaction: transaction.add_document_version(_invalid(DocumentVersion)),
         "document_version",
+    ),
+    (
+        "source-artefact-corpus",
+        lambda transaction: transaction.add_source_artefact(
+            _invalid(CorpusId), _invalid(SourceArtefact)
+        ),
+        "corpus_id",
+    ),
+    (
+        "source-artefact",
+        lambda transaction: transaction.add_source_artefact(
+            _CORPUS_ID, _invalid(SourceArtefact)
+        ),
+        "artefact",
+    ),
+    (
+        "parsed-representation-corpus",
+        lambda transaction: transaction.add_parsed_representation(
+            _invalid(CorpusId), _invalid(ParsedRepresentation)
+        ),
+        "corpus_id",
+    ),
+    (
+        "parsed-representation",
+        lambda transaction: transaction.add_parsed_representation(
+            _CORPUS_ID, _invalid(ParsedRepresentation)
+        ),
+        "representation",
     ),
     (
         "source",
