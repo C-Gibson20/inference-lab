@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any, Final
 
@@ -39,6 +39,7 @@ from inference_lab.evaluation.audit_contracts import (
     CorpusAuditRequest,
 )
 from inference_lab.ingest.discovery import DiscoveryPolicy
+from inference_lab.provenance import CorpusId, CorpusVersionId
 
 AUDIT_REPORT_SCHEMA_VERSION: Final = "1.0.0"
 AUDIT_IMPLEMENTATION: Final = "inference-lab"
@@ -164,6 +165,12 @@ class AuditToolIdentities:
         ):
             if not isinstance(getattr(self, field_name), str):
                 raise TypeError(f"{field_name} must be a string.")
+        if self.implementation != AUDIT_IMPLEMENTATION:
+            raise ValueError("unsupported audit implementation.")
+        if self.implementation_version != AUDIT_IMPLEMENTATION_VERSION:
+            raise ValueError("unsupported audit implementation version.")
+        if self.contract_version != AUDIT_CONTRACT_VERSION:
+            raise ValueError("unsupported audit contract version.")
         if not isinstance(self.discovery, AuditDiscoveryIdentity):
             raise TypeError("discovery must be an AuditDiscoveryIdentity.")
         if not isinstance(self.parser_versions, tuple):
@@ -321,15 +328,18 @@ class CorpusAuditReport:
     ocr: AuditOcrReport
     limitations: tuple[str, ...]
     reconciliation: AuditReconciliation
+    report_digest: str = ""
 
     def __post_init__(self) -> None:
+        if self.report_digest == "":
+            object.__setattr__(self, "report_digest", _report_content_digest(self))
         self._validate()
 
     def _validate(self) -> None:
         """Validate report identity, denominators, and section reconciliation."""
         if self.schema_version != AUDIT_REPORT_SCHEMA_VERSION:
             raise ValueError("unsupported audit report schema version.")
-        for field_name in ("report_id", "input_digest"):
+        for field_name in ("report_id", "input_digest", "report_digest"):
             value = getattr(self, field_name)
             if _SHA256.fullmatch(value) is None:
                 raise ValueError(f"{field_name} must be a SHA-256 identity.")
@@ -337,6 +347,8 @@ class CorpusAuditReport:
             self.corpus_version, str
         ):
             raise TypeError("corpus and corpus-version identities must be strings.")
+        CorpusId.from_str(self.corpus_id)
+        CorpusVersionId.from_str(self.corpus_version)
         if not isinstance(self.tools, AuditToolIdentities):
             raise TypeError("tools must be AuditToolIdentities.")
         if not isinstance(self.overall_status, AuditOverallStatus):
@@ -386,12 +398,33 @@ class CorpusAuditReport:
         ):
             raise TypeError("parse field coverage has invalid values.")
         field_names = tuple(name for name, _ in self.parse.field_coverage)
-        if len(field_names) != len(set(field_names)):
-            raise ValueError("parse field coverage must be unique.")
+        if field_names != (
+            "language",
+            "page_count",
+            "character_count",
+            "token_count",
+        ):
+            raise ValueError("parse field coverage must use canonical fields.")
+        if tuple(name for name, _ in self.parse.numeric_summaries) != (
+            "page_count",
+            "character_count",
+            "token_count",
+        ):
+            raise ValueError("numeric summaries must use canonical fields.")
         if len({item.kind for item in self.structures}) != len(self.structures):
             raise ValueError("structure reports must be unique.")
         if any(not isinstance(item, AuditStructureReport) for item in self.structures):
             raise TypeError("structures must contain AuditStructureReport values.")
+        if tuple(item.kind for item in self.structures) != tuple(AuditStructureKind):
+            raise ValueError("structure reports must use canonical ordering.")
+        if any(
+            not isinstance(item, AuditSourceFormatCoverage)
+            for item in self.source.formats
+        ):
+            raise TypeError("source formats must contain coverage values.")
+        format_keys = tuple(item.key() for item in self.source.formats)
+        if format_keys != tuple(sorted(format_keys)):
+            raise ValueError("source formats must use canonical ordering.")
         _validate_count_pairs(
             self.acquisition.status_counts, field_name="acquisition statuses"
         )
@@ -456,6 +489,8 @@ class CorpusAuditReport:
             raise ValueError("source failure totals disagree.")
         if self.reconciliation.parse_observation_slots != member_count:
             raise ValueError("parse observation slots do not reconcile.")
+        if self.report_digest != _report_content_digest(self):
+            raise ValueError("audit report digest does not match its contents.")
 
     @classmethod
     def from_request(cls, request: CorpusAuditRequest) -> "CorpusAuditReport":
@@ -714,6 +749,26 @@ def _overall_status(
     )
 
 
+def report_content_digest(report: CorpusAuditReport) -> str:
+    """Return the digest of canonical report content excluding its digest field."""
+    if not isinstance(report, CorpusAuditReport):
+        raise TypeError("report must be a CorpusAuditReport.")
+    return _report_content_digest(report)
+
+
+def _report_content_digest(report: CorpusAuditReport) -> str:
+    payload = asdict(report)
+    payload.pop("report_digest", None)
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def _semantic_digest(request: CorpusAuditRequest) -> str:
     payload = _semantic_input(request)
     encoded = json.dumps(
@@ -737,7 +792,7 @@ def _report_identity(request: CorpusAuditRequest, input_digest: str) -> str:
         "contract_version": AUDIT_CONTRACT_VERSION,
         "policy": _policy_payload(request.policy),
         "capability_profiles": [
-            _profile_payload(profile) for profile in request.capability_profiles
+            profile.value for profile in request.capability_profiles
         ],
     }
     encoded = json.dumps(

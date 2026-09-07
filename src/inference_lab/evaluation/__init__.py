@@ -41,6 +41,14 @@ from inference_lab.evaluation.audit_errors import (
     AuditContractError,
     AuditErrorCategory,
 )
+from inference_lab.evaluation.audit_report_serialisation import (
+    AuditReportManifest,
+    build_audit_report_manifest,
+    deserialise_audit_report,
+    render_audit_report,
+    serialise_audit_report,
+    serialise_audit_report_manifest,
+)
 from inference_lab.evaluation.audit_reports import (
     AUDIT_IMPLEMENTATION,
     AUDIT_IMPLEMENTATION_VERSION,
@@ -60,6 +68,7 @@ from inference_lab.evaluation.audit_reports import (
     AuditStructureReport,
     AuditToolIdentities,
     CorpusAuditReport,
+    report_content_digest,
 )
 from inference_lab.evaluation.cases import EvaluationCase, QuestionType
 from inference_lab.evaluation.contracts import HELD_OUT_SPLIT, SplitName
@@ -132,6 +141,7 @@ __all__ = [
     "AuditReconciliation",
     "AuditRelationshipInventory",
     "AuditRelationshipReport",
+    "AuditReportManifest",
     "AuditSourceFailure",
     "AuditSourceFormatCoverage",
     "AuditSourceInventory",
@@ -166,12 +176,18 @@ __all__ = [
     "adapt_text_native_acquisition",
     "aggregate_corpus_audit",
     "atomic_write",
+    "build_audit_report_manifest",
     "build_leakage_groups",
     "complete_parse_observations",
+    "deserialise_audit_report",
     "evaluation_json_schema",
     "generate_splits",
     "load_dataset",
     "parser_capability_profile",
+    "render_audit_report",
+    "report_content_digest",
+    "serialise_audit_report",
+    "serialise_audit_report_manifest",
     "serialise_cases",
     "serialise_manifest",
     "validate_benchmark_coverage",

@@ -1,5 +1,12 @@
 """Hand-calculated tests for the pure corpus-audit aggregation engine."""
 
+import json
+import subprocess
+import sys
+from dataclasses import replace
+
+import pytest
+
 from inference_lab.evaluation import (
     CURRENT_PARSER_CAPABILITY_PROFILE,
     AcquisitionStatus,
@@ -18,6 +25,11 @@ from inference_lab.evaluation import (
     CorpusAuditRequest,
     CorpusAuditScope,
     aggregate_corpus_audit,
+    build_audit_report_manifest,
+    deserialise_audit_report,
+    render_audit_report,
+    serialise_audit_report,
+    serialise_audit_report_manifest,
 )
 from inference_lab.evaluation.audit_aggregation import _IntegerSummary
 from inference_lab.ingest import (
@@ -372,3 +384,95 @@ def test_empty_report_is_explicitly_no_observations_and_payload_free() -> None:
     assert report.overall_status is AuditOverallStatus.NO_OBSERVATIONS
     assert report.populations.member_versions == 0
     assert "private source text" not in repr(report)
+
+
+def test_report_json_round_trips_canonically_and_manifest_checksums() -> None:
+    membership = _membership(_DOCUMENT_ONE, _VERSION_ONE)
+    report = CorpusAuditReport.from_request(
+        _request((membership,), (_observation(membership),))
+    )
+    report_bytes = serialise_audit_report(report)
+    restored = deserialise_audit_report(report_bytes)
+    markdown = render_audit_report(report)
+    manifest = build_audit_report_manifest(report, report_bytes, markdown)
+
+    assert restored == report
+    assert report_bytes == serialise_audit_report(restored)
+    assert report_bytes.endswith(b"\n")
+    assert report.report_digest.startswith("sha256:")
+    assert b"private source text" not in report_bytes
+    assert "private source text" not in markdown
+    assert manifest.report_digest.startswith("sha256:")
+    assert serialise_audit_report_manifest(manifest).endswith(b"\n")
+
+
+def test_report_json_rejects_duplicate_unknown_and_coerced_fields() -> None:
+    membership = _membership(_DOCUMENT_ONE, _VERSION_ONE)
+    report = CorpusAuditReport.from_request(
+        _request((membership,), (_observation(membership),))
+    )
+    payload = json.loads(serialise_audit_report(report))
+
+    duplicate = serialise_audit_report(report)[:-2] + (b',"schema_version":"1.0.0"}\n')
+    with pytest.raises(ValueError, match="duplicate_key"):
+        deserialise_audit_report(duplicate)
+
+    unknown_payload = payload | {"unexpected": True}
+    with pytest.raises(ValueError, match="JSON object fields do not match"):
+        deserialise_audit_report(
+            (
+                json.dumps(unknown_payload, sort_keys=True, separators=(",", ":"))
+                + "\n"
+            ).encode()
+        )
+
+    coerced = payload | {
+        "populations": payload["populations"] | {"member_versions": "1"}
+    }
+    with pytest.raises(ValueError, match="JSON integer"):
+        deserialise_audit_report(
+            (json.dumps(coerced, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        )
+
+
+def test_report_json_rejects_identity_digest_mismatch() -> None:
+    membership = _membership(_DOCUMENT_ONE, _VERSION_ONE)
+    report = CorpusAuditReport.from_request(
+        _request((membership,), (_observation(membership),))
+    )
+    tampered = replace(
+        report,
+        report_id="sha256:" + "0" * 64,
+        report_digest="",
+    )
+    data = serialise_audit_report(tampered)
+
+    with pytest.raises(ValueError, match="identity digest"):
+        deserialise_audit_report(data)
+
+
+def test_report_json_is_identical_across_cold_processes() -> None:
+    script = """
+from inference_lab.evaluation import CorpusAuditReport, serialise_audit_report
+from tests.inference_lab.evaluation.test_audit_aggregation import (
+    _DOCUMENT_ONE, _VERSION_ONE, _membership, _observation, _request,
+)
+
+membership = _membership(_DOCUMENT_ONE, _VERSION_ONE)
+report = CorpusAuditReport.from_request(_request((membership,), (_observation(membership),)))
+print(serialise_audit_report(report).hex())
+"""
+    first = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    second = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert first.stdout == second.stdout
