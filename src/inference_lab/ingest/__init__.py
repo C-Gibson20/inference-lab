@@ -14,6 +14,7 @@ from inference_lab.ingest._chunk_records import (
     build_chunk_set,
     build_chunking_outcome,
 )
+from inference_lab.ingest.chunk_observability import observe_chunking
 from inference_lab.ingest.chunk_serialisation import (
     InvalidChunkSerialisationError,
     chunk_payload,
@@ -328,6 +329,7 @@ __all__ = [
     "inventory_local_sources",
     "map_parse_persistence_request",
     "normalise_source_text",
+    "observe_chunking",
     "observe_discovery",
     "parsed_document_payload",
     "persist_discovered_source_identities",
