@@ -108,6 +108,8 @@ def _new_document_outcome() -> IdentityResolutionOutcome:
 def _discovered_source() -> DiscoveredSource:
     return DiscoveredSource(
         ordinal=0,
+        corpus_id=CorpusId.generate(),
+        policy=CURRENT_DISCOVERY_POLICY,
         source_observation_id=SourceObservationId.generate(),
         snapshot=_snapshot(),
         external_identifiers=(),

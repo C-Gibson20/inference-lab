@@ -28,6 +28,13 @@ _POST_CLASSIFICATION_STAGES: Final = frozenset(
         DiscoveryFailureStage.PERSISTENCE,
     }
 )
+_POST_HASHING_STAGES: Final = frozenset(
+    {
+        DiscoveryFailureStage.CONTINUITY,
+        DiscoveryFailureStage.RESOLUTION,
+        DiscoveryFailureStage.PERSISTENCE,
+    }
+)
 
 
 class DiscoveryStatus(StrEnum):
@@ -55,12 +62,13 @@ def _validate_failures(failures: object) -> None:
 
 
 def _supported_failure_count(failures: tuple[DiscoveryFailure, ...]) -> int:
-    """Count source failures reached after successful classification."""
-    return sum(
-        failure.scope is DiscoveryFailureScope.SOURCE
-        and failure.stage in _POST_CLASSIFICATION_STAGES
-        for failure in failures
-    )
+    """Count failures reached after successful source classification."""
+    return sum(failure.stage in _POST_CLASSIFICATION_STAGES for failure in failures)
+
+
+def _hashed_failure_count(failures: tuple[DiscoveryFailure, ...]) -> int:
+    """Count failures reached after source bytes were successfully hashed."""
+    return sum(failure.stage in _POST_HASHING_STAGES for failure in failures)
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,8 +118,8 @@ class DiscoveryCounts:
             + self.ambiguous
             + self.conflicting
         )
-        if identity_outcomes != self.hashed:
-            raise ValueError("identity outcome counts must equal hashed sources.")
+        if identity_outcomes > self.hashed:
+            raise ValueError("identity outcome counts cannot exceed hashed sources.")
         if self.hashed > self.supported:
             raise ValueError("hashed sources cannot exceed supported sources.")
         if self.supported + self.unsupported > self.files_seen:
@@ -135,7 +143,7 @@ class DiscoveryCounts:
             files_seen=files_seen,
             supported=len(sources) + _supported_failure_count(failures),
             unsupported=unsupported,
-            hashed=len(sources),
+            hashed=len(sources) + _hashed_failure_count(failures),
             unchanged=sum(
                 source.identity_outcome.kind is ResolutionKind.UNCHANGED
                 for source in sources
@@ -193,6 +201,10 @@ class DiscoveryResult:
             raise TypeError("status must be a DiscoveryStatus.")
         _validate_sources(self.sources)
         _validate_failures(self.failures)
+        if any(source.corpus_id != self.corpus_id for source in self.sources):
+            raise ValueError("source corpus must match the discovery result.")
+        if any(source.policy != self.policy for source in self.sources):
+            raise ValueError("source policy must match the discovery result.")
         if not isinstance(self.counts, DiscoveryCounts):
             raise TypeError("counts must be DiscoveryCounts.")
         self._validate_ordering()

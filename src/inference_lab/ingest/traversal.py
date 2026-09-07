@@ -31,7 +31,7 @@ from inference_lab.ingest.discovery_logging import (
     emit_discovery_event,
     failure_log_fields,
 )
-from inference_lab.provenance import ExternalIdentifier
+from inference_lab.provenance import CorpusId, ExternalIdentifier
 from inference_lab.provenance.values import validate_external_identifiers
 
 PathOrderingKey = tuple[str, str]
@@ -211,6 +211,7 @@ class TraversalRootScope:
 class TraversalInventory:
     """Retain ordered candidates, failures, and complete request-root scans."""
 
+    corpus_id: CorpusId
     root_count: int
     candidates: tuple[TraversalCandidate, ...]
     failures: tuple[DiscoveryFailure, ...]
@@ -222,6 +223,8 @@ class TraversalInventory:
 
     def _validate(self) -> None:
         """Validate types, non-negative counts, and bounded ordinals."""
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
         if not is_strict_integer(self.root_count):
             raise TypeError("root_count must be an integer.")
         if self.root_count < 1:
@@ -374,6 +377,7 @@ def _stat_evidence(metadata: TraversalPathMetadata) -> FileStatEvidence:
 
 def _root_failure(
     *,
+    corpus_id: CorpusId,
     root_count: int,
     root_ordinal: int,
     path: Path,
@@ -388,6 +392,7 @@ def _root_failure(
         relative_path=relative,
     )
     return TraversalInventory(
+        corpus_id=corpus_id,
         root_count=root_count,
         candidates=(),
         failures=(
@@ -430,6 +435,7 @@ def _prepare_roots(
             metadata = filesystem.lstat(lexical_path)
         except FileNotFoundError:
             return (), _root_failure(
+                corpus_id=request.corpus_id,
                 root_count=len(request.inputs),
                 root_ordinal=input_ordinal,
                 path=lexical_path,
@@ -437,6 +443,7 @@ def _prepare_roots(
             )
         except OSError:
             return (), _root_failure(
+                corpus_id=request.corpus_id,
                 root_count=len(request.inputs),
                 root_ordinal=input_ordinal,
                 path=lexical_path,
@@ -453,6 +460,7 @@ def _prepare_roots(
             is_junction = filesystem.is_junction(lexical_path)
         except OSError:
             return (), _root_failure(
+                corpus_id=request.corpus_id,
                 root_count=len(request.inputs),
                 root_ordinal=input_ordinal,
                 path=lexical_path,
@@ -460,6 +468,7 @@ def _prepare_roots(
             )
         if kind is DiscoveryFileKind.SYMLINK or is_junction:
             return (), _root_failure(
+                corpus_id=request.corpus_id,
                 root_count=len(request.inputs),
                 root_ordinal=input_ordinal,
                 path=lexical_path,
@@ -468,6 +477,7 @@ def _prepare_roots(
             )
         if kind is not expected_kind:
             return (), _root_failure(
+                corpus_id=request.corpus_id,
                 root_count=len(request.inputs),
                 root_ordinal=input_ordinal,
                 path=lexical_path,
@@ -479,6 +489,7 @@ def _prepare_roots(
             resolved = _resolved_path(lexical_path, filesystem)
         except OSError:
             return (), _root_failure(
+                corpus_id=request.corpus_id,
                 root_count=len(request.inputs),
                 root_ordinal=input_ordinal,
                 path=lexical_path,
@@ -489,6 +500,7 @@ def _prepare_roots(
         if existing is not None:
             if not _same_root_metadata(existing, discovery_input):
                 return (), _root_failure(
+                    corpus_id=request.corpus_id,
                     root_count=len(request.inputs),
                     root_ordinal=0,
                     path=resolved,
@@ -504,6 +516,7 @@ def _prepare_roots(
     for ordinal, (path, discovery_input, metadata) in enumerate(unique_inputs):
         if any(_paths_overlap(path, excluded) for excluded in excluded_paths):
             return (), _root_failure(
+                corpus_id=request.corpus_id,
                 root_count=root_count,
                 root_ordinal=ordinal,
                 path=path,
@@ -675,6 +688,7 @@ def _scan_directory_root(
 
 def _finalise_inventory(
     *,
+    corpus_id: CorpusId,
     root_count: int,
     raw_candidates: dict[PathOrderingKey, _RawCandidate],
     raw_failures: list[_RawFailure],
@@ -713,6 +727,7 @@ def _finalise_inventory(
                 )
             )
     return TraversalInventory(
+        corpus_id=corpus_id,
         root_count=root_count,
         candidates=tuple(candidates),
         failures=tuple(failures),
@@ -798,6 +813,7 @@ def inventory_local_sources(
             complete_roots.append(root.ordinal)
 
     inventory = _finalise_inventory(
+        corpus_id=request.corpus_id,
         root_count=len(roots),
         raw_candidates=raw_candidates,
         raw_failures=raw_failures,

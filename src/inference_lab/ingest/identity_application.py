@@ -26,24 +26,29 @@ from inference_lab.storage import (
 
 @dataclass(frozen=True, slots=True)
 class IdentityApplicationResult:
-    """Report a resolved source and its downstream parse eligibility."""
+    """Report a resolved source and whether this operation created its version."""
 
     source: DiscoveredSource
-    parse_eligible: bool
+    created_document_version: bool
 
     def __post_init__(self) -> None:
-        """Validate source type and outcome-owned eligibility."""
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate source type and outcome-owned creation state."""
         if not isinstance(self.source, DiscoveredSource):
             raise TypeError("source must be a DiscoveredSource.")
-        if not isinstance(self.parse_eligible, bool):
-            raise TypeError("parse_eligible must be a boolean.")
+        if not isinstance(self.created_document_version, bool):
+            raise TypeError("created_document_version must be a boolean.")
         expected = self.source.identity_outcome.kind in {
             ResolutionKind.NEW_VERSION,
             ResolutionKind.NEW_DOCUMENT,
             ResolutionKind.DUPLICATE,
         }
-        if self.parse_eligible is not expected:
-            raise ValueError("parse eligibility does not match the identity outcome.")
+        if self.created_document_version is not expected:
+            raise ValueError(
+                "document-version creation state does not match the identity outcome."
+            )
 
 
 def _assigned_identity(
@@ -214,15 +219,15 @@ def _apply_with_bound_corpus(
 ) -> IdentityApplicationResult:
     kind = source.identity_outcome.kind
     if kind in {ResolutionKind.AMBIGUOUS, ResolutionKind.CONFLICT}:
-        return IdentityApplicationResult(source=source, parse_eligible=False)
+        return IdentityApplicationResult(source=source, created_document_version=False)
     if kind is ResolutionKind.UNCHANGED:
         _apply_unchanged(source, corpus_id=corpus_id, transaction=transaction)
-        return IdentityApplicationResult(source=source, parse_eligible=False)
+        return IdentityApplicationResult(source=source, created_document_version=False)
     if kind is ResolutionKind.NEW_VERSION:
         _apply_new_version(source, corpus_id=corpus_id, transaction=transaction)
     else:
         _apply_new_identity(source, corpus_id=corpus_id, transaction=transaction)
-    return IdentityApplicationResult(source=source, parse_eligible=True)
+    return IdentityApplicationResult(source=source, created_document_version=True)
 
 
 def apply_discovery_identity_outcome(
@@ -236,6 +241,8 @@ def apply_discovery_identity_outcome(
         raise TypeError("source must be a DiscoveredSource.")
     if not isinstance(corpus_id, CorpusId):
         raise TypeError("corpus_id must be a CorpusId.")
+    if source.corpus_id != corpus_id:
+        raise ValueError("source corpus must match the persistence corpus.")
 
     with bound_contextvars(corpus_id=corpus_id.as_str()):
         return _apply_with_bound_corpus(

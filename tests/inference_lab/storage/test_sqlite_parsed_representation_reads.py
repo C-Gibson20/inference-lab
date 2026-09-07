@@ -342,11 +342,15 @@ def test_unsupported_representation_version_fails_repository_integrity_check(
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _persist(database_path, (parsed_representation(),))
-    with sqlite3.connect(database_path) as connection:
+    connection = sqlite3.connect(database_path)
+    try:
         connection.execute("PRAGMA ignore_check_constraints = ON")
         connection.execute(
             "UPDATE parsed_representations SET record_schema_version = '2.0.0'"
         )
+        connection.commit()
+    finally:
+        connection.close()
 
     with pytest.raises(CorruptStorageError):
         _open_repository(database_path)
@@ -355,11 +359,15 @@ def test_unsupported_representation_version_fails_repository_integrity_check(
 def test_digest_corruption_fails_closed_across_read_operations(tmp_path: Path) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _persist(database_path, (parsed_representation(),))
-    with sqlite3.connect(database_path) as connection:
+    connection = sqlite3.connect(database_path)
+    try:
         connection.execute(
             "UPDATE parsed_representations SET output_digest = ?",
             ("0" * 64,),
         )
+        connection.commit()
+    finally:
+        connection.close()
 
     repository = _open_repository(database_path)
     try:

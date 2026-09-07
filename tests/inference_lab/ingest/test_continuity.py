@@ -8,6 +8,7 @@ import pytest
 from inference_lab.ingest import (
     DiscoveryFailure,
     DiscoveryFailureCategory,
+    DiscoveryFileKind,
     DiscoveryInputKind,
     FileIdentityHint,
     FileStatEvidence,
@@ -243,6 +244,7 @@ def _inventory(
     *,
     complete: bool = True,
     live_prior: SourceLocatorRevision | None = None,
+    failures: tuple[DiscoveryFailure, ...] = (),
 ) -> TraversalInventory:
     candidates = [
         TraversalCandidate(
@@ -264,9 +266,10 @@ def _inventory(
             )
         )
     return TraversalInventory(
+        corpus_id=_CORPUS_ID,
         root_count=1,
         candidates=tuple(candidates),
-        failures=(),
+        failures=failures,
         complete_root_ordinals=(0,) if complete else (),
         root_scopes=(
             TraversalRootScope(
@@ -382,6 +385,89 @@ def test_live_hard_link_remains_an_independent_new_observation(
         ObservationMatchKind.NEW,
     )
     assert allocator.calls == 1
+
+
+@pytest.mark.parametrize(
+    ("category", "file_kind"),
+    (
+        (DiscoveryFailureCategory.SOURCE_SYMLINK, DiscoveryFileKind.SYMLINK),
+        (DiscoveryFailureCategory.SOURCE_SPECIAL_FILE, DiscoveryFileKind.SPECIAL),
+        (DiscoveryFailureCategory.NESTED_MOUNT, DiscoveryFileKind.DIRECTORY),
+    ),
+)
+def test_policy_skipped_prior_path_remains_an_independent_observation(
+    tmp_path: Path,
+    category: DiscoveryFailureCategory,
+    file_kind: DiscoveryFileKind,
+) -> None:
+    root = tmp_path.resolve()
+    prior = _locator(root / "still-present.txt")
+    snapshot = _snapshot(root / "new.txt", content_hash=_OTHER_HASH)
+    failure = DiscoveryFailure.for_category(
+        ordinal=1,
+        category=category,
+        locator=SourceLocator(
+            path=prior.path,
+            request_root_ordinal=0,
+            relative_path=prior.path.relative_to(root),
+        ),
+        file_kind=file_kind,
+    )
+    allocator = _Allocator()
+
+    assignment = _resolve(
+        snapshot,
+        _inventory(root, snapshot, failures=(failure,)),
+        _Reader(locators=(prior,)),
+        allocator,
+    )
+
+    assert assignment == SourceObservationAssignment(
+        _NEW_SOURCE_ID,
+        ObservationMatchKind.NEW,
+    )
+    assert allocator.calls == 1
+
+
+@pytest.mark.parametrize(
+    ("category", "file_kind"),
+    (
+        (DiscoveryFailureCategory.SOURCE_SYMLINK, DiscoveryFileKind.SYMLINK),
+        (DiscoveryFailureCategory.NESTED_MOUNT, DiscoveryFileKind.DIRECTORY),
+        (DiscoveryFailureCategory.TRAVERSAL_FAILED, DiscoveryFileKind.DIRECTORY),
+    ),
+)
+def test_untraversed_prior_path_reports_ambiguity(
+    tmp_path: Path,
+    category: DiscoveryFailureCategory,
+    file_kind: DiscoveryFileKind,
+) -> None:
+    root = tmp_path.resolve()
+    skipped_directory = root / "untraversed"
+    prior = _locator(skipped_directory / "possibly-present.txt")
+    snapshot = _snapshot(root / "new.txt", content_hash=_OTHER_HASH)
+    failure = DiscoveryFailure.for_category(
+        ordinal=1,
+        category=category,
+        locator=SourceLocator(
+            path=skipped_directory,
+            request_root_ordinal=0,
+            relative_path=skipped_directory.relative_to(root),
+        ),
+        file_kind=file_kind,
+    )
+    allocator = _Allocator()
+
+    result = _resolve(
+        snapshot,
+        _inventory(root, snapshot, failures=(failure,)),
+        _Reader(locators=(prior,)),
+        allocator,
+    )
+
+    assert isinstance(result, DiscoveryFailure)
+    assert result.category is DiscoveryFailureCategory.OBSERVATION_AMBIGUOUS
+    assert allocator.calls == 0
 
 
 def test_live_byte_identical_path_remains_an_independent_new_observation(

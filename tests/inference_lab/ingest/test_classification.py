@@ -37,8 +37,6 @@ from inference_lab.ingest import (
 )
 from inference_lab.provenance import CorpusId, ExternalIdentifier
 
-from .fixtures import fixture_settings  # noqa: TID252
-
 
 class _OpenRecordingFileSystem(LocalStableReadFileSystem):
     """Record opened paths without retaining any source bytes."""
@@ -246,6 +244,7 @@ def test_inventory_classifies_every_file_and_exposes_only_supported_for_hashing(
     None
 ):
     traversal = TraversalInventory(
+        corpus_id=CorpusId.generate(),
         root_count=1,
         candidates=(
             _candidate("paper.pdf", ordinal=0, byte_count=20),
@@ -301,6 +300,7 @@ def test_inventory_classifies_every_file_and_exposes_only_supported_for_hashing(
 
 def test_format_counts_aggregate_only_safe_stat_metadata() -> None:
     traversal = TraversalInventory(
+        corpus_id=CorpusId.generate(),
         root_count=1,
         candidates=(
             _candidate("paper.pdf", ordinal=0, byte_count=20),
@@ -349,6 +349,7 @@ def test_existing_traversal_failure_is_retained_in_ordinal_order() -> None:
         file_kind=DiscoveryFileKind.SYMLINK,
     )
     traversal = TraversalInventory(
+        corpus_id=CorpusId.generate(),
         root_count=1,
         candidates=(_candidate("unknown.bin", ordinal=1),),
         failures=(traversal_failure,),
@@ -365,6 +366,7 @@ def test_existing_traversal_failure_is_retained_in_ordinal_order() -> None:
 
 def test_empty_traversal_retains_policy_and_completion_evidence() -> None:
     traversal = TraversalInventory(
+        corpus_id=CorpusId.generate(),
         root_count=1,
         candidates=(),
         failures=(),
@@ -384,6 +386,7 @@ def test_empty_traversal_retains_policy_and_completion_evidence() -> None:
 
 def test_batch_result_rejects_incomplete_failure_or_count_accounting() -> None:
     traversal = TraversalInventory(
+        corpus_id=CorpusId.generate(),
         root_count=1,
         candidates=(_candidate("unknown.bin"),),
         failures=(),
@@ -424,6 +427,7 @@ def test_classification_inventory_requires_typed_traversal_and_registry() -> Non
             object(),  # pyright: ignore[reportArgumentType]
         )
     traversal = TraversalInventory(
+        corpus_id=CorpusId.generate(),
         root_count=1,
         candidates=(),
         failures=(),
@@ -439,6 +443,7 @@ def test_classification_inventory_requires_typed_traversal_and_registry() -> Non
 def test_batch_representations_hide_private_source_names() -> None:
     marker = "confidential-unsupported-source-7741.pdf"
     traversal = TraversalInventory(
+        corpus_id=CorpusId.generate(),
         root_count=1,
         candidates=(_candidate(marker),),
         failures=(),
@@ -477,9 +482,8 @@ def test_only_supported_classifications_reach_source_hashing(tmp_path: Path) -> 
 
     hashed = tuple(
         hash_source_candidate(
-            item.candidate,
-            item.classification,
-            settings=fixture_settings(),
+            item,
+            max_source_bytes=50 * 1024 * 1024,
             filesystem=filesystem,
         )
         for item in classified.hashable_candidates

@@ -395,6 +395,7 @@ def _source_case(
             )
         )
     inventory = TraversalInventory(
+        corpus_id=_CORPUS_ID,
         root_count=1,
         candidates=tuple(candidates),
         failures=(),

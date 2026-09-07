@@ -146,7 +146,7 @@ def _log_completion(
             source_observation_id=source.source_observation_id.as_str(),
             outcome_kind=outcome.kind.value,
             outcome_reason=outcome.reason.value,
-            parse_eligible=result.parse_eligible,
+            created_document_version=result.created_document_version,
             attempt_count=attempt_count,
         )
 
@@ -163,6 +163,10 @@ def persist_discovered_source_identity(
     """Resolve and persist one source, rebuilding once after a write conflict."""
     if not isinstance(request, DiscoveryRequest):
         raise TypeError("request must be a DiscoveryRequest.")
+    if not isinstance(inventory, TraversalInventory):
+        raise TypeError("inventory must be a TraversalInventory.")
+    if inventory.corpus_id != request.corpus_id:
+        raise ValueError("inventory corpus must match the discovery request.")
     if not callable(getattr(repository, "transaction", None)):
         raise TypeError("repository must provide transaction().")
 
@@ -226,6 +230,10 @@ def persist_discovered_source_identities(
     _validate_persistence_units(units)
     if not isinstance(request, DiscoveryRequest):
         raise TypeError("request must be a DiscoveryRequest.")
+    if not isinstance(inventory, TraversalInventory):
+        raise TypeError("inventory must be a TraversalInventory.")
+    if inventory.corpus_id != request.corpus_id:
+        raise ValueError("inventory corpus must match the discovery request.")
     if not callable(getattr(repository, "transaction", None)):
         raise TypeError("repository must provide transaction().")
 

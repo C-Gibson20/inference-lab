@@ -104,8 +104,10 @@ corrupt candidate metadata remain request-fatal.
 Results retain deterministic source order and report counts for files seen,
 supported, unsupported, hashed, unchanged, changed, new, duplicate, ambiguous,
 conflicting, and failed sources. An empty directory is a successful zero-source
-result. A partial result has at least one usable source and one failure; a failed
-result has failures but no usable source.
+result. `hashed` includes sources whose bytes were hashed successfully even when
+continuity, resolution, or persistence later fails; failures during hashing are
+excluded. A partial result has at least one usable source and one failure; a
+failed result has failures but no usable source.
 
 Structured lifecycle events expose policy identity, bounded categories,
 counts, durations, media type, byte count, retry state, outcome kind/reason, and
