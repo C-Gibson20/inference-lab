@@ -1,5 +1,12 @@
 """Versioned evaluation cases, datasets, and corpus-audit contracts."""
 
+from inference_lab.evaluation.audit_adapters import (
+    adapt_parse_persistence_request,
+    adapt_reconstructed_parse_outcome,
+    adapt_source_inventory,
+    adapt_text_native_acquisition,
+    complete_parse_observations,
+)
 from inference_lab.evaluation.audit_capabilities import (
     CURRENT_PARSER_CAPABILITY_PROFILE,
     PARSER_CAPABILITY_PROFILES,
@@ -112,8 +119,13 @@ __all__ = [
     "QuestionType",
     "SplitName",
     "SplitPolicy",
+    "adapt_parse_persistence_request",
+    "adapt_reconstructed_parse_outcome",
+    "adapt_source_inventory",
+    "adapt_text_native_acquisition",
     "atomic_write",
     "build_leakage_groups",
+    "complete_parse_observations",
     "evaluation_json_schema",
     "generate_splits",
     "load_dataset",
