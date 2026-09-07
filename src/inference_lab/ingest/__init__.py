@@ -1,5 +1,19 @@
 """Document ingestion contracts and pipeline stages."""
 
+from inference_lab.ingest._chunk_records import (
+    CHUNK_PAYLOAD_SCHEMA_VERSION,
+    Chunk,
+    ChunkingContractError,
+    ChunkingFailure,
+    ChunkingFailureCategory,
+    ChunkingOutcome,
+    ChunkMinimumException,
+    ChunkSet,
+    ChunkSourceReference,
+    ChunkSplitReason,
+    build_chunk_set,
+    build_chunking_outcome,
+)
 from inference_lab.ingest.chunking import (
     CURRENT_CHUNKER_VERSION,
     CanonicalSourceBoundaryMap,
@@ -172,15 +186,25 @@ from inference_lab.ingest.versioning import (
 )
 
 __all__ = [
+    "CHUNK_PAYLOAD_SCHEMA_VERSION",
     "CURRENT_CHUNKER_VERSION",
     "CURRENT_DISCOVERY_POLICY",
     "CURRENT_PARSER_VERSION",
     "CURRENT_SOURCE_CLASSIFIER",
     "BoundingBox",
     "CanonicalSourceBoundaryMap",
+    "Chunk",
+    "ChunkMinimumException",
+    "ChunkSet",
+    "ChunkSourceReference",
+    "ChunkSplitReason",
     "ChunkTokeniser",
     "ChunkTokeniserError",
     "ChunkerVersion",
+    "ChunkingContractError",
+    "ChunkingFailure",
+    "ChunkingFailureCategory",
+    "ChunkingOutcome",
     "ChunkingPolicy",
     "ChunkingRequest",
     "ClassificationInventory",
@@ -276,6 +300,8 @@ __all__ = [
     "VerifiedSourceSnapshot",
     "apply_discovery_identity_outcome",
     "build_canonical_source_boundary_map",
+    "build_chunk_set",
+    "build_chunking_outcome",
     "build_discovery_result",
     "build_normalisation_boundary_map",
     "canonical_path_key",
