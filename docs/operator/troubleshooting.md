@@ -47,6 +47,27 @@ was ingested, the persistent index is available, and the documented query
 command is being run from the correct deployment directory. An empty result is
 not by itself evidence of a failed operation.
 
+## A corpus update did not become active
+
+Inspect the current active version and the durable update state using the
+owning integration. `preparing` work is incomplete, `ready` work is sealed but
+unpublished, and `aborted` work is terminal. After restart, non-terminal work
+remains available for an explicit resume-or-abort decision; startup never
+publishes it automatically.
+
+A storage conflict means the expected active version or immutable inputs no
+longer agree. Do not blind-retry it. A concurrency error means the bounded
+SQLite lock wait expired and the complete transaction may be retried under a
+bounded caller policy. Follow the [corpus-version runbook](corpus-versions.md)
+for publication and recovery checks.
+
+## A reader still sees the previous corpus version
+
+An already-open snapshot is intentionally pinned to the version selected on
+entry. Close it at the end of its request or job unit and open a fresh active
+snapshot to select the newly published version. Do not close another reader's
+snapshot or rewrite the active pointer.
+
 ## Logs need inspection
 
 Logs are written to stdout. Use `logging.format = "console"` for interactive

@@ -1,7 +1,6 @@
 """Tests for corpus-authorised SQLite source-artefact persistence."""
 
 import sqlite3
-from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -312,7 +311,7 @@ def test_metadata_read_does_not_require_a_configured_blob_store(
         repository.close()
 
 
-def test_transaction_reads_its_staged_source_metadata_and_bytes(
+def test_transaction_source_access_is_metadata_only(
     tmp_path: Path,
 ) -> None:
     source_dir = tmp_path / "source-data"
@@ -327,7 +326,6 @@ def test_transaction_reads_its_staged_source_metadata_and_bytes(
         source_dir=source_dir,
     )
     _add_catalogue(repository)
-    stream: Iterator[bytes] | None = None
     try:
         with repository.transaction() as transaction:
             transaction.add_source_artefact(_FIRST_CORPUS.corpus_id, _ARTEFACT)
@@ -338,18 +336,20 @@ def test_transaction_reads_its_staged_source_metadata_and_bytes(
                 )
                 == _ARTEFACT
             )
-            assert (
-                transaction.read_source_bytes(
-                    _FIRST_CORPUS.corpus_id,
-                    DOCUMENT_VERSION_ID,
-                )
-                == SOURCE_BYTES
-            )
-            stream = transaction.stream_source_bytes(
+            assert not hasattr(transaction, "read_source_bytes")
+            assert not hasattr(transaction, "stream_source_bytes")
+
+        assert (
+            repository.read_source_bytes(
                 _FIRST_CORPUS.corpus_id,
                 DOCUMENT_VERSION_ID,
             )
-            assert stream is not None
+            == SOURCE_BYTES
+        )
+        stream = repository.stream_source_bytes(
+            _FIRST_CORPUS.corpus_id,
+            DOCUMENT_VERSION_ID,
+        )
         assert stream is not None
         assert b"".join(stream) == SOURCE_BYTES
     finally:
