@@ -347,6 +347,18 @@ staging data or partial metadata. A failure after blob promotion may leave an
 unreferenced final blob, which is safe because public visibility starts at the
 metadata membership boundary.
 
+Ingest integrations construct the canonical managed-source locator with the
+public `inference_lab.storage.build_source_blob_storage_key(ContentHash)`
+helper. They must not import the private blob-store implementation, duplicate
+its directory layout, or manufacture a path from implementation details. The
+helper returns an opaque relative storage key; it is not a public identity and
+must not appear in logs, errors, or request/result representations.
+
+The bundled publication returns no new-versus-replay flag. Callers may rely on
+stable IDs and parse status after success, but must not infer novelty from a
+race-prone preflight read. Exact replay remains a no-op; changed immutable
+payloads or reused record IDs remain typed storage conflicts.
+
 Source reads verify the complete stored byte count and hash before returning
 bytes. The streaming reader returns a detached, fully verified iterator so the
 repository may be closed before the caller consumes it. Missing, truncated,

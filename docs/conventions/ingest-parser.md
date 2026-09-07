@@ -131,3 +131,38 @@ The complete repository gate remains the lint, format, type-check, and test
 sequence in `AGENT.md`. The baseline does not accept paths, discover files,
 assign document identity, persist output, chunk text, invoke OCR, or load
 model backends; those responsibilities remain with later build-order work.
+
+## Persisted parse acceptance gate
+
+ING-03 adapts this parser contract to the storage-owned source publication
+boundary. The persistence request carries the exact `ParserInput` and
+`ParserVersion`, the selected `CorpusId`, and caller-owned parse identities.
+Preflight must establish explicit catalogue membership and validate immutable
+source bytes before the coordinator calls the single bundled
+`MetadataRepository.persist_source_artefact()` operation. Ingest does not write
+SQLite rows or managed files directly.
+
+The coordinator preserves the parser output across repository reopen: a
+successful or recoverable outcome reconstructs byte-identical parsed-document
+serialisation, while a fatal outcome remains document-free but retains its
+parser and source attribution. Exact replay is idempotent. A different payload
+under an existing immutable identity is a storage conflict, and a new parser
+version is a separate representation only when the request explicitly names
+its predecessor.
+
+Run the focused ING-03 acceptance suite with:
+
+```sh
+uv run pytest \
+  tests/inference_lab/ingest/test_parse_publication_sqlite_acceptance.py \
+  tests/inference_lab/ingest/test_parse_persistence_restart_acceptance.py \
+  tests/inference_lab/ingest/test_parse_persistence_corpus_isolation_acceptance.py \
+  tests/inference_lab/ingest/test_parse_persistence_fault_injection_acceptance.py \
+  tests/inference_lab/ingest/test_parse_persistence_privacy_acceptance.py
+```
+
+This gate covers replay before and after restart, successful/recoverable/fatal
+outcomes, explicit two-corpus membership, immutable conflict and supersession
+behaviour, streaming and metadata fault injection, no-partial-publication
+visibility, and privacy-safe logs, errors, requests, and results. The full
+repository gate remains required after the focused suite.
