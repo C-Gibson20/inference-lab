@@ -262,6 +262,10 @@ class Chunk:
             raise ValueError("structural block ordinals must be non-negative integers.")
         if len(self.structural_block_ordinals) != len(self.source_references):
             raise ValueError("structural annotations must match source references.")
+        if self.structural_block_ordinals != tuple(
+            reference.block_ordinal for reference in self.source_references
+        ):
+            raise ValueError("structural block ordinals must match source references.")
         if self.minimum_exception is not None and not isinstance(
             self.minimum_exception, ChunkMinimumException
         ):
@@ -376,6 +380,13 @@ class ChunkSet:
             raise TypeError("configuration_identity must be a ConfigurationIdentity.")
         if self.payload_schema_version != CHUNK_PAYLOAD_SCHEMA_VERSION:
             raise ValueError("unsupported chunk payload schema version.")
+        if self.configuration_identity != _configuration_identity_from_values(
+            parser_version=self.parser_version,
+            chunker_version=self.chunker_version,
+            tokeniser_identity=self.tokeniser_identity,
+            policy=self.policy,
+        ):
+            raise ChunkingContractError(ChunkingFailureCategory.INVALID_LINEAGE)
         if not isinstance(self.chunks, tuple):
             raise TypeError("chunks must be a tuple.")
         if any(not isinstance(chunk, Chunk) for chunk in self.chunks):
@@ -751,11 +762,26 @@ def _configuration_identity(
     tokeniser_identity: TokeniserIdentity,
 ) -> ConfigurationIdentity:
     """Digest every invalidation-relevant chunking choice without raw payloads."""
-    parser_version = request.parsed_document.parser_version
+    return _configuration_identity_from_values(
+        parser_version=request.parsed_document.parser_version,
+        chunker_version=CURRENT_CHUNKER_VERSION,
+        tokeniser_identity=tokeniser_identity,
+        policy=request.policy,
+    )
+
+
+def _configuration_identity_from_values(
+    *,
+    parser_version: ParserVersion,
+    chunker_version: ChunkerVersion,
+    tokeniser_identity: TokeniserIdentity,
+    policy: ChunkingPolicy,
+) -> ConfigurationIdentity:
+    """Digest the explicit values that determine one chunk generation."""
     payload: JsonObject = {
         "chunker": {
-            "implementation": CURRENT_CHUNKER_VERSION.implementation,
-            "contract_version": CURRENT_CHUNKER_VERSION.contract_version,
+            "implementation": chunker_version.implementation,
+            "contract_version": chunker_version.contract_version,
         },
         "parser": {
             "implementation": parser_version.implementation,
@@ -763,12 +789,12 @@ def _configuration_identity(
             "normalisation_version": parser_version.normalisation_version,
         },
         "policy": {
-            "min_tokens": request.policy.min_tokens,
-            "max_tokens": request.policy.max_tokens,
-            "overlap_numerator": request.policy.overlap_numerator,
-            "overlap_denominator": request.policy.overlap_denominator,
-            "structural_boundary_policy": request.policy.structural_boundary_policy.value,
-            "oversize_unit_policy": request.policy.oversize_unit_policy.value,
+            "min_tokens": policy.min_tokens,
+            "max_tokens": policy.max_tokens,
+            "overlap_numerator": policy.overlap_numerator,
+            "overlap_denominator": policy.overlap_denominator,
+            "structural_boundary_policy": policy.structural_boundary_policy.value,
+            "oversize_unit_policy": policy.oversize_unit_policy.value,
         },
         "tokeniser": {
             "implementation": tokeniser_identity.implementation,
