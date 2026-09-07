@@ -20,7 +20,7 @@ OUTPUT_DIR = OUTPUT_ROOT / "graphify-out"
 GRAPHIFY_ROOT = REPO_ROOT
 GRAPHIFY_SCOPE = ("src", "tests")
 GRAPHIFY_TIMEOUT_SECONDS = 300
-GRAPHIFY_VIZ_NODE_LIMIT = "20000"
+GRAPHIFY_VIZ_NODE_LIMIT = "5000"
 REPOSITORY_IDENTIFIER = "."
 OUTPUT_IDENTIFIER = ".dev/graphify-out"
 
@@ -152,6 +152,94 @@ def validate_html_output(html_path: Path, *, stage: str) -> None:
         raise GraphifyFailure("invalid_output", stage=stage) from exc
 
 
+def enrich_community_html(graph_path: Path, html_path: Path) -> None:
+    """Add representative source metadata to Graphify's aggregate nodes.
+
+    Graphify's large-graph renderer replaces each community with a synthetic
+    node. Those nodes have useful labels but no source file or type, which
+    makes the inspector panel say ``unknown``. Use the highest-degree symbol in
+    each community as a compact, deterministic representative.
+    """
+    try:
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        html = html_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GraphifyFailure("invalid_output", stage="cluster") from exc
+
+    nodes = graph.get("nodes")
+    links = graph.get("links", graph.get("edges", []))
+    if not isinstance(nodes, list) or not isinstance(links, list):
+        return
+
+    degree: dict[str, int] = {}
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        for endpoint in (
+            link.get("source", link.get("from")),
+            link.get("target", link.get("to")),
+        ):
+            if endpoint is not None:
+                key = str(endpoint)
+                degree[key] = degree.get(key, 0) + 1
+
+    representatives: dict[int, dict[str, object]] = {}
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("community"), int):
+            continue
+        source_file = str(node.get("source_file") or "")
+        if not source_file:
+            continue
+        community = node["community"]
+        current = representatives.get(community)
+        node_degree = degree.get(str(node.get("id")), 0)
+        current_degree = degree.get(str(current.get("id")), 0) if current else -1
+        if current is None or node_degree > current_degree:
+            representatives[community] = node
+
+    start_marker = "const RAW_NODES = "
+    end_marker = ";\nconst RAW_EDGES ="
+    start = html.find(start_marker)
+    end = html.find(end_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        return
+    try:
+        rendered_nodes = json.loads(html[start + len(start_marker) : end])
+    except json.JSONDecodeError as exc:
+        raise GraphifyFailure("invalid_output", stage="cluster") from exc
+    if not isinstance(rendered_nodes, list):
+        return
+
+    for rendered in rendered_nodes:
+        if not isinstance(rendered, dict):
+            continue
+        community = rendered.get("community")
+        if not isinstance(community, int):
+            continue
+        representative = representatives.get(community)
+        if representative is None:
+            continue
+        source = str(representative.get("source_file") or "")
+        location = str(representative.get("source_location") or "")
+        symbol = str(representative.get("label") or "symbol")
+        source_path = Path(source)
+        module = source_path.stem
+        if module == "__init__":
+            module = source_path.parent.name
+        label = f"{module} · {symbol}"
+        rendered["label"] = label
+        rendered["title"] = label
+        rendered["community_name"] = label
+        rendered["source_file"] = f"{source}:{location}" if location else source
+        rendered["file_type"] = representative.get("file_type", "code")
+
+    enriched = json.dumps(rendered_nodes, ensure_ascii=False)
+    html_path.write_text(
+        html[: start + len(start_marker)] + enriched + html[end:],
+        encoding="utf-8",
+    )
+
+
 def build_staged_graph(
     log: structlog.stdlib.BoundLogger,
 ) -> tuple[Path, Path]:
@@ -203,6 +291,7 @@ def build_staged_graph(
         if not report_path.is_file():
             raise GraphifyFailure("missing_output", stage="cluster")
         validate_html_output(report_path, stage="cluster")
+        enrich_community_html(graph_path, report_path)
 
         run_graphify_stage(
             [

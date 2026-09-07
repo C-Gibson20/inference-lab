@@ -21,7 +21,7 @@ other repository artefacts are excluded.
 Install the pinned local Graphify tool:
 
 ```sh
-uv tool install graphifyy==0.9.47
+uv tool install graphifyy==0.9.55
 ```
 
 The package installs the `graphify` executable. Verify that it is available:
@@ -66,6 +66,10 @@ Generated files are written under the ignored `.dev/graphify-out/` directory:
 - `graph.html`: clustered community visualisation;
 - `GRAPH_TREE.html`: browser-openable hierarchy visualisation;
 - Graphify manifest and local cache files.
+
+For repositories larger than Graphify's HTML node threshold, `graph.html` is
+automatically rendered as a reduced community-level graph. The complete
+symbol-level graph remains available in `graph.json`.
 
 Generated artefacts are reproducible developer output. They must not be
 committed, backed up as corpus state, or treated as application data.
