@@ -40,6 +40,12 @@ The owning feature must document each flag's TOML field, environment override,
 default, and operational effect. Until then, a proposed flag is unsupported
 and must be rejected by configuration validation.
 
+Chunking policy and tokeniser identity are explicit validated inputs to an
+ingest request, not deployment settings or feature flags in the baseline. A
+tokeniser artefact is selected by composition code and must remain local and
+path-free in its recorded identity. See the [chunking conventions](chunking.md)
+for the closed policy and invalidation rules.
+
 ## Source precedence
 
 Values are resolved from highest to lowest precedence:

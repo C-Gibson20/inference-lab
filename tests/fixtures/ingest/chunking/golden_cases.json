@@ -1,0 +1,33 @@
+{
+  "empty": {
+    "source_kind": "empty",
+    "token_count": 0,
+    "expected_chunk_count": 0
+  },
+  "whitespace_only": {
+    "source_kind": "whitespace",
+    "token_count": 0,
+    "expected_chunk_count": 0
+  },
+  "useful_below_minimum": {
+    "source_kind": "words",
+    "token_count": 255,
+    "expected_chunk_count": 1,
+    "expected_minimum_exception": "short_document"
+  },
+  "minimum_boundary": {
+    "source_kind": "words",
+    "token_count": 256,
+    "expected_chunk_count": 1
+  },
+  "maximum_boundary": {
+    "source_kind": "words",
+    "token_count": 512,
+    "expected_chunk_count": 1
+  },
+  "over_maximum_boundary": {
+    "source_kind": "words",
+    "token_count": 513,
+    "expected_chunk_count": 2
+  }
+}
