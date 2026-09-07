@@ -2,7 +2,11 @@
 
 from inference_lab._json import JsonObject, canonical_json_bytes
 from inference_lab.ingest.parser import ParsedDocument
-from inference_lab.ingest.sources import SourceSpan, StructuralBlock
+from inference_lab.ingest.sources import (
+    PageLayoutDescriptor,
+    SourceSpan,
+    StructuralBlock,
+)
 
 
 def _source_span_payload(span: SourceSpan) -> JsonObject:
@@ -36,6 +40,20 @@ def _block_payload(block: StructuralBlock) -> JsonObject:
     }
 
 
+def _page_layout_payload(layout: PageLayoutDescriptor) -> JsonObject:
+    """Convert one native page layout to a canonical mapping."""
+    if not isinstance(layout, PageLayoutDescriptor):
+        raise TypeError("layout must be a PageLayoutDescriptor.")
+    return {
+        "page_number": layout.page_number,
+        "coordinate_unit": layout.coordinate_unit,
+        "coordinate_origin": layout.coordinate_origin,
+        "page_width": layout.page_width,
+        "page_height": layout.page_height,
+        "rotation": layout.rotation,
+    }
+
+
 def parsed_document_payload(document: ParsedDocument) -> JsonObject:
     """Return the canonical semantic payload for parser output."""
     return {
@@ -66,6 +84,9 @@ def parsed_document_payload(document: ParsedDocument) -> JsonObject:
             if document.paragraphs is not None
             else None
         ),
+        "page_layouts": [
+            _page_layout_payload(layout) for layout in document.page_layouts
+        ],
         "language": document.language,
         "page_count": document.page_count,
         "character_count": document.character_count,

@@ -108,6 +108,7 @@ def fixture_parsed_document(*, include_paragraph: bool = True) -> ParsedDocument
         pages=None,
         sections=None,
         paragraphs=blocks,
+        page_layouts=(),
         language=None,
         page_count=None,
         character_count=1,

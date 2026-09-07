@@ -99,6 +99,10 @@ from inference_lab.ingest.serialisation import (
 )
 from inference_lab.ingest.sources import (
     BoundingBox,
+    CoordinateOrigin,
+    CoordinateUnit,
+    PageLayoutDescriptor,
+    PageRotation,
     SourceSpan,
     StructuralBlock,
     StructuralBlockKind,
@@ -127,6 +131,8 @@ __all__ = [
     "BoundingBox",
     "ClassificationInventory",
     "ClassifiedSourceCandidate",
+    "CoordinateOrigin",
+    "CoordinateUnit",
     "DirectorySnapshotPolicy",
     "DiscoveredSource",
     "DiscoveryCounts",
@@ -154,6 +160,8 @@ __all__ = [
     "NestedMountPolicy",
     "NormalisedText",
     "ObservationMatchKind",
+    "PageLayoutDescriptor",
+    "PageRotation",
     "ParseOutcome",
     "ParsePersistenceRequest",
     "ParseStatus",

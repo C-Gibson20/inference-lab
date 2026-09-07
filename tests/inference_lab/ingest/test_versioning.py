@@ -12,7 +12,7 @@ from inference_lab.provenance import DocumentVersionId
 
 def test_parser_version_has_canonical_value() -> None:
     assert CURRENT_PARSER_VERSION.value == (
-        "text-native/contract-2.0.0/normalisation-1.0.0"
+        "text-native/contract-3.0.0/normalisation-1.0.0"
     )
 
 

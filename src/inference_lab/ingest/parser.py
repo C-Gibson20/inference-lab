@@ -9,7 +9,11 @@ import structlog
 from inference_lab.ingest.errors import ParserDecodeError
 from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome
-from inference_lab.ingest.sources import StructuralBlock
+from inference_lab.ingest.sources import (
+    BoundingBox,
+    PageLayoutDescriptor,
+    StructuralBlock,
+)
 from inference_lab.ingest.versioning import (
     CURRENT_PARSER_VERSION,
     ParserVersion,
@@ -120,6 +124,7 @@ class ParsedDocument:
     pages: tuple[StructuralBlock, ...] | None
     sections: tuple[StructuralBlock, ...] | None
     paragraphs: tuple[StructuralBlock, ...] | None
+    page_layouts: tuple[PageLayoutDescriptor, ...]
     language: str | None
     page_count: int | None
     character_count: int
@@ -153,10 +158,17 @@ class ParsedDocument:
 
         if self.character_count != len(self.text.text):
             raise ValueError("character_count_mismatch")
-        if self.page_count is not None and self.page_count < 0:
-            raise ValueError("page_count_must_not_be_negative")
+        if self.page_count is not None:
+            if not isinstance(self.page_count, int) or isinstance(
+                self.page_count, bool
+            ):
+                raise ValueError("page_count_must_be_integer")
+            if self.page_count < 0:
+                raise ValueError("page_count_must_not_be_negative")
         if self.token_count is not None and self.token_count < 0:
             raise ValueError("token_count_must_not_be_negative")
+
+        layouts_by_page = self._validate_page_layouts()
 
         previous_start_offset = -1
         for ordinal, block in enumerate(self.blocks):
@@ -164,6 +176,7 @@ class ParsedDocument:
                 block,
                 ordinal=ordinal,
                 source_length=source_length,
+                layouts_by_page=layouts_by_page,
             )
             if block.source_span.start_offset < previous_start_offset:
                 raise ValueError("blocks_must_be_in_source_order")
@@ -187,6 +200,7 @@ class ParsedDocument:
         *,
         ordinal: int,
         source_length: int,
+        layouts_by_page: dict[int, PageLayoutDescriptor],
     ) -> None:
         """Validate one canonical block and its source provenance."""
         if not isinstance(block, StructuralBlock):
@@ -196,6 +210,14 @@ class ParsedDocument:
             raise ValueError("source_span_document_version_mismatch")
         if span.end_offset > source_length:
             raise ValueError("source_span_exceeds_source_text")
+        if span.page_number is not None:
+            self._validate_page_number(span.page_number)
+        if span.bounding_box is not None:
+            assert span.page_number is not None
+            layout = layouts_by_page.get(span.page_number)
+            if layout is None:
+                raise ValueError("bounding_box_requires_page_layout")
+            self._validate_bounding_box(span.bounding_box, layout)
         source_text = self.text.source_text[span.start_offset : span.end_offset]
         if block.text != normalise_source_text(source_text):
             raise ValueError("block_text_source_span_mismatch")
@@ -229,6 +251,44 @@ class ParsedDocument:
             raise ValueError(f"{name}_contain_wrong_block_kind")
         if collection != expected:
             raise ValueError(f"{name}_must_match_blocks")
+
+    def _validate_page_layouts(self) -> dict[int, PageLayoutDescriptor]:
+        """Require unique page-number-ordered layout descriptors."""
+        if not isinstance(self.page_layouts, tuple):
+            raise ValueError("page_layouts_must_be_tuple")
+        if any(
+            not isinstance(layout, PageLayoutDescriptor) for layout in self.page_layouts
+        ):
+            raise ValueError("invalid_page_layout")
+        layouts_by_page = {layout.page_number: layout for layout in self.page_layouts}
+        if len(layouts_by_page) != len(self.page_layouts):
+            raise ValueError("page_layouts_must_have_unique_page_numbers")
+        if tuple(layout.page_number for layout in self.page_layouts) != tuple(
+            sorted(layouts_by_page)
+        ):
+            raise ValueError("page_layouts_must_be_in_page_order")
+        for layout in self.page_layouts:
+            self._validate_page_number(layout.page_number)
+        return layouts_by_page
+
+    def _validate_page_number(self, page_number: int) -> None:
+        """Require represented pages to fit the declared page count."""
+        if self.page_count is not None and page_number > self.page_count:
+            raise ValueError("page_number_exceeds_page_count")
+
+    @staticmethod
+    def _validate_bounding_box(
+        bounding_box: BoundingBox,
+        layout: PageLayoutDescriptor,
+    ) -> None:
+        """Require a box to fit the declared untransformed coordinate space."""
+        if (
+            bounding_box.left < 0
+            or bounding_box.top < 0
+            or bounding_box.right > layout.page_width
+            or bounding_box.bottom > layout.page_height
+        ):
+            raise ValueError("bounding_box_exceeds_page_layout")
 
 
 class Parser(Protocol):
