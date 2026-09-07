@@ -1,5 +1,37 @@
-"""Versioned evaluation cases, datasets, and held-out split contracts."""
+"""Versioned evaluation cases, datasets, and corpus-audit contracts."""
 
+from inference_lab.evaluation.audit_capabilities import (
+    CURRENT_PARSER_CAPABILITY_PROFILE,
+    PARSER_CAPABILITY_PROFILES,
+    ParserCapabilityProfile,
+    parser_capability_profile,
+    validate_parsed_document_capabilities,
+)
+from inference_lab.evaluation.audit_contracts import (
+    AUDIT_CONTRACT_VERSION,
+    AcquisitionStatus,
+    AuditAcquisitionObservation,
+    AuditCoverage,
+    AuditDistribution,
+    AuditMissingReason,
+    AuditParsedDocumentFacts,
+    AuditParseEvidence,
+    AuditParseFailure,
+    AuditParseObservation,
+    AuditRate,
+    AuditRelationshipInventory,
+    AuditSourceFailure,
+    AuditSourceInventory,
+    AuditStructureCount,
+    AuditStructureKind,
+    CorpusAuditPolicy,
+    CorpusAuditRequest,
+    CorpusAuditScope,
+)
+from inference_lab.evaluation.audit_errors import (
+    AuditContractError,
+    AuditErrorCategory,
+)
 from inference_lab.evaluation.cases import EvaluationCase, QuestionType
 from inference_lab.evaluation.contracts import HELD_OUT_SPLIT, SplitName
 from inference_lab.evaluation.coverage import (
@@ -38,10 +70,33 @@ from inference_lab.evaluation.splitting import (
 )
 
 __all__ = [
+    "AUDIT_CONTRACT_VERSION",
+    "CURRENT_PARSER_CAPABILITY_PROFILE",
     "FINAL_BENCHMARK_POLICY",
     "HELD_OUT_SPLIT",
+    "PARSER_CAPABILITY_PROFILES",
     "AbstentionExpectation",
+    "AcquisitionStatus",
     "AnswerClaim",
+    "AuditAcquisitionObservation",
+    "AuditContractError",
+    "AuditCoverage",
+    "AuditDistribution",
+    "AuditErrorCategory",
+    "AuditMissingReason",
+    "AuditParseEvidence",
+    "AuditParseFailure",
+    "AuditParseObservation",
+    "AuditParsedDocumentFacts",
+    "AuditRate",
+    "AuditRelationshipInventory",
+    "AuditSourceFailure",
+    "AuditSourceInventory",
+    "AuditStructureCount",
+    "AuditStructureKind",
+    "CorpusAuditPolicy",
+    "CorpusAuditRequest",
+    "CorpusAuditScope",
     "CoveragePolicy",
     "CoverageReport",
     "DatasetManifest",
@@ -53,6 +108,7 @@ __all__ = [
     "LeakageGroup",
     "LoadedDataset",
     "NumericExpectation",
+    "ParserCapabilityProfile",
     "QuestionType",
     "SplitName",
     "SplitPolicy",
@@ -61,12 +117,14 @@ __all__ = [
     "evaluation_json_schema",
     "generate_splits",
     "load_dataset",
+    "parser_capability_profile",
     "serialise_cases",
     "serialise_manifest",
     "validate_benchmark_coverage",
     "validate_final_benchmark",
     "validate_local_path",
     "validate_no_leakage",
+    "validate_parsed_document_capabilities",
     "write_dataset",
     "write_json_schema",
 ]
