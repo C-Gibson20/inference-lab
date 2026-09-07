@@ -97,6 +97,7 @@ def _build_document(
         pages=None,
         sections=None,
         paragraphs=blocks,
+        page_layouts=(),
         language=None,
         page_count=None,
         character_count=len(prepared_text.text),

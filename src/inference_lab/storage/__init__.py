@@ -66,7 +66,10 @@ from inference_lab.storage.source_locations import (
     StructuralBlock,
     StructuralBlockKind,
 )
-from inference_lab.storage.source_records import SourceArtefact
+from inference_lab.storage.source_records import (
+    SourceArtefact,
+    build_source_blob_storage_key,
+)
 from inference_lab.storage.source_serialisation import serialise_source_artefact
 from inference_lab.storage.source_versioning import (
     CURRENT_SOURCE_RECORD_SCHEMA_VERSION,
@@ -145,6 +148,7 @@ __all__ = [
     "StructuralBlock",
     "StructuralBlockKind",
     "build_parsed_representation_output_digest",
+    "build_source_blob_storage_key",
     "open_metadata_repository",
     "serialise_parse_outcome",
     "serialise_parsed_representation",

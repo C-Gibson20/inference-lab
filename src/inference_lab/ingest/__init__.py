@@ -83,6 +83,29 @@ from inference_lab.ingest.identity_resolution import (
 )
 from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
+from inference_lab.ingest.parse_mapping import (
+    MappedParseRecords,
+    map_parse_persistence_request,
+)
+from inference_lab.ingest.parse_persistence import ParsePersistenceRequest
+from inference_lab.ingest.parse_preflight import (
+    ParsePersistencePreflight,
+    ParsePreflightError,
+    ParsePreflightErrorCategory,
+    ParsePreflightReader,
+    preflight_parse_persistence,
+)
+from inference_lab.ingest.parse_publication import (
+    ParsePersistenceResult,
+    ParsePublicationRepository,
+    persist_parse_request,
+)
+from inference_lab.ingest.parse_reconstruction import (
+    ParseReconstructionError,
+    ParseReconstructionErrorCategory,
+    ReconstructedParseOutcome,
+    reconstruct_parse_outcome,
+)
 from inference_lab.ingest.parser import (
     NormalisedText,
     ParsedDocument,
@@ -98,6 +121,10 @@ from inference_lab.ingest.serialisation import (
 )
 from inference_lab.ingest.sources import (
     BoundingBox,
+    CoordinateOrigin,
+    CoordinateUnit,
+    PageLayoutDescriptor,
+    PageRotation,
     SourceSpan,
     StructuralBlock,
     StructuralBlockKind,
@@ -126,6 +153,8 @@ __all__ = [
     "BoundingBox",
     "ClassificationInventory",
     "ClassifiedSourceCandidate",
+    "CoordinateOrigin",
+    "CoordinateUnit",
     "DirectorySnapshotPolicy",
     "DiscoveredSource",
     "DiscoveryCounts",
@@ -150,10 +179,22 @@ __all__ = [
     "IdentityPersistenceUnit",
     "LocalStableReadFileSystem",
     "LocalTraversalFileSystem",
+    "MappedParseRecords",
     "NestedMountPolicy",
     "NormalisedText",
     "ObservationMatchKind",
+    "PageLayoutDescriptor",
+    "PageRotation",
     "ParseOutcome",
+    "ParsePersistencePreflight",
+    "ParsePersistenceRequest",
+    "ParsePersistenceResult",
+    "ParsePreflightError",
+    "ParsePreflightErrorCategory",
+    "ParsePreflightReader",
+    "ParsePublicationRepository",
+    "ParseReconstructionError",
+    "ParseReconstructionErrorCategory",
     "ParseStatus",
     "ParsedDocument",
     "Parser",
@@ -166,6 +207,7 @@ __all__ = [
     "ParserInput",
     "ParserInputError",
     "ParserVersion",
+    "ReconstructedParseOutcome",
     "SourceClassification",
     "SourceClassifierRegistry",
     "SourceClassifierRule",
@@ -200,12 +242,16 @@ __all__ = [
     "generate_source_span_id",
     "hash_source_candidate",
     "inventory_local_sources",
+    "map_parse_persistence_request",
     "normalise_source_text",
     "observe_discovery",
     "parsed_document_payload",
     "persist_discovered_source_identities",
     "persist_discovered_source_identity",
+    "persist_parse_request",
+    "preflight_parse_persistence",
     "prepare_text",
+    "reconstruct_parse_outcome",
     "resolve_discovered_source_identity",
     "resolve_source_observation",
     "serialise_parsed_document",

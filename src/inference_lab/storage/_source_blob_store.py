@@ -12,14 +12,16 @@ from pathlib import Path
 from typing import Final
 
 from inference_lab._validation import is_local_path_shape
-from inference_lab.provenance import ContentHash, HashAlgorithm
 from inference_lab.storage.errors import (
     CorruptStorageError,
     StorageConcurrencyError,
     StorageConflictError,
     StorageTransactionError,
 )
-from inference_lab.storage.source_records import SourceArtefact
+from inference_lab.storage.source_records import (
+    SourceArtefact,
+    build_source_blob_storage_key,
+)
 
 DEFAULT_BLOB_READ_CHUNK_SIZE: Final = 64 * 1024
 _DIRECTORY_MODE: Final = 0o700
@@ -64,15 +66,6 @@ class SourceBlobReconciliation:
     orphan_blobs_found: int
     ambiguous_entries_retained: int
     limit_reached: bool
-
-
-def build_source_blob_storage_key(content_hash: ContentHash) -> str:
-    """Return the implementation-owned relative key for immutable source bytes."""
-    if not isinstance(content_hash, ContentHash):
-        raise TypeError("content_hash must be a ContentHash.")
-    if content_hash.algorithm is not HashAlgorithm.SHA256:
-        raise ValueError("managed source blobs require a SHA-256 content hash.")
-    return f"sha256/{content_hash.digest[:2]}/{content_hash.digest}"
 
 
 def _validate_chunk_size(chunk_size: int) -> None:
