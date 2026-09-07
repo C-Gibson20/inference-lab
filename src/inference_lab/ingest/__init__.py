@@ -83,6 +83,10 @@ from inference_lab.ingest.identity_resolution import (
 )
 from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
+from inference_lab.ingest.parse_mapping import (
+    MappedParseRecords,
+    map_parse_persistence_request,
+)
 from inference_lab.ingest.parse_persistence import ParsePersistenceRequest
 from inference_lab.ingest.parser import (
     NormalisedText,
@@ -157,6 +161,7 @@ __all__ = [
     "IdentityPersistenceUnit",
     "LocalStableReadFileSystem",
     "LocalTraversalFileSystem",
+    "MappedParseRecords",
     "NestedMountPolicy",
     "NormalisedText",
     "ObservationMatchKind",
@@ -210,6 +215,7 @@ __all__ = [
     "generate_source_span_id",
     "hash_source_candidate",
     "inventory_local_sources",
+    "map_parse_persistence_request",
     "normalise_source_text",
     "observe_discovery",
     "parsed_document_payload",
