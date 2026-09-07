@@ -11,6 +11,7 @@ import pytest
 from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
+    ClassifiedSourceCandidate,
     DiscoveryFailure,
     DiscoveryFailureCategory,
     DiscoveryInput,
@@ -28,7 +29,7 @@ from inference_lab.ingest import (
 )
 from inference_lab.provenance import CorpusId, HashAlgorithm
 
-from .fixtures import fixture_settings  # noqa: TID252
+_MAX_SOURCE_BYTES = 50 * 1024 * 1024
 
 
 class _RecordingFileSystem(LocalStableReadFileSystem):
@@ -122,6 +123,16 @@ def _classification() -> SourceClassification:
     )
 
 
+def _classified(
+    candidate: TraversalCandidate,
+    classification: SourceClassification | None = None,
+) -> ClassifiedSourceCandidate:
+    return ClassifiedSourceCandidate(
+        candidate,
+        _classification() if classification is None else classification,
+    )
+
+
 def test_regular_file_is_streamed_into_a_verified_sha256_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -134,9 +145,8 @@ def test_regular_file_is_streamed_into_a_verified_sha256_snapshot(
 
     with capture_logs() as logs:
         result = hash_source_candidate(
-            candidate,
-            _classification(),
-            settings=fixture_settings(max_source_bytes=len(content)),
+            _classified(candidate),
+            max_source_bytes=len(content),
             filesystem=filesystem,
             clock=clock_values.__next__,
         )
@@ -177,9 +187,8 @@ def test_empty_file_has_the_standard_empty_sha256_digest(tmp_path: Path) -> None
     source.touch()
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(),
+        _classified(_candidate(source)),
+        max_source_bytes=_MAX_SOURCE_BYTES,
     )
 
     assert isinstance(result, VerifiedSourceSnapshot)
@@ -194,17 +203,13 @@ def test_size_limit_accepts_boundary_and_rejects_oversized_source(
     boundary.write_bytes(b"1234")
     oversized = tmp_path / "oversized.txt"
     oversized.write_bytes(b"12345")
-    settings = fixture_settings(max_source_bytes=4)
-
     accepted = hash_source_candidate(
-        _candidate(boundary),
-        _classification(),
-        settings=settings,
+        _classified(_candidate(boundary)),
+        max_source_bytes=4,
     )
     rejected = hash_source_candidate(
-        _candidate(oversized),
-        _classification(),
-        settings=settings,
+        _classified(_candidate(oversized)),
+        max_source_bytes=4,
     )
 
     assert isinstance(accepted, VerifiedSourceSnapshot)
@@ -227,9 +232,8 @@ def test_candidate_replaced_by_symlink_is_not_opened(tmp_path: Path) -> None:
         pytest.skip(f"symlinks unavailable: {type(error).__name__}")
 
     result = hash_source_candidate(
-        candidate,
-        _classification(),
-        settings=fixture_settings(),
+        _classified(candidate),
+        max_source_bytes=_MAX_SOURCE_BYTES,
     )
 
     assert isinstance(result, DiscoveryFailure)
@@ -254,9 +258,8 @@ def test_opened_handle_swap_is_rejected_before_read(
         )
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(),
+        _classified(_candidate(source)),
+        max_source_bytes=_MAX_SOURCE_BYTES,
         filesystem=filesystem,
     )
 
@@ -287,9 +290,8 @@ def test_symlink_swap_at_open_is_rejected_without_reading_target(
     filesystem.before_open = replace_with_symlink
 
     result = hash_source_candidate(
-        candidate,
-        _classification(),
-        settings=fixture_settings(),
+        _classified(candidate),
+        max_source_bytes=_MAX_SOURCE_BYTES,
         filesystem=filesystem,
     )
 
@@ -328,9 +330,8 @@ def test_changed_post_read_evidence_discards_digest(
         )
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(),
+        _classified(_candidate(source)),
+        max_source_bytes=_MAX_SOURCE_BYTES,
         filesystem=filesystem,
     )
 
@@ -347,9 +348,8 @@ def test_growth_past_limit_during_read_is_rejected(tmp_path: Path) -> None:
     filesystem.injected_chunks[2] = b"5"
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(max_source_bytes=4),
+        _classified(_candidate(source)),
+        max_source_bytes=4,
         filesystem=filesystem,
     )
 
@@ -368,9 +368,8 @@ def test_growth_past_limit_between_stat_and_open_is_rejected_before_read(
     filesystem.fstat_transforms[1] = lambda metadata: replace(metadata, byte_count=5)
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(max_source_bytes=4),
+        _classified(_candidate(source)),
+        max_source_bytes=4,
         filesystem=filesystem,
     )
 
@@ -388,9 +387,8 @@ def test_premature_end_of_read_is_reported_as_changed_source(tmp_path: Path) -> 
     filesystem.injected_chunks[1] = b""
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(),
+        _classified(_candidate(source)),
+        max_source_bytes=_MAX_SOURCE_BYTES,
         filesystem=filesystem,
     )
 
@@ -428,9 +426,8 @@ def test_io_failures_are_bounded_and_close_open_source(
 
     with capture_logs() as logs:
         result = hash_source_candidate(
-            candidate,
-            _classification(),
-            settings=fixture_settings(),
+            _classified(candidate),
+            max_source_bytes=_MAX_SOURCE_BYTES,
             filesystem=filesystem,
             clock=clock_values.__next__,
         )
@@ -466,9 +463,8 @@ def test_vanished_path_is_reported_as_changed_source(
     filesystem.missing_lstats.add(lstat_call)
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(),
+        _classified(_candidate(source)),
+        max_source_bytes=_MAX_SOURCE_BYTES,
         filesystem=filesystem,
     )
 
@@ -487,9 +483,8 @@ def test_path_vanishing_at_open_is_reported_as_changed_source(
     filesystem.open_missing = True
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(),
+        _classified(_candidate(source)),
+        max_source_bytes=_MAX_SOURCE_BYTES,
         filesystem=filesystem,
     )
 
@@ -510,49 +505,42 @@ def test_hashing_boundary_requires_typed_supported_inputs(tmp_path: Path) -> Non
     )
 
     assert isinstance(LocalStableReadFileSystem(), StableReadFileSystem)
-    with pytest.raises(TypeError, match="candidate must be a TraversalCandidate"):
+    with pytest.raises(TypeError, match="source must be a ClassifiedSourceCandidate"):
         hash_source_candidate(
             object(),  # pyright: ignore[reportArgumentType]
-            _classification(),
-            settings=fixture_settings(),
-        )
-    with pytest.raises(TypeError, match="classification must be"):
-        hash_source_candidate(
-            candidate,
-            object(),  # pyright: ignore[reportArgumentType]
-            settings=fixture_settings(),
+            max_source_bytes=_MAX_SOURCE_BYTES,
         )
     with pytest.raises(ValueError, match="must describe a supported source"):
         hash_source_candidate(
-            candidate,
-            unsupported,
-            settings=fixture_settings(),
+            _classified(candidate, unsupported),
+            max_source_bytes=_MAX_SOURCE_BYTES,
         )
-    with pytest.raises(TypeError, match="settings must be Settings"):
+    with pytest.raises(TypeError, match="max_source_bytes must be an integer"):
         hash_source_candidate(
-            candidate,
-            _classification(),
-            settings=object(),  # pyright: ignore[reportArgumentType]
+            _classified(candidate),
+            max_source_bytes=True,  # pyright: ignore[reportArgumentType]
+        )
+    with pytest.raises(ValueError, match="max_source_bytes must be positive"):
+        hash_source_candidate(
+            _classified(candidate),
+            max_source_bytes=0,
         )
     with pytest.raises(TypeError, match="filesystem must implement"):
         hash_source_candidate(
-            candidate,
-            _classification(),
-            settings=fixture_settings(),
+            _classified(candidate),
+            max_source_bytes=_MAX_SOURCE_BYTES,
             filesystem=object(),  # pyright: ignore[reportArgumentType]
         )
     with pytest.raises(TypeError, match="clock must be callable"):
         hash_source_candidate(
-            candidate,
-            _classification(),
-            settings=fixture_settings(),
+            _classified(candidate),
+            max_source_bytes=_MAX_SOURCE_BYTES,
             clock=object(),  # pyright: ignore[reportArgumentType]
         )
     with pytest.raises(TypeError, match="clock must return an integer"):
         hash_source_candidate(
-            candidate,
-            _classification(),
-            settings=fixture_settings(),
+            _classified(candidate),
+            max_source_bytes=_MAX_SOURCE_BYTES,
             clock=lambda: True,  # pyright: ignore[reportReturnType]
         )
 
@@ -568,9 +556,8 @@ def test_hashing_rejects_a_clock_that_moves_backwards_without_logging_bytes(
     with capture_logs() as logs:
         with pytest.raises(ValueError, match="must not move backwards"):
             hash_source_candidate(
-                candidate,
-                _classification(),
-                settings=fixture_settings(),
+                _classified(candidate),
+                max_source_bytes=_MAX_SOURCE_BYTES,
                 clock=clock_values.__next__,
             )
 
@@ -583,9 +570,8 @@ def test_hash_failure_representation_hides_source_path(tmp_path: Path) -> None:
     source.write_bytes(b"private payload")
 
     result = hash_source_candidate(
-        _candidate(source),
-        _classification(),
-        settings=fixture_settings(max_source_bytes=1),
+        _classified(_candidate(source)),
+        max_source_bytes=1,
     )
 
     assert isinstance(result, DiscoveryFailure)

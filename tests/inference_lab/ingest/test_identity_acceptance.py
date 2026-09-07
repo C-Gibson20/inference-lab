@@ -103,9 +103,8 @@ def _supported_persistence_units(
     units: list[IdentityPersistenceUnit] = []
     for source in classification.hashable_candidates:
         snapshot = hash_source_candidate(
-            source.candidate,
-            source.classification,
-            settings=fixture_settings(),
+            source,
+            max_source_bytes=fixture_settings().ingest.max_source_bytes,
         )
         assert isinstance(snapshot, VerifiedSourceSnapshot)
         units.append(IdentityPersistenceUnit(source, snapshot))
@@ -660,9 +659,8 @@ def test_incomplete_scan_preserves_ambiguous_matching_source_after_restart(
     visible_source = classification.hashable_candidates[0]
     assert visible_source.candidate.locator.path == visible_path.resolve()
     snapshot = hash_source_candidate(
-        visible_source.candidate,
-        visible_source.classification,
-        settings=fixture_settings(),
+        visible_source,
+        max_source_bytes=fixture_settings().ingest.max_source_bytes,
     )
     assert isinstance(snapshot, VerifiedSourceSnapshot)
 

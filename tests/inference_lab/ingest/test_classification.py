@@ -37,8 +37,6 @@ from inference_lab.ingest import (
 )
 from inference_lab.provenance import CorpusId, ExternalIdentifier
 
-from .fixtures import fixture_settings  # noqa: TID252
-
 
 class _OpenRecordingFileSystem(LocalStableReadFileSystem):
     """Record opened paths without retaining any source bytes."""
@@ -477,9 +475,8 @@ def test_only_supported_classifications_reach_source_hashing(tmp_path: Path) -> 
 
     hashed = tuple(
         hash_source_candidate(
-            item.candidate,
-            item.classification,
-            settings=fixture_settings(),
+            item,
+            max_source_bytes=50 * 1024 * 1024,
             filesystem=filesystem,
         )
         for item in classified.hashable_candidates

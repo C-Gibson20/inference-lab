@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import BinaryIO, Final, Protocol, runtime_checkable
 
 from inference_lab._validation import is_strict_integer
+from inference_lab.ingest.classification import ClassifiedSourceCandidate
 from inference_lab.ingest.discovery import (
     FileIdentityHint,
     FileStatEvidence,
-    SourceClassification,
     SourceSupport,
     StableFileEvidence,
     VerifiedSourceSnapshot,
@@ -34,7 +34,6 @@ from inference_lab.ingest.traversal import (
     TraversalPathMetadata,
 )
 from inference_lab.provenance import ContentHash, HashAlgorithm
-from inference_lab.settings import Settings
 
 _HASH_CHUNK_SIZE_BYTES: Final = 1024 * 1024
 
@@ -107,17 +106,16 @@ _LOCAL_STABLE_READ_FILESYSTEM = LocalStableReadFileSystem()
 
 
 def _failure(
-    candidate: TraversalCandidate,
-    classification: SourceClassification,
+    source: ClassifiedSourceCandidate,
     category: DiscoveryFailureCategory,
 ) -> DiscoveryFailure:
     """Build a payload-free hashing failure for one traversal candidate."""
     return DiscoveryFailure.for_category(
-        ordinal=candidate.ordinal,
+        ordinal=source.candidate.ordinal,
         category=category,
-        locator=candidate.locator,
+        locator=source.candidate.locator,
         file_kind=DiscoveryFileKind.REGULAR_FILE,
-        media_type=classification.media_type,
+        media_type=source.classification.media_type,
     )
 
 
@@ -163,39 +161,35 @@ def _path_changed_after_open_failure(
 
 
 def _hash_open_source(
-    source: BinaryIO,
+    binary_source: BinaryIO,
     *,
-    candidate: TraversalCandidate,
-    classification: SourceClassification,
+    source: ClassifiedSourceCandidate,
     max_source_bytes: int,
     pre_open: TraversalPathMetadata,
     filesystem: StableReadFileSystem,
 ) -> VerifiedSourceSnapshot | DiscoveryFailure:
     """Hash one open source and validate its complete observation boundary."""
-    opened = _validated_metadata(filesystem.fstat(source))
+    opened = _validated_metadata(filesystem.fstat(binary_source))
     if not _is_regular(opened):
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
     if opened.byte_count > max_source_bytes:
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_TOO_LARGE,
         )
     if _file_evidence(opened) != _file_evidence(pre_open):
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
 
     digest = hashlib.sha256()
     byte_count = 0
     while True:
-        chunk = filesystem.read(source, _HASH_CHUNK_SIZE_BYTES)
+        chunk = filesystem.read(binary_source, _HASH_CHUNK_SIZE_BYTES)
         if not isinstance(chunk, bytes):
             raise TypeError("filesystem read must return bytes.")
         if not chunk:
@@ -203,19 +197,19 @@ def _hash_open_source(
         byte_count += len(chunk)
         if byte_count > max_source_bytes:
             return _failure(
-                candidate,
-                classification,
+                source,
                 DiscoveryFailureCategory.SOURCE_TOO_LARGE,
             )
         digest.update(chunk)
 
-    opened_after_read = _validated_metadata(filesystem.fstat(source))
+    opened_after_read = _validated_metadata(filesystem.fstat(binary_source))
     try:
-        path_after_read = _validated_metadata(filesystem.lstat(candidate.locator.path))
+        path_after_read = _validated_metadata(
+            filesystem.lstat(source.candidate.locator.path)
+        )
     except FileNotFoundError:
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
     if not all(
@@ -223,8 +217,7 @@ def _hash_open_source(
         for metadata in (pre_open, opened, opened_after_read, path_after_read)
     ):
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
 
@@ -234,14 +227,12 @@ def _hash_open_source(
     )
     if any(observation != observations[0] for observation in observations[1:]):
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
     if byte_count != opened_after_read.byte_count:
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
 
@@ -252,9 +243,9 @@ def _hash_open_source(
         path_after_read=observations[3],
     )
     return VerifiedSourceSnapshot(
-        locator=candidate.locator,
-        media_type=classification.media_type,
-        encoding=classification.encoding,
+        locator=source.candidate.locator,
+        media_type=source.classification.media_type,
+        encoding=source.classification.encoding,
         byte_count=byte_count,
         content_hash=ContentHash(HashAlgorithm.SHA256, digest.hexdigest()),
         file_evidence=stable_evidence,
@@ -262,46 +253,41 @@ def _hash_open_source(
 
 
 def _hash_source_candidate(
-    candidate: TraversalCandidate,
-    classification: SourceClassification,
+    source: ClassifiedSourceCandidate,
     *,
     max_source_bytes: int,
     filesystem: StableReadFileSystem,
 ) -> VerifiedSourceSnapshot | DiscoveryFailure:
     """Run the validated stable-read algorithm for one source."""
+    candidate = source.candidate
     try:
         pre_open = _validated_metadata(filesystem.lstat(candidate.locator.path))
     except FileNotFoundError:
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
     except OSError:
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_READ_FAILED,
         )
     if not _is_regular(pre_open):
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
     if pre_open.byte_count > max_source_bytes:
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_TOO_LARGE,
         )
 
     try:
-        source = filesystem.open_binary(candidate.locator.path)
+        binary_source = filesystem.open_binary(candidate.locator.path)
     except FileNotFoundError:
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
         )
     except OSError:
@@ -311,30 +297,26 @@ def _hash_source_candidate(
             filesystem,
         ):
             return _failure(
-                candidate,
-                classification,
+                source,
                 DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
             )
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_READ_FAILED,
         )
 
     try:
-        with source:
+        with binary_source:
             return _hash_open_source(
-                source,
-                candidate=candidate,
-                classification=classification,
+                binary_source,
+                source=source,
                 max_source_bytes=max_source_bytes,
                 pre_open=pre_open,
                 filesystem=filesystem,
             )
     except OSError:
         return _failure(
-            candidate,
-            classification,
+            source,
             DiscoveryFailureCategory.SOURCE_READ_FAILED,
         )
 
@@ -347,22 +329,21 @@ def _read_clock(clock: Clock) -> int:
 
 
 def hash_source_candidate(
-    candidate: TraversalCandidate,
-    classification: SourceClassification,
+    source: ClassifiedSourceCandidate,
     *,
-    settings: Settings,
+    max_source_bytes: int,
     filesystem: StableReadFileSystem | None = None,
     clock: Clock = time.monotonic_ns,
 ) -> VerifiedSourceSnapshot | DiscoveryFailure:
     """Hash one supported regular-file candidate as a stable byte snapshot."""
-    if not isinstance(candidate, TraversalCandidate):
-        raise TypeError("candidate must be a TraversalCandidate.")
-    if not isinstance(classification, SourceClassification):
-        raise TypeError("classification must be a SourceClassification.")
-    if classification.support is not SourceSupport.SUPPORTED:
+    if not isinstance(source, ClassifiedSourceCandidate):
+        raise TypeError("source must be a ClassifiedSourceCandidate.")
+    if source.classification.support is not SourceSupport.SUPPORTED:
         raise ValueError("classification must describe a supported source.")
-    if not isinstance(settings, Settings):
-        raise TypeError("settings must be Settings.")
+    if not is_strict_integer(max_source_bytes):
+        raise TypeError("max_source_bytes must be an integer.")
+    if max_source_bytes <= 0:
+        raise ValueError("max_source_bytes must be positive.")
     selected_filesystem = (
         _LOCAL_STABLE_READ_FILESYSTEM if filesystem is None else filesystem
     )
@@ -373,9 +354,8 @@ def hash_source_candidate(
 
     started_ns = _read_clock(clock)
     result = _hash_source_candidate(
-        candidate,
-        classification,
-        max_source_bytes=settings.ingest.max_source_bytes,
+        source,
+        max_source_bytes=max_source_bytes,
         filesystem=selected_filesystem,
     )
     finished_ns = _read_clock(clock)
@@ -388,7 +368,7 @@ def hash_source_candidate(
             __name__,
             "debug",
             "source_hashed",
-            source_ordinal=candidate.ordinal,
+            source_ordinal=source.candidate.ordinal,
             file_kind=DiscoveryFileKind.REGULAR_FILE.value,
             media_type=result.media_type,
             byte_count=result.byte_count,

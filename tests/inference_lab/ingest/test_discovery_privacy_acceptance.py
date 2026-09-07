@@ -69,9 +69,8 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
                 classification = classify_source_inventory(traversal)
                 source = classification.hashable_candidates[0]
                 snapshot = hash_source_candidate(
-                    source.candidate,
-                    source.classification,
-                    settings=fixture_settings(),
+                    source,
+                    max_source_bytes=fixture_settings().ingest.max_source_bytes,
                     clock=hashing_clock.__next__,
                 )
                 assert isinstance(snapshot, VerifiedSourceSnapshot)
