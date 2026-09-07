@@ -21,6 +21,8 @@ operational logs remain local in deployment.
   reader snapshots, restart recovery, and rollback.
 - [Evaluation dataset operations](evaluation.md): local validation,
   deterministic writing, held-out governance, and privacy boundaries.
+- [Corpus-audit runbook](corpus-audit.md): pin one corpus version, run the
+  aggregate audit locally, review limitations, and compare reruns.
 - [Backup and restore](backup-restore.md): recover persistent corpus state.
 
 Normative configuration, logging, and backup policy is defined in

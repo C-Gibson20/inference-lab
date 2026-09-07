@@ -4,6 +4,10 @@ The evaluation package exposes a Python library for creating and validating
 local evaluation datasets. Evaluation execution, result records, and quality
 reports are outside the current package boundary.
 
+The separate [corpus-audit runbook](corpus-audit.md) covers EVAL-02 aggregate
+coverage reports. It is intentionally distinct from question-set evaluation:
+the audit measures one pinned corpus version and never logs document payloads.
+
 ## Validate a dataset
 
 Always load a dataset through the public loader. It validates the manifest,

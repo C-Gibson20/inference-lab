@@ -1,0 +1,1102 @@
+"""Canonical JSON, Markdown, and checksum manifests for audit reports."""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import asdict, dataclass
+from decimal import ROUND_HALF_UP, Decimal
+from typing import cast
+
+from inference_lab._json import (
+    JsonObject,
+    JsonValue,
+    canonical_json_bytes,
+    canonical_json_text,
+    load_json_object,
+    require_exact_json_fields,
+)
+from inference_lab.evaluation.audit_contracts import (
+    AuditCoverage,
+    AuditDistribution,
+    AuditRate,
+    AuditSourceFormatCoverage,
+    AuditStructureKind,
+    CorpusAuditPolicy,
+)
+from inference_lab.evaluation.audit_reports import (
+    AUDIT_REPORT_SCHEMA_VERSION,
+    AuditAcquisitionReport,
+    AuditCoverageSummary,
+    AuditDiscoveryIdentity,
+    AuditIntegerSummary,
+    AuditOcrReport,
+    AuditOverallStatus,
+    AuditParseReport,
+    AuditPopulationCounts,
+    AuditReconciliation,
+    AuditRelationshipReport,
+    AuditSourceReport,
+    AuditSpanReport,
+    AuditStructureReport,
+    AuditToolIdentities,
+    CorpusAuditReport,
+    report_content_digest,
+)
+from inference_lab.ingest.discovery import (
+    DirectorySnapshotPolicy,
+    DiscoveryPolicy,
+    HiddenEntryPolicy,
+    NestedMountPolicy,
+    SourceSupport,
+    StableReadPolicy,
+    SymlinkPolicy,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AuditReportManifest:
+    """Checksum inventory for one immutable report's logical artefacts."""
+
+    schema_version: str
+    report_id: str
+    input_digest: str
+    report_digest: str
+    artifacts: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the manifest's schema version, identities, and artefact ordering."""
+        if self.schema_version != AUDIT_REPORT_SCHEMA_VERSION:
+            raise ValueError("unsupported audit manifest schema version.")
+        for value in (self.report_id, self.input_digest, self.report_digest):
+            if not isinstance(value, str) or not _is_sha256(value):
+                raise ValueError("manifest identities must be SHA-256 values.")
+        if self.artifacts != tuple(sorted(self.artifacts)):
+            raise ValueError("manifest artifacts must be ordered.")
+        if len(self.artifacts) != len({name for name, _ in self.artifacts}):
+            raise ValueError("manifest artifacts must be unique.")
+        for name, checksum in self.artifacts:
+            if not isinstance(name, str) or not name:
+                raise ValueError("manifest artifact names must be non-empty strings.")
+            if not _is_sha256(checksum):
+                raise ValueError("manifest artifact checksums must be SHA-256 values.")
+
+
+def serialise_audit_report(report: CorpusAuditReport) -> bytes:
+    """Return canonical UTF-8 JSON bytes for one validated report."""
+    if not isinstance(report, CorpusAuditReport):
+        raise TypeError("report must be a CorpusAuditReport.")
+    return canonical_json_bytes(cast(JsonObject, asdict(report)))
+
+
+def deserialise_audit_report(data: bytes) -> CorpusAuditReport:
+    """Decode and strictly validate canonical report JSON bytes."""
+    payload = load_json_object(data)
+    report = _decode_report(payload)
+    if serialise_audit_report(report) != data:
+        raise ValueError("audit report JSON is not canonical.")
+    if report.report_id != _expected_report_id(report):
+        raise ValueError("audit report identity digest does not match its contents.")
+    if report.report_digest != report_content_digest(report):
+        raise ValueError("audit report content digest does not match its contents.")
+    return report
+
+
+def render_audit_report(report: CorpusAuditReport) -> str:
+    """Render one validated aggregate-only report as deterministic Markdown."""
+    if not isinstance(report, CorpusAuditReport):
+        raise TypeError("report must be a CorpusAuditReport.")
+    lines = [
+        "# Corpus audit report",
+        "",
+        "## Identity",
+        "",
+        f"- Schema version: `{report.schema_version}`",
+        f"- Report ID: `{report.report_id}`",
+        f"- Input digest: `{report.input_digest}`",
+        f"- Report digest: `{report.report_digest}`",
+        f"- Corpus ID: `{report.corpus_id}`",
+        f"- Corpus version: `{report.corpus_version}`",
+        f"- Overall status: `{report.overall_status.value}`",
+        "",
+        "## Tools and policies",
+        "",
+        _table(
+            ("identity", "value"),
+            (
+                (
+                    "implementation",
+                    f"{report.tools.implementation}@{report.tools.implementation_version}",
+                ),
+                ("contract", report.tools.contract_version),
+                (
+                    "audit policy",
+                    f"{report.tools.policy.policy_name}@{report.tools.policy.policy_version}",
+                ),
+                ("availability policy", report.tools.policy.availability_version),
+                (
+                    "discovery policy",
+                    f"{report.tools.discovery.policy_name}@{report.tools.discovery.policy_version}",
+                ),
+                (
+                    "classifier",
+                    f"{report.tools.discovery.classifier_name}@{report.tools.discovery.classifier_version}",
+                ),
+                ("parser versions", ", ".join(report.tools.parser_versions) or "none"),
+                (
+                    "capability profiles",
+                    ", ".join(report.tools.capability_profiles) or "none",
+                ),
+            ),
+        ),
+        "",
+        "## Populations",
+        "",
+        _table(
+            ("population", "count"),
+            (
+                ("source files seen", report.populations.source_files_seen),
+                ("classified source files", report.populations.source_classified_files),
+                (
+                    "source traversal failures",
+                    report.populations.source_traversal_failures,
+                ),
+                ("corpus member versions", report.populations.member_versions),
+            ),
+        ),
+        "",
+        "## Source intake",
+        "",
+        _table(
+            ("media type", "support", "files", "bytes", "hashed", "identity"),
+            tuple(
+                (
+                    item.media_type,
+                    item.support.value,
+                    item.file_count,
+                    item.total_bytes,
+                    item.hashed_count,
+                    item.identity_count,
+                )
+                for item in report.source.formats
+            ),
+        ),
+        "",
+        "### Source sizes",
+        "",
+        _distribution_table(report.source.size_summary),
+        "",
+        "### Source failures",
+        "",
+        _count_table(report.source.failure_counts, "failure"),
+        "",
+        "## Parsing and fields",
+        "",
+        "### Parse statuses",
+        "",
+        _count_table(report.parse.status_counts, "status"),
+        "",
+        "### Parser versions",
+        "",
+        _count_table(report.parse.parser_counts, "parser"),
+        "",
+        "### Media types",
+        "",
+        _count_table(report.parse.media_type_counts, "media type"),
+        "",
+        "### Parse failures",
+        "",
+        _count_table(report.parse.failure_counts, "failure"),
+        "",
+        "### Field coverage",
+        "",
+        _coverage_table(report.parse.field_coverage),
+        "",
+        "### Numeric distributions",
+        "",
+        _summary_table(report.parse.numeric_summaries),
+        "",
+        "### Languages",
+        "",
+        _count_table(report.parse.language_counts, "language"),
+        "",
+        "### Token distributions by parser",
+        "",
+        _summary_table(report.parse.token_summaries),
+        "",
+        "## Acquisition status",
+        "",
+        _count_table(report.acquisition.status_counts, "status"),
+        "",
+        _coverage_table((("acquisition", report.acquisition.coverage),)),
+        "",
+        _table(
+            ("rate", "numerator", "denominator", "percentage"),
+            (
+                (
+                    "known-only",
+                    report.acquisition.known_only_rate.numerator,
+                    report.acquisition.known_only_rate.denominator,
+                    _percentage(report.acquisition.known_only_rate, report),
+                ),
+                (
+                    "complete-population",
+                    report.acquisition.population_rate.numerator,
+                    report.acquisition.population_rate.denominator,
+                    _percentage(report.acquisition.population_rate, report),
+                ),
+            ),
+        ),
+        "",
+        "## Relationships",
+        "",
+        _table(
+            ("metric", "value"),
+            (
+                ("duplicate edges", report.relationships.duplicate_edge_count),
+                (
+                    "duplicate participating members",
+                    report.relationships.duplicate_participating_members,
+                ),
+                ("duplicate groups", report.relationships.duplicate_group_count),
+                (
+                    "duplicate excess copies",
+                    report.relationships.duplicate_excess_copies,
+                ),
+                ("family count", report.relationships.family_count),
+                ("family documents", report.relationships.family_document_count),
+                ("family versions", report.relationships.family_version_count),
+                (
+                    "unassigned documents",
+                    report.relationships.unassigned_document_count,
+                ),
+                ("family candidates", report.relationships.family_candidate_count),
+                (
+                    "candidate families",
+                    report.relationships.family_candidate_family_count,
+                ),
+            ),
+        ),
+        "",
+        _table(
+            ("rate", "numerator", "denominator", "percentage"),
+            (
+                (
+                    "duplicate participating members",
+                    report.relationships.duplicate_participating_rate.numerator,
+                    report.relationships.duplicate_participating_rate.denominator,
+                    _percentage(
+                        report.relationships.duplicate_participating_rate, report
+                    ),
+                ),
+                (
+                    "duplicate excess copies",
+                    report.relationships.duplicate_excess_rate.numerator,
+                    report.relationships.duplicate_excess_rate.denominator,
+                    _percentage(report.relationships.duplicate_excess_rate, report),
+                ),
+            ),
+        ),
+        "",
+        "### Relationship distributions",
+        "",
+        _summary_table(
+            (
+                ("duplicate_group_size", report.relationships.duplicate_group_summary),
+                ("family_size", report.relationships.family_size_summary),
+            )
+        ),
+        "",
+        "## Structure and provenance",
+        "",
+        _coverage_table(
+            tuple((item.kind.value, item.coverage) for item in report.structures)
+        ),
+        "",
+        _summary_table(
+            tuple((item.kind.value, item.unit_summary) for item in report.structures)
+        ),
+        "",
+        _table(
+            ("structure", "present documents", "absent documents", "units"),
+            tuple(
+                (
+                    item.kind.value,
+                    item.present_documents,
+                    item.absent_documents,
+                    item.unit_summary.distribution.count,
+                )
+                for item in report.structures
+            ),
+        ),
+        "",
+        _table(
+            ("provenance metric", "value"),
+            (
+                ("source spans", report.spans.source_span_count),
+                ("page numbers", report.spans.page_number_count),
+                ("bounding boxes", report.spans.bounding_box_count),
+                ("zero-text pages", report.ocr.zero_text_page_count),
+                ("mixed-text documents", report.ocr.mixed_text_documents),
+                ("pages with layout", report.ocr.pages_with_layout),
+                ("pages without layout", report.ocr.pages_without_layout),
+                ("pages with boxes", report.ocr.pages_with_boxes),
+                ("pages without boxes", report.ocr.pages_without_boxes),
+            ),
+        ),
+        "",
+        "### Provenance distributions",
+        "",
+        _summary_table(
+            (
+                ("blocks", report.spans.block_summary),
+                ("page_characters", report.ocr.page_character_summary),
+            )
+        ),
+        "",
+        "## Limitations",
+        "",
+        *(
+            (f"- `{code}`" for code in report.limitations)
+            if report.limitations
+            else ("- None recorded.",)
+        ),
+        "",
+        "## Reconciliation",
+        "",
+        _table(
+            ("check", "value"),
+            (
+                ("source files", _yes_no(report.reconciliation.source_files_reconcile)),
+                ("source format files", report.reconciliation.source_format_files),
+                (
+                    "source traversal failures",
+                    report.reconciliation.source_traversal_failures,
+                ),
+                (
+                    "member versions",
+                    _yes_no(report.reconciliation.member_versions_reconcile),
+                ),
+                (
+                    "parse observation slots",
+                    report.reconciliation.parse_observation_slots,
+                ),
+                (
+                    "acquisition observation slots",
+                    report.reconciliation.acquisition_observation_slots,
+                ),
+                (
+                    "section populations",
+                    _yes_no(report.reconciliation.section_populations_reconcile),
+                ),
+            ),
+        ),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def build_audit_report_manifest(
+    report: CorpusAuditReport,
+    report_json: bytes | None = None,
+    report_markdown: str | None = None,
+) -> AuditReportManifest:
+    """Build the deterministic checksum inventory used by publication."""
+    if not isinstance(report, CorpusAuditReport):
+        raise TypeError("report must be a CorpusAuditReport.")
+    json_bytes = serialise_audit_report(report) if report_json is None else report_json
+    markdown = (
+        render_audit_report(report) if report_markdown is None else report_markdown
+    )
+    if not isinstance(json_bytes, bytes) or not isinstance(markdown, str):
+        raise TypeError("report artefacts must be bytes and text.")
+    expected_json = serialise_audit_report(report)
+    expected_markdown = render_audit_report(report)
+    if json_bytes != expected_json or markdown != expected_markdown:
+        raise ValueError("report artefacts do not match the validated report.")
+    json_digest = _sha256(json_bytes)
+    markdown_bytes = markdown.encode("utf-8")
+    return AuditReportManifest(
+        schema_version=AUDIT_REPORT_SCHEMA_VERSION,
+        report_id=report.report_id,
+        input_digest=report.input_digest,
+        report_digest=json_digest,
+        artifacts=(
+            ("report.json", json_digest),
+            ("report.md", _sha256(markdown_bytes)),
+        ),
+    )
+
+
+def serialise_audit_report_manifest(manifest: AuditReportManifest) -> bytes:
+    """Return canonical UTF-8 JSON bytes for a report checksum manifest."""
+    if not isinstance(manifest, AuditReportManifest):
+        raise TypeError("manifest must be an AuditReportManifest.")
+    return canonical_json_bytes(cast(JsonObject, asdict(manifest)))
+
+
+def _decode_report(payload: JsonObject) -> CorpusAuditReport:
+    require_exact_json_fields(
+        payload,
+        frozenset(
+            {
+                "schema_version",
+                "report_id",
+                "input_digest",
+                "report_digest",
+                "corpus_id",
+                "corpus_version",
+                "tools",
+                "overall_status",
+                "populations",
+                "source",
+                "parse",
+                "acquisition",
+                "relationships",
+                "structures",
+                "spans",
+                "ocr",
+                "limitations",
+                "reconciliation",
+            }
+        ),
+    )
+    return CorpusAuditReport(
+        schema_version=_string(payload["schema_version"]),
+        report_id=_string(payload["report_id"]),
+        input_digest=_string(payload["input_digest"]),
+        report_digest=_string(payload["report_digest"]),
+        corpus_id=_string(payload["corpus_id"]),
+        corpus_version=_string(payload["corpus_version"]),
+        tools=_decode_tools(_object(payload["tools"])),
+        overall_status=AuditOverallStatus(_string(payload["overall_status"])),
+        populations=_decode_populations(_object(payload["populations"])),
+        source=_decode_source(_object(payload["source"])),
+        parse=_decode_parse(_object(payload["parse"])),
+        acquisition=_decode_acquisition(_object(payload["acquisition"])),
+        relationships=_decode_relationships(_object(payload["relationships"])),
+        structures=tuple(
+            _decode_structure(_object(item)) for item in _array(payload["structures"])
+        ),
+        spans=_decode_spans(_object(payload["spans"])),
+        ocr=_decode_ocr(_object(payload["ocr"])),
+        limitations=tuple(_string(item) for item in _array(payload["limitations"])),
+        reconciliation=_decode_reconciliation(_object(payload["reconciliation"])),
+    )
+
+
+def _decode_tools(payload: JsonObject) -> AuditToolIdentities:
+    require_exact_json_fields(
+        payload,
+        frozenset(
+            {
+                "implementation",
+                "implementation_version",
+                "contract_version",
+                "policy",
+                "discovery",
+                "parser_versions",
+                "capability_profiles",
+            }
+        ),
+    )
+    return AuditToolIdentities(
+        implementation=_string(payload["implementation"]),
+        implementation_version=_string(payload["implementation_version"]),
+        contract_version=_string(payload["contract_version"]),
+        policy=_decode_policy(_object(payload["policy"])),
+        discovery=_decode_discovery(_object(payload["discovery"])),
+        parser_versions=tuple(
+            _string(item) for item in _array(payload["parser_versions"])
+        ),
+        capability_profiles=tuple(
+            _string(item) for item in _array(payload["capability_profiles"])
+        ),
+    )
+
+
+def _decode_policy(payload: JsonObject) -> CorpusAuditPolicy:
+    require_exact_json_fields(
+        payload,
+        frozenset(
+            {
+                "policy_name",
+                "policy_version",
+                "availability_version",
+                "rate_decimal_places",
+                "rate_rounding",
+                "quantile_method",
+                "duplicate_grouping_algorithm",
+                "rendering_version",
+            }
+        ),
+    )
+    return CorpusAuditPolicy(
+        policy_name=_string(payload["policy_name"]),
+        policy_version=_string(payload["policy_version"]),
+        availability_version=_string(payload["availability_version"]),
+        rate_decimal_places=_integer(payload["rate_decimal_places"]),
+        rate_rounding=_string(payload["rate_rounding"]),
+        quantile_method=_string(payload["quantile_method"]),
+        duplicate_grouping_algorithm=_string(payload["duplicate_grouping_algorithm"]),
+        rendering_version=_string(payload["rendering_version"]),
+    )
+
+
+def _decode_discovery(payload: JsonObject) -> AuditDiscoveryIdentity:
+    fields = (
+        "policy_name",
+        "policy_version",
+        "symlink_policy",
+        "nested_mount_policy",
+        "hidden_entry_policy",
+        "directory_snapshot_policy",
+        "stable_read_policy",
+        "classifier_name",
+        "classifier_version",
+    )
+    require_exact_json_fields(payload, frozenset(fields))
+    policy = DiscoveryPolicy(
+        policy_name=_string(payload["policy_name"]),
+        policy_version=_string(payload["policy_version"]),
+        symlink_policy=SymlinkPolicy(_string(payload["symlink_policy"])),
+        nested_mount_policy=NestedMountPolicy(_string(payload["nested_mount_policy"])),
+        hidden_entry_policy=HiddenEntryPolicy(_string(payload["hidden_entry_policy"])),
+        directory_snapshot_policy=DirectorySnapshotPolicy(
+            _string(payload["directory_snapshot_policy"])
+        ),
+        stable_read_policy=StableReadPolicy(_string(payload["stable_read_policy"])),
+        classifier_name=_string(payload["classifier_name"]),
+        classifier_version=_string(payload["classifier_version"]),
+    )
+    return AuditDiscoveryIdentity.from_policy(policy)
+
+
+def _decode_source(payload: JsonObject) -> AuditSourceReport:
+    require_exact_json_fields(
+        payload,
+        frozenset(
+            {
+                "files_seen",
+                "classified_files",
+                "traversal_failures",
+                "formats",
+                "size_summary",
+                "failure_counts",
+                "reconciles",
+            }
+        ),
+    )
+    return AuditSourceReport(
+        files_seen=_integer(payload["files_seen"]),
+        classified_files=_integer(payload["classified_files"]),
+        traversal_failures=_integer(payload["traversal_failures"]),
+        formats=tuple(
+            _decode_format(_object(item)) for item in _array(payload["formats"])
+        ),
+        size_summary=_decode_summary(_object(payload["size_summary"])),
+        failure_counts=_decode_count_pairs(payload["failure_counts"]),
+        reconciles=_boolean(payload["reconciles"]),
+    )
+
+
+def _decode_format(payload: JsonObject) -> AuditSourceFormatCoverage:
+    require_exact_json_fields(
+        payload,
+        frozenset(
+            {
+                "media_type",
+                "support",
+                "file_count",
+                "total_bytes",
+                "hashed_count",
+                "identity_count",
+            }
+        ),
+    )
+    return AuditSourceFormatCoverage(
+        media_type=_string(payload["media_type"]),
+        support=SourceSupport(_string(payload["support"])),
+        file_count=_integer(payload["file_count"]),
+        total_bytes=_integer(payload["total_bytes"]),
+        hashed_count=_integer(payload["hashed_count"]),
+        identity_count=_integer(payload["identity_count"]),
+    )
+
+
+def _decode_parse(payload: JsonObject) -> AuditParseReport:
+    require_exact_json_fields(
+        payload,
+        frozenset(
+            {
+                "status_counts",
+                "parser_counts",
+                "media_type_counts",
+                "failure_counts",
+                "field_coverage",
+                "language_counts",
+                "numeric_summaries",
+                "token_summaries",
+            }
+        ),
+    )
+    return AuditParseReport(
+        status_counts=_decode_count_pairs(payload["status_counts"]),
+        parser_counts=_decode_count_pairs(payload["parser_counts"]),
+        media_type_counts=_decode_count_pairs(payload["media_type_counts"]),
+        failure_counts=_decode_count_pairs(payload["failure_counts"]),
+        field_coverage=_decode_coverage_pairs(payload["field_coverage"]),
+        language_counts=_decode_count_pairs(payload["language_counts"]),
+        numeric_summaries=_decode_summary_pairs(payload["numeric_summaries"]),
+        token_summaries=_decode_summary_pairs(payload["token_summaries"]),
+    )
+
+
+def _decode_acquisition(payload: JsonObject) -> AuditAcquisitionReport:
+    require_exact_json_fields(
+        payload,
+        frozenset({"status_counts", "coverage", "known_only_rate", "population_rate"}),
+    )
+    return AuditAcquisitionReport(
+        status_counts=_decode_count_pairs(payload["status_counts"]),
+        coverage=_decode_coverage_summary(_object(payload["coverage"])),
+        known_only_rate=_decode_rate(_object(payload["known_only_rate"])),
+        population_rate=_decode_rate(_object(payload["population_rate"])),
+    )
+
+
+def _decode_structure(payload: JsonObject) -> AuditStructureReport:
+    require_exact_json_fields(
+        payload,
+        frozenset(
+            {
+                "kind",
+                "coverage",
+                "present_documents",
+                "absent_documents",
+                "unit_summary",
+            }
+        ),
+    )
+    return AuditStructureReport(
+        kind=AuditStructureKind(_string(payload["kind"])),
+        coverage=_decode_coverage_summary(_object(payload["coverage"])),
+        present_documents=_integer(payload["present_documents"]),
+        absent_documents=_integer(payload["absent_documents"]),
+        unit_summary=_decode_summary(_object(payload["unit_summary"])),
+    )
+
+
+def _decode_spans(payload: JsonObject) -> AuditSpanReport:
+    require_exact_json_fields(
+        payload,
+        frozenset(
+            {
+                "block_summary",
+                "source_span_count",
+                "page_number_count",
+                "bounding_box_count",
+                "document_coverage",
+            }
+        ),
+    )
+    return AuditSpanReport(
+        block_summary=_decode_summary(_object(payload["block_summary"])),
+        source_span_count=_integer(payload["source_span_count"]),
+        page_number_count=_integer(payload["page_number_count"]),
+        bounding_box_count=_integer(payload["bounding_box_count"]),
+        document_coverage=_decode_coverage_summary(
+            _object(payload["document_coverage"])
+        ),
+    )
+
+
+def _decode_ocr(payload: JsonObject) -> AuditOcrReport:
+    fields = frozenset(
+        {
+            "coverage",
+            "zero_text_page_count",
+            "page_character_summary",
+            "mixed_text_documents",
+            "pages_with_layout",
+            "pages_without_layout",
+            "pages_with_boxes",
+            "pages_without_boxes",
+        }
+    )
+    require_exact_json_fields(payload, fields)
+    return AuditOcrReport(
+        coverage=_decode_coverage_summary(_object(payload["coverage"])),
+        zero_text_page_count=_integer(payload["zero_text_page_count"]),
+        page_character_summary=_decode_summary(
+            _object(payload["page_character_summary"])
+        ),
+        mixed_text_documents=_integer(payload["mixed_text_documents"]),
+        pages_with_layout=_integer(payload["pages_with_layout"]),
+        pages_without_layout=_integer(payload["pages_without_layout"]),
+        pages_with_boxes=_integer(payload["pages_with_boxes"]),
+        pages_without_boxes=_integer(payload["pages_without_boxes"]),
+    )
+
+
+def _decode_relationships(payload: JsonObject) -> AuditRelationshipReport:
+    fields = frozenset(
+        {
+            "duplicate_edge_count",
+            "duplicate_participating_members",
+            "duplicate_group_count",
+            "duplicate_group_summary",
+            "duplicate_excess_copies",
+            "duplicate_participating_rate",
+            "duplicate_excess_rate",
+            "family_count",
+            "family_document_count",
+            "family_version_count",
+            "unassigned_document_count",
+            "family_size_summary",
+            "document_level_memberships",
+            "version_level_memberships",
+            "family_candidate_count",
+            "family_candidate_family_count",
+        }
+    )
+    require_exact_json_fields(payload, fields)
+    return AuditRelationshipReport(
+        duplicate_edge_count=_integer(payload["duplicate_edge_count"]),
+        duplicate_participating_members=_integer(
+            payload["duplicate_participating_members"]
+        ),
+        duplicate_group_count=_integer(payload["duplicate_group_count"]),
+        duplicate_group_summary=_decode_summary(
+            _object(payload["duplicate_group_summary"])
+        ),
+        duplicate_excess_copies=_integer(payload["duplicate_excess_copies"]),
+        duplicate_participating_rate=_decode_rate(
+            _object(payload["duplicate_participating_rate"])
+        ),
+        duplicate_excess_rate=_decode_rate(_object(payload["duplicate_excess_rate"])),
+        family_count=_integer(payload["family_count"]),
+        family_document_count=_integer(payload["family_document_count"]),
+        family_version_count=_integer(payload["family_version_count"]),
+        unassigned_document_count=_integer(payload["unassigned_document_count"]),
+        family_size_summary=_decode_summary(_object(payload["family_size_summary"])),
+        document_level_memberships=_integer(payload["document_level_memberships"]),
+        version_level_memberships=_integer(payload["version_level_memberships"]),
+        family_candidate_count=_integer(payload["family_candidate_count"]),
+        family_candidate_family_count=_integer(
+            payload["family_candidate_family_count"]
+        ),
+    )
+
+
+def _decode_populations(payload: JsonObject) -> AuditPopulationCounts:
+    fields = frozenset(
+        {
+            "source_files_seen",
+            "source_classified_files",
+            "source_traversal_failures",
+            "member_versions",
+        }
+    )
+    require_exact_json_fields(payload, fields)
+    return AuditPopulationCounts(
+        source_files_seen=_integer(payload["source_files_seen"]),
+        source_classified_files=_integer(payload["source_classified_files"]),
+        source_traversal_failures=_integer(payload["source_traversal_failures"]),
+        member_versions=_integer(payload["member_versions"]),
+    )
+
+
+def _decode_reconciliation(payload: JsonObject) -> AuditReconciliation:
+    fields = frozenset(
+        {
+            "source_files_reconcile",
+            "source_format_files",
+            "source_traversal_failures",
+            "member_versions_reconcile",
+            "parse_observation_slots",
+            "acquisition_observation_slots",
+            "section_populations_reconcile",
+        }
+    )
+    require_exact_json_fields(payload, fields)
+    return AuditReconciliation(
+        source_files_reconcile=_boolean(payload["source_files_reconcile"]),
+        source_format_files=_integer(payload["source_format_files"]),
+        source_traversal_failures=_integer(payload["source_traversal_failures"]),
+        member_versions_reconcile=_boolean(payload["member_versions_reconcile"]),
+        parse_observation_slots=_integer(payload["parse_observation_slots"]),
+        acquisition_observation_slots=_integer(
+            payload["acquisition_observation_slots"]
+        ),
+        section_populations_reconcile=_boolean(
+            payload["section_populations_reconcile"]
+        ),
+    )
+
+
+def _decode_summary(payload: JsonObject) -> AuditIntegerSummary:
+    require_exact_json_fields(payload, frozenset({"distribution", "quantiles"}))
+    quantiles = []
+    for item in _array(payload["quantiles"]):
+        pair = _array(item)
+        if len(pair) != 2:
+            raise ValueError("quantile entries must contain two values.")
+        quantiles.append((_string(pair[0]), _optional_integer(pair[1])))
+    return AuditIntegerSummary(
+        distribution=_decode_distribution(_object(payload["distribution"])),
+        quantiles=tuple(quantiles),
+    )
+
+
+def _decode_distribution(payload: JsonObject) -> AuditDistribution:
+    require_exact_json_fields(
+        payload, frozenset({"count", "total", "minimum", "maximum", "zero_count"})
+    )
+    return AuditDistribution(
+        count=_integer(payload["count"]),
+        total=_integer(payload["total"]),
+        minimum=_optional_integer(payload["minimum"]),
+        maximum=_optional_integer(payload["maximum"]),
+        zero_count=_integer(payload["zero_count"]),
+    )
+
+
+def _decode_coverage_summary(payload: JsonObject) -> AuditCoverageSummary:
+    require_exact_json_fields(payload, frozenset({"coverage", "reasons"}))
+    return AuditCoverageSummary(
+        coverage=_decode_coverage(_object(payload["coverage"])),
+        reasons=_decode_count_pairs(payload["reasons"]),
+    )
+
+
+def _decode_coverage_pairs(
+    value: JsonValue,
+) -> tuple[tuple[str, AuditCoverageSummary], ...]:
+    pairs = []
+    for item in _array(value):
+        pair = _array(item)
+        if len(pair) != 2:
+            raise ValueError("coverage entries must contain two values.")
+        pairs.append((_string(pair[0]), _decode_coverage_summary(_object(pair[1]))))
+    return tuple(pairs)
+
+
+def _decode_summary_pairs(
+    value: JsonValue,
+) -> tuple[tuple[str, AuditIntegerSummary], ...]:
+    pairs = []
+    for item in _array(value):
+        pair = _array(item)
+        if len(pair) != 2:
+            raise ValueError("summary entries must contain two values.")
+        pairs.append((_string(pair[0]), _decode_summary(_object(pair[1]))))
+    return tuple(pairs)
+
+
+def _decode_count_pairs(value: JsonValue) -> tuple[tuple[str, int], ...]:
+    pairs = []
+    for item in _array(value):
+        pair = _array(item)
+        if len(pair) != 2:
+            raise ValueError("count entries must contain two values.")
+        pairs.append((_string(pair[0]), _integer(pair[1])))
+    return tuple(pairs)
+
+
+def _decode_coverage(payload: JsonObject) -> AuditCoverage:
+    fields = frozenset(
+        {
+            "observed",
+            "observed_absent",
+            "unavailable",
+            "missing",
+            "failed",
+            "invalid",
+            "population",
+        }
+    )
+    require_exact_json_fields(payload, fields)
+    return AuditCoverage(
+        observed=_integer(payload["observed"]),
+        observed_absent=_integer(payload["observed_absent"]),
+        unavailable=_integer(payload["unavailable"]),
+        missing=_integer(payload["missing"]),
+        failed=_integer(payload["failed"]),
+        invalid=_integer(payload["invalid"]),
+        population=_integer(payload["population"]),
+    )
+
+
+def _decode_rate(payload: JsonObject) -> AuditRate:
+    require_exact_json_fields(payload, frozenset({"numerator", "denominator"}))
+    return AuditRate(
+        numerator=_integer(payload["numerator"]),
+        denominator=_integer(payload["denominator"]),
+    )
+
+
+def _object(value: JsonValue) -> JsonObject:
+    if not isinstance(value, dict):
+        raise ValueError("value must be a JSON object.")
+    return value
+
+
+def _array(value: JsonValue) -> list[JsonValue]:
+    if not isinstance(value, list):
+        raise ValueError("value must be a JSON array.")
+    return value
+
+
+def _string(value: JsonValue) -> str:
+    if not isinstance(value, str):
+        raise ValueError("value must be a JSON string.")
+    return value
+
+
+def _integer(value: JsonValue) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("value must be a JSON integer.")
+    return value
+
+
+def _optional_integer(value: JsonValue) -> int | None:
+    return None if value is None else _integer(value)
+
+
+def _boolean(value: JsonValue) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError("value must be a JSON boolean.")
+    return value
+
+
+def _expected_report_id(report: CorpusAuditReport) -> str:
+    payload = {
+        "schema_version": report.schema_version,
+        "corpus_id": report.corpus_id,
+        "corpus_version": report.corpus_version,
+        "input_digest": report.input_digest,
+        "implementation": report.tools.implementation,
+        "implementation_version": report.tools.implementation_version,
+        "contract_version": report.tools.contract_version,
+        "policy": asdict(report.tools.policy),
+        "capability_profiles": list(report.tools.capability_profiles),
+    }
+    encoded = canonical_json_text(cast(JsonObject, payload)).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _table(headers: tuple[str, ...], rows: tuple[tuple[object, ...], ...]) -> str:
+    head = "| " + " | ".join(_markdown(value) for value in headers) + " |"
+    separator = "| " + " | ".join("---" for _ in headers) + " |"
+    body = ["| " + " | ".join(_markdown(value) for value in row) + " |" for row in rows]
+    return "\n".join((head, separator, *body))
+
+
+def _count_table(values: tuple[tuple[str, int], ...], label: str) -> str:
+    return _table((label, "count"), tuple((key, value) for key, value in values))
+
+
+def _coverage_table(
+    values: tuple[tuple[str, AuditCoverageSummary], ...],
+) -> str:
+    return _table(
+        (
+            "field",
+            "observed",
+            "absent",
+            "unavailable",
+            "missing",
+            "failed",
+            "invalid",
+            "population",
+            "reasons",
+        ),
+        tuple(
+            (
+                key,
+                summary.coverage.observed,
+                summary.coverage.observed_absent,
+                summary.coverage.unavailable,
+                summary.coverage.missing,
+                summary.coverage.failed,
+                summary.coverage.invalid,
+                summary.coverage.population,
+                ", ".join(f"{reason}={count}" for reason, count in summary.reasons)
+                or "none",
+            )
+            for key, summary in sorted(values, key=lambda item: item[0])
+        ),
+    )
+
+
+def _summary_table(values: tuple[tuple[str, AuditIntegerSummary], ...]) -> str:
+    return _table(
+        (
+            "field",
+            "count",
+            "total",
+            "minimum",
+            "maximum",
+            "zero",
+            "p50",
+            "p90",
+            "p95",
+            "p99",
+        ),
+        tuple(
+            (
+                key,
+                summary.distribution.count,
+                summary.distribution.total,
+                summary.distribution.minimum,
+                summary.distribution.maximum,
+                summary.distribution.zero_count,
+                *dict(summary.quantiles).values(),
+            )
+            for key, summary in sorted(values, key=lambda item: item[0])
+        ),
+    )
+
+
+def _distribution_table(summary: AuditIntegerSummary) -> str:
+    return _summary_table((("source_bytes", summary),))
+
+
+def _markdown(value: object) -> str:
+    if value is None:
+        return "null"
+    return str(value).replace("|", "\\|")
+
+
+def _yes_no(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def _percentage(rate: AuditRate, report: CorpusAuditReport) -> str:
+    if rate.denominator == 0:
+        return "null"
+    places = report.tools.policy.rate_decimal_places
+    quantum = Decimal(1).scaleb(-places)
+    value = (Decimal(rate.numerator * 100) / Decimal(rate.denominator)).quantize(
+        quantum,
+        rounding=ROUND_HALF_UP,
+    )
+    return f"{value:.{places}f}%"
+
+
+def _is_sha256(value: str) -> bool:
+    return (
+        value.startswith("sha256:")
+        and len(value) == len("sha256:") + 64
+        and all(
+            character in "0123456789abcdef"
+            for character in value.removeprefix("sha256:")
+        )
+    )
+
+
+def _sha256(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
