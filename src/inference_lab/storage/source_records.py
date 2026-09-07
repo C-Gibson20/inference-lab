@@ -21,6 +21,15 @@ _MEDIA_TYPE: Final = re.compile(
 )
 
 
+def build_source_blob_storage_key(content_hash: ContentHash) -> str:
+    """Return the canonical relative key for immutable managed source bytes."""
+    if not isinstance(content_hash, ContentHash):
+        raise TypeError("content_hash must be a ContentHash.")
+    if content_hash.algorithm is not HashAlgorithm.SHA256:
+        raise ValueError("managed source blobs require a SHA-256 content hash.")
+    return f"sha256/{content_hash.digest[:2]}/{content_hash.digest}"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SourceArtefact:
     """Describe one immutable original held by managed source storage."""

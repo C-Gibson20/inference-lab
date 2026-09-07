@@ -8,6 +8,7 @@ from inference_lab.storage import (
     CURRENT_SOURCE_RECORD_SCHEMA_VERSION,
     SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS,
     SourceArtefact,
+    build_source_blob_storage_key,
     validate_source_record_schema_version,
 )
 from tests.inference_lab.storage.source_fixtures import (
@@ -35,6 +36,18 @@ def test_source_record_schema_version_is_explicit_and_supported() -> None:
     assert CURRENT_SOURCE_RECORD_SCHEMA_VERSION == "1.0.0"
     assert SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS == frozenset({"1.0.0"})
     assert validate_source_record_schema_version("1.0.0") == "1.0.0"
+
+
+def test_public_storage_key_builder_is_deterministic_and_content_addressed() -> None:
+    key = build_source_blob_storage_key(SOURCE_HASH)
+
+    assert key == f"sha256/{SOURCE_HASH.digest[:2]}/{SOURCE_HASH.digest}"
+    assert DOCUMENT_ID.as_str() not in key
+
+
+def test_public_storage_key_builder_rejects_wrong_runtime_type() -> None:
+    with pytest.raises(TypeError, match="ContentHash"):
+        build_source_blob_storage_key(object())  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("value", [None, 1, True])
