@@ -83,6 +83,7 @@ from inference_lab.ingest.identity_resolution import (
 )
 from inference_lab.ingest.normalisation import normalise_source_text
 from inference_lab.ingest.outcomes import ParseOutcome, ParseStatus
+from inference_lab.ingest.parse_persistence import ParsePersistenceRequest
 from inference_lab.ingest.parser import (
     NormalisedText,
     ParsedDocument,
@@ -154,6 +155,7 @@ __all__ = [
     "NormalisedText",
     "ObservationMatchKind",
     "ParseOutcome",
+    "ParsePersistenceRequest",
     "ParseStatus",
     "ParsedDocument",
     "Parser",
