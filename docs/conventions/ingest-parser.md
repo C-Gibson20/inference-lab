@@ -83,6 +83,15 @@ normalisation versions use canonical Semantic Versioning, including optional
 prerelease and build metadata. These restrictions keep the combined parser
 version unambiguous and safe to use in deterministic identity derivation.
 
+## Chunking handoff
+
+ING-04 consumes the validated `ParsedDocument` as its canonical source and
+structure input. It preserves the parser's decoded Unicode source-coordinate
+contract while producing deterministic retrieval chunks, clipped source
+references, and derived-record lineage. The parser does not choose chunk
+windows, tokeniser policy, overlap, or chunk persistence. See the
+[chunking conventions](chunking.md) for that downstream contract.
+
 ### Failure handling and logging
 
 The baseline reports named failures for invalid input, oversized source,

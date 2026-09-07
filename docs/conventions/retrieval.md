@@ -27,6 +27,12 @@ link retains `DocumentId`, `DocumentVersionId`, and `SourceSpanId`. Original
 passages, structured records, and generated summaries remain distinguishable;
 kind, rank, and score never prove claim support.
 
+For baseline passage retrieval, ING-04 supplies the exact immutable chunk text,
+record identity, token count, and source-linked ranges. Retrieval indexes and
+filters those chunks within the selected corpus version; it does not rewrite
+chunk content or infer new source locations. See the [chunking conventions](chunking.md)
+for the producer contract.
+
 Every channel contribution has a positive channel-local rank. A raw score is
 optional, and when present it must have a non-empty channel-owned semantics
 label and remains uninterpreted. Scores from different channels are not

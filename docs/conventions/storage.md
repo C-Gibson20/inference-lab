@@ -401,6 +401,9 @@ messages.
 
 - **ING-03** maps the ingest parser contract into the storage-owned aggregate
   and records target-corpus membership. Storage does not import ingest types.
+- **ING-04** produces storage-neutral canonical chunks and lineage. ING-05
+  owns their persistence, checkpointing, membership revalidation, and
+  corpus-version publication. See the [chunking conventions](chunking.md).
 - **STOR-03** publishes immutable corpus generations and applies version-scoped
   visibility to the records defined here.
 - **SERV-04** resolves accepted citations to stored text ranges and optional

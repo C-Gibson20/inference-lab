@@ -13,7 +13,8 @@ but its consistency boundary must remain explicit per corpus.
   - Document identities and versions.
   - Corpus identity and explicit document/version membership.
   - Corpus versions.
-  - Chunks, provenance, source locations, and lineage.
+  - Canonical chunks, provenance, source locations, and lineage. Chunk payloads
+    and identities follow the [chunking conventions](chunking.md).
   - Schema and migration state.
 - Persistent indexes:
   - Lexical index.

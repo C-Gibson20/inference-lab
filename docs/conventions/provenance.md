@@ -218,6 +218,13 @@ record. Validation also rejects missing source spans, source-span/document-
 version mismatches, missing parent or child records, duplicate records or
 edges, self-links, and direct or indirect cycles.
 
+ING-04 uses these contracts directly for chunk records: every non-empty chunk
+has one or more clipped source-span anchors, and its canonical payload,
+producing components, configuration identity, output digest, and derivation
+fingerprint are validated as one immutable record. See the
+[chunking conventions](chunking.md) for the chunk-specific identity and
+source-navigation rules.
+
 ## Immutable versions and supersession
 
 A `record_id` names one immutable derived-record version. Changing its domain
