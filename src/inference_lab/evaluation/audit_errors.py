@@ -28,3 +28,11 @@ class AuditContractError(ValueError):
         self.category = category
         self.stage = "contract"
         self.retryable = False
+
+
+class AuditPublicationError(OSError):
+    """Report a local publication failure without exposing filesystem details."""
+
+    def __init__(self) -> None:
+        """Create a fixed-message publication error."""
+        super().__init__("audit report publication failed")

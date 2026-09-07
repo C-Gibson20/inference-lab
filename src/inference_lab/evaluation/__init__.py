@@ -40,7 +40,9 @@ from inference_lab.evaluation.audit_contracts import (
 from inference_lab.evaluation.audit_errors import (
     AuditContractError,
     AuditErrorCategory,
+    AuditPublicationError,
 )
+from inference_lab.evaluation.audit_report_publication import publish_audit_report
 from inference_lab.evaluation.audit_report_serialisation import (
     AuditReportManifest,
     build_audit_report_manifest,
@@ -137,6 +139,7 @@ __all__ = [
     "AuditParseReport",
     "AuditParsedDocumentFacts",
     "AuditPopulationCounts",
+    "AuditPublicationError",
     "AuditRate",
     "AuditReconciliation",
     "AuditRelationshipInventory",
@@ -184,6 +187,7 @@ __all__ = [
     "generate_splits",
     "load_dataset",
     "parser_capability_profile",
+    "publish_audit_report",
     "render_audit_report",
     "report_content_digest",
     "serialise_audit_report",
