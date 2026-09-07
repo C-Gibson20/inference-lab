@@ -88,6 +88,12 @@ from inference_lab.ingest.parse_mapping import (
     map_parse_persistence_request,
 )
 from inference_lab.ingest.parse_persistence import ParsePersistenceRequest
+from inference_lab.ingest.parse_reconstruction import (
+    ParseReconstructionError,
+    ParseReconstructionErrorCategory,
+    ReconstructedParseOutcome,
+    reconstruct_parse_outcome,
+)
 from inference_lab.ingest.parser import (
     NormalisedText,
     ParsedDocument,
@@ -169,6 +175,8 @@ __all__ = [
     "PageRotation",
     "ParseOutcome",
     "ParsePersistenceRequest",
+    "ParseReconstructionError",
+    "ParseReconstructionErrorCategory",
     "ParseStatus",
     "ParsedDocument",
     "Parser",
@@ -181,6 +189,7 @@ __all__ = [
     "ParserInput",
     "ParserInputError",
     "ParserVersion",
+    "ReconstructedParseOutcome",
     "SourceClassification",
     "SourceClassifierRegistry",
     "SourceClassifierRule",
@@ -222,6 +231,7 @@ __all__ = [
     "persist_discovered_source_identities",
     "persist_discovered_source_identity",
     "prepare_text",
+    "reconstruct_parse_outcome",
     "resolve_discovered_source_identity",
     "resolve_source_observation",
     "serialise_parsed_document",
