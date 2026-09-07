@@ -4,7 +4,7 @@ from enum import StrEnum
 
 
 class AuditErrorCategory(StrEnum):
-    """Closed categories for invalid corpus-audit inputs."""
+    """Closed categories for corpus-audit contract and operation failures."""
 
     INVALID_INPUT = "invalid_input"
     CORPUS_MISMATCH = "corpus_mismatch"
@@ -15,6 +15,8 @@ class AuditErrorCategory(StrEnum):
     RELATIONSHIP_OUTSIDE_SCOPE = "relationship_outside_scope"
     INVALID_POLICY = "invalid_policy"
     INVALID_ORDERING = "invalid_ordering"
+    AGGREGATION_FAILURE = "aggregation_failure"
+    PUBLICATION_FAILURE = "publication_failure"
 
 
 class AuditContractError(ValueError):
@@ -27,4 +29,26 @@ class AuditContractError(ValueError):
         super().__init__(category.value)
         self.category = category
         self.stage = "contract"
+        self.retryable = False
+
+
+class AuditAggregationError(RuntimeError):
+    """Report an audit aggregation failure without retaining its cause."""
+
+    def __init__(self) -> None:
+        """Create a fixed-message, non-retryable aggregation error."""
+        super().__init__("corpus audit aggregation failed")
+        self.category = AuditErrorCategory.AGGREGATION_FAILURE
+        self.stage = "aggregation"
+        self.retryable = False
+
+
+class AuditPublicationError(OSError):
+    """Report a local publication failure without exposing filesystem details."""
+
+    def __init__(self) -> None:
+        """Create a fixed-message publication error."""
+        super().__init__("audit report publication failed")
+        self.category = AuditErrorCategory.PUBLICATION_FAILURE
+        self.stage = "publication"
         self.retryable = False

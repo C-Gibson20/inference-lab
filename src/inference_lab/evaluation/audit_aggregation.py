@@ -586,7 +586,7 @@ def _aggregate_relationships(request: CorpusAuditRequest) -> _RelationshipAggreg
         family_candidate_count=len(relationships.family_candidates),
         family_candidate_family_count=len(
             {
-                item.document_id.as_str() if item.document_id is not None else ""
+                item.document_family_id.as_str()
                 for item in relationships.family_candidates
             }
         ),
