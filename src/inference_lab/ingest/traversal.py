@@ -65,8 +65,20 @@ class TraversalPathMetadata:
                 raise ValueError(f"{field_name} must be non-negative.")
 
 
+class _NoFollowPathFileSystem(Protocol):
+    """Provide metadata operations used to enforce the no-link policy."""
+
+    def lstat(self, path: Path) -> TraversalPathMetadata:
+        """Return path metadata without following the final component."""
+        ...
+
+    def is_junction(self, path: Path) -> bool:
+        """Return whether the host identifies the path as a junction."""
+        ...
+
+
 @runtime_checkable
-class TraversalFileSystem(Protocol):
+class TraversalFileSystem(_NoFollowPathFileSystem, Protocol):
     """Provide the bounded local-filesystem operations used by traversal."""
 
     def absolute(self, path: Path) -> Path:
@@ -77,16 +89,8 @@ class TraversalFileSystem(Protocol):
         """Resolve aliases without requiring the final path to exist."""
         ...
 
-    def lstat(self, path: Path) -> TraversalPathMetadata:
-        """Return path metadata without following the final component."""
-        ...
-
     def list_directory(self, path: Path) -> tuple[Path, ...]:
         """Return one point-in-time snapshot of immediate entry paths."""
-        ...
-
-    def is_junction(self, path: Path) -> bool:
-        """Return whether the host identifies the path as a junction."""
         ...
 
 
@@ -311,11 +315,11 @@ class _RawFailure:
     file_kind: DiscoveryFileKind | None = None
 
 
-class _InvalidRootComponentError(ValueError):
-    """Report a bounded invalid kind in one explicit root's lexical chain."""
+class _InvalidPathComponentError(ValueError):
+    """Report a bounded invalid kind in one local path's lexical chain."""
 
     def __init__(self, file_kind: DiscoveryFileKind) -> None:
-        super().__init__("explicit root contains an invalid path component")
+        super().__init__("local path contains an invalid path component")
         self.file_kind = file_kind
 
 
@@ -374,27 +378,33 @@ def _file_kind(mode: int) -> DiscoveryFileKind:
     return DiscoveryFileKind.SPECIAL
 
 
+def _validate_path_ancestors_without_links(
+    path: Path,
+    filesystem: _NoFollowPathFileSystem,
+) -> None:
+    """Reject linked or non-directory lexical ancestors without following them."""
+    for component in reversed(path.parents):
+        metadata = filesystem.lstat(component)
+        kind = _file_kind(metadata.mode)
+        if kind is DiscoveryFileKind.SYMLINK:
+            raise _InvalidPathComponentError(DiscoveryFileKind.SYMLINK)
+        if filesystem.is_junction(component):
+            raise _InvalidPathComponentError(DiscoveryFileKind.SYMLINK)
+        if kind is not DiscoveryFileKind.DIRECTORY:
+            raise _InvalidPathComponentError(kind)
+
+
 def _lstat_root_without_links(
     path: Path,
     filesystem: TraversalFileSystem,
 ) -> TraversalPathMetadata:
-    """Stat a root only after every lexical component passes the link policy."""
-    components = (*reversed(path.parents), path)
-    root_metadata: TraversalPathMetadata | None = None
-    for component in components:
-        metadata = filesystem.lstat(component)
-        kind = _file_kind(metadata.mode)
-        if kind is DiscoveryFileKind.SYMLINK:
-            raise _InvalidRootComponentError(DiscoveryFileKind.SYMLINK)
-        if filesystem.is_junction(component):
-            raise _InvalidRootComponentError(DiscoveryFileKind.SYMLINK)
-        if component != path and kind is not DiscoveryFileKind.DIRECTORY:
-            raise _InvalidRootComponentError(kind)
-        root_metadata = metadata
-
-    if root_metadata is None:
-        raise RuntimeError("absolute root path produced no lexical components")
-    return root_metadata
+    """Stat a root only after its complete lexical chain passes link policy."""
+    _validate_path_ancestors_without_links(path, filesystem)
+    metadata = filesystem.lstat(path)
+    kind = _file_kind(metadata.mode)
+    if kind is DiscoveryFileKind.SYMLINK or filesystem.is_junction(path):
+        raise _InvalidPathComponentError(DiscoveryFileKind.SYMLINK)
+    return metadata
 
 
 def _stat_evidence(metadata: TraversalPathMetadata) -> FileStatEvidence:
@@ -483,7 +493,7 @@ def _prepare_roots(
                 path=lexical_path,
                 category=DiscoveryFailureCategory.ROOT_INACCESSIBLE,
             )
-        except _InvalidRootComponentError as error:
+        except _InvalidPathComponentError as error:
             return (), _root_failure(
                 corpus_id=request.corpus_id,
                 root_count=len(request.inputs),

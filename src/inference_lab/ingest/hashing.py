@@ -32,6 +32,9 @@ from inference_lab.ingest.traversal import (
     LocalTraversalFileSystem,
     TraversalCandidate,
     TraversalPathMetadata,
+    _InvalidPathComponentError,
+    _NoFollowPathFileSystem,
+    _validate_path_ancestors_without_links,
 )
 from inference_lab.provenance import ContentHash, HashAlgorithm
 
@@ -41,7 +44,7 @@ Clock = Callable[[], int]
 
 
 @runtime_checkable
-class StableReadFileSystem(Protocol):
+class StableReadFileSystem(_NoFollowPathFileSystem, Protocol):
     """Provide bounded operations for hashing one open local file."""
 
     def lstat(self, path: Path) -> TraversalPathMetadata:
@@ -150,8 +153,9 @@ def _path_changed_after_open_failure(
 ) -> bool:
     """Check whether a failed open coincided with a safely observable path swap."""
     try:
+        _validate_path_ancestors_without_links(candidate.locator.path, filesystem)
         current = _validated_metadata(filesystem.lstat(candidate.locator.path))
-    except FileNotFoundError:
+    except (FileNotFoundError, _InvalidPathComponentError):
         return True
     except OSError:
         return False
@@ -204,10 +208,10 @@ def _hash_open_source(
 
     opened_after_read = _validated_metadata(filesystem.fstat(binary_source))
     try:
-        path_after_read = _validated_metadata(
-            filesystem.lstat(source.candidate.locator.path)
-        )
-    except FileNotFoundError:
+        path = source.candidate.locator.path
+        _validate_path_ancestors_without_links(path, filesystem)
+        path_after_read = _validated_metadata(filesystem.lstat(path))
+    except (FileNotFoundError, _InvalidPathComponentError):
         return _failure(
             source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
@@ -261,8 +265,9 @@ def _hash_source_candidate(
     """Run the validated stable-read algorithm for one source."""
     candidate = source.candidate
     try:
+        _validate_path_ancestors_without_links(candidate.locator.path, filesystem)
         pre_open = _validated_metadata(filesystem.lstat(candidate.locator.path))
-    except FileNotFoundError:
+    except (FileNotFoundError, _InvalidPathComponentError):
         return _failure(
             source,
             DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
