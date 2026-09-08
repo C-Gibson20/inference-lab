@@ -378,6 +378,158 @@ def _rollback_target(
     return target_update, target_manifest
 
 
+def _resolve_rollback_requirements(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+    required_component_kinds: tuple[ComponentKind, ...],
+    expected_corpus_version: CorpusVersionId | None,
+    restores_corpus_version: CorpusVersionId | None,
+) -> tuple[tuple[ComponentKind, ...], CorpusVersionId | None]:
+    if restores_corpus_version is None:
+        return required_component_kinds, expected_corpus_version
+
+    target_update, _ = _rollback_target(
+        connection,
+        corpus_id,
+        corpus_version,
+        restores_corpus_version,
+    )
+    target_required = target_update.required_component_kinds
+    if required_component_kinds and required_component_kinds != target_required:
+        _raise_conflict(corpus_id, corpus_version)
+    return target_required, restores_corpus_version
+
+
+def _resolve_begin_replay(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+    *,
+    expected_corpus_version: CorpusVersionId | None,
+    required_component_kinds: tuple[ComponentKind, ...],
+    restores_corpus_version: CorpusVersionId | None,
+) -> CorpusUpdate | None:
+    stored = _get_update_by_version(connection, corpus_version)
+    if stored is None:
+        return None
+    if _matches_begin_payload(
+        stored,
+        corpus_id=corpus_id,
+        expected_corpus_version=expected_corpus_version,
+        required_component_kinds=required_component_kinds,
+        restores_corpus_version=restores_corpus_version,
+    ):
+        return stored
+    kind = (
+        _CorpusVersionConflictKind.UPDATE_PAYLOAD_MISMATCH
+        if stored.corpus_id == corpus_id
+        else _CorpusVersionConflictKind.VERSION_ID_REUSED
+    )
+    _raise_conflict(corpus_id, corpus_version, kind)
+
+
+def _require_expected_active_version(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+    expected_corpus_version: CorpusVersionId | None,
+) -> None:
+    active = _active_corpus_version(connection, corpus_id, corpus_version)
+    if active != expected_corpus_version:
+        _raise_conflict(
+            corpus_id,
+            corpus_version,
+            _CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
+        )
+
+
+def _insert_preparing_update(
+    connection: sqlite3.Connection,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+    *,
+    expected_corpus_version: CorpusVersionId | None,
+    required_component_kinds: tuple[ComponentKind, ...],
+    restores_corpus_version: CorpusVersionId | None,
+    created_at_factory: CreatedAtFactory,
+) -> CorpusUpdate:
+    update = CorpusUpdate(
+        corpus_id=corpus_id,
+        corpus_version=corpus_version,
+        expected_corpus_version=expected_corpus_version,
+        required_component_kinds=required_component_kinds,
+        state=CorpusUpdateState.PREPARING,
+        created_at=_created_at(created_at_factory),
+        restores_corpus_version=restores_corpus_version,
+    )
+    connection.execute(
+        """INSERT INTO corpus_updates (
+            corpus_id,
+            corpus_version,
+            expected_corpus_version,
+            state,
+            manifest_digest,
+            created_at,
+            restores_corpus_version
+        ) VALUES (?, ?, ?, 'preparing', NULL, ?, ?)""",
+        (
+            update.corpus_id.as_str(),
+            update.corpus_version.as_str(),
+            (
+                None
+                if update.expected_corpus_version is None
+                else update.expected_corpus_version.as_str()
+            ),
+            update.created_at.astimezone(UTC).isoformat(timespec="microseconds"),
+            (
+                None
+                if update.restores_corpus_version is None
+                else update.restores_corpus_version.as_str()
+            ),
+        ),
+    )
+    connection.executemany(
+        """INSERT INTO corpus_update_required_components (
+            corpus_id, corpus_version, component_kind
+        ) VALUES (?, ?, ?)""",
+        (
+            (
+                update.corpus_id.as_str(),
+                update.corpus_version.as_str(),
+                kind.as_str(),
+            )
+            for kind in update.required_component_kinds
+        ),
+    )
+    return update
+
+
+def _seed_update_memberships(
+    connection: sqlite3.Connection,
+    update: CorpusUpdate,
+    seed_corpus_version: CorpusVersionId | None,
+) -> None:
+    if seed_corpus_version is None:
+        return
+    connection.execute(
+        """INSERT INTO corpus_update_document_memberships (
+            corpus_id,
+            corpus_version,
+            document_id,
+            document_version_id
+        )
+        SELECT corpus_id, ?, document_id, document_version_id
+        FROM corpus_version_document_memberships
+        WHERE corpus_id = ? AND corpus_version = ?""",
+        (
+            update.corpus_version.as_str(),
+            update.corpus_id.as_str(),
+            seed_corpus_version.as_str(),
+        ),
+    )
+
+
 def begin_corpus_update(
     connection: sqlite3.Connection,
     corpus_id: CorpusId,
@@ -411,114 +563,40 @@ def begin_corpus_update(
     )
 
     try:
-        rollback_manifest: CorpusVersionManifest | None = None
-        if restores_corpus_version is not None:
-            target_update, rollback_manifest = _rollback_target(
-                connection,
-                corpus_id,
-                corpus_version,
-                restores_corpus_version,
-            )
-            target_required = target_update.required_component_kinds
-            if required and required != target_required:
-                _raise_conflict(corpus_id, corpus_version)
-            required = target_required
-
-        stored = _get_update_by_version(connection, corpus_version)
-        if stored is not None:
-            if _matches_begin_payload(
-                stored,
-                corpus_id=corpus_id,
-                expected_corpus_version=expected_corpus_version,
-                required_component_kinds=required,
-                restores_corpus_version=restores_corpus_version,
-            ):
-                return BeginCorpusUpdateOutcome(update=stored, replayed=True)
-            kind = (
-                _CorpusVersionConflictKind.UPDATE_PAYLOAD_MISMATCH
-                if stored.corpus_id == corpus_id
-                else _CorpusVersionConflictKind.VERSION_ID_REUSED
-            )
-            _raise_conflict(corpus_id, corpus_version, kind)
-
-        active = _active_corpus_version(connection, corpus_id, corpus_version)
-        if active != expected_corpus_version:
-            _raise_conflict(
-                corpus_id,
-                corpus_version,
-                _CorpusVersionConflictKind.EXPECTED_ACTIVE_MISMATCH,
-            )
-
-        update = CorpusUpdate(
-            corpus_id=corpus_id,
-            corpus_version=corpus_version,
+        required, seed_corpus_version = _resolve_rollback_requirements(
+            connection,
+            corpus_id,
+            corpus_version,
+            required,
             expected_corpus_version=expected_corpus_version,
-            required_component_kinds=required,
-            state=CorpusUpdateState.PREPARING,
-            created_at=_created_at(created_at_factory),
             restores_corpus_version=restores_corpus_version,
         )
-        connection.execute(
-            """INSERT INTO corpus_updates (
-                corpus_id,
-                corpus_version,
-                expected_corpus_version,
-                state,
-                manifest_digest,
-                created_at,
-                restores_corpus_version
-            ) VALUES (?, ?, ?, 'preparing', NULL, ?, ?)""",
-            (
-                update.corpus_id.as_str(),
-                update.corpus_version.as_str(),
-                (
-                    None
-                    if update.expected_corpus_version is None
-                    else update.expected_corpus_version.as_str()
-                ),
-                update.created_at.astimezone(UTC).isoformat(timespec="microseconds"),
-                (
-                    None
-                    if update.restores_corpus_version is None
-                    else update.restores_corpus_version.as_str()
-                ),
-            ),
+        replayed = _resolve_begin_replay(
+            connection,
+            corpus_id,
+            corpus_version,
+            expected_corpus_version=expected_corpus_version,
+            required_component_kinds=required,
+            restores_corpus_version=restores_corpus_version,
         )
-        connection.executemany(
-            """INSERT INTO corpus_update_required_components (
-                corpus_id, corpus_version, component_kind
-            ) VALUES (?, ?, ?)""",
-            (
-                (
-                    update.corpus_id.as_str(),
-                    update.corpus_version.as_str(),
-                    kind.as_str(),
-                )
-                for kind in update.required_component_kinds
-            ),
+        if replayed is not None:
+            return BeginCorpusUpdateOutcome(update=replayed, replayed=True)
+        _require_expected_active_version(
+            connection,
+            corpus_id,
+            corpus_version,
+            expected_corpus_version,
         )
-        seed_corpus_version = (
-            update.restores_corpus_version
-            if rollback_manifest is not None
-            else update.expected_corpus_version
+        update = _insert_preparing_update(
+            connection,
+            corpus_id,
+            corpus_version,
+            expected_corpus_version=expected_corpus_version,
+            required_component_kinds=required,
+            restores_corpus_version=restores_corpus_version,
+            created_at_factory=created_at_factory,
         )
-        if seed_corpus_version is not None:
-            connection.execute(
-                """INSERT INTO corpus_update_document_memberships (
-                    corpus_id,
-                    corpus_version,
-                    document_id,
-                    document_version_id
-                )
-                SELECT corpus_id, ?, document_id, document_version_id
-                FROM corpus_version_document_memberships
-                WHERE corpus_id = ? AND corpus_version = ?""",
-                (
-                    update.corpus_version.as_str(),
-                    update.corpus_id.as_str(),
-                    seed_corpus_version.as_str(),
-                ),
-            )
+        _seed_update_memberships(connection, update, seed_corpus_version)
         return BeginCorpusUpdateOutcome(update=update)
     except StorageConflictError:
         raise
