@@ -8,13 +8,14 @@ from typing import Final, cast
 from structlog.contextvars import bound_contextvars
 
 from inference_lab._validation import is_strict_integer
-from inference_lab.ingest._chunk_records import (
-    ChunkingOutcome,
-    ChunkingRequest,
-    build_chunking_outcome,
-)
+from inference_lab.ingest._chunk_builder import build_chunking_outcome
+from inference_lab.ingest._chunk_records import ChunkingOutcome
 from inference_lab.ingest.chunk_logging import emit_chunk_event
-from inference_lab.ingest.chunking import CURRENT_CHUNKER_VERSION, TokeniserIdentity
+from inference_lab.ingest.chunking import (
+    CURRENT_CHUNKER_VERSION,
+    ChunkingRequest,
+    TokeniserIdentity,
+)
 from inference_lab.provenance import CorpusVersionId
 
 Clock = Callable[[], int]
