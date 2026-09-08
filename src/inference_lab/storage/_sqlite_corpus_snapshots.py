@@ -35,7 +35,7 @@ from inference_lab.storage._sqlite_core import (
     get_document_family as read_document_family,
 )
 from inference_lab.storage._sqlite_corpus_publication import _published_manifest
-from inference_lab.storage._sqlite_corpus_updates import get_corpus_update
+from inference_lab.storage._sqlite_corpus_update_reads import get_corpus_update
 from inference_lab.storage._sqlite_corpus_versions import (
     get_active_corpus_version,
     get_corpus_version,

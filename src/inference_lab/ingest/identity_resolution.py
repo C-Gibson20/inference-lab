@@ -6,6 +6,7 @@ from structlog.contextvars import bound_contextvars
 
 from inference_lab.ingest.classification import ClassifiedSourceCandidate
 from inference_lab.ingest.continuity import (
+    SourceContinuityReader,
     SourceObservationIdAllocator,
     resolve_source_observation,
 )
@@ -23,9 +24,11 @@ from inference_lab.ingest.discovery_logging import (
 )
 from inference_lab.ingest.traversal import TraversalInventory
 from inference_lab.provenance import (
+    CorpusId,
     DocumentId,
     DocumentVersion,
     DocumentVersionId,
+    ExternalIdentifier,
     ExternalIdentifierAssertion,
     IdentityIdAllocator,
     IdentityResolutionRequest,
@@ -33,7 +36,26 @@ from inference_lab.provenance import (
     SourceObservationId,
     resolve_identity,
 )
-from inference_lab.storage import CorruptStorageError, MetadataTransaction
+from inference_lab.storage import CorruptStorageError
+
+
+class IdentityResolutionReader(SourceContinuityReader, Protocol):
+    """Provide the additional catalogue reads used for identity resolution."""
+
+    def get_document_version(
+        self,
+        document_version_id: DocumentVersionId,
+    ) -> DocumentVersion | None:
+        """Return one immutable document version when present."""
+        ...
+
+    def find_document_versions_by_external_identifiers(
+        self,
+        corpus_id: CorpusId,
+        external_identifiers: tuple[ExternalIdentifier, ...],
+    ) -> tuple[DocumentVersion, ...]:
+        """Return versions matching any supplied external identifier."""
+        ...
 
 
 class DiscoveryIdentityIdAllocator(
@@ -64,7 +86,7 @@ def _continuity_candidates(
     source_observation_id: SourceObservationId,
     *,
     request: DiscoveryRequest,
-    transaction: MetadataTransaction,
+    transaction: IdentityResolutionReader,
 ) -> tuple[DocumentVersion, ...]:
     state = transaction.get_source_observation(
         request.corpus_id,
@@ -84,7 +106,7 @@ def _identifier_assertions(
     candidate_roles: tuple[tuple[DocumentVersion, ...], ...],
     *,
     request: DiscoveryRequest,
-    transaction: MetadataTransaction,
+    transaction: IdentityResolutionReader,
 ) -> tuple[ExternalIdentifierAssertion, ...]:
     candidates = {
         candidate.document_version_id: candidate
@@ -111,7 +133,7 @@ def _resolution_request(
     source: ClassifiedSourceCandidate,
     *,
     request: DiscoveryRequest,
-    transaction: MetadataTransaction,
+    transaction: IdentityResolutionReader,
 ) -> IdentityResolutionRequest:
     continuity_candidates = _continuity_candidates(
         source_observation_id,
@@ -174,7 +196,7 @@ def _resolve_with_bound_corpus(
     *,
     request: DiscoveryRequest,
     inventory: TraversalInventory,
-    transaction: MetadataTransaction,
+    transaction: IdentityResolutionReader,
     allocator: DiscoveryIdentityIdAllocator,
 ) -> DiscoveredSource | DiscoveryFailure:
     assignment = resolve_source_observation(
@@ -260,7 +282,7 @@ def resolve_discovered_source_identity(
     *,
     request: DiscoveryRequest,
     inventory: TraversalInventory,
-    transaction: MetadataTransaction,
+    transaction: IdentityResolutionReader,
     allocator: DiscoveryIdentityIdAllocator,
 ) -> DiscoveredSource | DiscoveryFailure:
     """Resolve one source inside a caller-owned metadata transaction."""

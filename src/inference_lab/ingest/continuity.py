@@ -17,15 +17,18 @@ from inference_lab.ingest.discovery_failures import (
 )
 from inference_lab.ingest.traversal import TraversalInventory, canonical_path_key
 from inference_lab.provenance import (
+    ContentHash,
     CorpusId,
     DocumentVersion,
+    DocumentVersionId,
     ExternalIdentifier,
+    ExternalIdentifierAssertion,
     IdentityIdCollisionError,
     SourceObservationId,
+    SourceObservationState,
 )
 from inference_lab.provenance.values import validate_external_identifiers
 from inference_lab.storage import (
-    MetadataReader,
     SourceFileIdentityHint,
     SourceLocatorRevision,
 )
@@ -81,6 +84,66 @@ class SourceObservationIdAllocator(Protocol):
 
     def new_source_observation_id(self) -> SourceObservationId:
         """Allocate one new source-observation ID."""
+        ...
+
+
+class SourceContinuityReader(Protocol):
+    """Provide only the catalogue and locator reads used for continuity."""
+
+    def find_source_locator_by_path(
+        self,
+        corpus_id: CorpusId,
+        path: Path,
+    ) -> SourceLocatorRevision | None:
+        """Return the current locator matching one corpus-relative path."""
+        ...
+
+    def find_source_locators_by_identity_hint(
+        self,
+        corpus_id: CorpusId,
+        identity_hint: SourceFileIdentityHint,
+    ) -> tuple[SourceLocatorRevision, ...]:
+        """Return current locators matching stable filesystem identity."""
+        ...
+
+    def get_source_locator(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> SourceLocatorRevision | None:
+        """Return the current locator for one source observation."""
+        ...
+
+    def get_source_observation(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> SourceObservationState | None:
+        """Return the current state for one source observation."""
+        ...
+
+    def find_source_observations_by_document_version(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[SourceObservationState, ...]:
+        """Return observations currently assigned to one document version."""
+        ...
+
+    def find_document_versions_by_content_hash(
+        self,
+        corpus_id: CorpusId,
+        content_hash: ContentHash,
+    ) -> tuple[DocumentVersion, ...]:
+        """Return document versions matching an exact content hash."""
+        ...
+
+    def list_external_identifier_assertions(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+    ) -> tuple[ExternalIdentifierAssertion, ...]:
+        """Return identifier evidence asserted for one document version."""
         ...
 
 
@@ -242,7 +305,7 @@ def _identifier_values(
 def _identifiers_are_compatible(
     supplied: tuple[ExternalIdentifier, ...],
     candidate: DocumentVersion,
-    reader: MetadataReader,
+    reader: SourceContinuityReader,
     corpus_id: CorpusId,
 ) -> bool:
     candidate_identifiers = list(candidate.external_identifiers)
@@ -266,7 +329,7 @@ def _hash_match_locators(
     *,
     corpus_id: CorpusId,
     external_identifiers: tuple[ExternalIdentifier, ...],
-    reader: MetadataReader,
+    reader: SourceContinuityReader,
 ) -> tuple[SourceLocatorRevision, ...]:
     locators: dict[SourceObservationId, SourceLocatorRevision] = {}
     candidates = reader.find_document_versions_by_content_hash(
@@ -304,7 +367,7 @@ def _new_assignment(
     allocator: SourceObservationIdAllocator,
     *,
     corpus_id: CorpusId,
-    reader: MetadataReader,
+    reader: SourceContinuityReader,
 ) -> SourceObservationAssignment:
     source_observation_id = allocator.new_source_observation_id()
     if not isinstance(source_observation_id, SourceObservationId):
@@ -328,7 +391,7 @@ def resolve_source_observation(
     corpus_id: CorpusId,
     external_identifiers: tuple[ExternalIdentifier, ...],
     inventory: TraversalInventory,
-    reader: MetadataReader,
+    reader: SourceContinuityReader,
     allocator: SourceObservationIdAllocator,
 ) -> SourceObservationAssignment | DiscoveryFailure:
     """Resolve one verified source using only target-corpus and scan evidence."""
