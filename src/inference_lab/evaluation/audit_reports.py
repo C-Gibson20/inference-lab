@@ -740,7 +740,11 @@ def _overall_status(
     request: CorpusAuditRequest,
     aggregates: _CorpusAuditAggregates,
 ) -> AuditOverallStatus:
-    if not request.scope.memberships and aggregates.source.files_seen == 0:
+    if (
+        not request.scope.memberships
+        and aggregates.source.files_seen == 0
+        and not request.source_inventory.failures
+    ):
         return AuditOverallStatus.NO_OBSERVATIONS
     return (
         AuditOverallStatus.PARTIAL
