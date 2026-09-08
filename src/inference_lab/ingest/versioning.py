@@ -1,13 +1,14 @@
 """Represent the version of the parser used to process a document."""
 
-import re
 import uuid
 from dataclasses import dataclass
 
-from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
+from inference_lab._validation import (
+    is_canonical_semantic_version,
+    is_lowercase_slug,
+    is_strict_integer,
+)
 from inference_lab.provenance import DocumentVersionId, SourceSpanId
-
-_IMPLEMENTATION_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +24,7 @@ class ParserVersion:
 
     def _validate(self) -> None:
         """Require unambiguous canonical parser-version components."""
-        if not isinstance(
-            self.implementation, str
-        ) or not _IMPLEMENTATION_PATTERN.fullmatch(self.implementation):
+        if not is_lowercase_slug(self.implementation):
             raise ValueError("parser_implementation_must_be_slug")
         if not is_canonical_semantic_version(self.contract_version):
             raise ValueError("parser_contract_version_must_be_semantic_version")

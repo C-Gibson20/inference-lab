@@ -4,8 +4,8 @@ from typing import Protocol
 
 import structlog
 
+from inference_lab._validation import is_lowercase_slug
 from inference_lab.provenance._resolver_context import _ResolutionContext
-from inference_lab.provenance._validation import is_lowercase_slug
 from inference_lab.provenance.identifiers import DocumentId, DocumentVersionId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship

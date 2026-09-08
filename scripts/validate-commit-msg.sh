@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-MODULES='ingest|retrieval|serving|runtime|storage|provenance|evaluation|profiling|docs|tooling'
+MODULES='src|ingest|retrieval|serving|runtime|storage|provenance|evaluation|profiling|docs|tooling'
 TYPES='feat|fix|perf|refactor|docs|test|build|ci|chore'
 PATTERN='^\[('"$MODULES"')\] ('"$TYPES"')(!)?: [^[:space:]].*$'
 # Git and hosting providers generate merge subjects outside the project format.

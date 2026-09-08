@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
-from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
+from inference_lab._validation import (
+    is_canonical_media_type,
+    is_canonical_semantic_version,
+    is_lowercase_slug,
+    is_strict_integer,
+)
 from inference_lab.evaluation.audit_capabilities import (
     ParserCapabilityProfile,
     parser_capability_profile,
@@ -54,8 +58,6 @@ from inference_lab.provenance import (
 )
 
 AUDIT_CONTRACT_VERSION: Final = "1.0.0"
-_MEDIA_TYPE = re.compile(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+")
-_SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
 
 class AuditMissingReason(StrEnum):
@@ -347,14 +349,14 @@ class AuditParseEvidence:
 def _validate_media_type(value: object) -> None:
     if not isinstance(value, str):
         raise TypeError("media_type must be a string.")
-    if _MEDIA_TYPE.fullmatch(value) is None:
+    if not is_canonical_media_type(value):
         raise ValueError("media_type must be a canonical lowercase media type.")
 
 
 def _validate_slug(value: object, *, field_name: str) -> None:
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
-    if _SLUG.fullmatch(value) is None:
+    if not is_lowercase_slug(value):
         raise ValueError(f"{field_name} must be a lowercase hyphenated slug.")
 
 
