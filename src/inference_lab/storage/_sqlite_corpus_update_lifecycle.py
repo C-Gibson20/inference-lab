@@ -1,4 +1,4 @@
-"""Internal SQLite persistence for durable corpus update identities."""
+"""Internal SQLite lifecycle operations for durable corpus updates."""
 
 import sqlite3
 from collections.abc import Callable

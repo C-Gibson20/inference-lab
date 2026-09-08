@@ -54,6 +54,11 @@ from inference_lab.storage._sqlite_corpus_update_components import (
     register_corpus_update_component_generation,
     replace_corpus_update_component_generation,
 )
+from inference_lab.storage._sqlite_corpus_update_lifecycle import (
+    abort_corpus_update,
+    begin_corpus_update,
+    seal_corpus_update,
+)
 from inference_lab.storage._sqlite_corpus_update_memberships import (
     add_corpus_update_document_membership,
     list_corpus_update_document_memberships,
@@ -63,11 +68,6 @@ from inference_lab.storage._sqlite_corpus_update_memberships import (
 from inference_lab.storage._sqlite_corpus_update_reads import (
     get_corpus_update,
     list_non_terminal_corpus_updates,
-)
-from inference_lab.storage._sqlite_corpus_updates import (
-    abort_corpus_update,
-    begin_corpus_update,
-    seal_corpus_update,
 )
 from inference_lab.storage._sqlite_corpus_versions import (
     get_active_corpus_version,
