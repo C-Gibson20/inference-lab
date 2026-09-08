@@ -9,8 +9,8 @@ from pathlib import Path
 
 from inference_lab.evaluation.audit_contracts import CorpusAuditRequest
 from inference_lab.evaluation.audit_observability import run_corpus_audit
+from inference_lab.evaluation.audit_report_manifest import AuditReportManifest
 from inference_lab.evaluation.audit_report_publication import publish_audit_report
-from inference_lab.evaluation.audit_report_serialisation import AuditReportManifest
 from inference_lab.evaluation.audit_reports import CorpusAuditReport
 
 Clock = Callable[[], int]
