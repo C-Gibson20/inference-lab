@@ -5,6 +5,9 @@ from dataclasses import replace
 
 from inference_lab.provenance import CorpusId, CorpusVersionId
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
+from inference_lab.storage._sqlite_corpus_update_reads import (
+    _reconstruct_document_memberships,
+)
 from inference_lab.storage._sqlite_corpus_updates import (
     CreatedAtFactory,
     _active_corpus_version,
@@ -12,7 +15,6 @@ from inference_lab.storage._sqlite_corpus_updates import (
     _created_at,
     _proposed_manifest,
     _raise_conflict,
-    _reconstruct_document_memberships,
     _require_update,
     list_corpus_update_component_generations,
 )
