@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
-from inference_lab._validation import is_canonical_semantic_version
-from inference_lab.provenance._validation import is_lowercase_slug
+from inference_lab._validation import is_canonical_semantic_version, is_lowercase_slug
 from inference_lab.provenance.identifiers import DocumentVersionId, SourceObservationId
 from inference_lab.provenance.records import DocumentIdentity, DocumentVersion
 from inference_lab.provenance.relationships import DuplicateRelationship

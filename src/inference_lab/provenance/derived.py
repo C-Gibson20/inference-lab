@@ -5,10 +5,8 @@ import json
 from dataclasses import dataclass
 from typing import Self
 
-from inference_lab.provenance._validation import (
-    is_lowercase_slug,
-    is_sha256_hex_digest,
-)
+from inference_lab._validation import is_lowercase_slug
+from inference_lab.provenance._validation import is_sha256_hex_digest
 from inference_lab.provenance.errors import InvalidDerivedRecordError
 from inference_lab.provenance.identifiers import RecordId
 from inference_lab.provenance.lineage import LineageInputs

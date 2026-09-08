@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final, Self
 
-from inference_lab._validation import is_canonical_semantic_version
+from inference_lab._validation import is_canonical_semantic_version, is_lowercase_slug
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -17,7 +17,6 @@ from inference_lab.provenance import (
 
 CORPUS_MANIFEST_CONTRACT_VERSION: Final = "1.0.0"
 
-_LOWERCASE_SLUG_PATTERN: Final = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _GENERATION_IDENTIFIER_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 _SHA256_HEX_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
 
@@ -30,7 +29,7 @@ def _validate_slug(value: object, field_name: str) -> str:
     """Return a strictly validated lowercase hyphenated slug."""
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
-    if _LOWERCASE_SLUG_PATTERN.fullmatch(value) is None:
+    if not is_lowercase_slug(value):
         raise InvalidCorpusVersionContractError(
             f"{field_name} must be a lowercase hyphenated slug."
         )

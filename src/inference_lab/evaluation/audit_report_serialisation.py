@@ -9,11 +9,17 @@ from typing import cast
 
 from inference_lab._json import (
     JsonObject,
+    JsonStructureError,
     JsonValue,
     canonical_json_bytes,
     canonical_json_text,
     load_json_object,
     require_exact_json_fields,
+    require_json_array,
+    require_json_boolean,
+    require_json_integer,
+    require_json_object,
+    require_json_string,
 )
 from inference_lab.evaluation.audit_contracts import (
     AuditCoverage,
@@ -939,27 +945,31 @@ def _decode_rate(payload: JsonObject) -> AuditRate:
 
 
 def _object(value: JsonValue) -> JsonObject:
-    if not isinstance(value, dict):
-        raise ValueError("value must be a JSON object.")
-    return value
+    try:
+        return require_json_object(value)
+    except JsonStructureError:
+        raise ValueError("value must be a JSON object.") from None
 
 
 def _array(value: JsonValue) -> list[JsonValue]:
-    if not isinstance(value, list):
-        raise ValueError("value must be a JSON array.")
-    return value
+    try:
+        return require_json_array(value)
+    except JsonStructureError:
+        raise ValueError("value must be a JSON array.") from None
 
 
 def _string(value: JsonValue) -> str:
-    if not isinstance(value, str):
-        raise ValueError("value must be a JSON string.")
-    return value
+    try:
+        return require_json_string(value)
+    except JsonStructureError:
+        raise ValueError("value must be a JSON string.") from None
 
 
 def _integer(value: JsonValue) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("value must be a JSON integer.")
-    return value
+    try:
+        return require_json_integer(value)
+    except JsonStructureError:
+        raise ValueError("value must be a JSON integer.") from None
 
 
 def _optional_integer(value: JsonValue) -> int | None:
@@ -967,9 +977,10 @@ def _optional_integer(value: JsonValue) -> int | None:
 
 
 def _boolean(value: JsonValue) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError("value must be a JSON boolean.")
-    return value
+    try:
+        return require_json_boolean(value)
+    except JsonStructureError:
+        raise ValueError("value must be a JSON boolean.") from None
 
 
 def _expected_report_id(report: CorpusAuditReport) -> str:

@@ -1,16 +1,17 @@
 """Contracts for deterministic, source-navigable ingest chunking."""
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
 from inference_lab._normalisation import normalise_source_text
-from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
+from inference_lab._validation import (
+    is_canonical_semantic_version,
+    is_lowercase_slug,
+    is_strict_integer,
+)
 from inference_lab.ingest.parser import NormalisedText, ParsedDocument
 from inference_lab.provenance import CorpusId
-
-_SLUG_PATTERN: Final = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
 
 class StructuralBoundaryPolicy(StrEnum):
@@ -35,7 +36,7 @@ class ChunkerVersion:
     def __post_init__(self) -> None:
         if not isinstance(self.implementation, str):
             raise TypeError("chunker implementation must be a string")
-        if _SLUG_PATTERN.fullmatch(self.implementation) is None:
+        if not is_lowercase_slug(self.implementation):
             raise ValueError("chunker implementation must be a lowercase slug")
         if not is_canonical_semantic_version(self.contract_version):
             raise ValueError("chunker contract version must be semantic version")
@@ -69,7 +70,7 @@ class TokeniserIdentity:
         """Validate the tokeniser identity fields."""
         if not isinstance(self.implementation, str):
             raise TypeError("tokeniser implementation must be a string")
-        if _SLUG_PATTERN.fullmatch(self.implementation) is None:
+        if not is_lowercase_slug(self.implementation):
             raise ValueError("tokeniser implementation must be a lowercase slug")
         if not is_canonical_semantic_version(self.contract_version):
             raise ValueError("tokeniser contract version must be semantic version")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -18,7 +17,6 @@ from inference_lab.ingest.versioning import (
     ParserVersion,
 )
 
-_SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _STRUCTURE_KINDS: Final[frozenset[str]] = frozenset(
     {
         "page",
