@@ -23,6 +23,14 @@ without special tokens. A chunk's stored count is the count of its exact
 canonical text, not a slice of whole-document token IDs; this matters for
 contextual BPE tokenisers.
 
+Native token offsets establish a bounded candidate neighbourhood for end and
+overlap selection. Exact standalone counts choose between candidates within
+that neighbourhood and independently enforce the hard maximum. Selection must
+not binary-search scalar counts as though they were globally monotonic, nor
+exhaustively rescan every remaining document boundary. The baseline guarantees
+deterministic, contract-safe packing rather than globally optimal packing for
+an arbitrary pathological count oracle.
+
 The baseline local adapter loads a fast tokeniser from an explicit local
 artefact directory with `local_files_only=True`, rejects slow or changing
 artefacts, and records a manifest revision. It never falls back to a network
