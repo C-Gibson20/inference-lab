@@ -50,9 +50,9 @@ from inference_lab.evaluation.audit_report_manifest import (
     serialise_audit_report_manifest,
 )
 from inference_lab.evaluation.audit_report_publication import publish_audit_report
+from inference_lab.evaluation.audit_report_rendering import render_audit_report
 from inference_lab.evaluation.audit_report_serialisation import (
     deserialise_audit_report,
-    render_audit_report,
     serialise_audit_report,
 )
 from inference_lab.evaluation.audit_reports import (
