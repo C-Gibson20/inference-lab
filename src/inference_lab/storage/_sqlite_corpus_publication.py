@@ -8,14 +8,16 @@ from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage._sqlite_corpus_update_reads import (
     _reconstruct_document_memberships,
 )
+from inference_lab.storage._sqlite_corpus_update_support import (
+    _CorpusVersionConflictKind,
+    _raise_conflict,
+    _require_update,
+)
 from inference_lab.storage._sqlite_corpus_updates import (
     CreatedAtFactory,
     _active_corpus_version,
-    _CorpusVersionConflictKind,
     _created_at,
     _proposed_manifest,
-    _raise_conflict,
-    _require_update,
     list_corpus_update_component_generations,
 )
 from inference_lab.storage._sqlite_corpus_versions import (
