@@ -1,4 +1,4 @@
-"""Tests for per-source identity resolution and persistence coordination."""
+"""Tests for non-retry persistence failures."""
 
 from pathlib import Path
 from unittest.mock import Mock
