@@ -48,6 +48,9 @@ class TraversalPathMetadata:
     file_id: int
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
         """Validate the non-negative integer metadata boundary."""
         for field_name, value in (
             ("mode", self.mode),

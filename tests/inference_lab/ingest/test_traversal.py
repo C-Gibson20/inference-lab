@@ -50,6 +50,18 @@ def _relative_locations(inventory: TraversalInventory) -> tuple[str, ...]:
     )
 
 
+def _path_metadata(**changes: object) -> TraversalPathMetadata:
+    values: dict[str, object] = {
+        "mode": 1,
+        "byte_count": 2,
+        "modified_time_ns": 3,
+        "device_id": 4,
+        "file_id": 5,
+    }
+    values.update(changes)
+    return TraversalPathMetadata(**values)  # type: ignore[arg-type]
+
+
 class _FaultInjectingFileSystem(LocalTraversalFileSystem):
     """Expose deterministic path races and host-specific traversal failures."""
 
@@ -650,18 +662,22 @@ def test_canonical_path_key_rejects_untyped_or_remote_paths() -> None:
         canonical_path_key(Path("https:/example.test/source"))
 
 
-def test_traversal_path_metadata_rejects_untyped_or_negative_values() -> None:
-    valid = {
-        "mode": 1,
-        "byte_count": 2,
-        "modified_time_ns": 3,
-        "device_id": 4,
-        "file_id": 5,
-    }
-    with pytest.raises(TypeError, match="mode must be an integer"):
-        TraversalPathMetadata(**(valid | {"mode": True}))
-    with pytest.raises(ValueError, match="byte_count must be non-negative"):
-        TraversalPathMetadata(**(valid | {"byte_count": -1}))
+@pytest.mark.parametrize(
+    "field_name",
+    ["mode", "byte_count", "modified_time_ns", "device_id", "file_id"],
+)
+def test_traversal_path_metadata_rejects_untyped_values(field_name: str) -> None:
+    with pytest.raises(TypeError, match=rf"{field_name} must be an integer"):
+        _path_metadata(**{field_name: True})
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["mode", "byte_count", "modified_time_ns", "device_id", "file_id"],
+)
+def test_traversal_path_metadata_rejects_negative_values(field_name: str) -> None:
+    with pytest.raises(ValueError, match=rf"{field_name} must be non-negative"):
+        _path_metadata(**{field_name: -1})
 
 
 def test_failure_and_candidate_representations_hide_source_paths(
