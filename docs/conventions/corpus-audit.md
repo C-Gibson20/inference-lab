@@ -44,6 +44,14 @@ observed and observed-absent values; population rates use the complete stated
 population. Percentages use the fixed decimal precision and rounding policy in
 `CorpusAuditPolicy`, not binary floating-point arithmetic.
 
+For EVAL-02 acceptance, an explicit `unavailable` value is complete coverage
+accounting when the selected versioned producer truthfully declares that it
+cannot observe the field. It is not evidence that the feature is absent and
+must remain visible in the report's limitations. EVAL-02 does not require
+capabilities assigned to later parser, extraction, or OCR work. When such a
+capability is added, its observations and producer identity must be versioned
+and the corpus must be audited again before relying on the stronger evidence.
+
 Source format support is classifier evidence, not file-signature proof. The
 current classifier is the versioned suffix-based `text-native-baseline` policy:
 `.txt` is supported text, `.pdf` is recognised but unsupported, and other or

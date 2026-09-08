@@ -312,6 +312,13 @@ A `ParsedRepresentation` retains:
 - source locations with half-open decoded-text offsets; and
 - optional page coordinate spaces, rotations, origins, and bounding boxes.
 
+This representation is a canonical source record, not a PROV-03 derived
+record. Its producer identity, schema version, output digest, document-version
+ownership, and source-span catalogue are its complete provenance contract.
+Downstream derived records use `DerivedRecordMetadata` to cite the specific
+source spans or parent records they consume; storage does not manufacture a
+whole-document span solely to make parser output fit that envelope.
+
 The aggregate validates its canonical output digest, source ownership, block
 text, spans, coordinate bounds, producer attribution, and distinction between
 unavailable (`None`) and available-empty (`()`) data before it becomes durable.
