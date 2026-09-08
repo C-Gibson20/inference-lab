@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
 from inference_lab._validation import (
+    is_canonical_media_type,
     is_canonical_semantic_version,
     is_local_path_shape,
+    is_lowercase_slug,
     is_strict_integer,
 )
 from inference_lab.provenance import (
@@ -27,15 +28,12 @@ from inference_lab.provenance import (
 )
 from inference_lab.provenance.values import validate_external_identifiers
 
-_LOWERCASE_SLUG: Final = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
-_MEDIA_TYPE: Final = re.compile(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+")
-
 
 def _validate_slug(value: object, *, field_name: str) -> None:
     """Validate a project-owned lowercase slug without exposing its value."""
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
-    if _LOWERCASE_SLUG.fullmatch(value) is None:
+    if not is_lowercase_slug(value):
         raise ValueError(f"{field_name} must be a lowercase hyphenated slug.")
 
 
@@ -51,7 +49,7 @@ def _validate_media_type(value: object) -> None:
     """Validate a canonical, parameter-free media type."""
     if not isinstance(value, str):
         raise TypeError("media_type must be a string.")
-    if _MEDIA_TYPE.fullmatch(value) is None:
+    if not is_canonical_media_type(value):
         raise ValueError("media_type must be a canonical lowercase media type.")
 
 

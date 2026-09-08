@@ -1,7 +1,8 @@
 """Per-source identity resolution and persistence coordination."""
 
 from dataclasses import dataclass
-from typing import Final
+from types import TracebackType
+from typing import Final, Protocol, Self
 
 from structlog.contextvars import bound_contextvars
 
@@ -18,21 +19,47 @@ from inference_lab.ingest.discovery_logging import (
 )
 from inference_lab.ingest.identity_application import (
     IdentityApplicationResult,
+    IdentityApplicationTransaction,
     apply_discovery_identity_outcome,
 )
 from inference_lab.ingest.identity_resolution import (
     DiscoveryIdentityIdAllocator,
+    IdentityResolutionReader,
     resolve_discovered_source_identity,
 )
 from inference_lab.ingest.traversal import TraversalInventory
 from inference_lab.provenance import IdentityIdCollisionError
 from inference_lab.storage import (
-    MetadataRepository,
     StorageConcurrencyError,
     StorageConflictError,
 )
 
 _MAX_IDENTITY_ATTEMPTS: Final = 2
+
+
+class IdentityPersistenceTransaction(
+    IdentityResolutionReader,
+    IdentityApplicationTransaction,
+    Protocol,
+):
+    """Provide the context-managed capabilities used by identity persistence."""
+
+    def __enter__(self) -> Self: ...
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool: ...
+
+
+class IdentityPersistenceRepository(Protocol):
+    """Create atomic identity-persistence transactions."""
+
+    def transaction(self) -> IdentityPersistenceTransaction:
+        """Return a transaction that starts on context entry."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +106,7 @@ def _attempt_identity_persistence(
     *,
     request: DiscoveryRequest,
     inventory: TraversalInventory,
-    repository: MetadataRepository,
+    repository: IdentityPersistenceRepository,
     allocator: DiscoveryIdentityIdAllocator,
 ) -> IdentityApplicationResult | DiscoveryFailure:
     with repository.transaction() as transaction:
@@ -157,7 +184,7 @@ def persist_discovered_source_identity(
     *,
     request: DiscoveryRequest,
     inventory: TraversalInventory,
-    repository: MetadataRepository,
+    repository: IdentityPersistenceRepository,
     allocator: DiscoveryIdentityIdAllocator,
 ) -> IdentityApplicationResult | DiscoveryFailure:
     """Resolve and persist one source, rebuilding once after a write conflict."""
@@ -223,7 +250,7 @@ def persist_discovered_source_identities(
     *,
     request: DiscoveryRequest,
     inventory: TraversalInventory,
-    repository: MetadataRepository,
+    repository: IdentityPersistenceRepository,
     allocator: DiscoveryIdentityIdAllocator,
 ) -> tuple[IdentityApplicationResult | DiscoveryFailure, ...]:
     """Persist ordered sources as independently atomic identity units."""

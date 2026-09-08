@@ -1,16 +1,19 @@
 """Contracts for deterministic, source-navigable ingest chunking."""
 
-import re
+from bisect import bisect_left
 from dataclasses import dataclass
 from enum import StrEnum
+from operator import attrgetter
 from typing import Final
 
 from inference_lab._normalisation import normalise_source_text
-from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
+from inference_lab._validation import (
+    is_canonical_semantic_version,
+    is_lowercase_slug,
+    is_strict_integer,
+)
 from inference_lab.ingest.parser import NormalisedText, ParsedDocument
 from inference_lab.provenance import CorpusId
-
-_SLUG_PATTERN: Final = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
 
 class StructuralBoundaryPolicy(StrEnum):
@@ -35,7 +38,7 @@ class ChunkerVersion:
     def __post_init__(self) -> None:
         if not isinstance(self.implementation, str):
             raise TypeError("chunker implementation must be a string")
-        if _SLUG_PATTERN.fullmatch(self.implementation) is None:
+        if not is_lowercase_slug(self.implementation):
             raise ValueError("chunker implementation must be a lowercase slug")
         if not is_canonical_semantic_version(self.contract_version):
             raise ValueError("chunker contract version must be semantic version")
@@ -48,7 +51,7 @@ class ChunkerVersion:
 
 CURRENT_CHUNKER_VERSION: Final = ChunkerVersion(
     implementation="structure-aware-greedy",
-    contract_version="1.0.0",
+    contract_version="1.0.1",
 )
 
 
@@ -69,7 +72,7 @@ class TokeniserIdentity:
         """Validate the tokeniser identity fields."""
         if not isinstance(self.implementation, str):
             raise TypeError("tokeniser implementation must be a string")
-        if _SLUG_PATTERN.fullmatch(self.implementation) is None:
+        if not is_lowercase_slug(self.implementation):
             raise ValueError("tokeniser implementation must be a lowercase slug")
         if not is_canonical_semantic_version(self.contract_version):
             raise ValueError("tokeniser contract version must be semantic version")
@@ -261,18 +264,32 @@ class CanonicalSourceBoundaryMap:
         """Return the source offset for one safe canonical boundary."""
         if not is_strict_integer(canonical_offset):
             raise TypeError("canonical offset must be an integer")
-        for boundary in self.boundaries:
-            if boundary.canonical_offset == canonical_offset:
-                return boundary.source_offset
+        index = bisect_left(
+            self.boundaries,
+            canonical_offset,
+            key=attrgetter("canonical_offset"),
+        )
+        if (
+            index < len(self.boundaries)
+            and self.boundaries[index].canonical_offset == canonical_offset
+        ):
+            return self.boundaries[index].source_offset
         raise UnsafeSourceBoundaryError()
 
     def canonical_offset_for_source(self, source_offset: int) -> int:
         """Return the canonical offset for one safe source boundary."""
         if not is_strict_integer(source_offset):
             raise TypeError("source offset must be an integer")
-        for boundary in self.boundaries:
-            if boundary.source_offset == source_offset:
-                return boundary.canonical_offset
+        index = bisect_left(
+            self.boundaries,
+            source_offset,
+            key=attrgetter("source_offset"),
+        )
+        if (
+            index < len(self.boundaries)
+            and self.boundaries[index].source_offset == source_offset
+        ):
+            return self.boundaries[index].canonical_offset
         raise UnsafeSourceBoundaryError()
 
     def source_range_for_canonical_range(

@@ -109,7 +109,7 @@ def test_observed_chunking_binds_scope_and_logs_safe_completion() -> None:
         ("chunk_completed", "info"),
     ]
     assert logs[0]["pipeline_stage"] == "chunk"
-    assert logs[0]["chunker_contract_version"] == "1.0.0"
+    assert logs[0]["chunker_contract_version"] == "1.0.1"
     assert logs[0]["tokeniser_contract_version"] == "1.0.0"
     assert logs[1]["chunk_count"] == 1
     assert logs[1]["input_token_count"] == 1

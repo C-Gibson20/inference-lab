@@ -227,7 +227,8 @@ class LocalFastChunkTokeniser:
         except Exception:
             raise ChunkTokeniserError("unavailable") from None
         loaded = cls(tokeniser, identity, after, root)
-        return cast(LocalFastChunkTokeniser, validate_chunk_tokeniser(loaded))
+        validate_chunk_tokeniser(loaded)
+        return loaded
 
     @property
     def identity(self) -> TokeniserIdentity:
@@ -265,19 +266,73 @@ class LocalFastChunkTokeniser:
         return len(self.tokenise(text).token_ids)
 
 
+class _ValidatedChunkTokeniser:
+    """Sanitise one tokeniser implementation behind the ingest boundary."""
+
+    def __init__(
+        self,
+        tokeniser: ChunkTokeniser,
+        identity: TokeniserIdentity,
+    ) -> None:
+        self._tokeniser = tokeniser
+        self._identity = identity
+
+    @property
+    def identity(self) -> TokeniserIdentity:
+        """Return the identity captured at boundary validation."""
+        return self._identity
+
+    def tokenise(self, text: str) -> TokenisedText:
+        """Return validated output while bounding backend exceptions."""
+        try:
+            tokenised = self._tokeniser.tokenise(text)
+        except ChunkTokeniserError:
+            raise
+        except Exception:
+            raise ChunkTokeniserError("unavailable") from None
+        try:
+            return validate_tokenised_text(text, tokenised)
+        except ChunkTokeniserError:
+            raise
+        except Exception:
+            raise ChunkTokeniserError("invalid_output") from None
+
+    def count_tokens(self, text: str) -> int:
+        """Return an exact count consistent with validated tokenisation."""
+        try:
+            count = self._tokeniser.count_tokens(text)
+        except ChunkTokeniserError:
+            raise
+        except Exception:
+            raise ChunkTokeniserError("unavailable") from None
+        if not is_strict_integer(count) or count < 0:
+            raise ChunkTokeniserError("invalid_count")
+        if count != len(self.tokenise(text).token_ids):
+            raise ChunkTokeniserError("inconsistent_count")
+        return count
+
+
 def validate_chunk_tokeniser(tokeniser: ChunkTokeniser) -> ChunkTokeniser:
     """Validate the public tokeniser boundary and deterministic identity shape."""
-    if not isinstance(tokeniser, ChunkTokeniser):
-        raise TypeError("tokeniser must implement ChunkTokeniser")
-    identity = tokeniser.identity
+    if isinstance(tokeniser, _ValidatedChunkTokeniser):
+        return tokeniser
+    try:
+        implements_protocol = isinstance(tokeniser, ChunkTokeniser)
+    except Exception:
+        raise ChunkTokeniserError("unavailable") from None
+    if not implements_protocol:
+        raise ChunkTokeniserError("invalid_identity")
+    try:
+        identity = tokeniser.identity
+    except Exception:
+        raise ChunkTokeniserError("unavailable") from None
     if not isinstance(identity, TokeniserIdentity):
         raise ChunkTokeniserError("invalid_identity")
+    validated = _ValidatedChunkTokeniser(tokeniser, identity)
     for probe in ("", "one café", "astral 😀"):
-        first = validate_tokenised_text(probe, tokeniser.tokenise(probe))
-        second = validate_tokenised_text(probe, tokeniser.tokenise(probe))
-        count = tokeniser.count_tokens(probe)
-        if not is_strict_integer(count):
-            raise ChunkTokeniserError("invalid_count")
+        first = validated.tokenise(probe)
+        second = validated.tokenise(probe)
+        count = validated.count_tokens(probe)
         if first != second or count != len(first.token_ids):
             raise ChunkTokeniserError("non_deterministic")
-    return tokeniser
+    return validated

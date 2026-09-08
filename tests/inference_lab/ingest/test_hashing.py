@@ -68,12 +68,14 @@ class _FaultInjectingFileSystem(_RecordingFileSystem):
         self.opened_source: BinaryIO | None = None
 
     def lstat(self, path: Path) -> TraversalPathMetadata:
+        metadata = super().lstat(path)
+        if not stat.S_ISREG(metadata.mode):
+            return metadata
         self.lstat_count += 1
         if self.lstat_count in self.missing_lstats:
             raise FileNotFoundError("injected private path")
         if self.lstat_count in self.lstat_errors:
             raise PermissionError("injected private path")
-        metadata = super().lstat(path)
         transform = self.lstat_transforms.get(self.lstat_count)
         return metadata if transform is None else transform(metadata)
 
@@ -238,6 +240,34 @@ def test_candidate_replaced_by_symlink_is_not_opened(tmp_path: Path) -> None:
 
     assert isinstance(result, DiscoveryFailure)
     assert result.category is DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ
+
+
+def test_candidate_with_ancestor_replaced_by_symlink_is_not_opened(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    source = root / "source.txt"
+    source.write_bytes(b"original")
+    candidate = _candidate(source)
+    relocated_root = tmp_path / "relocated-sources"
+    root.rename(relocated_root)
+    try:
+        root.symlink_to(relocated_root, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable: {type(error).__name__}")
+    filesystem = _FaultInjectingFileSystem()
+
+    result = hash_source_candidate(
+        _classified(candidate),
+        max_source_bytes=_MAX_SOURCE_BYTES,
+        filesystem=filesystem,
+    )
+
+    assert isinstance(result, DiscoveryFailure)
+    assert result.category is DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ
+    assert filesystem.read_count == 0
+    assert filesystem.opened_source is None
 
 
 @pytest.mark.parametrize("swap", ["identity", "type"])

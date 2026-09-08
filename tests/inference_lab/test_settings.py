@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from inference_lab.settings import Settings, get_settings
+from inference_lab.settings import Settings, StorageConfig, get_settings
 
 
 @pytest.fixture(autouse=True)
@@ -209,6 +209,83 @@ def test_non_local_source_directory_shapes_are_rejected(
         Settings(  # pyright: ignore[reportCallIssue]
             storage={"source_dir": rejected_local_path_shape}
         )
+
+
+def _storage_config(tmp_path: Path, **changes: Path) -> StorageConfig:
+    values = {
+        "index_dir": tmp_path / "indexes",
+        "metadata_db_path": tmp_path / "metadata.sqlite3",
+        "source_dir": tmp_path / "source-data",
+    }
+    values.update(changes)
+    return StorageConfig(**values)
+
+
+@pytest.mark.parametrize(
+    ("first_name", "second_name"),
+    [
+        ("index_dir", "metadata_db_path"),
+        ("index_dir", "source_dir"),
+        ("metadata_db_path", "source_dir"),
+    ],
+)
+def test_storage_paths_must_not_be_equal(
+    tmp_path: Path,
+    first_name: str,
+    second_name: str,
+) -> None:
+    shared = tmp_path / "shared"
+
+    with pytest.raises(ValidationError, match="must not overlap"):
+        _storage_config(
+            tmp_path,
+            **{first_name: shared, second_name: shared},
+        )
+
+
+@pytest.mark.parametrize(
+    ("first_name", "second_name"),
+    [
+        ("index_dir", "metadata_db_path"),
+        ("index_dir", "source_dir"),
+        ("metadata_db_path", "source_dir"),
+    ],
+)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_storage_paths_must_not_contain_one_another(
+    tmp_path: Path,
+    first_name: str,
+    second_name: str,
+    reverse: bool,
+) -> None:
+    parent = tmp_path / "state"
+    child = parent / "nested"
+    first, second = (child, parent) if reverse else (parent, child)
+
+    with pytest.raises(ValidationError, match="must not overlap"):
+        _storage_config(
+            tmp_path,
+            **{first_name: first, second_name: second},
+        )
+
+
+def test_storage_paths_reject_relative_lexical_aliases(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="must not overlap"):
+        _storage_config(
+            tmp_path,
+            index_dir=Path("state/sources"),
+            source_dir=Path("state/indexes/../sources"),
+        )
+
+
+def test_storage_path_validation_does_not_require_existing_targets(
+    tmp_path: Path,
+) -> None:
+    config = _storage_config(tmp_path)
+
+    assert config.index_dir == tmp_path / "indexes"
+    assert config.metadata_db_path == tmp_path / "metadata.sqlite3"
+    assert config.source_dir == tmp_path / "source-data"
 
 
 def test_missing_source_directory_is_rejected(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 """Atomic persistence plans for resolved discovery identity outcomes."""
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from structlog.contextvars import bound_contextvars
 
@@ -10,18 +11,97 @@ from inference_lab.provenance import (
     CorpusId,
     DocumentIdentity,
     DocumentVersion,
+    DocumentVersionId,
+    DuplicateRelationship,
+    ExternalIdentifierAssertion,
     IdentityResolutionOutcome,
     ResolutionKind,
     ResolutionReason,
+    SourceObservationId,
     SourceObservationState,
 )
 from inference_lab.storage import (
-    MetadataTransaction,
     SourceFileIdentityHint,
     SourceFingerprint,
     SourceLocatorRevision,
     StorageConflictError,
 )
+
+
+class IdentityApplicationTransaction(Protocol):
+    """Provide only the reads and writes used to apply identity outcomes."""
+
+    def get_source_locator(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> SourceLocatorRevision | None:
+        """Return the current private locator for one observation."""
+        ...
+
+    def get_source_observation(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+    ) -> SourceObservationState | None:
+        """Return the current state for one source observation."""
+        ...
+
+    def add_document(self, document: DocumentIdentity) -> None:
+        """Create a logical document or accept an exact replay."""
+        ...
+
+    def add_document_version(self, document_version: DocumentVersion) -> None:
+        """Create an immutable document version or accept an exact replay."""
+        ...
+
+    def add_corpus_document_version_membership(
+        self,
+        membership: CorpusDocumentVersionMembership,
+    ) -> None:
+        """Add a document version to the corpus catalogue."""
+        ...
+
+    def add_source_observation(self, state: SourceObservationState) -> None:
+        """Create the initial state for a source observation."""
+        ...
+
+    def advance_source_observation(
+        self,
+        corpus_id: CorpusId,
+        source_observation_id: SourceObservationId,
+        *,
+        expected_version_id: DocumentVersionId,
+        new_version_id: DocumentVersionId,
+    ) -> SourceObservationState:
+        """Advance an observation from its expected document version."""
+        ...
+
+    def add_source_locator(self, revision: SourceLocatorRevision) -> None:
+        """Create the first private locator revision for an observation."""
+        ...
+
+    def advance_source_locator(
+        self,
+        revision: SourceLocatorRevision,
+    ) -> SourceLocatorRevision:
+        """Append and select the next private locator revision."""
+        ...
+
+    def add_external_identifier_assertions(
+        self,
+        corpus_id: CorpusId,
+        assertions: tuple[ExternalIdentifierAssertion, ...],
+    ) -> None:
+        """Append a canonical batch of external-identifier evidence."""
+        ...
+
+    def add_duplicate_relationship(
+        self,
+        relationship: DuplicateRelationship,
+    ) -> None:
+        """Create a duplicate relationship or accept an exact replay."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +190,7 @@ def _write_locator(
     source: DiscoveredSource,
     *,
     corpus_id: CorpusId,
-    transaction: MetadataTransaction,
+    transaction: IdentityApplicationTransaction,
 ) -> None:
     current = transaction.get_source_locator(
         corpus_id,
@@ -152,7 +232,7 @@ def _apply_unchanged(
     source: DiscoveredSource,
     *,
     corpus_id: CorpusId,
-    transaction: MetadataTransaction,
+    transaction: IdentityApplicationTransaction,
 ) -> None:
     outcome = source.identity_outcome
     _, version = _assigned_identity(outcome)
@@ -174,7 +254,7 @@ def _apply_new_version(
     source: DiscoveredSource,
     *,
     corpus_id: CorpusId,
-    transaction: MetadataTransaction,
+    transaction: IdentityApplicationTransaction,
 ) -> None:
     outcome = source.identity_outcome
     _, version = _assigned_identity(outcome)
@@ -198,7 +278,7 @@ def _apply_new_identity(
     source: DiscoveredSource,
     *,
     corpus_id: CorpusId,
-    transaction: MetadataTransaction,
+    transaction: IdentityApplicationTransaction,
 ) -> None:
     outcome = source.identity_outcome
     document, version = _assigned_identity(outcome)
@@ -215,7 +295,7 @@ def _apply_with_bound_corpus(
     source: DiscoveredSource,
     *,
     corpus_id: CorpusId,
-    transaction: MetadataTransaction,
+    transaction: IdentityApplicationTransaction,
 ) -> IdentityApplicationResult:
     kind = source.identity_outcome.kind
     if kind in {ResolutionKind.AMBIGUOUS, ResolutionKind.CONFLICT}:
@@ -234,7 +314,7 @@ def apply_discovery_identity_outcome(
     source: DiscoveredSource,
     *,
     corpus_id: CorpusId,
-    transaction: MetadataTransaction,
+    transaction: IdentityApplicationTransaction,
 ) -> IdentityApplicationResult:
     """Apply one complete outcome within a caller-owned transaction."""
     if not isinstance(source, DiscoveredSource):

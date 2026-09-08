@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
-from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
+from inference_lab._validation import (
+    is_canonical_media_type,
+    is_canonical_semantic_version,
+    is_lowercase_slug,
+    is_strict_integer,
+)
 from inference_lab.evaluation.audit_capabilities import (
     ParserCapabilityProfile,
     parser_capability_profile,
@@ -54,8 +58,6 @@ from inference_lab.provenance import (
 )
 
 AUDIT_CONTRACT_VERSION: Final = "1.0.0"
-_MEDIA_TYPE = re.compile(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+")
-_SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
 
 class AuditMissingReason(StrEnum):
@@ -347,14 +349,14 @@ class AuditParseEvidence:
 def _validate_media_type(value: object) -> None:
     if not isinstance(value, str):
         raise TypeError("media_type must be a string.")
-    if _MEDIA_TYPE.fullmatch(value) is None:
+    if not is_canonical_media_type(value):
         raise ValueError("media_type must be a canonical lowercase media type.")
 
 
 def _validate_slug(value: object, *, field_name: str) -> None:
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
-    if _SLUG.fullmatch(value) is None:
+    if not is_lowercase_slug(value):
         raise ValueError(f"{field_name} must be a lowercase hyphenated slug.")
 
 
@@ -590,97 +592,7 @@ class AuditSourceInventory:
         discovery: DiscoveryResult,
     ) -> "AuditSourceInventory":
         """Adapt ING-02 values and discard locators and source metadata."""
-        if not isinstance(classification, ClassificationInventory):
-            raise TypeError("classification must be a ClassificationInventory.")
-        if not isinstance(discovery, DiscoveryResult):
-            raise TypeError("discovery must be a DiscoveryResult.")
-        if classification.traversal.corpus_id != discovery.corpus_id:
-            raise AuditContractError(AuditErrorCategory.CORPUS_MISMATCH)
-        if classification.policy != discovery.policy:
-            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
-        expected_ordinals = tuple(
-            item.candidate.ordinal for item in classification.classified_candidates
-        ) + tuple(item.ordinal for item in classification.traversal.failures)
-        observed_ordinals = tuple(item.ordinal for item in discovery.sources) + tuple(
-            item.ordinal for item in discovery.failures
-        )
-        if (
-            len(observed_ordinals) != len(expected_ordinals)
-            or set(observed_ordinals) != set(expected_ordinals)
-            or discovery.counts.files_seen != len(expected_ordinals)
-        ):
-            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
-        classification_failures = {
-            (failure.ordinal, failure.category, failure.stage)
-            for failure in classification.failures
-        }
-        discovery_failures = {
-            (failure.ordinal, failure.category, failure.stage)
-            for failure in discovery.failures
-        }
-        if not classification_failures <= discovery_failures:
-            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
-        classified_by_ordinal = {
-            item.candidate.ordinal: item for item in classification.hashable_candidates
-        }
-        for source in discovery.sources:
-            classified = classified_by_ordinal.get(source.ordinal)
-            if classified is None:
-                raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
-            if (
-                source.corpus_id != discovery.corpus_id
-                or source.policy != discovery.policy
-                or source.classification != classified.classification
-                or source.snapshot.locator != classified.candidate.locator
-            ):
-                raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
-
-        hashed_ordinals = {source.ordinal for source in discovery.sources} | {
-            failure.ordinal
-            for failure in discovery.failures
-            if failure.stage
-            in {
-                DiscoveryFailureStage.CONTINUITY,
-                DiscoveryFailureStage.RESOLUTION,
-                DiscoveryFailureStage.PERSISTENCE,
-            }
-        }
-        identity_ordinals = {source.ordinal for source in discovery.sources} | {
-            failure.ordinal
-            for failure in discovery.failures
-            if failure.stage
-            in {
-                DiscoveryFailureStage.RESOLUTION,
-                DiscoveryFailureStage.PERSISTENCE,
-            }
-        }
-        coverage_by_key: dict[tuple[str, SourceSupport], list[int]] = {}
-        for item in classification.classified_candidates:
-            key = (item.classification.media_type, item.classification.support)
-            counts = coverage_by_key.setdefault(key, [0, 0, 0])
-            counts[0] += 1
-            if item.candidate.ordinal in hashed_ordinals:
-                counts[1] += 1
-            if item.candidate.ordinal in identity_ordinals:
-                counts[2] += 1
-        format_coverage = tuple(
-            AuditSourceFormatCoverage(
-                media_type=media_type,
-                support=support,
-                file_count=counts[0],
-                total_bytes=next(
-                    item.total_bytes
-                    for item in classification.format_counts
-                    if item.media_type == media_type and item.support is support
-                ),
-                hashed_count=counts[1],
-                identity_count=counts[2],
-            )
-            for (media_type, support), counts in sorted(
-                coverage_by_key.items(),
-                key=lambda item: (item[0][0], item[0][1].value),
-            )
-        )
+        _validate_ingest_source_evidence(classification, discovery)
         return cls(
             corpus_id=discovery.corpus_id,
             policy=discovery.policy,
@@ -690,7 +602,10 @@ class AuditSourceInventory:
                 AuditSourceFailure.from_discovery_failure(failure)
                 for failure in discovery.failures
             ),
-            format_coverage=format_coverage,
+            format_coverage=_project_source_format_coverage(
+                classification,
+                discovery,
+            ),
             known_source_byte_counts=tuple(
                 sorted(
                     item.candidate.stat_evidence.byte_count
@@ -706,6 +621,141 @@ class AuditSourceInventory:
             f"corpus_id={self.corpus_id.as_str()!r}, "
             f"files_seen={self.discovery_counts.files_seen})"
         )
+
+
+def _validate_ingest_source_evidence(
+    classification: ClassificationInventory,
+    discovery: DiscoveryResult,
+) -> None:
+    """Validate that classification and discovery describe one complete run."""
+    if not isinstance(classification, ClassificationInventory):
+        raise TypeError("classification must be a ClassificationInventory.")
+    if not isinstance(discovery, DiscoveryResult):
+        raise TypeError("discovery must be a DiscoveryResult.")
+    if classification.traversal.corpus_id != discovery.corpus_id:
+        raise AuditContractError(AuditErrorCategory.CORPUS_MISMATCH)
+    if classification.policy != discovery.policy:
+        raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+    _validate_ingest_ordinals(classification, discovery)
+    _validate_ingest_failures(classification, discovery)
+    _validate_ingest_sources(classification, discovery)
+
+
+def _validate_ingest_ordinals(
+    classification: ClassificationInventory,
+    discovery: DiscoveryResult,
+) -> None:
+    """Require discovery to retain every classified or failed ordinal exactly once."""
+    expected_ordinals = tuple(
+        item.candidate.ordinal for item in classification.classified_candidates
+    ) + tuple(item.ordinal for item in classification.traversal.failures)
+    observed_ordinals = tuple(item.ordinal for item in discovery.sources) + tuple(
+        item.ordinal for item in discovery.failures
+    )
+    expected_source_ordinals = tuple(
+        item.candidate.ordinal for item in classification.classified_candidates
+    ) + tuple(
+        failure.ordinal
+        for failure in classification.traversal.failures
+        if failure.scope is DiscoveryFailureScope.SOURCE
+    )
+    if (
+        len(observed_ordinals) != len(expected_ordinals)
+        or set(observed_ordinals) != set(expected_ordinals)
+        or discovery.counts.files_seen != len(expected_source_ordinals)
+    ):
+        raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+
+
+def _validate_ingest_failures(
+    classification: ClassificationInventory,
+    discovery: DiscoveryResult,
+) -> None:
+    """Require discovery to retain all failures raised during classification."""
+    classification_failures = {
+        (failure.ordinal, failure.category, failure.stage)
+        for failure in classification.failures
+    }
+    discovery_failures = {
+        (failure.ordinal, failure.category, failure.stage)
+        for failure in discovery.failures
+    }
+    if not classification_failures <= discovery_failures:
+        raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+
+
+def _validate_ingest_sources(
+    classification: ClassificationInventory,
+    discovery: DiscoveryResult,
+) -> None:
+    """Match each discovered source to its content-free classified candidate."""
+    classified_by_ordinal = {
+        item.candidate.ordinal: item for item in classification.hashable_candidates
+    }
+    for source in discovery.sources:
+        classified = classified_by_ordinal.get(source.ordinal)
+        if classified is None:
+            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+        if (
+            source.corpus_id != discovery.corpus_id
+            or source.policy != discovery.policy
+            or source.classification != classified.classification
+            or source.snapshot.locator != classified.candidate.locator
+        ):
+            raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
+
+
+def _project_source_format_coverage(
+    classification: ClassificationInventory,
+    discovery: DiscoveryResult,
+) -> tuple[AuditSourceFormatCoverage, ...]:
+    """Project path-free format progress from validated ingest evidence."""
+    hashed_ordinals = {source.ordinal for source in discovery.sources} | {
+        failure.ordinal
+        for failure in discovery.failures
+        if failure.stage
+        in {
+            DiscoveryFailureStage.CONTINUITY,
+            DiscoveryFailureStage.RESOLUTION,
+            DiscoveryFailureStage.PERSISTENCE,
+        }
+    }
+    identity_ordinals = {source.ordinal for source in discovery.sources} | {
+        failure.ordinal
+        for failure in discovery.failures
+        if failure.stage
+        in {
+            DiscoveryFailureStage.RESOLUTION,
+            DiscoveryFailureStage.PERSISTENCE,
+        }
+    }
+    coverage_by_key: dict[tuple[str, SourceSupport], list[int]] = {}
+    for item in classification.classified_candidates:
+        key = (item.classification.media_type, item.classification.support)
+        counts = coverage_by_key.setdefault(key, [0, 0, 0])
+        counts[0] += 1
+        if item.candidate.ordinal in hashed_ordinals:
+            counts[1] += 1
+        if item.candidate.ordinal in identity_ordinals:
+            counts[2] += 1
+    return tuple(
+        AuditSourceFormatCoverage(
+            media_type=media_type,
+            support=support,
+            file_count=counts[0],
+            total_bytes=next(
+                item.total_bytes
+                for item in classification.format_counts
+                if item.media_type == media_type and item.support is support
+            ),
+            hashed_count=counts[1],
+            identity_count=counts[2],
+        )
+        for (media_type, support), counts in sorted(
+            coverage_by_key.items(),
+            key=lambda item: (item[0][0], item[0][1].value),
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True, repr=False)

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Self, TypeAlias, TypeVar
 
-from inference_lab.provenance._validation import is_lowercase_slug
+from inference_lab._validation import is_lowercase_slug
 from inference_lab.provenance.errors import InvalidLineageReferenceError
 from inference_lab.provenance.identifiers import (
     DocumentVersionId,

@@ -2,7 +2,7 @@
 
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Final, Literal, cast
 
 from inference_lab._validation import is_strict_integer
@@ -14,7 +14,11 @@ from inference_lab.ingest.chunking import (
 )
 from inference_lab.ingest.parser import ParsedDocument
 from inference_lab.ingest.sources import StructuralBlock
-from inference_lab.ingest.tokenisation import ChunkTokeniser, validate_chunk_tokeniser
+from inference_lab.ingest.tokenisation import (
+    ChunkTokeniser,
+    validate_chunk_tokeniser,
+    validate_tokenised_text,
+)
 
 StructuralBoundaryRole = Literal["start", "end"]
 CountFn = Callable[[int, int], int]
@@ -29,6 +33,7 @@ _STRUCTURAL_PRIORITY: Final[dict[str, int]] = {
 }
 _PROTECTED_KINDS: Final[frozenset[str]] = frozenset({"table", "figure_caption"})
 _MAX_COUNT_CACHE_ENTRIES: Final[int] = 4096
+_STANDALONE_COUNT_CORRECTION_TOKENS: Final[int] = 32
 
 
 class ChunkWindowError(ValueError):
@@ -260,6 +265,8 @@ def build_chunk_drafts(request: ChunkingRequest) -> tuple[ChunkDraft, ...]:
         previous = drafts[-1] if drafts else None
         overlap = _overlap_for(
             previous,
+            boundary_map=boundary_map,
+            tokeniser=tokeniser,
             safe_boundaries=token_boundaries,
             catalogue=catalogue,
             count=count,
@@ -275,6 +282,13 @@ def build_chunk_drafts(request: ChunkingRequest) -> tuple[ChunkDraft, ...]:
             count=count,
             min_tokens=request.policy.min_tokens,
             max_tokens=request.policy.max_tokens,
+            candidate_limit=_prefix_candidate_limit(
+                window_start=overlap[0],
+                useful_end=useful_end,
+                boundary_map=boundary_map,
+                tokeniser=tokeniser,
+                max_tokens=request.policy.max_tokens,
+            ),
         )
         if end <= current_start:
             raise ChunkWindowError("no_progress")
@@ -301,6 +315,7 @@ def build_chunk_drafts(request: ChunkingRequest) -> tuple[ChunkDraft, ...]:
                 safe_boundaries=token_boundaries,
                 catalogue=catalogue,
                 boundary_map=boundary_map,
+                tokeniser=tokeniser,
                 count=count,
                 numerator=request.policy.overlap_numerator,
                 denominator=request.policy.overlap_denominator,
@@ -412,6 +427,52 @@ def _find_useful_range(
     return useful_start, useful_end
 
 
+def _prefix_candidate_limit(
+    *,
+    window_start: int,
+    useful_end: int,
+    boundary_map: CanonicalSourceBoundaryMap,
+    tokeniser: ChunkTokeniser,
+    max_tokens: int,
+) -> int:
+    """Bound exact prefix probes using native offsets plus correction headroom."""
+    text = boundary_map.canonical_text_for_source_range(window_start, useful_end)
+    tokenised = validate_tokenised_text(text, tokeniser.tokenise(text))
+    probe_tokens = max_tokens + _STANDALONE_COUNT_CORRECTION_TOKENS
+    if len(tokenised.offsets) <= probe_tokens:
+        return useful_end
+    canonical_start = boundary_map.canonical_offset_for_source(window_start)
+    canonical_limit = canonical_start + tokenised.offsets[probe_tokens - 1].end
+    return max(
+        boundary.source_offset
+        for boundary in boundary_map.boundaries
+        if boundary.canonical_offset <= canonical_limit
+    )
+
+
+def _suffix_candidate_limit(
+    previous: ChunkDraft,
+    *,
+    boundary_map: CanonicalSourceBoundaryMap,
+    tokeniser: ChunkTokeniser,
+    target_tokens: int,
+) -> int:
+    """Bound exact suffix probes using native offsets plus correction headroom."""
+    tokenised = validate_tokenised_text(
+        previous.text,
+        tokeniser.tokenise(previous.text),
+    )
+    probe_tokens = target_tokens + _STANDALONE_COUNT_CORRECTION_TOKENS
+    if len(tokenised.offsets) <= probe_tokens:
+        return previous.source_start
+    canonical_limit = previous.canonical_start + tokenised.offsets[-probe_tokens].start
+    return min(
+        boundary.source_offset
+        for boundary in boundary_map.boundaries
+        if boundary.canonical_offset >= canonical_limit
+    )
+
+
 def _choose_end(
     *,
     progress_start: int,
@@ -422,13 +483,14 @@ def _choose_end(
     count: CountFn,
     min_tokens: int,
     max_tokens: int,
+    candidate_limit: int,
 ) -> int:
     """Choose the furthest legal structural or token boundary."""
     count_range = count
 
     structural_candidates: list[tuple[int, StructuralBoundary]] = []
     for boundary in catalogue.boundaries:
-        if not progress_start < boundary.source_offset <= useful_end:
+        if not progress_start < boundary.source_offset <= candidate_limit:
             continue
         if _splits_protected(
             window_start,
@@ -451,7 +513,7 @@ def _choose_end(
     fallback = tuple(
         boundary.source_offset
         for boundary in safe_boundaries
-        if progress_start < boundary.source_offset <= useful_end
+        if progress_start < boundary.source_offset <= candidate_limit
         and not _splits_protected(
             window_start,
             boundary.source_offset,
@@ -460,25 +522,18 @@ def _choose_end(
     )
     if not fallback:
         raise ChunkWindowError("token_budget_failure")
-    low = 0
-    high = len(fallback) - 1
-    best: int | None = None
-    while low <= high:
-        middle = (low + high) // 2
-        token_count = count_range(window_start, fallback[middle])
+    for source_offset in reversed(fallback):
+        token_count = count_range(window_start, source_offset)
         if token_count <= max_tokens:
-            best = fallback[middle]
-            low = middle + 1
-        else:
-            high = middle - 1
-    if best is None:
-        raise ChunkWindowError("token_budget_failure")
-    return best
+            return source_offset
+    raise ChunkWindowError("token_budget_failure")
 
 
 def _overlap_for(
     previous: ChunkDraft | None,
     *,
+    boundary_map: CanonicalSourceBoundaryMap,
+    tokeniser: ChunkTokeniser,
     safe_boundaries: tuple[SourceBoundary, ...],
     catalogue: StructuralCatalogue,
     count: CountFn,
@@ -490,40 +545,31 @@ def _overlap_for(
         return (0, 0, 0, 0)
     count_range = count
     target = previous.token_count * numerator // denominator
+    candidate_limit = _suffix_candidate_limit(
+        previous,
+        boundary_map=boundary_map,
+        tokeniser=tokeniser,
+        target_tokens=target,
+    )
     candidates = tuple(
         boundary.source_offset
         for boundary in safe_boundaries
-        if previous.source_start <= boundary.source_offset <= previous.source_end
+        if candidate_limit <= boundary.source_offset <= previous.source_end
         and not _starts_inside_protected(boundary.source_offset, catalogue.protected)
     )
     if not candidates:
         return (previous.source_end, previous.source_end, target, 0)
-    low = 0
-    high = len(candidates) - 1
-    best_index: int | None = None
-    best_count = 0
-    while low <= high:
-        middle = (low + high) // 2
-        overlap_count = count_range(candidates[middle], previous.source_end)
-        if overlap_count <= target:
-            best_index = middle
-            best_count = overlap_count
-            high = middle - 1
-        else:
-            low = middle + 1
-    if best_index is None:
+    best: tuple[int, int] | None = None
+    for source_start in candidates:
+        overlap_count = count_range(source_start, previous.source_end)
+        if overlap_count > target:
+            continue
+        candidate = (overlap_count, source_start)
+        if best is None or candidate > best:
+            best = candidate
+    if best is None:
         return (previous.source_end, previous.source_end, target, 0)
-    latest_index = best_index
-    while latest_index + 1 < len(candidates):
-        candidate_count = count_range(
-            candidates[latest_index + 1],
-            previous.source_end,
-        )
-        if candidate_count != best_count:
-            break
-        latest_index += 1
-    start = candidates[latest_index]
-    overlap_count = best_count
+    overlap_count, start = best
     return (start, previous.source_end, target, overlap_count)
 
 
@@ -597,6 +643,7 @@ def _rebalance_tail(
     safe_boundaries: tuple[SourceBoundary, ...],
     catalogue: StructuralCatalogue,
     boundary_map: CanonicalSourceBoundaryMap,
+    tokeniser: ChunkTokeniser,
     count: CountFn,
     numerator: int,
     denominator: int,
@@ -608,7 +655,7 @@ def _rebalance_tail(
         return None
     previous = drafts[-1]
     count_range = count
-    candidates: list[tuple[int, int, int, int]] = []
+    candidates: list[tuple[int, int]] = []
     for boundary in safe_boundaries:
         candidate_end = boundary.source_offset
         if not previous.source_start < candidate_end < useful_end:
@@ -622,18 +669,20 @@ def _rebalance_tail(
         previous_count = count_range(previous.source_start, candidate_end)
         if not min_tokens <= previous_count <= max_tokens:
             continue
-        candidate_previous = replace(
+        candidates.append((abs(previous_count - previous.token_count), candidate_end))
+    for _, candidate_end in sorted(candidates):
+        candidate_previous = _replace_draft_range(
             previous,
             source_end=candidate_end,
-            canonical_end=boundary_map.canonical_offset_for_source(candidate_end),
-            text=boundary_map.canonical_text_for_source_range(
-                previous.source_start,
-                candidate_end,
-            ),
-            token_count=previous_count,
+            boundary_map=boundary_map,
+            catalogue=catalogue,
+            count=count_range,
+            minimum_exception=None,
         )
         overlap = _overlap_for(
             candidate_previous,
+            boundary_map=boundary_map,
+            tokeniser=tokeniser,
             safe_boundaries=safe_boundaries,
             catalogue=catalogue,
             count=count_range,
@@ -641,50 +690,22 @@ def _rebalance_tail(
             denominator=denominator,
         )
         current_count = count_range(overlap[0], useful_end)
-        if min_tokens <= current_count <= max_tokens:
-            candidates.append(
-                (
-                    abs(previous_count - previous.token_count),
-                    candidate_end,
-                    previous_count,
-                    current_count,
-                )
-            )
-    if not candidates:
-        return None
-    _, candidate_end, _, _ = min(
-        candidates, key=lambda candidate: (candidate[0], candidate[1])
-    )
-    previous_count = count_range(previous.source_start, candidate_end)
-    previous = _replace_draft_range(
-        previous,
-        source_end=candidate_end,
-        boundary_map=boundary_map,
-        catalogue=catalogue,
-        count=count_range,
-        minimum_exception=None,
-    )
-    overlap = _overlap_for(
-        previous,
-        safe_boundaries=safe_boundaries,
-        catalogue=catalogue,
-        count=count_range,
-        numerator=numerator,
-        denominator=denominator,
-    )
-    current = _make_draft(
-        ordinal=previous.ordinal + 1,
-        source_start=overlap[0],
-        source_end=useful_end,
-        previous=previous,
-        boundary_map=boundary_map,
-        catalogue=catalogue,
-        count=count_range,
-        overlap=overlap,
-        useful_end=useful_end,
-        min_tokens=min_tokens,
-    )
-    return previous, current
+        if not min_tokens <= current_count <= max_tokens:
+            continue
+        current = _make_draft(
+            ordinal=candidate_previous.ordinal + 1,
+            source_start=overlap[0],
+            source_end=useful_end,
+            previous=candidate_previous,
+            boundary_map=boundary_map,
+            catalogue=catalogue,
+            count=count_range,
+            overlap=overlap,
+            useful_end=useful_end,
+            min_tokens=min_tokens,
+        )
+        return candidate_previous, current
+    return None
 
 
 def _replace_draft_range(

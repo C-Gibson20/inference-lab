@@ -80,6 +80,13 @@ scan classification, layout, tables, figures, claims, examples, references,
 and other unsupported structures must be reported as unavailable or missing,
 not inferred from filenames, punctuation, headings, or heuristics.
 
+Those explicit unavailable states are acceptable coverage for the EVAL-02
+Phase 4 boundary; they do not assert that the corresponding corpus features are
+absent. Do not add heuristic audit-only inference to turn an unavailable value
+into an observation. Later versioned parser, extraction, and OCR producers may
+strengthen the evidence, at which point this audit must be rerun before its
+conclusions are reused.
+
 ## Repeatability check
 
 Run the same request factory against a new destination and compare with the
@@ -105,4 +112,6 @@ corpus snapshot or deployment metadata database is present here. The committed
 tests establish deterministic mixed-capability, reconciliation, privacy, and
 two-corpus isolation behaviour. A deployment operator must execute the
 procedure above and review the resulting aggregate report before EVAL-02 can
-be declared complete for a real corpus.
+be declared complete for a real corpus. No later implementation phase blocks
+that run: it can be performed now wherever the pinned corpus, its metadata, and
+the deployment-local request factory are available.

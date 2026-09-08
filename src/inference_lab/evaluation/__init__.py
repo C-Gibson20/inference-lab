@@ -44,15 +44,17 @@ from inference_lab.evaluation.audit_errors import (
     AuditPublicationError,
 )
 from inference_lab.evaluation.audit_observability import run_corpus_audit
-from inference_lab.evaluation.audit_report_publication import publish_audit_report
-from inference_lab.evaluation.audit_report_serialisation import (
+from inference_lab.evaluation.audit_report_codec import (
+    deserialise_audit_report,
+    serialise_audit_report,
+)
+from inference_lab.evaluation.audit_report_manifest import (
     AuditReportManifest,
     build_audit_report_manifest,
-    deserialise_audit_report,
-    render_audit_report,
-    serialise_audit_report,
     serialise_audit_report_manifest,
 )
+from inference_lab.evaluation.audit_report_publication import publish_audit_report
+from inference_lab.evaluation.audit_report_rendering import render_audit_report
 from inference_lab.evaluation.audit_reports import (
     AUDIT_IMPLEMENTATION,
     AUDIT_IMPLEMENTATION_VERSION,

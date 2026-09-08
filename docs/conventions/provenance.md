@@ -177,6 +177,23 @@ identifiers when moved between in-memory and persistent representations.
 membership does not merge member documents or their immutable source versions;
 each member remains independently citable.
 
+## Canonical source records and derived records
+
+Original source artefacts, parsed representations, parse outcomes, and source
+spans are canonical, storage-owned source records. A parsed representation is
+an immutable representation of one `DocumentVersionId`: it records its
+parser/OCR producer identity, canonical output digest, schema version, and the
+source-span catalogue produced in that parse. It is not a
+`DerivedRecordMetadata` value and does not cite a synthetic whole-document
+source span.
+
+The STOR-02 and ING-03 dependency on PROV-03 means that their source spans use
+the stable provenance identities and coordinate contracts required to anchor
+downstream lineage. It does not require the parser record itself to duplicate
+the derived-record envelope. A chunk, fact, summary, OCR-derived output, or
+other semantic transformation is a derived record and must cite the canonical
+source spans or parent records it actually used.
+
 ## Derived-record lineage
 
 Every `DerivedRecordMetadata` value identifies one immutable record version and

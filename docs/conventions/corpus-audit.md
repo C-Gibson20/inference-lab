@@ -13,8 +13,10 @@ The report keeps two populations separate:
 
 - **Source intake** is every traversed or classified source, including
   unsupported, unknown, inaccessible, changed, ambiguous, conflicting, and
-  failed sources. `files_seen` reconciles to classified files plus traversal
-  failures; format counts reconcile to classified files.
+  failed sources. `files_seen` reconciles to classified files plus
+  source-scoped traversal failures; format counts reconcile to classified
+  files. Request-scoped failures remain explicit upstream limitations outside
+  that source denominator.
 - **Corpus membership** is every document version in the selected immutable
   corpus version. Member-level parse, acquisition, structure, span, and OCR
   coverage use `member_versions` as their population, including members with
@@ -43,6 +45,14 @@ denominator is rendered as `null`, never as zero. Known-only rates use only
 observed and observed-absent values; population rates use the complete stated
 population. Percentages use the fixed decimal precision and rounding policy in
 `CorpusAuditPolicy`, not binary floating-point arithmetic.
+
+For EVAL-02 acceptance, an explicit `unavailable` value is complete coverage
+accounting when the selected versioned producer truthfully declares that it
+cannot observe the field. It is not evidence that the feature is absent and
+must remain visible in the report's limitations. EVAL-02 does not require
+capabilities assigned to later parser, extraction, or OCR work. When such a
+capability is added, its observations and producer identity must be versioned
+and the corpus must be audited again before relying on the stronger evidence.
 
 Source format support is classifier evidence, not file-signature proof. The
 current classifier is the versioned suffix-based `text-native-baseline` policy:

@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
 import shutil
+import sys
 from pathlib import Path
 from tempfile import mkdtemp
 
 from inference_lab.evaluation.audit_errors import AuditPublicationError
-from inference_lab.evaluation.audit_report_serialisation import (
+from inference_lab.evaluation.audit_report_codec import (
+    deserialise_audit_report,
+    serialise_audit_report,
+)
+from inference_lab.evaluation.audit_report_manifest import (
     AuditReportManifest,
     build_audit_report_manifest,
-    deserialise_audit_report,
-    render_audit_report,
-    serialise_audit_report,
     serialise_audit_report_manifest,
 )
+from inference_lab.evaluation.audit_report_rendering import render_audit_report
 from inference_lab.evaluation.audit_reports import CorpusAuditReport
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.serialisation import (
@@ -23,6 +28,10 @@ from inference_lab.evaluation.serialisation import (
     _fsync_tree_directories,
     atomic_write,
 )
+
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
+_RENAME_EXCL = 0x00000004
 
 
 def publish_audit_report(
@@ -69,9 +78,7 @@ def publish_audit_report(
         )
         _fsync_tree_directories(staging_path)
 
-        if destination.exists() or destination.is_symlink():
-            raise FileExistsError("Audit report destination already exists")
-        os.replace(staging_path, destination)
+        _rename_directory_without_replacement(staging_path, destination)
         staging_path = None
         _fsync_directory(destination.parent)
         return manifest
@@ -81,6 +88,70 @@ def publish_audit_report(
     except OSError as error:
         _cleanup_staging(staging_path, error)
         raise AuditPublicationError from None
+
+
+def _rename_directory_without_replacement(source: Path, destination: Path) -> None:
+    """Atomically rename a directory only when the destination is absent."""
+    if sys.platform == "darwin":
+        _call_libc_rename(
+            "renamex_np",
+            os.fsencode(source),
+            os.fsencode(destination),
+            _RENAME_EXCL,
+            destination=destination,
+        )
+        return
+    if sys.platform.startswith("linux"):
+        _call_libc_rename(
+            "renameat2",
+            _AT_FDCWD,
+            os.fsencode(source),
+            _AT_FDCWD,
+            os.fsencode(destination),
+            _RENAME_NOREPLACE,
+            destination=destination,
+        )
+        return
+    if os.name == "nt":
+        os.rename(source, destination)
+        return
+    raise OSError(
+        errno.ENOTSUP,
+        "atomic no-replace directory rename is unsupported",
+        destination,
+    )
+
+
+def _call_libc_rename(
+    function_name: str,
+    *arguments: bytes | int,
+    destination: Path,
+) -> None:
+    """Call a platform rename primitive and preserve its errno semantics."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        rename = getattr(libc, function_name)
+    except AttributeError:
+        raise OSError(
+            errno.ENOTSUP,
+            "atomic no-replace directory rename is unsupported",
+            destination,
+        ) from None
+    if function_name == "renamex_np":
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+    else:
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+    rename.restype = ctypes.c_int
+    if rename(*arguments) == 0:
+        return
+    error_number = ctypes.get_errno()
+    raise OSError(error_number, os.strerror(error_number), destination)
 
 
 def _cleanup_staging(

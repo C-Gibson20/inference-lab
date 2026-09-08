@@ -10,6 +10,7 @@ from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     DiscoveryFailureCategory,
+    DiscoveryFileKind,
     DiscoveryInput,
     DiscoveryInputKind,
     DiscoveryRequest,
@@ -48,6 +49,18 @@ def _relative_locations(inventory: TraversalInventory) -> tuple[str, ...]:
     return tuple(
         candidate.locator.relative_path.as_posix() for candidate in inventory.candidates
     )
+
+
+def _path_metadata(**changes: object) -> TraversalPathMetadata:
+    values: dict[str, object] = {
+        "mode": 1,
+        "byte_count": 2,
+        "modified_time_ns": 3,
+        "device_id": 4,
+        "file_id": 5,
+    }
+    values.update(changes)
+    return TraversalPathMetadata(**values)  # type: ignore[arg-type]
 
 
 class _FaultInjectingFileSystem(LocalTraversalFileSystem):
@@ -299,6 +312,62 @@ def test_explicit_symlink_root_fails_closed(tmp_path: Path) -> None:
 
     assert inventory.candidates == ()
     assert inventory.failures[0].category is DiscoveryFailureCategory.INVALID_ROOT
+    assert inventory.complete_root_ordinals == ()
+
+
+@pytest.mark.parametrize(
+    "input_kind", [DiscoveryInputKind.FILE, DiscoveryInputKind.DIRECTORY]
+)
+def test_explicit_root_with_symlinked_ancestor_fails_closed(
+    tmp_path: Path,
+    input_kind: DiscoveryInputKind,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    if input_kind is DiscoveryInputKind.FILE:
+        (target / "source.txt").write_text("content", encoding="utf-8")
+        relative = Path("source.txt")
+    else:
+        (target / "nested").mkdir()
+        relative = Path("nested")
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable: {type(error).__name__}")
+    root = alias / relative
+    discovery_input = DiscoveryInput(root=root, kind=input_kind)
+
+    inventory = inventory_local_sources(
+        _request(discovery_input),
+        excluded_paths=(),
+    )
+
+    assert inventory.candidates == ()
+    assert len(inventory.failures) == 1
+    assert inventory.failures[0].category is DiscoveryFailureCategory.INVALID_ROOT
+    assert inventory.failures[0].file_kind is DiscoveryFileKind.SYMLINK
+    assert inventory.complete_root_ordinals == ()
+
+
+def test_explicit_root_with_junction_ancestor_fails_closed(tmp_path: Path) -> None:
+    ancestor = tmp_path / "junction"
+    root = ancestor / "source.txt"
+    ancestor.mkdir()
+    root.write_text("content", encoding="utf-8")
+    filesystem = _FaultInjectingFileSystem()
+    filesystem.junctions.add(ancestor)
+
+    inventory = inventory_local_sources(
+        _request(_file_input(root)),
+        excluded_paths=(),
+        filesystem=filesystem,
+    )
+
+    assert inventory.candidates == ()
+    assert len(inventory.failures) == 1
+    assert inventory.failures[0].category is DiscoveryFailureCategory.INVALID_ROOT
+    assert inventory.failures[0].file_kind is DiscoveryFileKind.SYMLINK
     assert inventory.complete_root_ordinals == ()
 
 
@@ -650,18 +719,22 @@ def test_canonical_path_key_rejects_untyped_or_remote_paths() -> None:
         canonical_path_key(Path("https:/example.test/source"))
 
 
-def test_traversal_path_metadata_rejects_untyped_or_negative_values() -> None:
-    valid = {
-        "mode": 1,
-        "byte_count": 2,
-        "modified_time_ns": 3,
-        "device_id": 4,
-        "file_id": 5,
-    }
-    with pytest.raises(TypeError, match="mode must be an integer"):
-        TraversalPathMetadata(**(valid | {"mode": True}))
-    with pytest.raises(ValueError, match="byte_count must be non-negative"):
-        TraversalPathMetadata(**(valid | {"byte_count": -1}))
+@pytest.mark.parametrize(
+    "field_name",
+    ["mode", "byte_count", "modified_time_ns", "device_id", "file_id"],
+)
+def test_traversal_path_metadata_rejects_untyped_values(field_name: str) -> None:
+    with pytest.raises(TypeError, match=rf"{field_name} must be an integer"):
+        _path_metadata(**{field_name: True})
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["mode", "byte_count", "modified_time_ns", "device_id", "file_id"],
+)
+def test_traversal_path_metadata_rejects_negative_values(field_name: str) -> None:
+    with pytest.raises(ValueError, match=rf"{field_name} must be non-negative"):
+        _path_metadata(**{field_name: -1})
 
 
 def test_failure_and_candidate_representations_hide_source_paths(

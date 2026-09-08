@@ -33,7 +33,7 @@ The baseline policy is `local-source-discovery` version `1.0.0`:
 
 | Area | Behaviour |
 | --- | --- |
-| Symbolic links and junctions | Never followed, including when explicitly selected. |
+| Symbolic links and junctions | Never followed, including an explicitly selected root or any of its lexical ancestors. |
 | Special files | FIFOs, sockets, devices, and other non-regular entries are skipped with explicit outcomes. |
 | Hidden entries | Included; `.gitignore` and similar files do not change discovery. |
 | Mount boundaries | An explicitly selected mount may be a root, but recursive traversal does not enter a nested device. |

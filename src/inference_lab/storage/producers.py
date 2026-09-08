@@ -1,12 +1,8 @@
 """Immutable producer identities for persisted parser and layout records."""
 
-import re
 from dataclasses import dataclass
-from typing import Final
 
-from inference_lab._validation import is_canonical_semantic_version
-
-_LOWERCASE_SLUG: Final = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+from inference_lab._validation import is_canonical_semantic_version, is_lowercase_slug
 
 
 def _validate_optional_identity(value: object, field_name: str) -> None:
@@ -35,7 +31,7 @@ class ProducerIdentity:
         """Validate that the producer identity is self-consistent."""
         if not isinstance(self.implementation, str):
             raise TypeError("implementation must be a string.")
-        if _LOWERCASE_SLUG.fullmatch(self.implementation) is None:
+        if not is_lowercase_slug(self.implementation):
             raise ValueError("implementation must be a lowercase hyphenated slug.")
         if not isinstance(self.contract_version, str):
             raise TypeError("contract_version must be a string.")

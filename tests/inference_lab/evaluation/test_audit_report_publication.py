@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -17,6 +16,7 @@ from inference_lab.evaluation import (
     render_audit_report,
 )
 from inference_lab.evaluation.audit_report_publication import (
+    _rename_directory_without_replacement,
     atomic_write,
 )
 
@@ -118,15 +118,15 @@ def test_publish_cleans_staging_after_publication_failure(
 ) -> None:
     report = _report()
     destination = tmp_path / "audit"
-    real_replace = os.replace
 
     def fail_publication(source: Path, target: Path) -> None:
         if Path(target) == destination:
             raise OSError("publication failed")
-        real_replace(source, target)
+        _rename_directory_without_replacement(source, target)
 
     monkeypatch.setattr(
-        "inference_lab.evaluation.audit_report_publication.os.replace",
+        "inference_lab.evaluation.audit_report_publication."
+        "_rename_directory_without_replacement",
         fail_publication,
     )
 
@@ -160,4 +160,29 @@ def test_publish_preserves_competing_destination(
         publish_audit_report(destination, report)
 
     assert (destination / "owner").read_text(encoding="utf-8") == "external"
+    assert not tuple(tmp_path.glob(".audit.*.staging"))
+
+
+def test_publish_preserves_empty_competing_destination_at_atomic_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = _report()
+    destination = tmp_path / "audit"
+
+    def publish_after_competitor(source: Path, target: Path) -> None:
+        destination.mkdir()
+        _rename_directory_without_replacement(source, target)
+
+    monkeypatch.setattr(
+        "inference_lab.evaluation.audit_report_publication."
+        "_rename_directory_without_replacement",
+        publish_after_competitor,
+    )
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        publish_audit_report(destination, report)
+
+    assert destination.is_dir()
+    assert not tuple(destination.iterdir())
     assert not tuple(tmp_path.glob(".audit.*.staging"))
