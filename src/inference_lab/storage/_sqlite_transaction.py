@@ -49,20 +49,22 @@ from inference_lab.storage._sqlite_corpus_publication import (
     commit_corpus_rollback,
     commit_corpus_update,
 )
+from inference_lab.storage._sqlite_corpus_update_memberships import (
+    add_corpus_update_document_membership,
+    list_corpus_update_document_memberships,
+    remove_corpus_update_document_membership,
+    replace_corpus_update_document_membership,
+)
 from inference_lab.storage._sqlite_corpus_update_reads import (
     get_corpus_update,
     list_non_terminal_corpus_updates,
 )
 from inference_lab.storage._sqlite_corpus_updates import (
     abort_corpus_update,
-    add_corpus_update_document_membership,
     begin_corpus_update,
     list_corpus_update_component_generations,
-    list_corpus_update_document_memberships,
     register_corpus_update_component_generation,
-    remove_corpus_update_document_membership,
     replace_corpus_update_component_generation,
-    replace_corpus_update_document_membership,
     seal_corpus_update,
 )
 from inference_lab.storage._sqlite_corpus_versions import (
