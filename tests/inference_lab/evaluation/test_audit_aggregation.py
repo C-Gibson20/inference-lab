@@ -435,6 +435,36 @@ def test_report_json_rejects_duplicate_unknown_and_coerced_fields() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("tools",), [], "JSON object"),
+        (("structures",), {}, "JSON array"),
+        (("schema_version",), 1, "JSON string"),
+        (("populations", "member_versions"), True, "JSON integer"),
+        (("source", "reconciles"), "true", "JSON boolean"),
+    ],
+)
+def test_report_json_rejects_wrong_primitive_shapes(
+    path: tuple[str, ...],
+    value: object,
+    message: str,
+) -> None:
+    membership = _membership(_DOCUMENT_ONE, _VERSION_ONE)
+    report = CorpusAuditReport.from_request(
+        _request((membership,), (_observation(membership),))
+    )
+    payload = json.loads(serialise_audit_report(report))
+    target = payload
+    for field_name in path[:-1]:
+        target = target[field_name]
+    target[path[-1]] = value
+    data = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+    with pytest.raises(ValueError, match=message):
+        deserialise_audit_report(data)
+
+
 def test_report_json_rejects_identity_digest_mismatch() -> None:
     membership = _membership(_DOCUMENT_ONE, _VERSION_ONE)
     report = CorpusAuditReport.from_request(
