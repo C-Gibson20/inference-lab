@@ -109,6 +109,50 @@ class ContextualTestTokeniser:
         return len(self.tokenise(text).token_ids)
 
 
+class NonMonotonicTestTokeniser:
+    """Expose valid standalone counts that repeatedly cross a token limit."""
+
+    _IDENTITY = TokeniserIdentity(
+        implementation="non-monotonic-test",
+        contract_version="1.0.0",
+        artefact_identity="acceptance-fixture",
+        artefact_revision="v1",
+        options=(("non-monotonic-counts", "true"),),
+    )
+    _COUNTS = {1: 1, 2: 3, 3: 2, 4: 5, 5: 1, 6: 4}
+
+    @property
+    def identity(self) -> TokeniserIdentity:
+        """Return the stable acceptance tokeniser identity."""
+        return self._IDENTITY
+
+    def tokenise(self, text: str) -> TokenisedText:
+        """Return offsets consistent with the adversarial standalone count."""
+        words = tuple(re.finditer(r"\S+", text))
+        word_count = len(words)
+        token_count = self._COUNTS.get(word_count, word_count)
+        offsets = [TokenOffset(match.start(), match.end()) for match in words]
+        if token_count < word_count:
+            offsets = offsets[:token_count]
+        elif token_count > word_count:
+            whitespace = (
+                TokenOffset(index, index + 1)
+                for index, character in enumerate(text)
+                if character.isspace()
+            )
+            offsets.extend(tuple(whitespace)[: token_count - word_count])
+            offsets.sort(key=lambda offset: offset.start)
+        return TokenisedText(
+            token_ids=tuple(range(1, len(offsets) + 1)),
+            offsets=tuple(offsets),
+        )
+
+    def count_tokens(self, text: str) -> int:
+        """Return deterministic counts with no monotonicity guarantee."""
+        word_count = len(tuple(re.finditer(r"\S+", text)))
+        return self._COUNTS.get(word_count, word_count)
+
+
 def _words(count: int) -> str:
     """Build deterministic whitespace-tokenised source text."""
     return " ".join(f"word{index}" for index in range(count))
@@ -480,6 +524,32 @@ def test_contextual_tokeniser_uses_exact_standalone_chunk_text_counts() -> None:
 
     whole_document_count = tokeniser.count_tokens(document.text.text)
     assert any(chunk.token_count != whole_document_count for chunk in chunk_set.chunks)
+    _assert_invariants(document, chunk_set, tokeniser)
+    assert _reconstruct(document, chunk_set) == document.text.text
+
+
+def test_non_monotonic_counts_choose_furthest_end_and_best_overlap() -> None:
+    tokeniser = NonMonotonicTestTokeniser()
+    source = "a b c d e f g h"
+    document, chunk_set = _build_set(
+        source,
+        _full_span(source),
+        tokeniser=tokeniser,
+        policy=ChunkingPolicy(
+            min_tokens=1,
+            max_tokens=4,
+            overlap_numerator=1,
+            overlap_denominator=2,
+        ),
+    )
+
+    assert len(chunk_set.chunks) == 2
+    first, second = chunk_set.chunks
+    assert first.source_end == source.index("g")
+    assert first.token_count == 4
+    assert second.source_start == source.index("d")
+    assert second.target_overlap_tokens == 2
+    assert second.overlap_token_count == 2
     _assert_invariants(document, chunk_set, tokeniser)
     assert _reconstruct(document, chunk_set) == document.text.text
 
