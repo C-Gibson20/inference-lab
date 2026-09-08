@@ -58,6 +58,7 @@ _DOCUMENT_ID = DocumentId.from_str("00000000-0000-4000-8000-000000000403")
 _DOCUMENT_VERSION_ID = DocumentVersionId.from_str(
     "00000000-0000-4000-8000-000000000404"
 )
+_PRIVATE_TOKENISER_MARKER = "private tokeniser payload marker"
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +152,61 @@ class NonMonotonicTestTokeniser:
         """Return deterministic counts with no monotonicity guarantee."""
         word_count = len(tuple(re.finditer(r"\S+", text)))
         return self._COUNTS.get(word_count, word_count)
+
+
+class MissingIdentityTestTokeniser:
+    """Implement token operations without the required stable identity."""
+
+    def __init__(self) -> None:
+        self._delegate = FakeChunkTokeniser()
+
+    def tokenise(self, text: str) -> TokenisedText:
+        """Delegate tokenisation for the missing-identity case."""
+        return self._delegate.tokenise(text)
+
+    def count_tokens(self, text: str) -> int:
+        """Delegate counting for the missing-identity case."""
+        return self._delegate.count_tokens(text)
+
+
+class InvalidBoundaryTestTokeniser:
+    """Inject one selected tokeniser contract violation on document text."""
+
+    def __init__(self, failure: str) -> None:
+        self._failure = failure
+        self._delegate = FakeChunkTokeniser()
+
+    @property
+    def identity(self) -> object:
+        """Return either the valid fixture identity or an invalid value."""
+        if self._failure == "identity_exception":
+            raise RuntimeError(_PRIVATE_TOKENISER_MARKER)
+        if self._failure == "invalid_identity":
+            return _PRIVATE_TOKENISER_MARKER
+        return self._delegate.identity
+
+    def tokenise(self, text: str) -> TokenisedText:
+        """Inject malformed offsets or a private backend exception."""
+        if self._failure == "probe_exception" and text == "one café":
+            raise RuntimeError(_PRIVATE_TOKENISER_MARKER)
+        if _PRIVATE_TOKENISER_MARKER in text:
+            if self._failure == "malformed_offsets":
+                return TokenisedText(
+                    (1,),
+                    (TokenOffset(0, len(text) + 1),),
+                )
+            if self._failure == "backend_exception":
+                raise RuntimeError(_PRIVATE_TOKENISER_MARKER)
+        return self._delegate.tokenise(text)
+
+    def count_tokens(self, text: str) -> int:
+        """Inject an actual-document count inconsistent with tokenisation."""
+        if self._failure == "count_exception" and _PRIVATE_TOKENISER_MARKER in text:
+            raise RuntimeError(_PRIVATE_TOKENISER_MARKER)
+        count = self._delegate.count_tokens(text)
+        if self._failure == "inconsistent_count" and _PRIVATE_TOKENISER_MARKER in text:
+            return count + 1
+        return count
 
 
 def _words(count: int) -> str:
@@ -666,3 +722,38 @@ def test_acceptance_failure_and_logs_exclude_private_canaries() -> None:
 
     assert observed.failure is not None
     assert private_source not in repr(logs)
+
+
+@pytest.mark.parametrize(
+    ("tokeniser", "expected_category"),
+    (
+        (MissingIdentityTestTokeniser(), "invalid_tokeniser"),
+        (InvalidBoundaryTestTokeniser("invalid_identity"), "invalid_tokeniser"),
+        (
+            InvalidBoundaryTestTokeniser("identity_exception"),
+            "tokeniser_unavailable",
+        ),
+        (InvalidBoundaryTestTokeniser("probe_exception"), "tokeniser_unavailable"),
+        (InvalidBoundaryTestTokeniser("malformed_offsets"), "invalid_tokeniser"),
+        (InvalidBoundaryTestTokeniser("inconsistent_count"), "invalid_tokeniser"),
+        (InvalidBoundaryTestTokeniser("backend_exception"), "tokeniser_unavailable"),
+        (InvalidBoundaryTestTokeniser("count_exception"), "tokeniser_unavailable"),
+    ),
+)
+def test_tokeniser_contract_failures_produce_bounded_outcomes(
+    tokeniser: object,
+    expected_category: str,
+) -> None:
+    document = _document(
+        _PRIVATE_TOKENISER_MARKER,
+        _full_span(_PRIVATE_TOKENISER_MARKER),
+    )
+
+    with capture_logs() as logs:
+        outcome = build_chunking_outcome(_request(document, tokeniser=tokeniser))
+
+    assert not outcome.succeeded
+    assert outcome.failure is not None
+    assert outcome.failure.category.value == expected_category
+    assert _PRIVATE_TOKENISER_MARKER not in repr(outcome)
+    assert logs == []
