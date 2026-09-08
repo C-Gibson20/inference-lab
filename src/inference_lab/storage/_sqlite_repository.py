@@ -55,6 +55,9 @@ from inference_lab.storage._sqlite_corpus_snapshots import (
     create_active_corpus_snapshot,
     create_corpus_snapshot,
 )
+from inference_lab.storage._sqlite_corpus_update_components import (
+    list_corpus_update_component_generations,
+)
 from inference_lab.storage._sqlite_corpus_update_memberships import (
     list_corpus_update_document_memberships,
 )
@@ -62,10 +65,7 @@ from inference_lab.storage._sqlite_corpus_update_reads import (
     get_corpus_update,
     list_non_terminal_corpus_updates,
 )
-from inference_lab.storage._sqlite_corpus_updates import (
-    CreatedAtFactory,
-    list_corpus_update_component_generations,
-)
+from inference_lab.storage._sqlite_corpus_updates import CreatedAtFactory
 from inference_lab.storage._sqlite_corpus_versions import (
     get_active_corpus_version,
     get_corpus_version,
