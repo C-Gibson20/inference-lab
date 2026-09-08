@@ -10,6 +10,7 @@ from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     DiscoveryFailureCategory,
+    DiscoveryFileKind,
     DiscoveryInput,
     DiscoveryInputKind,
     DiscoveryRequest,
@@ -311,6 +312,62 @@ def test_explicit_symlink_root_fails_closed(tmp_path: Path) -> None:
 
     assert inventory.candidates == ()
     assert inventory.failures[0].category is DiscoveryFailureCategory.INVALID_ROOT
+    assert inventory.complete_root_ordinals == ()
+
+
+@pytest.mark.parametrize(
+    "input_kind", [DiscoveryInputKind.FILE, DiscoveryInputKind.DIRECTORY]
+)
+def test_explicit_root_with_symlinked_ancestor_fails_closed(
+    tmp_path: Path,
+    input_kind: DiscoveryInputKind,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    if input_kind is DiscoveryInputKind.FILE:
+        (target / "source.txt").write_text("content", encoding="utf-8")
+        relative = Path("source.txt")
+    else:
+        (target / "nested").mkdir()
+        relative = Path("nested")
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable: {type(error).__name__}")
+    root = alias / relative
+    discovery_input = DiscoveryInput(root=root, kind=input_kind)
+
+    inventory = inventory_local_sources(
+        _request(discovery_input),
+        excluded_paths=(),
+    )
+
+    assert inventory.candidates == ()
+    assert len(inventory.failures) == 1
+    assert inventory.failures[0].category is DiscoveryFailureCategory.INVALID_ROOT
+    assert inventory.failures[0].file_kind is DiscoveryFileKind.SYMLINK
+    assert inventory.complete_root_ordinals == ()
+
+
+def test_explicit_root_with_junction_ancestor_fails_closed(tmp_path: Path) -> None:
+    ancestor = tmp_path / "junction"
+    root = ancestor / "source.txt"
+    ancestor.mkdir()
+    root.write_text("content", encoding="utf-8")
+    filesystem = _FaultInjectingFileSystem()
+    filesystem.junctions.add(ancestor)
+
+    inventory = inventory_local_sources(
+        _request(_file_input(root)),
+        excluded_paths=(),
+        filesystem=filesystem,
+    )
+
+    assert inventory.candidates == ()
+    assert len(inventory.failures) == 1
+    assert inventory.failures[0].category is DiscoveryFailureCategory.INVALID_ROOT
+    assert inventory.failures[0].file_kind is DiscoveryFileKind.SYMLINK
     assert inventory.complete_root_ordinals == ()
 
 

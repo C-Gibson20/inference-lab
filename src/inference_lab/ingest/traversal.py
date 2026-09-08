@@ -311,6 +311,14 @@ class _RawFailure:
     file_kind: DiscoveryFileKind | None = None
 
 
+class _InvalidRootComponentError(ValueError):
+    """Report a bounded invalid kind in one explicit root's lexical chain."""
+
+    def __init__(self, file_kind: DiscoveryFileKind) -> None:
+        super().__init__("explicit root contains an invalid path component")
+        self.file_kind = file_kind
+
+
 def _resolved_path(path: Path, filesystem: TraversalFileSystem) -> Path:
     """Resolve aliases for path equality without requiring the leaf to exist."""
     return filesystem.resolve(path)
@@ -364,6 +372,29 @@ def _file_kind(mode: int) -> DiscoveryFileKind:
     if stat.S_ISLNK(mode):
         return DiscoveryFileKind.SYMLINK
     return DiscoveryFileKind.SPECIAL
+
+
+def _lstat_root_without_links(
+    path: Path,
+    filesystem: TraversalFileSystem,
+) -> TraversalPathMetadata:
+    """Stat a root only after every lexical component passes the link policy."""
+    components = (*reversed(path.parents), path)
+    root_metadata: TraversalPathMetadata | None = None
+    for component in components:
+        metadata = filesystem.lstat(component)
+        kind = _file_kind(metadata.mode)
+        if kind is DiscoveryFileKind.SYMLINK:
+            raise _InvalidRootComponentError(DiscoveryFileKind.SYMLINK)
+        if filesystem.is_junction(component):
+            raise _InvalidRootComponentError(DiscoveryFileKind.SYMLINK)
+        if component != path and kind is not DiscoveryFileKind.DIRECTORY:
+            raise _InvalidRootComponentError(kind)
+        root_metadata = metadata
+
+    if root_metadata is None:
+        raise RuntimeError("absolute root path produced no lexical components")
+    return root_metadata
 
 
 def _stat_evidence(metadata: TraversalPathMetadata) -> FileStatEvidence:
@@ -435,7 +466,7 @@ def _prepare_roots(
     for input_ordinal, discovery_input in enumerate(ordered_inputs):
         lexical_path = filesystem.absolute(discovery_input.root)
         try:
-            metadata = filesystem.lstat(lexical_path)
+            metadata = _lstat_root_without_links(lexical_path, filesystem)
         except FileNotFoundError:
             return (), _root_failure(
                 corpus_id=request.corpus_id,
@@ -452,6 +483,15 @@ def _prepare_roots(
                 path=lexical_path,
                 category=DiscoveryFailureCategory.ROOT_INACCESSIBLE,
             )
+        except _InvalidRootComponentError as error:
+            return (), _root_failure(
+                corpus_id=request.corpus_id,
+                root_count=len(request.inputs),
+                root_ordinal=input_ordinal,
+                path=lexical_path,
+                category=DiscoveryFailureCategory.INVALID_ROOT,
+                file_kind=error.file_kind,
+            )
 
         kind = _file_kind(metadata.mode)
         expected_kind = (
@@ -459,25 +499,6 @@ def _prepare_roots(
             if discovery_input.kind is DiscoveryInputKind.FILE
             else DiscoveryFileKind.DIRECTORY
         )
-        try:
-            is_junction = filesystem.is_junction(lexical_path)
-        except OSError:
-            return (), _root_failure(
-                corpus_id=request.corpus_id,
-                root_count=len(request.inputs),
-                root_ordinal=input_ordinal,
-                path=lexical_path,
-                category=DiscoveryFailureCategory.ROOT_INACCESSIBLE,
-            )
-        if kind is DiscoveryFileKind.SYMLINK or is_junction:
-            return (), _root_failure(
-                corpus_id=request.corpus_id,
-                root_count=len(request.inputs),
-                root_ordinal=input_ordinal,
-                path=lexical_path,
-                category=DiscoveryFailureCategory.INVALID_ROOT,
-                file_kind=DiscoveryFileKind.SYMLINK,
-            )
         if kind is not expected_kind:
             return (), _root_failure(
                 corpus_id=request.corpus_id,
