@@ -40,6 +40,15 @@ def is_canonical_media_type(value: object) -> bool:
     )
 
 
+def paths_overlap(first: Path, second: Path) -> bool:
+    """Return whether two paths are equal or contain one another."""
+    if not isinstance(first, Path):
+        raise TypeError("first must be a Path")
+    if not isinstance(second, Path):
+        raise TypeError("second must be a Path")
+    return first == second or first in second.parents or second in first.parents
+
+
 def is_local_path_shape(value: object) -> bool:
     """Return whether a value names a local path on the current host.
 

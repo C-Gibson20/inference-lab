@@ -10,6 +10,7 @@ from inference_lab.settings import StorageConfig
 from inference_lab.storage import (
     MetadataRepository,
     MigrationRequiredError,
+    RepositoryUnavailableError,
     open_metadata_repository,
 )
 
@@ -83,6 +84,75 @@ def test_factory_rejects_invalid_source_directory_type(tmp_path: Path) -> None:
             tmp_path / "metadata.sqlite3",
             source_dir=object(),  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize(
+    ("database_suffix", "source_suffix"),
+    [
+        (("state",), ("state",)),
+        (("state", "metadata.sqlite3"), ("state",)),
+        (("state",), ("state", "sources")),
+    ],
+)
+def test_factory_rejects_resolved_storage_path_overlap_before_creation(
+    tmp_path: Path,
+    database_suffix: tuple[str, ...],
+    source_suffix: tuple[str, ...],
+) -> None:
+    database_path = tmp_path.joinpath(*database_suffix)
+    source_dir = tmp_path.joinpath(*source_suffix)
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        open_metadata_repository(
+            database_path,
+            source_dir=source_dir,
+            apply_migrations=True,
+        )
+
+    assert not database_path.exists()
+    assert not source_dir.exists()
+
+
+def test_factory_rejects_symlink_alias_overlap_before_opening_storage(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source-data"
+    source_dir.mkdir()
+    database_alias = tmp_path / "metadata-alias.sqlite3"
+    database_alias.symlink_to(source_dir / "metadata.sqlite3")
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        open_metadata_repository(
+            database_alias,
+            source_dir=source_dir,
+            apply_migrations=True,
+        )
+
+    assert database_alias.is_symlink()
+    assert not (source_dir / "metadata.sqlite3").exists()
+
+
+def test_factory_hides_path_resolution_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_resolution(
+        _path: Path,
+        *,
+        strict: bool = False,
+    ) -> Path:
+        del strict
+        raise OSError("private-storage-path")
+
+    monkeypatch.setattr(Path, "resolve", fail_resolution)
+
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        open_metadata_repository(
+            tmp_path / "metadata.sqlite3",
+            source_dir=tmp_path / "source-data",
+        )
+
+    assert "private-storage-path" not in str(caught.value)
 
 
 @pytest.mark.parametrize(

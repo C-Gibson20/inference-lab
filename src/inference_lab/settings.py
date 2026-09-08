@@ -13,7 +13,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from inference_lab._validation import is_local_path_shape
+from inference_lab._validation import is_local_path_shape, paths_overlap
 
 
 def _validate_local_path(value: object) -> object:
@@ -25,11 +25,6 @@ def _validate_local_path(value: object) -> object:
 def _absolute_lexical_path(path: Path) -> Path:
     """Return a host-normalised absolute path without resolving filesystem aliases."""
     return Path(os.path.normcase(os.path.abspath(os.fspath(path))))
-
-
-def _paths_overlap(first: Path, second: Path) -> bool:
-    """Return whether two lexical paths are equal or contain one another."""
-    return first == second or first in second.parents or second in first.parents
 
 
 class ModelPaths(BaseModel):
@@ -81,7 +76,7 @@ class StorageConfig(BaseModel):
         )
         for index, (first_name, first_path) in enumerate(paths):
             for second_name, second_path in paths[index + 1 :]:
-                if _paths_overlap(first_path, second_path):
+                if paths_overlap(first_path, second_path):
                     raise ValueError(f"{first_name} and {second_name} must not overlap")
         return self
 
