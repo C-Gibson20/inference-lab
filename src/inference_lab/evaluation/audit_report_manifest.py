@@ -5,8 +5,8 @@ from dataclasses import asdict, dataclass
 from typing import cast
 
 from inference_lab._json import JsonObject, canonical_json_bytes
+from inference_lab.evaluation.audit_report_codec import serialise_audit_report
 from inference_lab.evaluation.audit_report_rendering import render_audit_report
-from inference_lab.evaluation.audit_report_serialisation import serialise_audit_report
 from inference_lab.evaluation.audit_reports import (
     AUDIT_REPORT_SCHEMA_VERSION,
     CorpusAuditReport,

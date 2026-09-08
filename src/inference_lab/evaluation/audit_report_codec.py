@@ -1,4 +1,4 @@
-"""Canonical JSON, Markdown, and checksum manifests for audit reports."""
+"""Canonical JSON encoding and strict reconstruction for audit reports."""
 
 from __future__ import annotations
 

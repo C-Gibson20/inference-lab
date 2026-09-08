@@ -11,16 +11,16 @@ from pathlib import Path
 from tempfile import mkdtemp
 
 from inference_lab.evaluation.audit_errors import AuditPublicationError
+from inference_lab.evaluation.audit_report_codec import (
+    deserialise_audit_report,
+    serialise_audit_report,
+)
 from inference_lab.evaluation.audit_report_manifest import (
     AuditReportManifest,
     build_audit_report_manifest,
     serialise_audit_report_manifest,
 )
 from inference_lab.evaluation.audit_report_rendering import render_audit_report
-from inference_lab.evaluation.audit_report_serialisation import (
-    deserialise_audit_report,
-    serialise_audit_report,
-)
 from inference_lab.evaluation.audit_reports import CorpusAuditReport
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.serialisation import (
