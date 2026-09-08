@@ -1,10 +1,11 @@
 """Typed application settings and configuration-source precedence."""
 
+import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -19,6 +20,16 @@ def _validate_local_path(value: object) -> object:
     if isinstance(value, (str, Path)) and not is_local_path_shape(value):
         raise ValueError("path must be a local filesystem path")
     return value
+
+
+def _absolute_lexical_path(path: Path) -> Path:
+    """Return a host-normalised absolute path without resolving filesystem aliases."""
+    return Path(os.path.normcase(os.path.abspath(os.fspath(path))))
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    """Return whether two lexical paths are equal or contain one another."""
+    return first == second or first in second.parents or second in first.parents
 
 
 class ModelPaths(BaseModel):
@@ -59,6 +70,20 @@ class StorageConfig(BaseModel):
         "source_dir",
         mode="before",
     )(_validate_local_path)
+
+    @model_validator(mode="after")
+    def _validate_path_separation(self) -> Self:
+        """Reject equal or nested deployment storage locations."""
+        paths = (
+            ("index_dir", _absolute_lexical_path(self.index_dir)),
+            ("metadata_db_path", _absolute_lexical_path(self.metadata_db_path)),
+            ("source_dir", _absolute_lexical_path(self.source_dir)),
+        )
+        for index, (first_name, first_path) in enumerate(paths):
+            for second_name, second_path in paths[index + 1 :]:
+                if _paths_overlap(first_path, second_path):
+                    raise ValueError(f"{first_name} and {second_name} must not overlap")
+        return self
 
 
 class LoggingConfig(BaseModel):
