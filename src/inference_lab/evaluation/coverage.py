@@ -58,6 +58,22 @@ def _validate_question_type_minima(
     return MappingProxyType(copied)
 
 
+def _validate_question_type_counts(
+    name: str,
+    counts: Mapping[QuestionType, int],
+) -> Mapping[QuestionType, int]:
+    """Validate and defensively freeze one complete question-type count map."""
+    if not isinstance(counts, Mapping):
+        raise TypeError(f"{name} must be a mapping")
+
+    copied = dict(counts)
+    if set(copied) != set(QUESTION_TYPES):
+        raise ValueError(f"{name} must contain exactly the canonical question types")
+    for question_type, count in copied.items():
+        _validate_count(f"{name}[{question_type}]", count)
+    return MappingProxyType(copied)
+
+
 @dataclass(frozen=True, slots=True)
 class CoveragePolicy:
     """Immutable acceptance thresholds for an evaluation question set."""
@@ -163,17 +179,80 @@ class CoverageReport:
     held_out_question_type_counts: Mapping[QuestionType, int]
 
     def __post_init__(self) -> None:
-        """Defensively freeze the report's nested count mappings."""
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate and freeze complete, internally consistent coverage counts."""
+        self._validate_counts()
+        self._freeze_question_type_counts()
+        self._validate_reconciliation()
+
+    def _validate_counts(self) -> None:
+        """Validate every scalar report count as a strict non-negative integer."""
+        for name in (
+            "total_cases",
+            "answerable_cases",
+            "abstention_cases",
+            "held_out_cases",
+            "held_out_answerable_cases",
+            "held_out_abstention_cases",
+        ):
+            _validate_count(name, getattr(self, name))
+
+    def _freeze_question_type_counts(self) -> None:
+        """Validate and defensively freeze complete question-type mappings."""
+        question_type_counts = _validate_question_type_counts(
+            "question_type_counts",
+            self.question_type_counts,
+        )
+        held_out_question_type_counts = _validate_question_type_counts(
+            "held_out_question_type_counts",
+            self.held_out_question_type_counts,
+        )
         object.__setattr__(
             self,
             "question_type_counts",
-            MappingProxyType(dict(self.question_type_counts)),
+            question_type_counts,
         )
         object.__setattr__(
             self,
             "held_out_question_type_counts",
-            MappingProxyType(dict(self.held_out_question_type_counts)),
+            held_out_question_type_counts,
         )
+
+    def _validate_reconciliation(self) -> None:
+        """Require scalar and per-question-type populations to reconcile."""
+        if self.answerable_cases + self.abstention_cases != self.total_cases:
+            raise ValueError(
+                "answerable_cases and abstention_cases must sum to total_cases"
+            )
+        if (
+            self.held_out_answerable_cases + self.held_out_abstention_cases
+            != self.held_out_cases
+        ):
+            raise ValueError("held_out answerability counts must sum to held_out_cases")
+        if sum(self.question_type_counts.values()) != self.total_cases:
+            raise ValueError("question_type_counts must sum to total_cases")
+        if sum(self.held_out_question_type_counts.values()) != self.held_out_cases:
+            raise ValueError("held_out_question_type_counts must sum to held_out_cases")
+        if self.held_out_cases > self.total_cases:
+            raise ValueError("held_out_cases must not exceed total_cases")
+        if self.held_out_answerable_cases > self.answerable_cases:
+            raise ValueError(
+                "held_out_answerable_cases must not exceed answerable_cases"
+            )
+        if self.held_out_abstention_cases > self.abstention_cases:
+            raise ValueError(
+                "held_out_abstention_cases must not exceed abstention_cases"
+            )
+        if any(
+            self.held_out_question_type_counts[question_type]
+            > self.question_type_counts[question_type]
+            for question_type in QUESTION_TYPES
+        ):
+            raise ValueError(
+                "held-out question-type counts must not exceed total counts"
+            )
 
 
 def _build_coverage_report(
