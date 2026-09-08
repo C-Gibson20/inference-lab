@@ -263,10 +263,14 @@ Application composition opens storage through
 one local deployment and may contain records shared by multiple named corpora.
 They are not corpus selectors.
 
-The metadata database, source directory, and index directory must be distinct.
-The repository creates required parent directories, but the deployment must
-provide sufficient permissions and capacity. It must not follow symbolic links
-inside managed source storage.
+The metadata database, source directory, and index directory must be distinct:
+none may equal, contain, or be contained by another after lexical
+normalisation or safe resolution at the consuming boundary. Settings reject
+lexical equality and overlap without requiring the paths to exist. Storage and
+index consumers reject filesystem aliases before creating or opening managed
+state. The repository creates required parent directories, but the deployment
+must provide sufficient permissions and capacity. It must not follow symbolic
+links inside managed source storage.
 
 Repository opening is non-mutating by default. Callers must opt in with
 `apply_migrations=True` to create a database or apply a supported forward

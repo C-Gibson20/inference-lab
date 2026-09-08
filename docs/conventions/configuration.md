@@ -124,6 +124,14 @@ component that modifies its contents. See the
 [storage conventions](storage.md) for lifecycle, integrity, and corpus
 visibility rules.
 
+“Separate” means that `storage.index_dir`, `storage.metadata_db_path`, and
+`storage.source_dir` are neither equal nor ancestors or descendants of one
+another. Settings enforce this after converting each path to a host-normalised
+absolute lexical path; this does not require the targets to exist or resolve
+symbolic links. The storage and index consumers must repeat the separation
+check after safely resolving existing filesystem aliases before creating or
+opening managed state.
+
 Configuration errors must fail startup clearly. They must not be replaced with
 guessed model paths, storage paths, or runtime values.
 
