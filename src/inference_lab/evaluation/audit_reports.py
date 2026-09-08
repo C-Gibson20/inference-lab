@@ -337,6 +337,15 @@ class CorpusAuditReport:
 
     def _validate(self) -> None:
         """Validate report identity, denominators, and section reconciliation."""
+        self._validate_identity_and_types()
+        self._validate_populations()
+        self._validate_canonical_shape()
+        self._validate_reconciliation()
+        if self.report_digest != _report_content_digest(self):
+            raise ValueError("audit report digest does not match its contents.")
+
+    def _validate_identity_and_types(self) -> None:
+        """Validate report identities and top-level section types."""
         if self.schema_version != AUDIT_REPORT_SCHEMA_VERSION:
             raise ValueError("unsupported audit report schema version.")
         for field_name in ("report_id", "input_digest", "report_digest"):
@@ -369,6 +378,9 @@ class CorpusAuditReport:
             raise TypeError("ocr must be AuditOcrReport.")
         if not isinstance(self.reconciliation, AuditReconciliation):
             raise TypeError("reconciliation must be AuditReconciliation.")
+
+    def _validate_populations(self) -> None:
+        """Validate explicit source and member population counts."""
         for field_name in (
             "source_files_seen",
             "source_classified_files",
@@ -378,6 +390,9 @@ class CorpusAuditReport:
             _validate_nonnegative(
                 getattr(self.populations, field_name), field_name=field_name
             )
+
+    def _validate_canonical_shape(self) -> None:
+        """Validate canonical ordering, names, and aggregate value shapes."""
         _validate_count_pairs(self.source.failure_counts, field_name="source failures")
         _validate_count_pairs(self.parse.status_counts, field_name="parse statuses")
         _validate_count_pairs(self.parse.parser_counts, field_name="parser counts")
@@ -434,6 +449,9 @@ class CorpusAuditReport:
             raise ValueError("limitations must contain non-empty strings.")
         if self.limitations != tuple(sorted(set(self.limitations))):
             raise ValueError("limitations must be ordered and unique.")
+
+    def _validate_reconciliation(self) -> None:
+        """Validate section denominators and explicit reconciliation totals."""
         for field_name in (
             "source_files_reconcile",
             "member_versions_reconcile",
@@ -489,8 +507,6 @@ class CorpusAuditReport:
             raise ValueError("source failure totals disagree.")
         if self.reconciliation.parse_observation_slots != member_count:
             raise ValueError("parse observation slots do not reconcile.")
-        if self.report_digest != _report_content_digest(self):
-            raise ValueError("audit report digest does not match its contents.")
 
     @classmethod
     def from_request(cls, request: CorpusAuditRequest) -> "CorpusAuditReport":
