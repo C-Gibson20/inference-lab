@@ -606,10 +606,17 @@ class AuditSourceInventory:
         observed_ordinals = tuple(item.ordinal for item in discovery.sources) + tuple(
             item.ordinal for item in discovery.failures
         )
+        expected_source_ordinals = tuple(
+            item.candidate.ordinal for item in classification.classified_candidates
+        ) + tuple(
+            failure.ordinal
+            for failure in classification.traversal.failures
+            if failure.scope is DiscoveryFailureScope.SOURCE
+        )
         if (
             len(observed_ordinals) != len(expected_ordinals)
             or set(observed_ordinals) != set(expected_ordinals)
-            or discovery.counts.files_seen != len(expected_ordinals)
+            or discovery.counts.files_seen != len(expected_source_ordinals)
         ):
             raise AuditContractError(AuditErrorCategory.OBSERVATION_MISMATCH)
         classification_failures = {

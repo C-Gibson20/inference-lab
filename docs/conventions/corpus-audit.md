@@ -13,8 +13,10 @@ The report keeps two populations separate:
 
 - **Source intake** is every traversed or classified source, including
   unsupported, unknown, inaccessible, changed, ambiguous, conflicting, and
-  failed sources. `files_seen` reconciles to classified files plus traversal
-  failures; format counts reconcile to classified files.
+  failed sources. `files_seen` reconciles to classified files plus
+  source-scoped traversal failures; format counts reconcile to classified
+  files. Request-scoped failures remain explicit upstream limitations outside
+  that source denominator.
 - **Corpus membership** is every document version in the selected immutable
   corpus version. Member-level parse, acquisition, structure, span, and OCR
   coverage use `member_versions` as their population, including members with
