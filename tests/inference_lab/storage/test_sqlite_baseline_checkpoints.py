@@ -164,6 +164,53 @@ def test_manifest_and_checkpoint_round_trip_with_exact_replay(
         repository.close()
 
 
+def test_manifest_and_checkpoint_survive_repository_reopen(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _prepare_repository(database_path)
+    checkpoint = _checkpoint()
+    try:
+        with repository.transaction() as transaction:
+            transaction.write_baseline_checkpoint(
+                checkpoint,
+                expected_status=None,
+            )
+    finally:
+        repository.close()
+
+    reopened = _open_repository(database_path)
+    try:
+        assert (
+            reopened.get_baseline_manifest(
+                _CORPUS_ID,
+                _PROPOSED_VERSION,
+            )
+            == _manifest()
+        )
+        assert (
+            reopened.get_baseline_checkpoint(
+                _CORPUS_ID,
+                _PROPOSED_VERSION,
+                _DOCUMENT_VERSION_ID,
+                BaselineCheckpointRecordStage.PARSE,
+                _CONFIGURATION,
+            )
+            == checkpoint
+        )
+        with reopened.transaction() as transaction:
+            assert transaction.begin_baseline_manifest(_manifest()).replayed is True
+            assert (
+                transaction.write_baseline_checkpoint(
+                    checkpoint,
+                    expected_status=None,
+                ).replayed
+                is True
+            )
+    finally:
+        reopened.close()
+
+
 def test_checkpoint_compare_and_set_and_manifest_transition_are_idempotent(
     tmp_path: Path,
 ) -> None:
