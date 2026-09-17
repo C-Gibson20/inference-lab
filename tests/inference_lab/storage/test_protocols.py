@@ -525,6 +525,15 @@ class StructuralRepository(StructuralTransaction):
     ) -> CorpusSnapshot:
         raise NotImplementedError
 
+    def get_chunk_set_selection(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> storage.ChunkSetSelectionRecord | None:
+        del corpus_id, document_version_id, configuration_identity
+        return None
+
     def read_source_bytes(
         self,
         corpus_id: CorpusId,
@@ -675,6 +684,8 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "ChunkParserVersionRecord",
         "ChunkSplitReasonRecord",
         "ChunkSourceReferenceRecord",
+        "ChunkSetReader",
+        "ChunkSetSelectionRecord",
         "ChunkTokeniserIdentityRecord",
         "ChunkOversizeUnitPolicy",
         "ChunkStructuralBoundaryPolicy",

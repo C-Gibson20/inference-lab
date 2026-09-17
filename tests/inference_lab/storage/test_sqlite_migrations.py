@@ -74,7 +74,7 @@ def _insert_version(
 def test_multi_corpus_baseline_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 6
+    assert len(MIGRATIONS) == 7
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "multi_corpus_metadata_baseline"
     assert MIGRATIONS[0].checksum == (
@@ -104,6 +104,11 @@ def test_multi_corpus_baseline_is_stable_and_registry_is_valid() -> None:
     assert MIGRATIONS[5].migration_id == "baseline_checkpoint_records"
     assert MIGRATIONS[5].checksum == (
         "cdcac3b4b3a4e2da1b12333f34d7fc175b16fee2718951f0c1d58b0d59f6c614"
+    )
+    assert MIGRATIONS[6].revision == 7
+    assert MIGRATIONS[6].migration_id == "canonical_chunk_sets"
+    assert MIGRATIONS[6].checksum == (
+        "8d4a21f9e37a09be95190f102c0db3bfd38bb62a85736eb0d6725a8e77fc16ef"
     )
 
 

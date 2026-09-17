@@ -1,5 +1,6 @@
 """Storage-owned immutable records for canonical ingest chunks."""
 
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
@@ -9,7 +10,13 @@ from inference_lab._validation import (
     is_lowercase_slug,
     is_strict_integer,
 )
-from inference_lab.provenance import DocumentVersionId, SourceSpanId
+from inference_lab.provenance import (
+    ConfigurationIdentity,
+    DocumentId,
+    DocumentVersionId,
+    OutputDigest,
+    SourceSpanId,
+)
 from inference_lab.storage.source_locations import StructuralBlockKind
 
 CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION: Final[str] = "1.0.0"
@@ -286,3 +293,56 @@ class ChunkingPolicyRecord:
             self.structural_boundary_policy.value,
             self.oversize_unit_policy.value,
         )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ChunkSetSelectionRecord:
+    """Represent one corpus-authorised exact chunk-set selection."""
+
+    document_id: DocumentId
+    document_version_id: DocumentVersionId
+    parser_version: ChunkParserVersionRecord
+    chunker_version: ChunkerVersionRecord
+    tokeniser_identity: ChunkTokeniserIdentityRecord
+    policy: ChunkingPolicyRecord
+    configuration_identity: ConfigurationIdentity
+    payload_digest: OutputDigest
+    canonical_payload: bytes
+    payload_schema_version: str = CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the exact selection metadata and detached payload."""
+        if not isinstance(self.document_id, DocumentId):
+            raise TypeError("document_id must be a DocumentId.")
+        if not isinstance(self.document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")
+        if not isinstance(self.parser_version, ChunkParserVersionRecord):
+            raise TypeError("parser_version must be a ChunkParserVersionRecord.")
+        if not isinstance(self.chunker_version, ChunkerVersionRecord):
+            raise TypeError("chunker_version must be a ChunkerVersionRecord.")
+        if not isinstance(
+            self.tokeniser_identity,
+            ChunkTokeniserIdentityRecord,
+        ):
+            raise TypeError(
+                "tokeniser_identity must be a ChunkTokeniserIdentityRecord."
+            )
+        if not isinstance(self.policy, ChunkingPolicyRecord):
+            raise TypeError("policy must be a ChunkingPolicyRecord.")
+        if not isinstance(self.configuration_identity, ConfigurationIdentity):
+            raise TypeError("configuration_identity must be a ConfigurationIdentity.")
+        if not isinstance(self.payload_digest, OutputDigest):
+            raise TypeError("payload_digest must be an OutputDigest.")
+        if not isinstance(self.canonical_payload, bytes):
+            raise TypeError("canonical_payload must be bytes.")
+        if not self.canonical_payload:
+            raise ValueError("canonical_payload must not be empty.")
+        if hashlib.sha256(self.canonical_payload).hexdigest() != (
+            self.payload_digest.digest
+        ):
+            raise ValueError("payload_digest does not match canonical_payload.")
+        if self.payload_schema_version != CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION:
+            raise ValueError("unsupported chunk payload schema version.")

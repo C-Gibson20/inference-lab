@@ -34,6 +34,7 @@ from inference_lab.storage.baseline_checkpoint_records import (
     BaselineManifestRecord,
     BaselineManifestRecordState,
 )
+from inference_lab.storage.chunk_records import ChunkSetSelectionRecord
 from inference_lab.storage.locator_continuity import (
     SourceFileIdentityHint,
     SourceLocatorRevision,
@@ -146,6 +147,19 @@ class BaselineCheckpointRepository(
     Protocol,
 ):
     """Atomic baseline checkpoint operations on an owned transaction."""
+
+
+class ChunkSetReader(Protocol):
+    """Read exact immutable chunk sets through corpus visibility."""
+
+    def get_chunk_set_selection(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> ChunkSetSelectionRecord | None:
+        """Return an exact visible selection, or ``None`` without disclosure."""
+        ...
 
 
 class MetadataReader(Protocol):
@@ -610,7 +624,7 @@ class MetadataTransaction(MetadataReader, MetadataWriter, Protocol):
 
 
 @runtime_checkable
-class MetadataRepository(MetadataReader, Protocol):
+class MetadataRepository(MetadataReader, ChunkSetReader, Protocol):
     """Opened, restart-safe metadata repository with explicit lifecycle."""
 
     @property

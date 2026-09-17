@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Final
 
+from inference_lab.storage._sqlite_chunk_schema import CHUNK_SCHEMA_STATEMENTS
 from inference_lab.storage._sqlite_version_schema import (
     CORPUS_VERSION_SCHEMA_STATEMENTS,
 )
@@ -1367,6 +1368,11 @@ MIGRATIONS: Final = (
         revision=6,
         migration_id="baseline_checkpoint_records",
         statements=_BASELINE_CHECKPOINT_RECORD_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=7,
+        migration_id="canonical_chunk_sets",
+        statements=CHUNK_SCHEMA_STATEMENTS,
     ),
 )
 
