@@ -40,6 +40,7 @@ from inference_lab.storage import (
     BaselineManifestRecordState,
     BeginBaselineManifestOutcome,
     BeginCorpusUpdateOutcome,
+    ChunkSetWriteRequest,
     CommitCorpusUpdateOutcome,
     ComponentGenerationReference,
     ComponentGenerationValidator,
@@ -60,6 +61,7 @@ from inference_lab.storage import (
     SourceLocatorRevision,
     TransitionBaselineManifestOutcome,
     WriteBaselineCheckpointOutcome,
+    WriteChunkSetOutcome,
 )
 
 
@@ -262,6 +264,12 @@ class StructuralTransaction:
         *,
         expected_status: BaselineCheckpointRecordStatus | None,
     ) -> WriteBaselineCheckpointOutcome:
+        raise NotImplementedError
+
+    def write_chunk_set(
+        self,
+        request: ChunkSetWriteRequest,
+    ) -> WriteChunkSetOutcome:
         raise NotImplementedError
 
     def get_corpus(self, corpus_id: CorpusId) -> CorpusMetadata | None:
@@ -686,6 +694,8 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "ChunkSourceReferenceRecord",
         "ChunkSetReader",
         "ChunkSetSelectionRecord",
+        "ChunkSetWriteRequest",
+        "ChunkSetWriter",
         "ChunkTokeniserIdentityRecord",
         "ChunkOversizeUnitPolicy",
         "ChunkStructuralBoundaryPolicy",
@@ -743,6 +753,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "StructuralBlockKind",
         "TransitionBaselineManifestOutcome",
         "WriteBaselineCheckpointOutcome",
+        "WriteChunkSetOutcome",
         "TransitionBaselineManifestOutcome",
         "WriteBaselineCheckpointOutcome",
         "build_parsed_representation_output_digest",

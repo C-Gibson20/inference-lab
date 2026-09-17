@@ -37,6 +37,7 @@ from inference_lab.storage._sqlite_baseline_checkpoints import (
     transition_baseline_manifest,
     write_baseline_checkpoint,
 )
+from inference_lab.storage._sqlite_chunk_sets import write_chunk_set
 from inference_lab.storage._sqlite_cleanup import rollback_preserving_primary
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
 from inference_lab.storage._sqlite_core import (
@@ -142,6 +143,7 @@ from inference_lab.storage.baseline_checkpoint_records import (
     BaselineManifestRecord,
     BaselineManifestRecordState,
 )
+from inference_lab.storage.chunk_records import ChunkSetWriteRequest
 from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
@@ -160,6 +162,7 @@ from inference_lab.storage.outcomes import (
     SealCorpusUpdateOutcome,
     TransitionBaselineManifestOutcome,
     WriteBaselineCheckpointOutcome,
+    WriteChunkSetOutcome,
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
@@ -429,6 +432,27 @@ class SQLiteMetadataTransaction:
                     ),
                     "checkpoint_stage": outcome.checkpoint.stage.value,
                     "checkpoint_status": outcome.checkpoint.status.value,
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
+
+    def write_chunk_set(
+        self,
+        request: ChunkSetWriteRequest,
+    ) -> WriteChunkSetOutcome:
+        """Insert one corpus-authorised chunk set within this transaction."""
+        outcome = self._execute(write_chunk_set, request)
+        self._pending_success_logs.append(
+            (
+                "chunk_set_written",
+                {
+                    "corpus_id": request.corpus_id.as_str(),
+                    "document_version_id": (
+                        outcome.selection.document_version_id.as_str()
+                    ),
+                    "document_id": outcome.selection.document_id.as_str(),
                     "replayed": outcome.replayed,
                 },
             )

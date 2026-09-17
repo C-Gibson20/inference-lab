@@ -34,7 +34,10 @@ from inference_lab.storage.baseline_checkpoint_records import (
     BaselineManifestRecord,
     BaselineManifestRecordState,
 )
-from inference_lab.storage.chunk_records import ChunkSetSelectionRecord
+from inference_lab.storage.chunk_records import (
+    ChunkSetSelectionRecord,
+    ChunkSetWriteRequest,
+)
 from inference_lab.storage.locator_continuity import (
     SourceFileIdentityHint,
     SourceLocatorRevision,
@@ -49,6 +52,7 @@ from inference_lab.storage.outcomes import (
     SealCorpusUpdateOutcome,
     TransitionBaselineManifestOutcome,
     WriteBaselineCheckpointOutcome,
+    WriteChunkSetOutcome,
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
@@ -159,6 +163,17 @@ class ChunkSetReader(Protocol):
         configuration_identity: ConfigurationIdentity,
     ) -> ChunkSetSelectionRecord | None:
         """Return an exact visible selection, or ``None`` without disclosure."""
+        ...
+
+
+class ChunkSetWriter(Protocol):
+    """Write immutable chunk sets through a corpus-authorised transaction."""
+
+    def write_chunk_set(
+        self,
+        request: ChunkSetWriteRequest,
+    ) -> WriteChunkSetOutcome:
+        """Insert one chunk set or return its exact replay."""
         ...
 
 
@@ -602,7 +617,7 @@ class MetadataWriter(Protocol):
 
 
 @runtime_checkable
-class MetadataTransaction(MetadataReader, MetadataWriter, Protocol):
+class MetadataTransaction(MetadataReader, MetadataWriter, ChunkSetWriter, Protocol):
     """Context-managed atomic unit of metadata reads and writes.
 
     Successful context exit commits the complete unit. Exceptional exit rolls

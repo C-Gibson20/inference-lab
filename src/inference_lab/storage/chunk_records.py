@@ -12,6 +12,7 @@ from inference_lab._validation import (
 )
 from inference_lab.provenance import (
     ConfigurationIdentity,
+    CorpusId,
     DocumentId,
     DocumentVersionId,
     OutputDigest,
@@ -346,3 +347,21 @@ class ChunkSetSelectionRecord:
             raise ValueError("payload_digest does not match canonical_payload.")
         if self.payload_schema_version != CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION:
             raise ValueError("unsupported chunk payload schema version.")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ChunkSetWriteRequest:
+    """Request one corpus-authorised immutable chunk-set write."""
+
+    corpus_id: CorpusId
+    selection: ChunkSetSelectionRecord
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the write target and its detached immutable selection."""
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(self.selection, ChunkSetSelectionRecord):
+            raise TypeError("selection must be a ChunkSetSelectionRecord.")

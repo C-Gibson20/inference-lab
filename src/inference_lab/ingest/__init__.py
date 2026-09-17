@@ -49,6 +49,7 @@ from inference_lab.ingest.baseline_serialisation import (
 )
 from inference_lab.ingest.chunk_mapping import (
     ChunkMappingError,
+    map_chunk_set,
     map_chunk_source_reference,
 )
 from inference_lab.ingest.chunk_observability import observe_chunking
@@ -390,6 +391,7 @@ __all__ = [
     "generate_source_span_id",
     "hash_source_candidate",
     "inventory_local_sources",
+    "map_chunk_set",
     "map_chunk_source_reference",
     "map_parse_persistence_request",
     "normalise_source_text",
