@@ -279,6 +279,45 @@ def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
         reopened_without_permission.close()
 
 
+@pytest.mark.parametrize("legacy_revision", range(1, 7))
+def test_each_supported_legacy_revision_upgrades_to_chunk_schema(
+    tmp_path: Path,
+    legacy_revision: int,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_complete_baseline(
+        database_path,
+        migrations=MIGRATIONS[:legacy_revision],
+    )
+
+    migrated = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+        applied_at_factory=_fixed_applied_at,
+    )
+    try:
+        assert migrated.schema_inspection.current_revision == 7
+        _assert_complete_graph(migrated)
+    finally:
+        migrated.close()
+
+    connection = sqlite3.connect(database_path)
+    try:
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'chunk_sets'"
+        ).fetchone() == ("chunk_sets",)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'chunk_sets_selection_idx'"
+        ).fetchone() == ("chunk_sets_selection_idx",)
+        assert connection.execute(
+            "SELECT count(*) FROM migration_history WHERE revision = 7"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
+
+
 def test_non_empty_repository_requires_explicit_upgrade_without_mutation(
     tmp_path: Path,
 ) -> None:

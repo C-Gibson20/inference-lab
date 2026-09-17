@@ -34,9 +34,13 @@ from inference_lab.storage import (
     StorageConflictError,
     WriteChunkSetOutcome,
 )
+from inference_lab.storage._sqlite_migrations import MIGRATIONS
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from tests.inference_lab.ingest.fixtures import (  # noqa: TID252
     fixture_parsed_document,
+)
+from tests.inference_lab.storage.fixtures import (  # noqa: TID252
+    fixed_applied_at as _fixed_applied_at,
 )
 from tests.inference_lab.storage.fixtures import (  # noqa: TID252
     open_repository as _open_repository,
@@ -131,11 +135,64 @@ def test_chunk_set_write_persists_complete_selection_atomically(
             )
             == case.selection
         )
+        chunk_logs = [
+            record for record in logs if record["event"] == "chunk_set_written"
+        ]
+        assert len(chunk_logs) == 1
+        assert chunk_logs[0]["pipeline_stage"] == "storage"
+        assert chunk_logs[0]["corpus_id"] == case.corpus.corpus_id.as_str()
+        assert chunk_logs[0]["document_id"] == case.selection.document_id.as_str()
+        assert (
+            chunk_logs[0]["document_version_id"]
+            == case.selection.document_version_id.as_str()
+        )
+        assert chunk_logs[0]["replayed"] is False
         rendered_logs = repr(logs)
-        assert "chunk_set_written" in rendered_logs
-        assert case.selection.payload_digest.digest not in rendered_logs
-        assert case.selection.configuration_identity.digest not in rendered_logs
-        assert case.selection.canonical_payload.decode("utf-8") not in rendered_logs
+        private_values = (
+            case.selection.payload_digest.digest,
+            case.selection.configuration_identity.digest,
+            case.selection.tokeniser_identity.artefact_identity,
+            case.selection.tokeniser_identity.artefact_revision,
+            case.selection.canonical_payload.decode("utf-8"),
+        )
+        assert all(value not in rendered_logs for value in private_values)
+    finally:
+        repository.close()
+
+
+def test_revision_six_database_can_write_chunk_set_after_upgrade(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    case = _case()
+    legacy = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+        migrations=MIGRATIONS[:6],
+        applied_at_factory=_fixed_applied_at,
+    )
+    try:
+        _add_catalogue(legacy, case)
+    finally:
+        legacy.close()
+
+    repository = _open_repository(database_path)
+    try:
+        assert repository.schema_inspection.current_revision == 7
+        outcome: WriteChunkSetOutcome | None = None
+        with repository.transaction() as transaction:
+            outcome = transaction.write_chunk_set(case.request)
+
+        assert outcome is not None
+        assert outcome == WriteChunkSetOutcome(case.selection, replayed=False)
+        assert (
+            repository.get_chunk_set_selection(
+                case.corpus.corpus_id,
+                case.version.document_version_id,
+                case.selection.configuration_identity,
+            )
+            == case.selection
+        )
     finally:
         repository.close()
 
@@ -185,6 +242,46 @@ def test_chunk_set_write_rolls_back_after_later_transaction_failure(
         )
     finally:
         repository.close()
+
+
+def test_interrupted_chunk_write_is_invisible_and_retryable(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    writer = _open_repository(database_path)
+    reader = _open_repository(database_path)
+    case = _case()
+    _add_catalogue(writer, case)
+    try:
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            with writer.transaction() as transaction:
+                transaction.write_chunk_set(case.request)
+                assert (
+                    reader.get_chunk_set_selection(
+                        case.corpus.corpus_id,
+                        case.version.document_version_id,
+                        case.selection.configuration_identity,
+                    )
+                    is None
+                )
+                raise RuntimeError("injected interruption")
+
+        assert (
+            reader.get_chunk_set_selection(
+                case.corpus.corpus_id,
+                case.version.document_version_id,
+                case.selection.configuration_identity,
+            )
+            is None
+        )
+        outcome: WriteChunkSetOutcome | None = None
+        with writer.transaction() as transaction:
+            outcome = transaction.write_chunk_set(case.request)
+        assert outcome is not None
+        assert outcome.replayed is False
+    finally:
+        reader.close()
+        writer.close()
 
 
 def test_identical_chunk_set_write_is_an_exact_replay(
