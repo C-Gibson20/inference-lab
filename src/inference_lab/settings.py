@@ -96,6 +96,7 @@ class IngestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_source_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+    max_concurrent_documents: int = Field(default=1, gt=0)
 
 
 class Settings(BaseSettings):

@@ -35,6 +35,7 @@ def isolated_settings_environment(
 
         [ingest]
         max_source_bytes = 1048576
+        max_concurrent_documents = 3
         """
     )
     monkeypatch.chdir(tmp_path)
@@ -89,6 +90,7 @@ def test_toml_configuration_loads() -> None:
     assert configured.runtime.vram_budget_gb == 24
     assert configured.storage.metadata_db_path == Path("/data/metadata.db")
     assert configured.storage.source_dir == Path("/source-data")
+    assert configured.ingest.max_concurrent_documents == 3
 
 
 def test_explicit_source_directory_overrides_environment_and_toml(
@@ -486,6 +488,7 @@ def test_ingest_size_setting_has_safe_default(tmp_path: Path) -> None:
     configured = _load_settings(TestSettings)
 
     assert configured.ingest.max_source_bytes == 50 * 1024 * 1024
+    assert configured.ingest.max_concurrent_documents == 1
 
 
 def test_ingest_size_environment_override(
@@ -498,9 +501,27 @@ def test_ingest_size_environment_override(
     assert configured.ingest.max_source_bytes == 2048
 
 
+def test_ingest_concurrency_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INGEST__MAX_CONCURRENT_DOCUMENTS", "4")
+
+    configured = get_settings()
+
+    assert configured.ingest.max_concurrent_documents == 4
+
+
 @pytest.mark.parametrize("value", [0, -1, "not-an-int"])
 def test_invalid_ingest_size_is_rejected(value: object) -> None:
     with pytest.raises(ValidationError):
         Settings(  # pyright: ignore[reportCallIssue]
             ingest={"max_source_bytes": value}
+        )
+
+
+@pytest.mark.parametrize("value", [0, -1, "not-an-int"])
+def test_invalid_ingest_concurrency_is_rejected(value: object) -> None:
+    with pytest.raises(ValidationError):
+        Settings(  # pyright: ignore[reportCallIssue]
+            ingest={"max_concurrent_documents": value}
         )

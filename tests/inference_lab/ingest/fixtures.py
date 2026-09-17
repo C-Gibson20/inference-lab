@@ -63,7 +63,11 @@ def fixture_source(name: str) -> ParserInput:
     )
 
 
-def fixture_settings(*, max_source_bytes: int = 50 * 1024 * 1024) -> Settings:
+def fixture_settings(
+    *,
+    max_source_bytes: int = 50 * 1024 * 1024,
+    max_concurrent_documents: int = 1,
+) -> Settings:
     """Return validated settings for deterministic local fixture tests."""
     return Settings(
         models=ModelPaths(
@@ -77,7 +81,10 @@ def fixture_settings(*, max_source_bytes: int = 50 * 1024 * 1024) -> Settings:
             metadata_db_path=Path("fixture/metadata.db"),
             source_dir=Path("fixture/source-data"),
         ),
-        ingest=IngestConfig(max_source_bytes=max_source_bytes),
+        ingest=IngestConfig(
+            max_source_bytes=max_source_bytes,
+            max_concurrent_documents=max_concurrent_documents,
+        ),
     )
 
 
