@@ -1183,6 +1183,160 @@ ON baseline_manifests (corpus_id, state, proposed_corpus_version)""",
 ) STRICT""",
 )
 
+_BASELINE_CHECKPOINT_RECORD_STATEMENTS: Final = (
+    """CREATE TABLE baseline_checkpoints (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    proposed_corpus_version TEXT NOT NULL,
+    document_version_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    stage TEXT NOT NULL
+        CHECK (
+            stage IN (
+                'discovery',
+                'source_acquisition',
+                'parse',
+                'parse_persistence',
+                'chunk',
+                'chunk_persistence',
+                'membership',
+                'publication'
+            )
+        ),
+    configuration_algorithm TEXT NOT NULL
+        CHECK (configuration_algorithm = 'sha256'),
+    configuration_digest TEXT NOT NULL
+        CHECK (
+            length(configuration_digest) = 64
+            AND configuration_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+    status TEXT NOT NULL
+        CHECK (status IN ('started', 'completed', 'failed')),
+    failure_category TEXT
+        CHECK (
+            failure_category IS NULL
+            OR failure_category IN (
+                'invalid_request',
+                'incompatible_resume',
+                'discovery_failed',
+                'source_acquisition_failed',
+                'parser_unavailable',
+                'parse_failed',
+                'parse_persistence_failed',
+                'chunk_failed',
+                'chunk_persistence_failed',
+                'membership_conflict',
+                'generation_build_failed',
+                'generation_validation_failed',
+                'storage_unavailable',
+                'publication_conflict',
+                'publication_concurrency',
+                'corrupt_state'
+            )
+        ),
+    FOREIGN KEY (corpus_id, proposed_corpus_version)
+        REFERENCES baseline_manifests (
+            corpus_id,
+            proposed_corpus_version
+        ),
+    FOREIGN KEY (document_version_id, document_id)
+        REFERENCES document_versions (document_version_id, document_id),
+    UNIQUE (
+        corpus_id,
+        proposed_corpus_version,
+        document_version_id,
+        stage,
+        configuration_algorithm,
+        configuration_digest
+    ),
+    CHECK (
+        (status IN ('started', 'completed') AND failure_category IS NULL)
+        OR (status = 'failed' AND failure_category IS NOT NULL)
+    )
+) STRICT""",
+    """CREATE INDEX baseline_checkpoints_recovery_idx
+ON baseline_checkpoints (
+    corpus_id,
+    proposed_corpus_version,
+    status,
+    document_version_id,
+    stage
+)""",
+    """CREATE TABLE baseline_checkpoint_identities (
+    storage_id INTEGER PRIMARY KEY,
+    checkpoint_storage_id INTEGER NOT NULL,
+    identity_role TEXT NOT NULL
+        CHECK (identity_role IN ('input', 'output')),
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    identity_kind TEXT NOT NULL
+        CHECK (
+            identity_kind IN (
+                'document',
+                'document_version',
+                'record',
+                'source_observation',
+                'source_span'
+            )
+        ),
+    identity_value TEXT NOT NULL
+        CHECK (
+            length(identity_value) = 36
+            AND identity_value = lower(identity_value)
+            AND substr(identity_value, 9, 1) = '-'
+            AND substr(identity_value, 14, 1) = '-'
+            AND substr(identity_value, 19, 1) = '-'
+            AND substr(identity_value, 24, 1) = '-'
+            AND length(replace(identity_value, '-', '')) = 32
+            AND identity_value NOT GLOB '*[^0-9a-f-]*'
+        ),
+    FOREIGN KEY (checkpoint_storage_id)
+        REFERENCES baseline_checkpoints (storage_id),
+    UNIQUE (checkpoint_storage_id, identity_role, ordinal),
+    UNIQUE (
+        checkpoint_storage_id,
+        identity_role,
+        identity_kind,
+        identity_value
+    )
+) STRICT""",
+    """CREATE INDEX baseline_checkpoint_identities_lookup_idx
+ON baseline_checkpoint_identities (
+    checkpoint_storage_id,
+    identity_role,
+    ordinal
+)""",
+    """CREATE TRIGGER baseline_checkpoint_output_identity_insert
+BEFORE INSERT ON baseline_checkpoint_identities
+WHEN NEW.identity_role = 'output'
+    AND EXISTS (
+        SELECT 1
+        FROM baseline_checkpoints
+        WHERE storage_id = NEW.checkpoint_storage_id
+            AND status != 'completed'
+    )
+BEGIN
+    SELECT RAISE(
+        ABORT,
+        'only completed checkpoints may have output identities'
+    );
+END""",
+    """CREATE TRIGGER baseline_checkpoint_output_identity_status_update
+BEFORE UPDATE OF status ON baseline_checkpoints
+WHEN NEW.status != 'completed'
+    AND EXISTS (
+        SELECT 1
+        FROM baseline_checkpoint_identities
+        WHERE checkpoint_storage_id = NEW.storage_id
+            AND identity_role = 'output'
+    )
+BEGIN
+    SELECT RAISE(
+        ABORT,
+        'checkpoints with output identities must remain completed'
+    );
+END""",
+)
+
 MIGRATIONS: Final = (
     MigrationDefinition(
         revision=1,
@@ -1208,6 +1362,11 @@ MIGRATIONS: Final = (
         revision=5,
         migration_id="baseline_checkpoint_persistence",
         statements=_BASELINE_CHECKPOINT_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=6,
+        migration_id="baseline_checkpoint_records",
+        statements=_BASELINE_CHECKPOINT_RECORD_STATEMENTS,
     ),
 )
 
