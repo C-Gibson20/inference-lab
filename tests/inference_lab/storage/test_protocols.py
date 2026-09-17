@@ -7,6 +7,7 @@ from typing import Self
 
 import inference_lab.storage as storage
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -29,6 +30,15 @@ from inference_lab.provenance import (
 )
 from inference_lab.storage import (
     AbortCorpusUpdateOutcome,
+    BaselineCheckpointReader,
+    BaselineCheckpointRecord,
+    BaselineCheckpointRecordStage,
+    BaselineCheckpointRecordStatus,
+    BaselineCheckpointRepository,
+    BaselineCheckpointWriter,
+    BaselineManifestRecord,
+    BaselineManifestRecordState,
+    BeginBaselineManifestOutcome,
     BeginCorpusUpdateOutcome,
     CommitCorpusUpdateOutcome,
     ComponentGenerationReference,
@@ -48,6 +58,8 @@ from inference_lab.storage import (
     SourceArtefact,
     SourceFileIdentityHint,
     SourceLocatorRevision,
+    TransitionBaselineManifestOutcome,
+    WriteBaselineCheckpointOutcome,
 )
 
 
@@ -227,6 +239,30 @@ class StructuralTransaction:
 
     def add_family_membership(self, membership: DocumentFamilyMembership) -> None:
         pass
+
+    def begin_baseline_manifest(
+        self,
+        manifest: BaselineManifestRecord,
+    ) -> BeginBaselineManifestOutcome:
+        raise NotImplementedError
+
+    def transition_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        *,
+        expected_state: BaselineManifestRecordState,
+        next_state: BaselineManifestRecordState,
+    ) -> TransitionBaselineManifestOutcome:
+        raise NotImplementedError
+
+    def write_baseline_checkpoint(
+        self,
+        checkpoint: BaselineCheckpointRecord,
+        *,
+        expected_status: BaselineCheckpointRecordStatus | None,
+    ) -> WriteBaselineCheckpointOutcome:
+        raise NotImplementedError
 
     def get_corpus(self, corpus_id: CorpusId) -> CorpusMetadata | None:
         return None
@@ -431,6 +467,30 @@ class StructuralTransaction:
     ) -> tuple[DocumentFamilyMembership, ...]:
         return ()
 
+    def get_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> BaselineManifestRecord | None:
+        return None
+
+    def get_baseline_checkpoint(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        document_version_id: DocumentVersionId,
+        stage: BaselineCheckpointRecordStage,
+        configuration_identity: ConfigurationIdentity,
+    ) -> BaselineCheckpointRecord | None:
+        return None
+
+    def list_baseline_checkpoints(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> tuple[BaselineCheckpointRecord, ...]:
+        return ()
+
 
 class StructuralComponentValidator:
     """Complete structural component validator without protocol inheritance."""
@@ -504,6 +564,9 @@ def test_storage_protocols_are_structural() -> None:
 
     assert isinstance(transaction, MetadataTransaction)
     assert isinstance(repository, MetadataRepository)
+    assert isinstance(transaction, BaselineCheckpointRepository)
+    assert isinstance(transaction, BaselineCheckpointReader)
+    assert isinstance(transaction, BaselineCheckpointWriter)
     assert isinstance(StructuralComponentValidator(), ComponentGenerationValidator)
     assert not hasattr(transaction, "read_source_bytes")
     assert not hasattr(transaction, "stream_source_bytes")
@@ -586,6 +649,15 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
         "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
         "AbortCorpusUpdateOutcome",
+        "BaselineCheckpointRecord",
+        "BaselineCheckpointRecordStage",
+        "BaselineCheckpointRecordStatus",
+        "BaselineCheckpointReader",
+        "BaselineCheckpointRepository",
+        "BaselineCheckpointWriter",
+        "BaselineManifestRecord",
+        "BaselineManifestRecordState",
+        "BeginBaselineManifestOutcome",
         "BaselineCheckpointIdentityRecord",
         "BaselineCheckpointRecord",
         "BaselineCheckpointRecordFailureCategory",
@@ -648,6 +720,10 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "StorageTransactionError",
         "StructuralBlock",
         "StructuralBlockKind",
+        "TransitionBaselineManifestOutcome",
+        "WriteBaselineCheckpointOutcome",
+        "TransitionBaselineManifestOutcome",
+        "WriteBaselineCheckpointOutcome",
         "build_parsed_representation_output_digest",
         "build_source_blob_storage_key",
         "open_metadata_repository",

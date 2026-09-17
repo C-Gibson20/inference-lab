@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -26,17 +27,27 @@ from inference_lab.provenance import (
     SourceObservationState,
     SourceSpanId,
 )
+from inference_lab.storage.baseline_checkpoint_records import (
+    BaselineCheckpointRecord,
+    BaselineCheckpointRecordStage,
+    BaselineCheckpointRecordStatus,
+    BaselineManifestRecord,
+    BaselineManifestRecordState,
+)
 from inference_lab.storage.locator_continuity import (
     SourceFileIdentityHint,
     SourceLocatorRevision,
 )
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
+    BeginBaselineManifestOutcome,
     BeginCorpusUpdateOutcome,
     CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
     RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
+    TransitionBaselineManifestOutcome,
+    WriteBaselineCheckpointOutcome,
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
@@ -62,6 +73,79 @@ class ComponentGenerationValidator(Protocol):
     ) -> bool:
         """Return whether the generation is durable, compatible, and complete."""
         ...
+
+
+@runtime_checkable
+class BaselineCheckpointReader(Protocol):
+    """Read durable baseline-ingest manifests and checkpoints."""
+
+    def get_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> BaselineManifestRecord | None:
+        """Return one corpus-scoped baseline manifest, or ``None``."""
+        ...
+
+    def get_baseline_checkpoint(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        document_version_id: DocumentVersionId,
+        stage: BaselineCheckpointRecordStage,
+        configuration_identity: ConfigurationIdentity,
+    ) -> BaselineCheckpointRecord | None:
+        """Return one exact document-stage checkpoint, or ``None``."""
+        ...
+
+    def list_baseline_checkpoints(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> tuple[BaselineCheckpointRecord, ...]:
+        """Return checkpoints in canonical key order."""
+        ...
+
+
+@runtime_checkable
+class BaselineCheckpointWriter(Protocol):
+    """Write durable baseline-ingest manifests and checkpoints."""
+
+    def begin_baseline_manifest(
+        self,
+        manifest: BaselineManifestRecord,
+    ) -> BeginBaselineManifestOutcome:
+        """Insert a manifest or return an exact replay."""
+        ...
+
+    def transition_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        *,
+        expected_state: BaselineManifestRecordState,
+        next_state: BaselineManifestRecordState,
+    ) -> TransitionBaselineManifestOutcome:
+        """Compare-and-set one manifest lifecycle state."""
+        ...
+
+    def write_baseline_checkpoint(
+        self,
+        checkpoint: BaselineCheckpointRecord,
+        *,
+        expected_status: BaselineCheckpointRecordStatus | None,
+    ) -> WriteBaselineCheckpointOutcome:
+        """Insert or compare-and-set one checkpoint."""
+        ...
+
+
+@runtime_checkable
+class BaselineCheckpointRepository(
+    BaselineCheckpointReader,
+    BaselineCheckpointWriter,
+    Protocol,
+):
+    """Atomic baseline checkpoint operations on an owned transaction."""
 
 
 class MetadataReader(Protocol):
