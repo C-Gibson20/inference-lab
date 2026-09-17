@@ -416,6 +416,10 @@ def test_baseline_contracts_are_public_ingest_api() -> None:
     from inference_lab import ingest
 
     public_names = (
+        "BaselineCheckpoint",
+        "BaselineCheckpointIdentity",
+        "BaselineCheckpointMappingError",
+        "BaselineCheckpointStatus",
         "BaselineDocumentOutcome",
         "BaselineDocumentOutcomeKind",
         "BaselineExecutionStatus",
@@ -423,12 +427,17 @@ def test_baseline_contracts_are_public_ingest_api() -> None:
         "BaselineFailureCategory",
         "BaselineFailureScope",
         "BaselineFailureSeverity",
+        "BaselineIngestManifest",
         "BaselineIngestRequest",
         "BaselineIngestSummary",
+        "BaselineManifestState",
         "BaselinePublicationStatus",
         "BaselineStage",
         "BaselineStageCounts",
         "BaselineStageDisposition",
+        "BaselineWorkKey",
+        "baseline_manifest_from_record",
+        "baseline_manifest_to_record",
         "baseline_ingest_summary_payload",
     )
 

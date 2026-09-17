@@ -1,5 +1,9 @@
 """Persistent corpus metadata, indexes, and version-aware storage boundaries."""
 
+from inference_lab.storage.baseline_checkpoint_records import (
+    BaselineManifestRecord,
+    BaselineManifestRecordState,
+)
 from inference_lab.storage.errors import (
     CorruptStorageError,
     IncompatibleSchemaError,
@@ -93,6 +97,8 @@ __all__ = [
     "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
     "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
     "AbortCorpusUpdateOutcome",
+    "BaselineManifestRecord",
+    "BaselineManifestRecordState",
     "BeginCorpusUpdateOutcome",
     "BoundingBox",
     "CollectionAvailability",
