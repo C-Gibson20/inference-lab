@@ -145,7 +145,7 @@ def test_fresh_database_initialises_with_locator_continuity_schema(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert repository.schema_inspection.current_revision == 4
+        assert repository.schema_inspection.current_revision == 5
         connection = repository._connection_or_raise()
         tables = connection.execute(
             """SELECT name FROM sqlite_schema
@@ -175,7 +175,7 @@ def test_standard_upgrade_requires_permission_then_preserves_existing_records(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert migrated.schema_inspection.current_revision == 4
+        assert migrated.schema_inspection.current_revision == 5
         connection = migrated._connection_or_raise()
         assert connection.execute("SELECT count(*) FROM corpora").fetchone()[0] == 1
         assert connection.execute("SELECT count(*) FROM documents").fetchone()[0] == 1
@@ -204,7 +204,7 @@ def test_standard_upgrade_requires_permission_then_preserves_existing_records(
 
     reopened = SQLiteMetadataRepository.open(database_path)
     try:
-        assert reopened.schema_inspection.current_revision == 4
+        assert reopened.schema_inspection.current_revision == 5
     finally:
         reopened.close()
 

@@ -17,6 +17,8 @@ _OTHER_DOCUMENT_ID = "00000000-0000-0000-0000-000000000002"
 _VERSION_ID = "00000000-0000-0000-0000-000000000003"
 _OTHER_VERSION_ID = "00000000-0000-0000-0000-000000000004"
 _FAMILY_ID = "00000000-0000-0000-0000-000000000005"
+_CORPUS_ID = "00000000-0000-0000-0000-000000000006"
+_CORPUS_VERSION_ID = "00000000-0000-0000-0000-000000000007"
 _DIGEST = "a" * 64
 
 
@@ -30,6 +32,16 @@ def baseline_database() -> Generator[sqlite3.Connection]:
         yield connection
     finally:
         connection.close()
+
+
+@pytest.fixture
+def current_database(
+    baseline_database: sqlite3.Connection,
+) -> sqlite3.Connection:
+    for migration in MIGRATIONS[1:]:
+        for statement in migration.statements:
+            baseline_database.execute(statement)
+    return baseline_database
 
 
 def _insert_document(connection: sqlite3.Connection, document_id: str) -> None:
@@ -60,7 +72,7 @@ def _insert_version(
 def test_multi_corpus_baseline_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 4
+    assert len(MIGRATIONS) == 5
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "multi_corpus_metadata_baseline"
     assert MIGRATIONS[0].checksum == (
@@ -81,6 +93,152 @@ def test_multi_corpus_baseline_is_stable_and_registry_is_valid() -> None:
     assert MIGRATIONS[3].checksum == (
         "715300e82383992a929c7377bdbe2d7840ca7e1ddf9a9a1931ddcf57fee0f268"
     )
+    assert MIGRATIONS[4].revision == 5
+    assert MIGRATIONS[4].migration_id == "baseline_checkpoint_persistence"
+    assert MIGRATIONS[4].checksum == (
+        "eb5ee4625496586d7d2af349ac22ce8884d0475c3493e733289811148cab255b"
+    )
+
+
+def _insert_corpus_update(
+    connection: sqlite3.Connection,
+    *,
+    corpus_id: str = _CORPUS_ID,
+    corpus_version: str = _CORPUS_VERSION_ID,
+) -> None:
+    connection.execute(
+        "INSERT INTO corpora (corpus_id, display_name) VALUES (?, ?)",
+        (corpus_id, "Test corpus"),
+    )
+    connection.execute(
+        """INSERT INTO corpus_updates (
+            corpus_id,
+            corpus_version,
+            expected_corpus_version,
+            state,
+            manifest_digest,
+            created_at,
+            restores_corpus_version
+        ) VALUES (?, ?, NULL, 'preparing', NULL, ?, NULL)""",
+        (corpus_id, corpus_version, "2026-01-01T00:00:00+00:00"),
+    )
+
+
+def _insert_manifest(
+    connection: sqlite3.Connection,
+    *,
+    corpus_id: str = _CORPUS_ID,
+    proposed_corpus_version: str = _CORPUS_VERSION_ID,
+    expected_corpus_version: str | None = None,
+    configuration_digest: str = "b" * 64,
+    discovery_summary_digest: str = "c" * 64,
+    state: str = "preparing",
+) -> None:
+    connection.execute(
+        """INSERT INTO baseline_manifests (
+            corpus_id,
+            proposed_corpus_version,
+            expected_corpus_version,
+            configuration_algorithm,
+            configuration_digest,
+            discovery_summary_algorithm,
+            discovery_summary_digest,
+            state
+        ) VALUES (?, ?, ?, 'sha256', ?, 'sha256', ?, ?)""",
+        (
+            corpus_id,
+            proposed_corpus_version,
+            expected_corpus_version,
+            configuration_digest,
+            discovery_summary_digest,
+            state,
+        ),
+    )
+
+
+def test_baseline_checkpoint_migration_creates_manifest_tables(
+    current_database: sqlite3.Connection,
+) -> None:
+    tables = current_database.execute(
+        """SELECT name
+        FROM sqlite_schema
+        WHERE type = 'table'
+          AND name LIKE 'baseline_%'
+        ORDER BY name"""
+    ).fetchall()
+
+    assert tables == [
+        ("baseline_manifest_required_components",),
+        ("baseline_manifests",),
+    ]
+
+
+def test_baseline_manifest_requires_existing_corpus_proposal(
+    current_database: sqlite3.Connection,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_manifest(current_database)
+
+
+def test_baseline_manifest_requires_existing_expected_parent(
+    current_database: sqlite3.Connection,
+) -> None:
+    _insert_corpus_update(current_database)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_manifest(
+            current_database,
+            expected_corpus_version=_OTHER_VERSION_ID,
+        )
+
+
+def test_baseline_manifest_enforces_digest_and_state_constraints(
+    current_database: sqlite3.Connection,
+) -> None:
+    _insert_corpus_update(current_database)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_manifest(current_database, configuration_digest="z" * 64)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_manifest(current_database, state="unknown")
+
+
+def test_baseline_manifest_required_components_are_unique(
+    current_database: sqlite3.Connection,
+) -> None:
+    _insert_corpus_update(current_database)
+    _insert_manifest(current_database)
+
+    current_database.execute(
+        """INSERT INTO baseline_manifest_required_components (
+            corpus_id, proposed_corpus_version, component_kind
+        ) VALUES (?, ?, ?)""",
+        (_CORPUS_ID, _CORPUS_VERSION_ID, "chunks"),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(
+            """INSERT INTO baseline_manifest_required_components (
+                corpus_id, proposed_corpus_version, component_kind
+            ) VALUES (?, ?, ?)""",
+            (_CORPUS_ID, _CORPUS_VERSION_ID, "chunks"),
+        )
+
+
+@pytest.mark.parametrize("component_kind", ["Chunks", "chunks_", "chunks--v2"])
+def test_baseline_manifest_required_components_reject_noncanonical_kinds(
+    current_database: sqlite3.Connection,
+    component_kind: str,
+) -> None:
+    _insert_corpus_update(current_database)
+    _insert_manifest(current_database)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(
+            """INSERT INTO baseline_manifest_required_components (
+                corpus_id, proposed_corpus_version, component_kind
+            ) VALUES (?, ?, ?)""",
+            (_CORPUS_ID, _CORPUS_VERSION_ID, component_kind),
+        )
 
 
 def test_baseline_creates_the_complete_current_metadata_scope(

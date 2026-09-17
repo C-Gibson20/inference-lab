@@ -1127,6 +1127,62 @@ BEGIN
 END""",
 )
 
+_BASELINE_CHECKPOINT_STATEMENTS: Final = (
+    """CREATE TABLE baseline_manifests (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    proposed_corpus_version TEXT NOT NULL,
+    expected_corpus_version TEXT,
+    configuration_algorithm TEXT NOT NULL
+        CHECK (configuration_algorithm = 'sha256'),
+    configuration_digest TEXT NOT NULL
+        CHECK (
+            length(configuration_digest) = 64
+            AND configuration_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+    discovery_summary_algorithm TEXT NOT NULL
+        CHECK (discovery_summary_algorithm = 'sha256'),
+    discovery_summary_digest TEXT NOT NULL
+        CHECK (
+            length(discovery_summary_digest) = 64
+            AND discovery_summary_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+    state TEXT NOT NULL
+        CHECK (state IN ('preparing', 'ready', 'committed', 'aborted')),
+    FOREIGN KEY (corpus_id, proposed_corpus_version)
+        REFERENCES corpus_updates (corpus_id, corpus_version),
+    FOREIGN KEY (corpus_id, expected_corpus_version)
+        REFERENCES corpus_versions (corpus_id, corpus_version),
+    UNIQUE (corpus_id, proposed_corpus_version),
+    CHECK (
+        expected_corpus_version IS NULL
+        OR expected_corpus_version != proposed_corpus_version
+    )
+) STRICT""",
+    """CREATE INDEX baseline_manifests_recovery_idx
+ON baseline_manifests (corpus_id, state, proposed_corpus_version)""",
+    """CREATE TABLE baseline_manifest_required_components (
+    storage_id INTEGER PRIMARY KEY,
+    corpus_id TEXT NOT NULL,
+    proposed_corpus_version TEXT NOT NULL,
+    component_kind TEXT NOT NULL
+        CHECK (
+            length(component_kind) > 0
+            AND substr(component_kind, 1, 1) GLOB '[a-z]'
+            AND component_kind = lower(component_kind)
+            AND component_kind NOT GLOB '*[^a-z0-9-]*'
+            AND component_kind NOT GLOB '*--*'
+            AND substr(component_kind, -1, 1) GLOB '[a-z0-9]'
+        ),
+    FOREIGN KEY (corpus_id, proposed_corpus_version)
+        REFERENCES baseline_manifests (
+            corpus_id,
+            proposed_corpus_version
+        ),
+    UNIQUE (corpus_id, proposed_corpus_version, component_kind)
+) STRICT""",
+)
+
 MIGRATIONS: Final = (
     MigrationDefinition(
         revision=1,
@@ -1147,6 +1203,11 @@ MIGRATIONS: Final = (
         revision=4,
         migration_id="corpus_version_publication",
         statements=CORPUS_VERSION_SCHEMA_STATEMENTS,
+    ),
+    MigrationDefinition(
+        revision=5,
+        migration_id="baseline_checkpoint_persistence",
+        statements=_BASELINE_CHECKPOINT_STATEMENTS,
     ),
 )
 
