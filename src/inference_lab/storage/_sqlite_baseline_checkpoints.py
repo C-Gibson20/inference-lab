@@ -516,6 +516,22 @@ def _insert_checkpoint(
     _insert_checkpoint_identities(connection, storage_id, checkpoint)
 
 
+def _validate_checkpoint_manifest_compatibility(
+    connection: sqlite3.Connection,
+    checkpoint: BaselineCheckpointRecord,
+) -> None:
+    """Require a checkpoint to resume the manifest's exact request identity."""
+    manifest = _get_manifest(
+        connection,
+        checkpoint.corpus_id,
+        checkpoint.proposed_corpus_version,
+    )
+    if manifest is None or (
+        manifest.configuration_identity != checkpoint.configuration_identity
+    ):
+        raise StorageConflictError()
+
+
 def write_baseline_checkpoint(
     connection: sqlite3.Connection,
     checkpoint: BaselineCheckpointRecord,
@@ -534,6 +550,7 @@ def write_baseline_checkpoint(
         )
 
     try:
+        _validate_checkpoint_manifest_compatibility(connection, checkpoint)
         row = _checkpoint_query(
             connection,
             corpus_id=checkpoint.corpus_id,

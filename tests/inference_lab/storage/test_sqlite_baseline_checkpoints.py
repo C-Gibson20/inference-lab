@@ -314,6 +314,64 @@ def test_checkpoint_and_manifest_conflicts_fail_closed(
         repository.close()
 
 
+def test_checkpoint_configuration_mismatch_is_an_incompatible_resume(
+    tmp_path: Path,
+) -> None:
+    repository = _prepare_repository(tmp_path / "metadata.sqlite3")
+    incompatible_configuration = ConfigurationIdentity(
+        DigestAlgorithm.SHA256,
+        "d" * 64,
+    )
+    try:
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.write_baseline_checkpoint(
+                    _checkpoint(configuration_identity=incompatible_configuration),
+                    expected_status=None,
+                )
+
+        assert (
+            repository.list_baseline_checkpoints(
+                _CORPUS_ID,
+                _PROPOSED_VERSION,
+            )
+            == ()
+        )
+    finally:
+        repository.close()
+
+
+def test_checkpoint_without_manifest_is_an_incompatible_resume(
+    tmp_path: Path,
+) -> None:
+    repository = _open_repository(tmp_path / "metadata.sqlite3")
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "Checkpoint corpus"))
+            transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
+            transaction.add_document_version(_DOCUMENT_VERSION)
+
+        incompatible_version = CorpusVersionId(
+            "66666666-6666-4666-8666-666666666666",
+        )
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.write_baseline_checkpoint(
+                    _checkpoint(proposed_corpus_version=incompatible_version),
+                    expected_status=None,
+                )
+
+        assert (
+            repository.list_baseline_checkpoints(
+                _CORPUS_ID,
+                incompatible_version,
+            )
+            == ()
+        )
+    finally:
+        repository.close()
+
+
 def test_corrupt_checkpoint_identity_role_fails_closed(tmp_path: Path) -> None:
     repository = _prepare_repository(tmp_path / "metadata.sqlite3")
     checkpoint = _checkpoint()
