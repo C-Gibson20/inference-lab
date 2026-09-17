@@ -109,6 +109,25 @@ type BaselineCheckpointIdentity = (
 )
 
 
+def _checkpoint_identity_key(
+    identity: BaselineCheckpointIdentity,
+) -> tuple[str, str]:
+    """Return a stable, storage-independent identity ordering key."""
+    if isinstance(identity, DocumentId):
+        kind = "document"
+    elif isinstance(identity, DocumentVersionId):
+        kind = "document_version"
+    elif isinstance(identity, RecordId):
+        kind = "record"
+    elif isinstance(identity, SourceObservationId):
+        kind = "source_observation"
+    elif isinstance(identity, SourceSpanId):
+        kind = "source_span"
+    else:
+        raise TypeError("identity must be a supported checkpoint identity.")
+    return kind, identity.as_str()
+
+
 @dataclass(frozen=True, slots=True)
 class BaselineWorkKey:
     """Identify one invalidation-sensitive document-stage attempt."""
@@ -175,11 +194,16 @@ def _validate_checkpoint_identities(
         tuple[BaselineCheckpointIdentity, ...],
         values,
     )
-    keys = tuple((type(value).__name__, value.as_str()) for value in typed_values)
+    keys = tuple(_checkpoint_identity_key(value) for value in typed_values)
     if len(keys) != len(set(keys)):
         raise ValueError(f"{field_name} must not contain duplicates.")
 
-    return typed_values
+    return tuple(
+        sorted(
+            typed_values,
+            key=_checkpoint_identity_key,
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

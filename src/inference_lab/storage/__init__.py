@@ -1,6 +1,12 @@
 """Persistent corpus metadata, indexes, and version-aware storage boundaries."""
 
 from inference_lab.storage.baseline_checkpoint_records import (
+    BaselineCheckpointIdentityRecord,
+    BaselineCheckpointRecord,
+    BaselineCheckpointRecordFailureCategory,
+    BaselineCheckpointRecordIdentityKind,
+    BaselineCheckpointRecordStage,
+    BaselineCheckpointRecordStatus,
     BaselineManifestRecord,
     BaselineManifestRecordState,
 )
@@ -97,6 +103,12 @@ __all__ = [
     "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
     "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
     "AbortCorpusUpdateOutcome",
+    "BaselineCheckpointIdentityRecord",
+    "BaselineCheckpointRecord",
+    "BaselineCheckpointRecordFailureCategory",
+    "BaselineCheckpointRecordIdentityKind",
+    "BaselineCheckpointRecordStage",
+    "BaselineCheckpointRecordStatus",
     "BaselineManifestRecord",
     "BaselineManifestRecordState",
     "BeginCorpusUpdateOutcome",

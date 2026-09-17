@@ -183,6 +183,21 @@ def test_completed_checkpoint_preserves_typed_identities() -> None:
     assert checkpoint.key()[0] == _PROPOSED_VERSION.as_str()
 
 
+def test_checkpoint_identity_tuples_are_canonical() -> None:
+    checkpoint = BaselineCheckpoint(
+        work_key=_work_key(),
+        document_id=_DOCUMENT_ID,
+        input_identities=(_RECORD_ID, _DOCUMENT_VERSION_ID),
+        output_identities=(),
+        status=BaselineCheckpointStatus.STARTED,
+    )
+
+    assert checkpoint.input_identities == (
+        _DOCUMENT_VERSION_ID,
+        _RECORD_ID,
+    )
+
+
 def test_started_checkpoint_rejects_output_identity() -> None:
     with pytest.raises(ValueError, match="started checkpoints"):
         BaselineCheckpoint(
