@@ -646,6 +646,7 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
 def test_public_storage_api_contains_only_contract_boundary() -> None:
     expected_exports = {
         "CORPUS_MANIFEST_CONTRACT_VERSION",
+        "CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION",
         "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
         "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
         "AbortCorpusUpdateOutcome",
@@ -668,6 +669,15 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "BaselineManifestRecordState",
         "BeginCorpusUpdateOutcome",
         "BoundingBox",
+        "ChunkerVersionRecord",
+        "ChunkingPolicyRecord",
+        "ChunkMinimumExceptionRecord",
+        "ChunkParserVersionRecord",
+        "ChunkSplitReasonRecord",
+        "ChunkSourceReferenceRecord",
+        "ChunkTokeniserIdentityRecord",
+        "ChunkOversizeUnitPolicy",
+        "ChunkStructuralBoundaryPolicy",
         "CollectionAvailability",
         "CommitCorpusUpdateOutcome",
         "ComponentGenerationReference",

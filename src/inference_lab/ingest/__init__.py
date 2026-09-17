@@ -47,6 +47,10 @@ from inference_lab.ingest.baseline_serialisation import (
     baseline_ingest_summary_payload,
     serialise_baseline_ingest_summary,
 )
+from inference_lab.ingest.chunk_mapping import (
+    ChunkMappingError,
+    map_chunk_source_reference,
+)
 from inference_lab.ingest.chunk_observability import observe_chunking
 from inference_lab.ingest.chunk_serialisation import (
     InvalidChunkSerialisationError,
@@ -257,6 +261,7 @@ __all__ = [
     "BoundingBox",
     "CanonicalSourceBoundaryMap",
     "Chunk",
+    "ChunkMappingError",
     "ChunkMinimumException",
     "ChunkSet",
     "ChunkSourceReference",
@@ -385,6 +390,7 @@ __all__ = [
     "generate_source_span_id",
     "hash_source_candidate",
     "inventory_local_sources",
+    "map_chunk_source_reference",
     "map_parse_persistence_request",
     "normalise_source_text",
     "observe_chunking",

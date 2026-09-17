@@ -10,6 +10,18 @@ from inference_lab.storage.baseline_checkpoint_records import (
     BaselineManifestRecord,
     BaselineManifestRecordState,
 )
+from inference_lab.storage.chunk_records import (
+    CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION,
+    ChunkerVersionRecord,
+    ChunkingPolicyRecord,
+    ChunkMinimumExceptionRecord,
+    ChunkOversizeUnitPolicy,
+    ChunkParserVersionRecord,
+    ChunkSourceReferenceRecord,
+    ChunkSplitReasonRecord,
+    ChunkStructuralBoundaryPolicy,
+    ChunkTokeniserIdentityRecord,
+)
 from inference_lab.storage.errors import (
     CorruptStorageError,
     IncompatibleSchemaError,
@@ -106,6 +118,7 @@ from inference_lab.storage.versioning import (
 
 __all__ = [
     "CORPUS_MANIFEST_CONTRACT_VERSION",
+    "CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION",
     "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
     "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
     "AbortCorpusUpdateOutcome",
@@ -123,6 +136,15 @@ __all__ = [
     "BeginBaselineManifestOutcome",
     "BeginCorpusUpdateOutcome",
     "BoundingBox",
+    "ChunkMinimumExceptionRecord",
+    "ChunkOversizeUnitPolicy",
+    "ChunkParserVersionRecord",
+    "ChunkSourceReferenceRecord",
+    "ChunkSplitReasonRecord",
+    "ChunkStructuralBoundaryPolicy",
+    "ChunkTokeniserIdentityRecord",
+    "ChunkerVersionRecord",
+    "ChunkingPolicyRecord",
     "CollectionAvailability",
     "CommitCorpusUpdateOutcome",
     "ComponentGenerationReference",
