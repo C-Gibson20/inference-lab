@@ -90,6 +90,7 @@ class BaselineFailureCategory(StrEnum):
     """Closed categories for baseline-ingest failures."""
 
     INVALID_REQUEST = "invalid_request"
+    CANCELLED = "cancelled"
     INCOMPATIBLE_RESUME = "incompatible_resume"
     DISCOVERY_FAILED = "discovery_failed"
     SOURCE_ACQUISITION_FAILED = "source_acquisition_failed"
