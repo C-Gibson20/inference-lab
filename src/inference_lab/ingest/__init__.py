@@ -15,6 +15,8 @@ from inference_lab.ingest._chunk_records import (
 )
 from inference_lab.ingest.baseline_checkpoint_mapping import (
     BaselineCheckpointMappingError,
+    baseline_checkpoint_from_record,
+    baseline_checkpoint_to_record,
     baseline_manifest_from_record,
     baseline_manifest_to_record,
 )
@@ -361,6 +363,8 @@ __all__ = [
     "UuidSourceObservationIdAllocator",
     "VerifiedSourceSnapshot",
     "apply_discovery_identity_outcome",
+    "baseline_checkpoint_from_record",
+    "baseline_checkpoint_to_record",
     "baseline_ingest_summary_payload",
     "baseline_manifest_from_record",
     "baseline_manifest_to_record",
