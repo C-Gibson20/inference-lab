@@ -161,6 +161,11 @@ def _reconstruct_checkpoint(
             ORDER BY identity_role, ordinal""",
             (checkpoint_storage_id,),
         ).fetchall()
+        if any(
+            identity_row["identity_role"] not in {"input", "output"}
+            for identity_row in identity_rows
+        ):
+            raise CorruptStorageError()
         input_identities = tuple(
             _identity_from_row(identity_row)
             for identity_row in identity_rows

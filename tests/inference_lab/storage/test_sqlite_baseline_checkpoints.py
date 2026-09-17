@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
     ConfigurationIdentity,
@@ -31,6 +32,7 @@ from inference_lab.storage import (
     BaselineManifestRecordState,
     BeginBaselineManifestOutcome,
     ComponentKind,
+    CorruptStorageError,
     StorageConflictError,
     TransitionBaselineManifestOutcome,
     WriteBaselineCheckpointOutcome,
@@ -308,5 +310,90 @@ def test_checkpoint_and_manifest_conflicts_fail_closed(
                     _checkpoint(status=BaselineCheckpointRecordStatus.COMPLETED),
                     expected_status=BaselineCheckpointRecordStatus.COMPLETED,
                 )
+    finally:
+        repository.close()
+
+
+def test_corrupt_checkpoint_identity_role_fails_closed(tmp_path: Path) -> None:
+    repository = _prepare_repository(tmp_path / "metadata.sqlite3")
+    checkpoint = _checkpoint()
+    try:
+        with repository.transaction() as transaction:
+            transaction.write_baseline_checkpoint(
+                checkpoint,
+                expected_status=None,
+            )
+
+        connection = repository._connection_or_raise()
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            """UPDATE baseline_checkpoint_identities
+            SET identity_role = 'corrupt'
+            WHERE checkpoint_storage_id = (
+                SELECT storage_id
+                FROM baseline_checkpoints
+                WHERE corpus_id = ? AND proposed_corpus_version = ?
+            )""",
+            (_CORPUS_ID.as_str(), _PROPOSED_VERSION.as_str()),
+        )
+        connection.commit()
+
+        with pytest.raises(CorruptStorageError):
+            repository.list_baseline_checkpoints(
+                _CORPUS_ID,
+                _PROPOSED_VERSION,
+            )
+    finally:
+        repository.close()
+
+
+def test_corrupt_checkpoint_configuration_digest_fails_closed(tmp_path: Path) -> None:
+    repository = _prepare_repository(tmp_path / "metadata.sqlite3")
+    checkpoint = _checkpoint()
+    try:
+        with repository.transaction() as transaction:
+            transaction.write_baseline_checkpoint(
+                checkpoint,
+                expected_status=None,
+            )
+
+        connection = repository._connection_or_raise()
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            """UPDATE baseline_checkpoints
+            SET configuration_digest = 'not-a-sha256-digest'
+            WHERE corpus_id = ? AND proposed_corpus_version = ?""",
+            (_CORPUS_ID.as_str(), _PROPOSED_VERSION.as_str()),
+        )
+        connection.commit()
+
+        with pytest.raises(CorruptStorageError):
+            repository.list_baseline_checkpoints(
+                _CORPUS_ID,
+                _PROPOSED_VERSION,
+            )
+    finally:
+        repository.close()
+
+
+def test_baseline_checkpoint_logs_are_bounded_and_digest_free(
+    tmp_path: Path,
+) -> None:
+    repository = _prepare_repository(tmp_path / "metadata.sqlite3")
+    try:
+        with capture_logs() as logs:
+            with repository.transaction() as transaction:
+                transaction.begin_baseline_manifest(_manifest())
+                transaction.write_baseline_checkpoint(
+                    _checkpoint(),
+                    expected_status=None,
+                )
+
+        rendered_logs = repr(logs)
+        assert "baseline_manifest_started" in rendered_logs
+        assert "baseline_checkpoint_written" in rendered_logs
+        assert _CONFIGURATION.digest not in rendered_logs
+        assert _DISCOVERY_DIGEST.digest not in rendered_logs
+        assert _DOCUMENT_VERSION.content_hash.digest not in rendered_logs
     finally:
         repository.close()
