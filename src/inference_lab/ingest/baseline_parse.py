@@ -12,6 +12,7 @@ from inference_lab.ingest.baseline_contracts import (
     BaselineStage,
     BaselineStageDisposition,
 )
+from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.ingest.discovery import DiscoveredSource
 from inference_lab.ingest.discovery_failures import DiscoveryFailure
 from inference_lab.ingest.hashing import StableReadFileSystem, read_verified_source
@@ -361,60 +362,108 @@ def _publish_parse(
     settings: Settings,
     parser_registry: ParserRegistry,
     filesystem: StableReadFileSystem | None,
+    profiling: BaselineProfilingContext,
+    document_id: DocumentId,
+    source_stage_id: str,
+    parse_stage_id: str,
+    parse_persistence_stage_id: str,
+    parent_stage_id: str | None,
 ) -> BaselineParseResult:
     """Acquire, parse, publish, and replay one new parse attempt."""
-    content = read_verified_source(
-        request.source.snapshot,
-        ordinal=request.source.ordinal,
-        max_source_bytes=settings.ingest.max_source_bytes,
-        filesystem=filesystem,
-    )
-    if isinstance(content, DiscoveryFailure):
-        raise BaselineParseExecutionError(
-            BaselineParseErrorCategory.SOURCE_ACQUISITION_FAILED
+    content: bytes | None = None
+    with profiling.observed_stage(
+        stage="source_acquisition",
+        stage_id=source_stage_id,
+        document_id=document_id.as_str(),
+        corpus_id=request.source.corpus_id.as_str(),
+        corpus_version=request.work_key.proposed_corpus_version.as_str(),
+        parent_stage_id=parent_stage_id,
+    ) as source_stage:
+        source_stage.set_counts(items_processed=1, records_emitted=0)
+        content_result = read_verified_source(
+            request.source.snapshot,
+            ordinal=request.source.ordinal,
+            max_source_bytes=settings.ingest.max_source_bytes,
+            filesystem=filesystem,
         )
-    try:
-        parser = select_parser(
-            request.source.classification,
-            parser_version=request.parser_version,
-            registry=parser_registry,
-        )
-    except ParserSelectionError as error:
-        raise BaselineParseExecutionError(
-            BaselineParseErrorCategory.PARSER_UNAVAILABLE
-        ) from error
+        if isinstance(content_result, DiscoveryFailure):
+            raise BaselineParseExecutionError(
+                BaselineParseErrorCategory.SOURCE_ACQUISITION_FAILED
+            )
+        content = content_result
+        source_stage.set_counts(items_processed=1, records_emitted=1)
 
-    parser_input = _build_parser_input(request, content)
-    outcome = _run_parser(parser, parser_input, settings=settings)
-    if outcome.document is not None and request.parsed_record_id is None:
-        raise BaselineParseExecutionError(
-            BaselineParseErrorCategory.PARSE_PERSISTENCE_FAILED
-        )
-    try:
-        persistence_request = ParsePersistenceRequest(
-            corpus_id=request.source.corpus_id,
-            parser_input=parser_input,
-            parser_version=request.parser_version,
-            outcome=outcome,
-            parse_id=request.parse_id,
-            parsed_record_id=request.parsed_record_id,
-            supersedes_record_id=request.supersedes_record_id,
-        )
-        persist_parse_request(
+    assert content is not None
+    parser_input: ParserInput | None = None
+    outcome: ParseOutcome | None = None
+    with profiling.observed_stage(
+        stage="parse",
+        stage_id=parse_stage_id,
+        document_id=document_id.as_str(),
+        corpus_id=request.source.corpus_id.as_str(),
+        corpus_version=request.work_key.proposed_corpus_version.as_str(),
+        parent_stage_id=parent_stage_id,
+    ) as parse_stage:
+        parse_stage.set_counts(items_processed=1, records_emitted=0)
+        try:
+            parser = select_parser(
+                request.source.classification,
+                parser_version=request.parser_version,
+                registry=parser_registry,
+            )
+        except ParserSelectionError as error:
+            raise BaselineParseExecutionError(
+                BaselineParseErrorCategory.PARSER_UNAVAILABLE
+            ) from error
+
+        parser_input = _build_parser_input(request, content)
+        outcome = _run_parser(parser, parser_input, settings=settings)
+        parse_stage.set_counts(items_processed=1, records_emitted=1)
+
+    assert parser_input is not None
+    assert outcome is not None
+    reconstructed: ReconstructedParseOutcome | None = None
+    with profiling.observed_stage(
+        stage="parse_persistence",
+        stage_id=parse_persistence_stage_id,
+        document_id=document_id.as_str(),
+        corpus_id=request.source.corpus_id.as_str(),
+        corpus_version=request.work_key.proposed_corpus_version.as_str(),
+        parent_stage_id=parse_stage_id,
+    ) as persistence_stage:
+        persistence_stage.set_counts(items_processed=1, records_emitted=0)
+        if outcome.document is not None and request.parsed_record_id is None:
+            raise BaselineParseExecutionError(
+                BaselineParseErrorCategory.PARSE_PERSISTENCE_FAILED
+            )
+        try:
+            persistence_request = ParsePersistenceRequest(
+                corpus_id=request.source.corpus_id,
+                parser_input=parser_input,
+                parser_version=request.parser_version,
+                outcome=outcome,
+                parse_id=request.parse_id,
+                parsed_record_id=request.parsed_record_id,
+                supersedes_record_id=request.supersedes_record_id,
+            )
+            persist_parse_request(
+                repository,
+                persistence_request,
+                settings=settings,
+                emit_lifecycle_events=False,
+            )
+        except Exception as error:
+            raise BaselineParseExecutionError(
+                BaselineParseErrorCategory.PARSE_PERSISTENCE_FAILED
+            ) from error
+
+        reconstructed = _load_reconstructed(
             repository,
-            persistence_request,
-            settings=settings,
+            request,
+            require_existing=True,
         )
-    except Exception as error:
-        raise BaselineParseExecutionError(
-            BaselineParseErrorCategory.PARSE_PERSISTENCE_FAILED
-        ) from error
-
-    reconstructed = _load_reconstructed(
-        repository,
-        request,
-        require_existing=True,
-    )
+        assert reconstructed is not None
+        persistence_stage.set_counts(items_processed=1, records_emitted=1)
     assert reconstructed is not None
     return _result_from_reconstructed(
         request,
@@ -448,6 +497,8 @@ def execute_baseline_parse(
     settings: Settings,
     parser_registry: ParserRegistry = CURRENT_PARSER_REGISTRY,
     filesystem: StableReadFileSystem | None = None,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
 ) -> BaselineParseResult:
     """Reuse or complete one stable, persist-and-reconstruct parse attempt."""
     _validate_repository(repository)
@@ -457,23 +508,49 @@ def execute_baseline_parse(
         raise TypeError("settings must be Settings.")
     if not isinstance(parser_registry, ParserRegistry):
         raise TypeError("parser_registry must be a ParserRegistry.")
+    if profiling is not None and not isinstance(profiling, BaselineProfilingContext):
+        raise TypeError("profiling must be a BaselineProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    selected_profiling = (
+        profiling if profiling is not None else BaselineProfilingContext.create()
+    )
     document_id, _ = _assigned_document_identity(request)
+    ordinal = str(request.source.ordinal)
+    parse_stage_id = selected_profiling.stage_id("parse", ordinal)
+    source_stage_id = selected_profiling.stage_id("source_acquisition", ordinal)
+    parse_persistence_preflight_stage_id = selected_profiling.stage_id(
+        "parse_persistence", f"{ordinal}:preflight"
+    )
+    parse_persistence_publish_stage_id = selected_profiling.stage_id(
+        "parse_persistence", f"{ordinal}:publish"
+    )
     context = bound_contextvars(
         corpus_id=request.source.corpus_id.as_str(),
         document_id=document_id.as_str(),
         corpus_version=request.work_key.proposed_corpus_version.as_str(),
         pipeline_stage="parse",
+        run_id=selected_profiling.run_id,
+        request_id=selected_profiling.request_id,
     )
     with context:
         fields = _log_fields(request)
-        _emit_event("info", "baseline_parse_started", **fields)
-        try:
+        with selected_profiling.observed_stage(
+            stage="parse_persistence",
+            stage_id=parse_persistence_preflight_stage_id,
+            document_id=document_id.as_str(),
+            corpus_id=request.source.corpus_id.as_str(),
+            corpus_version=request.work_key.proposed_corpus_version.as_str(),
+            parent_stage_id=parent_stage_id,
+        ) as persistence_stage:
+            persistence_stage.set_counts(items_processed=0, records_emitted=0)
             reconstructed = _load_reconstructed(
                 repository,
                 request,
                 require_existing=False,
             )
             if reconstructed is not None:
+                persistence_stage.set_counts(items_processed=1, records_emitted=1)
                 result = _result_from_reconstructed(
                     request,
                     reconstructed,
@@ -483,30 +560,22 @@ def execute_baseline_parse(
                     "info",
                     "baseline_parse_reused",
                     **fields,
+                    run_id=selected_profiling.run_id,
+                    stage_id=parse_persistence_preflight_stage_id,
                     parse_status=result.reconstructed.outcome.status,
                 )
                 return result
-            result = _publish_parse(
-                repository,
-                request,
-                settings=settings,
-                parser_registry=parser_registry,
-                filesystem=filesystem,
-            )
-        except BaselineParseExecutionError as error:
-            _emit_event(
-                "error",
-                "baseline_parse_failed",
-                **fields,
-                error_category=error.category.value,
-                retryable=False,
-            )
-            raise
-        _emit_event(
-            "info",
-            "baseline_parse_completed",
-            **fields,
-            parse_status=result.reconstructed.outcome.status,
-            disposition=result.disposition.value,
+
+        return _publish_parse(
+            repository,
+            request,
+            settings=settings,
+            parser_registry=parser_registry,
+            filesystem=filesystem,
+            profiling=selected_profiling,
+            document_id=document_id,
+            source_stage_id=source_stage_id,
+            parse_stage_id=parse_stage_id,
+            parse_persistence_stage_id=parse_persistence_publish_stage_id,
+            parent_stage_id=parent_stage_id,
         )
-        return result

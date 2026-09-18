@@ -8,6 +8,7 @@ from typing import Protocol, Self
 import structlog
 from structlog.contextvars import bound_contextvars
 
+from inference_lab.ingest._chunk_builder import build_chunking_outcome
 from inference_lab.ingest._chunk_records import ChunkingFailureCategory, ChunkSet
 from inference_lab.ingest.baseline_checkpoints import BaselineWorkKey
 from inference_lab.ingest.baseline_contracts import (
@@ -15,8 +16,8 @@ from inference_lab.ingest.baseline_contracts import (
     BaselineStageDisposition,
 )
 from inference_lab.ingest.baseline_parse import BaselineParseResult
+from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.ingest.chunk_mapping import ChunkMappingError, map_chunk_set
-from inference_lab.ingest.chunk_observability import observe_chunking
 from inference_lab.ingest.chunk_serialisation import (
     InvalidChunkSerialisationError,
     deserialise_chunk_set_selection,
@@ -269,6 +270,11 @@ def _build_and_publish(
     repository: BaselineChunkRepository,
     request: BaselineChunkRequest,
     tokeniser: ChunkTokeniser,
+    *,
+    profiling: BaselineProfilingContext,
+    chunk_stage_id: str,
+    chunk_persistence_stage_id: str,
+    parent_stage_id: str | None,
 ) -> BaselineChunkResult:
     """Build an all-or-nothing set, write it, and replay its public payload."""
     document = request.parse_result.reconstructed.outcome.document
@@ -279,64 +285,96 @@ def _build_and_publish(
         tokeniser=tokeniser,
         policy=request.policy,
     )
-    try:
-        with observe_chunking(
-            chunking_request,
-            corpus_version=request.work_key.proposed_corpus_version,
-        ) as lifecycle:
-            outcome = lifecycle.complete()
-    except Exception as error:
-        raise BaselineChunkExecutionError(
-            BaselineChunkErrorCategory.CHUNK_FAILED
-        ) from error
-    if not outcome.succeeded:
-        assert outcome.failure is not None
-        raise BaselineChunkExecutionError(
-            BaselineChunkErrorCategory.CHUNK_FAILED,
-            chunking_category=outcome.failure.category,
-        )
-    chunk_set = outcome.chunk_set
-    assert chunk_set is not None
-    if (
-        chunk_set.chunker_version != request.chunker_version
-        or chunk_set.tokeniser_identity != tokeniser.identity
-        or chunk_set.policy != request.policy
-        or chunk_set.configuration_identity != request.work_key.configuration_identity
-    ):
-        raise BaselineChunkExecutionError(BaselineChunkErrorCategory.CORRUPT_STATE)
-    try:
-        selection = map_chunk_set(chunk_set)
-        write_outcome: WriteChunkSetOutcome | None = None
-        with repository.transaction() as transaction:
-            write_outcome = transaction.write_chunk_set(
-                ChunkSetWriteRequest(
-                    corpus_id=request.corpus_id,
-                    selection=selection,
-                )
+    chunk_set: ChunkSet | None = None
+    with profiling.observed_stage(
+        stage="chunk",
+        stage_id=chunk_stage_id,
+        document_id=document.document_id.as_str(),
+        corpus_id=request.corpus_id.as_str(),
+        corpus_version=request.work_key.proposed_corpus_version.as_str(),
+        parent_stage_id=parent_stage_id,
+    ) as chunk_stage:
+        chunk_stage.set_counts(items_processed=1, records_emitted=0)
+        try:
+            outcome = build_chunking_outcome(chunking_request)
+        except Exception as error:
+            raise BaselineChunkExecutionError(
+                BaselineChunkErrorCategory.CHUNK_FAILED
+            ) from error
+        if not outcome.succeeded:
+            assert outcome.failure is not None
+            raise BaselineChunkExecutionError(
+                BaselineChunkErrorCategory.CHUNK_FAILED,
+                chunking_category=outcome.failure.category,
             )
-            if not isinstance(write_outcome, WriteChunkSetOutcome):
-                raise BaselineChunkExecutionError(
-                    BaselineChunkErrorCategory.CORRUPT_STATE
+        chunk_set = outcome.chunk_set
+        assert chunk_set is not None
+        if (
+            chunk_set.chunker_version != request.chunker_version
+            or chunk_set.tokeniser_identity != tokeniser.identity
+            or chunk_set.policy != request.policy
+            or chunk_set.configuration_identity
+            != request.work_key.configuration_identity
+        ):
+            raise BaselineChunkExecutionError(BaselineChunkErrorCategory.CORRUPT_STATE)
+        chunk_stage.set_counts(
+            items_processed=1,
+            records_emitted=len(chunk_set.chunks),
+        )
+
+    assert chunk_set is not None
+    write_outcome: WriteChunkSetOutcome | None = None
+    replayed: ChunkSet | None = None
+    with profiling.observed_stage(
+        stage="chunk_persistence",
+        stage_id=chunk_persistence_stage_id,
+        document_id=document.document_id.as_str(),
+        corpus_id=request.corpus_id.as_str(),
+        corpus_version=request.work_key.proposed_corpus_version.as_str(),
+        parent_stage_id=chunk_stage_id,
+    ) as persistence_stage:
+        persistence_stage.set_counts(
+            items_processed=len(chunk_set.chunks),
+            records_emitted=0,
+        )
+        try:
+            selection = map_chunk_set(chunk_set)
+            with repository.transaction() as transaction:
+                write_outcome = transaction.write_chunk_set(
+                    ChunkSetWriteRequest(
+                        corpus_id=request.corpus_id,
+                        selection=selection,
+                    )
                 )
-            if write_outcome.selection != selection:
-                raise BaselineChunkExecutionError(
-                    BaselineChunkErrorCategory.CORRUPT_STATE
-                )
-    except BaselineChunkExecutionError:
-        raise
-    except (ChunkMappingError, TypeError, ValueError) as error:
-        raise BaselineChunkExecutionError(
-            BaselineChunkErrorCategory.CHUNK_PERSISTENCE_FAILED
-        ) from error
-    except Exception as error:
-        raise BaselineChunkExecutionError(
-            BaselineChunkErrorCategory.CHUNK_PERSISTENCE_FAILED
-        ) from error
-    if write_outcome is None:
-        raise BaselineChunkExecutionError(BaselineChunkErrorCategory.CORRUPT_STATE)
-    replayed = _read_selection(repository, request, tokeniser)
-    if replayed is None:
-        raise BaselineChunkExecutionError(BaselineChunkErrorCategory.CORRUPT_STATE)
+                if not isinstance(write_outcome, WriteChunkSetOutcome):
+                    raise BaselineChunkExecutionError(
+                        BaselineChunkErrorCategory.CORRUPT_STATE
+                    )
+                if write_outcome.selection != selection:
+                    raise BaselineChunkExecutionError(
+                        BaselineChunkErrorCategory.CORRUPT_STATE
+                    )
+        except BaselineChunkExecutionError:
+            raise
+        except (ChunkMappingError, TypeError, ValueError) as error:
+            raise BaselineChunkExecutionError(
+                BaselineChunkErrorCategory.CHUNK_PERSISTENCE_FAILED
+            ) from error
+        except Exception as error:
+            raise BaselineChunkExecutionError(
+                BaselineChunkErrorCategory.CHUNK_PERSISTENCE_FAILED
+            ) from error
+        if write_outcome is None:
+            raise BaselineChunkExecutionError(BaselineChunkErrorCategory.CORRUPT_STATE)
+        replayed = _read_selection(repository, request, tokeniser)
+        if replayed is None:
+            raise BaselineChunkExecutionError(BaselineChunkErrorCategory.CORRUPT_STATE)
+        persistence_stage.set_counts(
+            items_processed=len(chunk_set.chunks),
+            records_emitted=len(replayed.chunks),
+        )
+    assert write_outcome is not None
+    assert replayed is not None
     return BaselineChunkResult(
         corpus_id=request.corpus_id,
         work_key=request.work_key,
@@ -373,26 +411,64 @@ def _emit_event(method: str, event: str, **fields: object) -> None:
 def execute_baseline_chunk(
     repository: BaselineChunkRepository,
     request: BaselineChunkRequest,
+    *,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str | None = None,
 ) -> BaselineChunkResult:
     """Reuse or complete one deterministic, atomically persisted chunk set."""
     _validate_repository(repository)
     if not isinstance(request, BaselineChunkRequest):
         raise TypeError("request must be a BaselineChunkRequest.")
+    if profiling is not None and not isinstance(profiling, BaselineProfilingContext):
+        raise TypeError("profiling must be a BaselineProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    if profiling_identity is not None and not isinstance(profiling_identity, str):
+        raise TypeError("profiling_identity must be a string or None.")
     tokeniser = _validated_tokeniser(request)
     document = request.parse_result.reconstructed.outcome.document
     assert document is not None
+    selected_profiling = (
+        profiling if profiling is not None else BaselineProfilingContext.create()
+    )
+    identity = (
+        profiling_identity
+        if profiling_identity is not None
+        else document.document_version_id.as_str()
+    )
+    chunk_stage_id = selected_profiling.stage_id("chunk", identity)
+    chunk_persistence_preflight_stage_id = selected_profiling.stage_id(
+        "chunk_persistence", f"{identity}:preflight"
+    )
+    chunk_persistence_publish_stage_id = selected_profiling.stage_id(
+        "chunk_persistence", f"{identity}:publish"
+    )
     context = bound_contextvars(
         corpus_id=request.corpus_id.as_str(),
         document_id=document.document_id.as_str(),
         corpus_version=request.work_key.proposed_corpus_version.as_str(),
         pipeline_stage="chunk",
+        run_id=selected_profiling.run_id,
+        request_id=selected_profiling.request_id,
     )
     with context:
         fields = _log_fields(request, tokeniser)
-        _emit_event("info", "baseline_chunk_started", **fields)
-        try:
+        with selected_profiling.observed_stage(
+            stage="chunk_persistence",
+            stage_id=chunk_persistence_preflight_stage_id,
+            document_id=document.document_id.as_str(),
+            corpus_id=request.corpus_id.as_str(),
+            corpus_version=request.work_key.proposed_corpus_version.as_str(),
+            parent_stage_id=parent_stage_id,
+        ) as persistence_stage:
+            persistence_stage.set_counts(items_processed=0, records_emitted=0)
             existing = _read_selection(repository, request, tokeniser)
             if existing is not None:
+                persistence_stage.set_counts(
+                    items_processed=len(existing.chunks),
+                    records_emitted=len(existing.chunks),
+                )
                 result = BaselineChunkResult(
                     corpus_id=request.corpus_id,
                     work_key=request.work_key,
@@ -403,28 +479,17 @@ def execute_baseline_chunk(
                     "info",
                     "baseline_chunk_reused",
                     **fields,
+                    run_id=selected_profiling.run_id,
+                    stage_id=chunk_persistence_preflight_stage_id,
                     chunk_count=len(existing.chunks),
                 )
                 return result
-            result = _build_and_publish(repository, request, tokeniser)
-        except BaselineChunkExecutionError as error:
-            failure_fields: dict[str, object] = {
-                **fields,
-                "error_category": error.category.value,
-                "retryable": False,
-            }
-            if error.chunking_category is not None:
-                failure_fields["chunking_error_category"] = (
-                    error.chunking_category.value
-                )
-            _emit_event("error", "baseline_chunk_failed", **failure_fields)
-            raise
-        _emit_event(
-            "info",
-            "baseline_chunk_completed",
-            **fields,
-            chunk_count=len(result.chunk_set.chunks),
-            disposition=result.disposition.value,
-            storage_replayed=result.storage_replayed,
+        return _build_and_publish(
+            repository,
+            request,
+            tokeniser,
+            profiling=selected_profiling,
+            chunk_stage_id=chunk_stage_id,
+            chunk_persistence_stage_id=chunk_persistence_publish_stage_id,
+            parent_stage_id=parent_stage_id,
         )
-        return result

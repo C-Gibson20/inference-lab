@@ -297,7 +297,10 @@ class StageTimer:
         if self._finished:
             raise RuntimeError("StageTimer has already finished")
 
-        duration_ms = (self._clock() - self._start_ns) / 1_000_000
+        finished_ns = self._clock()
+        if exc_type is None and finished_ns < self._start_ns:
+            raise ValueError("clock must not move backwards.")
+        duration_ms = (finished_ns - self._start_ns) / 1_000_000
         if exc_type is None:
             status = self._terminal_status or "completed"
         elif issubclass(exc_type, asyncio.CancelledError):
