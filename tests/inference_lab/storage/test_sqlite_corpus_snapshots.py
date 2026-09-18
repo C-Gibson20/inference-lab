@@ -1,5 +1,7 @@
 """Tests for dedicated version-pinned SQLite corpus snapshot lifecycles."""
 
+import hashlib
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
 from multiprocessing import get_context
@@ -11,23 +13,35 @@ import pytest
 from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
     CorpusMetadata,
     CorpusVersionId,
+    DigestAlgorithm,
     DocumentId,
     DocumentIdentity,
     DocumentVersion,
     DocumentVersionId,
     HashAlgorithm,
+    OutputDigest,
 )
 from inference_lab.storage import (
+    ChunkerVersionRecord,
+    ChunkingPolicyRecord,
+    ChunkOversizeUnitPolicy,
+    ChunkParserVersionRecord,
+    ChunkSetSelectionRecord,
+    ChunkSetWriteRequest,
+    ChunkStructuralBoundaryPolicy,
+    ChunkTokeniserIdentityRecord,
     CommitCorpusUpdateOutcome,
     ComponentGenerationReference,
     ComponentGenerationState,
     ComponentKind,
     CorpusSnapshot,
+    CorruptStorageError,
     RepositoryClosedError,
     SealCorpusUpdateOutcome,
     StorageConflictError,
@@ -157,6 +171,54 @@ def _add_catalogue(repository: SQLiteMetadataRepository) -> None:
             transaction.add_document(DocumentIdentity(document_id))
             transaction.add_document_version(version)
             transaction.add_corpus_document_version_membership(membership)
+
+
+def _chunk_selection(
+    document_id: DocumentId,
+    document_version_id: DocumentVersionId,
+    configuration_digest: str,
+) -> ChunkSetSelectionRecord:
+    """Build one valid storage selection for snapshot visibility tests."""
+    payload = (f'{{"document_version_id":"{document_version_id.as_str()}"}}\n').encode(
+        "utf-8"
+    )
+    return ChunkSetSelectionRecord(
+        document_id=document_id,
+        document_version_id=document_version_id,
+        parser_version=ChunkParserVersionRecord(
+            implementation="text-native",
+            contract_version="3.0.0",
+            normalisation_version="1.0.0",
+        ),
+        chunker_version=ChunkerVersionRecord(
+            implementation="structure-aware-greedy",
+            contract_version="1.0.1",
+        ),
+        tokeniser_identity=ChunkTokeniserIdentityRecord(
+            implementation="fake-whitespace",
+            contract_version="1.0.0",
+            artefact_identity="test-fixture",
+            artefact_revision="v1",
+            options=(("add-special-tokens", "false"),),
+        ),
+        policy=ChunkingPolicyRecord(
+            min_tokens=256,
+            max_tokens=512,
+            overlap_numerator=15,
+            overlap_denominator=100,
+            structural_boundary_policy=ChunkStructuralBoundaryPolicy.GREEDY,
+            oversize_unit_policy=ChunkOversizeUnitPolicy.TOKEN_WINDOW,
+        ),
+        configuration_identity=ConfigurationIdentity(
+            algorithm=DigestAlgorithm.SHA256,
+            digest=configuration_digest,
+        ),
+        payload_digest=OutputDigest(
+            algorithm=DigestAlgorithm.SHA256,
+            digest=hashlib.sha256(payload).hexdigest(),
+        ),
+        canonical_payload=payload,
+    )
 
 
 def _publish(
@@ -460,6 +522,237 @@ def test_snapshots_select_only_matching_committed_component_manifest(
                     generation.generation_id
                     for generation in current.manifest.component_generations
                 } == staged_ids
+    finally:
+        repository.close()
+
+
+def test_snapshot_chunk_reads_follow_the_pinned_manifest(
+    tmp_path: Path,
+) -> None:
+    repository = _open(tmp_path / "metadata.sqlite3")
+    _add_catalogue(repository)
+    first_selection = _chunk_selection(
+        _FIRST_DOCUMENT_ID,
+        _FIRST_DOCUMENT_VERSION.document_version_id,
+        "a" * 64,
+    )
+    second_selection = _chunk_selection(
+        _SECOND_DOCUMENT_ID,
+        _SECOND_DOCUMENT_VERSION.document_version_id,
+        "b" * 64,
+    )
+    with repository.transaction() as transaction:
+        transaction.write_chunk_set(
+            ChunkSetWriteRequest(
+                corpus_id=_CORPUS_A.corpus_id,
+                selection=first_selection,
+            )
+        )
+        transaction.write_chunk_set(
+            ChunkSetWriteRequest(
+                corpus_id=_CORPUS_A.corpus_id,
+                selection=second_selection,
+            )
+        )
+    _publish(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+
+    try:
+        with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as original:
+            assert (
+                original.get_chunk_set_selection(
+                    _FIRST_DOCUMENT_VERSION.document_version_id,
+                    first_selection.configuration_identity,
+                )
+                == first_selection
+            )
+            assert (
+                original.get_chunk_set_selection(
+                    _SECOND_DOCUMENT_VERSION.document_version_id,
+                    second_selection.configuration_identity,
+                )
+                is None
+            )
+            assert (
+                original.get_chunk_set_selection(
+                    _FIRST_DOCUMENT_VERSION.document_version_id,
+                    ConfigurationIdentity(
+                        algorithm=DigestAlgorithm.SHA256,
+                        digest="c" * 64,
+                    ),
+                )
+                is None
+            )
+
+            _publish(
+                repository,
+                _VERSION_A2,
+                expected_corpus_version=_VERSION_A1,
+                memberships=(_SECOND_MEMBERSHIP,),
+            )
+
+            with repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as current:
+                assert (
+                    current.get_chunk_set_selection(
+                        _SECOND_DOCUMENT_VERSION.document_version_id,
+                        second_selection.configuration_identity,
+                    )
+                    == second_selection
+                )
+            assert (
+                original.get_chunk_set_selection(
+                    _SECOND_DOCUMENT_VERSION.document_version_id,
+                    second_selection.configuration_identity,
+                )
+                is None
+            )
+    finally:
+        repository.close()
+
+
+def test_snapshot_chunk_read_fails_closed_for_reachable_corruption(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    repository = _open(database_path)
+    _add_catalogue(repository)
+    selection = _chunk_selection(
+        _FIRST_DOCUMENT_ID,
+        _FIRST_DOCUMENT_VERSION.document_version_id,
+        "a" * 64,
+    )
+    with repository.transaction() as transaction:
+        transaction.write_chunk_set(
+            ChunkSetWriteRequest(
+                corpus_id=_CORPUS_A.corpus_id,
+                selection=selection,
+            )
+        )
+    _publish(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    repository.close()
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            "UPDATE chunk_sets SET canonical_payload = ?",
+            (b"tampered",),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    reopened = _open(database_path)
+    try:
+        with reopened.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as snapshot:
+            with pytest.raises(CorruptStorageError):
+                snapshot.get_chunk_set_selection(
+                    _FIRST_DOCUMENT_VERSION.document_version_id,
+                    selection.configuration_identity,
+                )
+    finally:
+        reopened.close()
+
+
+def test_snapshot_chunk_selection_survives_repository_restart_and_is_payload_free(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    selection = _chunk_selection(
+        _FIRST_DOCUMENT_ID,
+        _FIRST_DOCUMENT_VERSION.document_version_id,
+        "a" * 64,
+    )
+    repository = _open(database_path)
+    _add_catalogue(repository)
+    with repository.transaction() as transaction:
+        transaction.write_chunk_set(
+            ChunkSetWriteRequest(
+                corpus_id=_CORPUS_A.corpus_id,
+                selection=selection,
+            )
+        )
+    _publish(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    repository.close()
+
+    reopened = _open(database_path)
+    try:
+        with capture_logs() as logs:
+            with reopened.open_active_corpus_snapshot(_CORPUS_A.corpus_id) as snapshot:
+                assert (
+                    snapshot.get_chunk_set_selection(
+                        _FIRST_DOCUMENT_VERSION.document_version_id,
+                        selection.configuration_identity,
+                    )
+                    == selection
+                )
+        rendered_logs = repr(logs)
+        assert selection.canonical_payload.decode("utf-8") not in rendered_logs
+        assert selection.payload_digest.digest not in rendered_logs
+        assert selection.configuration_identity.digest not in rendered_logs
+    finally:
+        reopened.close()
+
+
+def test_snapshot_chunk_selection_enforces_open_lifecycle_and_types(
+    tmp_path: Path,
+) -> None:
+    repository = _open(tmp_path / "metadata.sqlite3")
+    _add_catalogue(repository)
+    selection = _chunk_selection(
+        _FIRST_DOCUMENT_ID,
+        _FIRST_DOCUMENT_VERSION.document_version_id,
+        "a" * 64,
+    )
+    with repository.transaction() as transaction:
+        transaction.write_chunk_set(
+            ChunkSetWriteRequest(
+                corpus_id=_CORPUS_A.corpus_id,
+                selection=selection,
+            )
+        )
+    _publish(
+        repository,
+        _VERSION_A1,
+        expected_corpus_version=None,
+        memberships=(_FIRST_MEMBERSHIP,),
+    )
+    snapshot = repository.open_active_corpus_snapshot(_CORPUS_A.corpus_id)
+    try:
+        with pytest.raises(StorageTransactionError):
+            snapshot.get_chunk_set_selection(
+                _FIRST_DOCUMENT_VERSION.document_version_id,
+                selection.configuration_identity,
+            )
+        with snapshot:
+            with pytest.raises(TypeError, match="document_version_id"):
+                snapshot.get_chunk_set_selection(  # type: ignore[arg-type]
+                    object(),  # type: ignore[arg-type]
+                    selection.configuration_identity,
+                )
+            with pytest.raises(TypeError, match="configuration_identity"):
+                snapshot.get_chunk_set_selection(
+                    _FIRST_DOCUMENT_VERSION.document_version_id,
+                    object(),  # type: ignore[arg-type]
+                )
+        with pytest.raises(RepositoryClosedError):
+            snapshot.get_chunk_set_selection(
+                _FIRST_DOCUMENT_VERSION.document_version_id,
+                selection.configuration_identity,
+            )
     finally:
         repository.close()
 

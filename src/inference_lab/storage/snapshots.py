@@ -5,6 +5,7 @@ from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusId,
     DocumentFamilyId,
@@ -21,6 +22,7 @@ from inference_lab.provenance import (
     SourceObservationState,
     SourceSpanId,
 )
+from inference_lab.storage.chunk_records import ChunkSetSelectionRecord
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_locations import ResolvedSourceSpan
@@ -70,6 +72,14 @@ class CorpusSnapshot(Protocol):
         document_version_id: DocumentVersionId,
     ) -> SourceArtefact | None:
         """Return source metadata for a version visible in this snapshot."""
+        ...
+
+    def get_chunk_set_selection(
+        self,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> ChunkSetSelectionRecord | None:
+        """Return a compatible chunk set for a visible version, or ``None``."""
         ...
 
     def read_source_bytes(

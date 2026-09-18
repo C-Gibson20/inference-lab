@@ -7,6 +7,7 @@ from types import TracebackType
 from typing import Self
 
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusId,
     CorpusVersionId,
@@ -25,6 +26,9 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 from inference_lab.storage._source_blob_store import ManagedSourceBlobStore
+from inference_lab.storage._sqlite_chunk_sets import (
+    get_chunk_set_selection as read_chunk_set_selection,
+)
 from inference_lab.storage._sqlite_cleanup import (
     close_preserving_primary,
     rollback_preserving_primary,
@@ -83,6 +87,7 @@ from inference_lab.storage._sqlite_versions import (
 from inference_lab.storage._sqlite_versions import (
     list_document_versions as read_document_versions,
 )
+from inference_lab.storage.chunk_records import ChunkSetSelectionRecord
 from inference_lab.storage.errors import (
     CorruptStorageError,
     RepositoryClosedError,
@@ -253,6 +258,34 @@ class SQLiteCorpusSnapshot:
         if document_version_id not in self._visible_document_version_ids:
             return None
         return get_source_artefact(connection, self.corpus_id, document_version_id)
+
+    def get_chunk_set_selection(
+        self,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> ChunkSetSelectionRecord | None:
+        """Return chunk metadata only for a version in the pinned manifest."""
+        connection = self._reader_connection()
+        self._require_document_version_id(document_version_id)
+        if not isinstance(configuration_identity, ConfigurationIdentity):
+            raise TypeError("configuration_identity must be a ConfigurationIdentity.")
+        if document_version_id not in self._visible_document_version_ids:
+            return None
+
+        selection = read_chunk_set_selection(
+            connection,
+            self.corpus_id,
+            document_version_id,
+            configuration_identity,
+        )
+        if selection is None:
+            return None
+        if (
+            selection.document_id,
+            selection.document_version_id,
+        ) not in self._visible_membership_keys:
+            raise CorruptStorageError()
+        return selection
 
     def read_source_bytes(
         self,

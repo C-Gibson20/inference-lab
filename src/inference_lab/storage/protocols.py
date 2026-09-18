@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -26,17 +27,32 @@ from inference_lab.provenance import (
     SourceObservationState,
     SourceSpanId,
 )
+from inference_lab.storage.baseline_checkpoint_records import (
+    BaselineCheckpointRecord,
+    BaselineCheckpointRecordStage,
+    BaselineCheckpointRecordStatus,
+    BaselineManifestRecord,
+    BaselineManifestRecordState,
+)
+from inference_lab.storage.chunk_records import (
+    ChunkSetSelectionRecord,
+    ChunkSetWriteRequest,
+)
 from inference_lab.storage.locator_continuity import (
     SourceFileIdentityHint,
     SourceLocatorRevision,
 )
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
+    BeginBaselineManifestOutcome,
     BeginCorpusUpdateOutcome,
     CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
     RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
+    TransitionBaselineManifestOutcome,
+    WriteBaselineCheckpointOutcome,
+    WriteChunkSetOutcome,
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
@@ -61,6 +77,103 @@ class ComponentGenerationValidator(Protocol):
         document_memberships: tuple[CorpusDocumentVersionMembership, ...],
     ) -> bool:
         """Return whether the generation is durable, compatible, and complete."""
+        ...
+
+
+@runtime_checkable
+class BaselineCheckpointReader(Protocol):
+    """Read durable baseline-ingest manifests and checkpoints."""
+
+    def get_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> BaselineManifestRecord | None:
+        """Return one corpus-scoped baseline manifest, or ``None``."""
+        ...
+
+    def get_baseline_checkpoint(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        document_version_id: DocumentVersionId,
+        stage: BaselineCheckpointRecordStage,
+        configuration_identity: ConfigurationIdentity,
+    ) -> BaselineCheckpointRecord | None:
+        """Return one exact document-stage checkpoint, or ``None``."""
+        ...
+
+    def list_baseline_checkpoints(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> tuple[BaselineCheckpointRecord, ...]:
+        """Return checkpoints in canonical key order."""
+        ...
+
+
+@runtime_checkable
+class BaselineCheckpointWriter(Protocol):
+    """Write durable baseline-ingest manifests and checkpoints."""
+
+    def begin_baseline_manifest(
+        self,
+        manifest: BaselineManifestRecord,
+    ) -> BeginBaselineManifestOutcome:
+        """Insert a manifest or return an exact replay."""
+        ...
+
+    def transition_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        *,
+        expected_state: BaselineManifestRecordState,
+        next_state: BaselineManifestRecordState,
+    ) -> TransitionBaselineManifestOutcome:
+        """Compare-and-set one manifest lifecycle state."""
+        ...
+
+    def write_baseline_checkpoint(
+        self,
+        checkpoint: BaselineCheckpointRecord,
+        *,
+        expected_status: BaselineCheckpointRecordStatus | None,
+    ) -> WriteBaselineCheckpointOutcome:
+        """Insert or compare-and-set one checkpoint."""
+        ...
+
+
+@runtime_checkable
+class BaselineCheckpointRepository(
+    BaselineCheckpointReader,
+    BaselineCheckpointWriter,
+    Protocol,
+):
+    """Atomic baseline checkpoint operations on an owned transaction."""
+
+
+class ChunkSetReader(Protocol):
+    """Read exact immutable chunk sets through corpus visibility."""
+
+    def get_chunk_set_selection(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> ChunkSetSelectionRecord | None:
+        """Return an exact visible selection, or ``None`` without disclosure."""
+        ...
+
+
+class ChunkSetWriter(Protocol):
+    """Write immutable chunk sets through a corpus-authorised transaction."""
+
+    def write_chunk_set(
+        self,
+        request: ChunkSetWriteRequest,
+    ) -> WriteChunkSetOutcome:
+        """Insert one chunk set or return its exact replay."""
         ...
 
 
@@ -504,7 +617,7 @@ class MetadataWriter(Protocol):
 
 
 @runtime_checkable
-class MetadataTransaction(MetadataReader, MetadataWriter, Protocol):
+class MetadataTransaction(MetadataReader, MetadataWriter, ChunkSetWriter, Protocol):
     """Context-managed atomic unit of metadata reads and writes.
 
     Successful context exit commits the complete unit. Exceptional exit rolls
@@ -526,7 +639,7 @@ class MetadataTransaction(MetadataReader, MetadataWriter, Protocol):
 
 
 @runtime_checkable
-class MetadataRepository(MetadataReader, Protocol):
+class MetadataRepository(MetadataReader, ChunkSetReader, Protocol):
     """Opened, restart-safe metadata repository with explicit lifecycle."""
 
     @property

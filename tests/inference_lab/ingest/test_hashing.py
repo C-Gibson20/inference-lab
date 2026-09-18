@@ -26,6 +26,7 @@ from inference_lab.ingest import (
     VerifiedSourceSnapshot,
     hash_source_candidate,
     inventory_local_sources,
+    read_verified_source,
 )
 from inference_lab.provenance import CorpusId, HashAlgorithm
 
@@ -196,6 +197,119 @@ def test_empty_file_has_the_standard_empty_sha256_digest(tmp_path: Path) -> None
     assert isinstance(result, VerifiedSourceSnapshot)
     assert result.byte_count == 0
     assert result.content_hash.digest == hashlib.sha256(b"").hexdigest()
+
+
+def test_verified_source_reacquisition_returns_exact_bytes_and_safe_log(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "private-reacquisition.txt"
+    content = b"private reacquisition payload"
+    source.write_bytes(content)
+    candidate = _candidate(source)
+    snapshot = hash_source_candidate(
+        _classified(candidate),
+        max_source_bytes=len(content),
+    )
+    assert isinstance(snapshot, VerifiedSourceSnapshot)
+
+    filesystem = _RecordingFileSystem()
+    clock_values = iter((2_000_000_000, 2_020_000_000))
+    with capture_logs() as logs:
+        result = read_verified_source(
+            snapshot,
+            ordinal=candidate.ordinal,
+            max_source_bytes=len(content),
+            filesystem=filesystem,
+            clock=clock_values.__next__,
+        )
+
+    assert result == content
+    assert logs == [
+        {
+            "pipeline_stage": "ingest",
+            "source_ordinal": candidate.ordinal,
+            "media_type": "text/plain",
+            "byte_count": len(content),
+            "duration_ms": 20.0,
+            "event": "source_reacquired",
+            "log_level": "debug",
+        }
+    ]
+    rendered = repr(logs)
+    assert str(source) not in rendered
+    assert content.decode() not in rendered
+    assert snapshot.content_hash.digest not in rendered
+
+
+def test_verified_source_reacquisition_rejects_changed_bytes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "changed-after-discovery.txt"
+    source.write_bytes(b"original")
+    candidate = _candidate(source)
+    snapshot = hash_source_candidate(
+        _classified(candidate),
+        max_source_bytes=100,
+    )
+    assert isinstance(snapshot, VerifiedSourceSnapshot)
+    source.write_bytes(b"changed")
+
+    result = read_verified_source(
+        snapshot,
+        ordinal=candidate.ordinal,
+        max_source_bytes=100,
+    )
+
+    assert isinstance(result, DiscoveryFailure)
+    assert result.category is DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ
+
+
+def test_verified_source_reacquisition_rejects_current_size_limit(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "reacquisition-too-large.txt"
+    content = b"12345"
+    source.write_bytes(content)
+    candidate = _candidate(source)
+    snapshot = hash_source_candidate(
+        _classified(candidate),
+        max_source_bytes=len(content),
+    )
+    assert isinstance(snapshot, VerifiedSourceSnapshot)
+
+    result = read_verified_source(
+        snapshot,
+        ordinal=candidate.ordinal,
+        max_source_bytes=len(content) - 1,
+    )
+
+    assert isinstance(result, DiscoveryFailure)
+    assert result.category is DiscoveryFailureCategory.SOURCE_TOO_LARGE
+
+
+def test_verified_source_reacquisition_maps_read_failure(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "reacquisition-read-failure.txt"
+    source.write_bytes(b"read failure")
+    candidate = _candidate(source)
+    snapshot = hash_source_candidate(
+        _classified(candidate),
+        max_source_bytes=100,
+    )
+    assert isinstance(snapshot, VerifiedSourceSnapshot)
+    filesystem = _FaultInjectingFileSystem()
+    filesystem.read_errors.add(1)
+
+    result = read_verified_source(
+        snapshot,
+        ordinal=candidate.ordinal,
+        max_source_bytes=100,
+        filesystem=filesystem,
+    )
+
+    assert isinstance(result, DiscoveryFailure)
+    assert result.category is DiscoveryFailureCategory.SOURCE_READ_FAILED
 
 
 def test_size_limit_accepts_boundary_and_rejects_oversized_source(

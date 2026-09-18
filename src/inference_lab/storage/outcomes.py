@@ -2,6 +2,12 @@
 
 from dataclasses import dataclass
 
+from inference_lab.storage.baseline_checkpoint_records import (
+    BaselineCheckpointRecord,
+    BaselineManifestRecord,
+    BaselineManifestRecordState,
+)
+from inference_lab.storage.chunk_records import ChunkSetSelectionRecord
 from inference_lab.storage.versioning import (
     CorpusUpdate,
     CorpusUpdateState,
@@ -214,3 +220,78 @@ class RollbackCorpusVersionOutcome:
             raise InvalidCorpusVersionContractError(
                 "a rollback outcome requires a historical restore target."
             )
+
+
+@dataclass(frozen=True, slots=True)
+class BeginBaselineManifestOutcome:
+    """Return a new or exact-replayed baseline manifest."""
+
+    manifest: BaselineManifestRecord
+    replayed: bool = False
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate a new or replayed manifest begin result."""
+        if not isinstance(self.manifest, BaselineManifestRecord):
+            raise TypeError("manifest must be a BaselineManifestRecord.")
+        _validate_replayed(self.replayed)
+        if (
+            not self.replayed
+            and self.manifest.state is not BaselineManifestRecordState.PREPARING
+        ):
+            raise ValueError(
+                "a new baseline manifest outcome requires a preparing manifest."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionBaselineManifestOutcome:
+    """Return a compare-and-set manifest transition or exact replay."""
+
+    manifest: BaselineManifestRecord
+    replayed: bool = False
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate a manifest transition result."""
+        if not isinstance(self.manifest, BaselineManifestRecord):
+            raise TypeError("manifest must be a BaselineManifestRecord.")
+        _validate_replayed(self.replayed)
+
+
+@dataclass(frozen=True, slots=True)
+class WriteBaselineCheckpointOutcome:
+    """Return a new, transitioned, or exact-replayed checkpoint."""
+
+    checkpoint: BaselineCheckpointRecord
+    replayed: bool = False
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate a checkpoint write result."""
+        if not isinstance(self.checkpoint, BaselineCheckpointRecord):
+            raise TypeError("checkpoint must be a BaselineCheckpointRecord.")
+        _validate_replayed(self.replayed)
+
+
+@dataclass(frozen=True, slots=True)
+class WriteChunkSetOutcome:
+    """Return a newly written or exactly replayed immutable chunk set."""
+
+    selection: ChunkSetSelectionRecord
+    replayed: bool = False
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the selection and explicit replay disposition."""
+        if not isinstance(self.selection, ChunkSetSelectionRecord):
+            raise TypeError("selection must be a ChunkSetSelectionRecord.")
+        _validate_replayed(self.replayed)

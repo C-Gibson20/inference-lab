@@ -17,6 +17,10 @@ _OTHER_DOCUMENT_ID = "00000000-0000-0000-0000-000000000002"
 _VERSION_ID = "00000000-0000-0000-0000-000000000003"
 _OTHER_VERSION_ID = "00000000-0000-0000-0000-000000000004"
 _FAMILY_ID = "00000000-0000-0000-0000-000000000005"
+_CORPUS_ID = "00000000-0000-0000-0000-000000000006"
+_CORPUS_VERSION_ID = "00000000-0000-0000-0000-000000000007"
+_CHECKPOINT_DOCUMENT_ID = "00000000-0000-0000-0000-000000000008"
+_CHECKPOINT_DOCUMENT_VERSION_ID = "00000000-0000-0000-0000-000000000009"
 _DIGEST = "a" * 64
 
 
@@ -30,6 +34,16 @@ def baseline_database() -> Generator[sqlite3.Connection]:
         yield connection
     finally:
         connection.close()
+
+
+@pytest.fixture
+def current_database(
+    baseline_database: sqlite3.Connection,
+) -> sqlite3.Connection:
+    for migration in MIGRATIONS[1:]:
+        for statement in migration.statements:
+            baseline_database.execute(statement)
+    return baseline_database
 
 
 def _insert_document(connection: sqlite3.Connection, document_id: str) -> None:
@@ -60,7 +74,7 @@ def _insert_version(
 def test_multi_corpus_baseline_is_stable_and_registry_is_valid() -> None:
     assert SQLITE_APPLICATION_ID == 0x494C4142
     assert validate_migration_registry(MIGRATIONS) is MIGRATIONS
-    assert len(MIGRATIONS) == 4
+    assert len(MIGRATIONS) == 7
     assert MIGRATIONS[0].revision == 1
     assert MIGRATIONS[0].migration_id == "multi_corpus_metadata_baseline"
     assert MIGRATIONS[0].checksum == (
@@ -81,6 +95,344 @@ def test_multi_corpus_baseline_is_stable_and_registry_is_valid() -> None:
     assert MIGRATIONS[3].checksum == (
         "715300e82383992a929c7377bdbe2d7840ca7e1ddf9a9a1931ddcf57fee0f268"
     )
+    assert MIGRATIONS[4].revision == 5
+    assert MIGRATIONS[4].migration_id == "baseline_checkpoint_persistence"
+    assert MIGRATIONS[4].checksum == (
+        "eb5ee4625496586d7d2af349ac22ce8884d0475c3493e733289811148cab255b"
+    )
+    assert MIGRATIONS[5].revision == 6
+    assert MIGRATIONS[5].migration_id == "baseline_checkpoint_records"
+    assert MIGRATIONS[5].checksum == (
+        "cdcac3b4b3a4e2da1b12333f34d7fc175b16fee2718951f0c1d58b0d59f6c614"
+    )
+    assert MIGRATIONS[6].revision == 7
+    assert MIGRATIONS[6].migration_id == "canonical_chunk_sets"
+    assert MIGRATIONS[6].checksum == (
+        "8d4a21f9e37a09be95190f102c0db3bfd38bb62a85736eb0d6725a8e77fc16ef"
+    )
+
+
+def _insert_corpus_update(
+    connection: sqlite3.Connection,
+    *,
+    corpus_id: str = _CORPUS_ID,
+    corpus_version: str = _CORPUS_VERSION_ID,
+) -> None:
+    connection.execute(
+        "INSERT INTO corpora (corpus_id, display_name) VALUES (?, ?)",
+        (corpus_id, "Test corpus"),
+    )
+    connection.execute(
+        """INSERT INTO corpus_updates (
+            corpus_id,
+            corpus_version,
+            expected_corpus_version,
+            state,
+            manifest_digest,
+            created_at,
+            restores_corpus_version
+        ) VALUES (?, ?, NULL, 'preparing', NULL, ?, NULL)""",
+        (corpus_id, corpus_version, "2026-01-01T00:00:00+00:00"),
+    )
+
+
+def _insert_manifest(
+    connection: sqlite3.Connection,
+    *,
+    corpus_id: str = _CORPUS_ID,
+    proposed_corpus_version: str = _CORPUS_VERSION_ID,
+    expected_corpus_version: str | None = None,
+    configuration_digest: str = "b" * 64,
+    discovery_summary_digest: str = "c" * 64,
+    state: str = "preparing",
+) -> None:
+    connection.execute(
+        """INSERT INTO baseline_manifests (
+            corpus_id,
+            proposed_corpus_version,
+            expected_corpus_version,
+            configuration_algorithm,
+            configuration_digest,
+            discovery_summary_algorithm,
+            discovery_summary_digest,
+            state
+        ) VALUES (?, ?, ?, 'sha256', ?, 'sha256', ?, ?)""",
+        (
+            corpus_id,
+            proposed_corpus_version,
+            expected_corpus_version,
+            configuration_digest,
+            discovery_summary_digest,
+            state,
+        ),
+    )
+
+
+def _prepare_checkpoint_dependencies(connection: sqlite3.Connection) -> None:
+    _insert_corpus_update(connection)
+    _insert_manifest(connection)
+    _insert_document(connection, _CHECKPOINT_DOCUMENT_ID)
+    _insert_version(
+        connection,
+        version_id=_CHECKPOINT_DOCUMENT_VERSION_ID,
+        document_id=_CHECKPOINT_DOCUMENT_ID,
+    )
+
+
+def _insert_checkpoint(
+    connection: sqlite3.Connection,
+    *,
+    document_version_id: str = _CHECKPOINT_DOCUMENT_VERSION_ID,
+    document_id: str = _CHECKPOINT_DOCUMENT_ID,
+    stage: str = "parse",
+    configuration_digest: str = "d" * 64,
+    status: str = "started",
+    failure_category: str | None = None,
+) -> None:
+    connection.execute(
+        """INSERT INTO baseline_checkpoints (
+            corpus_id,
+            proposed_corpus_version,
+            document_version_id,
+            document_id,
+            stage,
+            configuration_algorithm,
+            configuration_digest,
+            status,
+            failure_category
+        ) VALUES (?, ?, ?, ?, ?, 'sha256', ?, ?, ?)""",
+        (
+            _CORPUS_ID,
+            _CORPUS_VERSION_ID,
+            document_version_id,
+            document_id,
+            stage,
+            configuration_digest,
+            status,
+            failure_category,
+        ),
+    )
+
+
+def _checkpoint_storage_id(connection: sqlite3.Connection) -> int:
+    row = connection.execute(
+        "SELECT storage_id FROM baseline_checkpoints ORDER BY storage_id DESC LIMIT 1"
+    ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def test_baseline_checkpoint_migration_creates_manifest_tables(
+    current_database: sqlite3.Connection,
+) -> None:
+    tables = current_database.execute(
+        """SELECT name
+        FROM sqlite_schema
+        WHERE type = 'table'
+          AND name LIKE 'baseline_%'
+        ORDER BY name"""
+    ).fetchall()
+
+    assert tables == [
+        ("baseline_checkpoint_identities",),
+        ("baseline_checkpoints",),
+        ("baseline_manifest_required_components",),
+        ("baseline_manifests",),
+    ]
+
+
+def test_baseline_checkpoint_requires_existing_manifest_and_document_version(
+    current_database: sqlite3.Connection,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_checkpoint(current_database)
+
+    _insert_corpus_update(current_database)
+    _insert_manifest(current_database)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_checkpoint(current_database)
+
+
+def test_baseline_checkpoint_enforces_work_key_and_lifecycle_constraints(
+    current_database: sqlite3.Connection,
+) -> None:
+    _prepare_checkpoint_dependencies(current_database)
+    _insert_checkpoint(current_database)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_checkpoint(current_database)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_checkpoint(current_database, stage="unknown")
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_checkpoint(
+            current_database,
+            configuration_digest="z" * 64,
+            stage="chunk",
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_checkpoint(
+            current_database,
+            status="failed",
+            stage="publication",
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_checkpoint(
+            current_database,
+            status="started",
+            failure_category="parse_failed",
+            stage="source_acquisition",
+        )
+
+
+def test_baseline_checkpoint_identity_rows_are_ordered_and_unique(
+    current_database: sqlite3.Connection,
+) -> None:
+    _prepare_checkpoint_dependencies(current_database)
+    _insert_checkpoint(current_database)
+    checkpoint_storage_id = _checkpoint_storage_id(current_database)
+    insert = """INSERT INTO baseline_checkpoint_identities (
+        checkpoint_storage_id,
+        identity_role,
+        ordinal,
+        identity_kind,
+        identity_value
+    ) VALUES (?, ?, ?, ?, ?)"""
+    values = (
+        checkpoint_storage_id,
+        "input",
+        0,
+        "document",
+        _CHECKPOINT_DOCUMENT_ID,
+    )
+    current_database.execute(insert, values)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(insert, values)
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(insert, (*values[:2], 1, *values[3:]))
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(
+            insert,
+            (999, "input", 0, "document", _CHECKPOINT_DOCUMENT_ID),
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(
+            insert,
+            (checkpoint_storage_id, "output", 0, "document", _CHECKPOINT_DOCUMENT_ID),
+        )
+
+    current_database.execute(
+        "UPDATE baseline_checkpoints SET status = 'completed' WHERE storage_id = ?",
+        (checkpoint_storage_id,),
+    )
+    current_database.execute(
+        insert,
+        (checkpoint_storage_id, "output", 0, "document", _CHECKPOINT_DOCUMENT_ID),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(
+            """UPDATE baseline_checkpoints
+            SET status = 'failed', failure_category = 'parse_failed'
+            WHERE storage_id = ?""",
+            (checkpoint_storage_id,),
+        )
+
+
+@pytest.mark.parametrize(
+    "identity_kind, identity_value",
+    [
+        ("unknown", _CHECKPOINT_DOCUMENT_ID),
+        ("document", "not-a-document-identifier"),
+    ],
+)
+def test_baseline_checkpoint_identity_rows_reject_invalid_values(
+    current_database: sqlite3.Connection,
+    identity_kind: str,
+    identity_value: str,
+) -> None:
+    _prepare_checkpoint_dependencies(current_database)
+    _insert_checkpoint(current_database)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(
+            """INSERT INTO baseline_checkpoint_identities (
+                checkpoint_storage_id,
+                identity_role,
+                ordinal,
+                identity_kind,
+                identity_value
+            ) VALUES (?, 'output', 0, ?, ?)""",
+            (_checkpoint_storage_id(current_database), identity_kind, identity_value),
+        )
+
+
+def test_baseline_manifest_requires_existing_corpus_proposal(
+    current_database: sqlite3.Connection,
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_manifest(current_database)
+
+
+def test_baseline_manifest_requires_existing_expected_parent(
+    current_database: sqlite3.Connection,
+) -> None:
+    _insert_corpus_update(current_database)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_manifest(
+            current_database,
+            expected_corpus_version=_OTHER_VERSION_ID,
+        )
+
+
+def test_baseline_manifest_enforces_digest_and_state_constraints(
+    current_database: sqlite3.Connection,
+) -> None:
+    _insert_corpus_update(current_database)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_manifest(current_database, configuration_digest="z" * 64)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_manifest(current_database, state="unknown")
+
+
+def test_baseline_manifest_required_components_are_unique(
+    current_database: sqlite3.Connection,
+) -> None:
+    _insert_corpus_update(current_database)
+    _insert_manifest(current_database)
+
+    current_database.execute(
+        """INSERT INTO baseline_manifest_required_components (
+            corpus_id, proposed_corpus_version, component_kind
+        ) VALUES (?, ?, ?)""",
+        (_CORPUS_ID, _CORPUS_VERSION_ID, "chunks"),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(
+            """INSERT INTO baseline_manifest_required_components (
+                corpus_id, proposed_corpus_version, component_kind
+            ) VALUES (?, ?, ?)""",
+            (_CORPUS_ID, _CORPUS_VERSION_ID, "chunks"),
+        )
+
+
+@pytest.mark.parametrize("component_kind", ["Chunks", "chunks_", "chunks--v2"])
+def test_baseline_manifest_required_components_reject_noncanonical_kinds(
+    current_database: sqlite3.Connection,
+    component_kind: str,
+) -> None:
+    _insert_corpus_update(current_database)
+    _insert_manifest(current_database)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        current_database.execute(
+            """INSERT INTO baseline_manifest_required_components (
+                corpus_id, proposed_corpus_version, component_kind
+            ) VALUES (?, ?, ?)""",
+            (_CORPUS_ID, _CORPUS_VERSION_ID, component_kind),
+        )
 
 
 def test_baseline_creates_the_complete_current_metadata_scope(

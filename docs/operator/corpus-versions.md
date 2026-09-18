@@ -131,6 +131,68 @@ block publication.
 The repository may be closed after a snapshot is open because the snapshot
 owns its dedicated connection. The snapshot itself still must be closed.
 
+## Canonical chunk persistence
+
+Baseline ingest stores one complete immutable `ChunkSet` for each document
+version and compatible parser, chunker, tokeniser, and policy identity. The
+chunk set is deployment-global physical state; explicit corpus membership still
+controls whether a catalogue or pinned snapshot can select it. Sharing a
+document version or its canonical bytes between corpora does not grant
+cross-corpus visibility.
+
+The write boundary is atomic. An interrupted or rolled-back write leaves no
+partially visible chunk set, and an exact retry returns the same result without
+creating a duplicate. A changed immutable payload, configuration, ownership,
+or source association is a storage conflict and must be reconciled by the
+owning workflow rather than overwritten. A reachable row that fails digest or
+metadata reconstruction is corrupt state; readers fail closed instead of
+returning partial payloads.
+
+Repository creation and supported forward migrations are explicit operations.
+Open an older database through the configured metadata-repository factory with
+`apply_migrations=True`; do not edit `chunk_sets`, migration history, or other
+SQLite tables by hand. After a clean restart, reopen the repository and select
+the same corpus and exact configuration to verify replay or catalogue reads.
+
+If a chunk read or write reports `CorruptStorageError`, preserve the database
+and the associated source state for investigation. Do not delete rows, replace
+canonical payloads, change stored digests, or infer a repair from a mutable
+filesystem path. Use a validated deployment backup or the owning ingest
+rebuild workflow when that workflow is available. The command-line entry point
+does not yet expose a chunk repair command.
+
+## Baseline ingest restart and replay
+
+The baseline ingest integration uses the proposed `CorpusVersionId` as its
+durable update identity. A process restart must reopen the same metadata
+database and resume or reconcile that proposal; it must not generate a second
+proposal merely because the previous process ended before returning a result.
+
+For a restarted or uncertain operation:
+
+1. Reopen the repository with supported migrations enabled and inspect the
+   proposal's durable state.
+2. Reconstruct the same request, corpus version, configuration identity, and
+   component-generation identity from the private job state.
+3. Retry the exact begin and publication operations in a new transaction.
+4. Treat an exact committed result with `replayed = true` as success. It must
+   retain the original version, sequence, manifest, and timestamp.
+5. If the proposal is still `preparing` or `ready`, validate its staged
+   membership and component references before deciding whether to resume or
+   abort it explicitly.
+
+An acknowledgement failure is not evidence that publication failed. Re-read
+the active version and proposal before starting any compensating work. The
+retry may return the already committed result, a semantic no-change outcome,
+or a named conflict if the retry payload no longer matches the durable
+proposal. Never create a new proposal to guess what an ambiguous commit did.
+
+Baseline publication is corpus-scoped. A second corpus may publish while the
+first corpus is idle or advancing, but each operation must use its own
+`corpus_id`, expected active version, membership, and snapshot. Verify each
+result through a fresh active snapshot; a snapshot for one corpus must not
+select the other corpus's document versions or chunk sets.
+
 ## Roll back an active corpus
 
 Rollback is a new publication, not a pointer rewind:

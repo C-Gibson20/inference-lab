@@ -11,6 +11,7 @@ from structlog.contextvars import bound_contextvars
 
 from inference_lab._clock import utc_now
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -35,6 +36,12 @@ from inference_lab.storage._source_blob_store import (
     ManagedSourceBlobStore,
     SourceBlobReconciliation,
 )
+from inference_lab.storage._sqlite_baseline_checkpoints import (
+    get_baseline_checkpoint,
+    get_baseline_manifest,
+    list_baseline_checkpoints,
+)
+from inference_lab.storage._sqlite_chunk_sets import get_chunk_set_selection
 from inference_lab.storage._sqlite_cleanup import close_preserving_primary
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
@@ -120,6 +127,12 @@ from inference_lab.storage._sqlite_versions import (
     get_document_version,
     list_document_versions,
 )
+from inference_lab.storage.baseline_checkpoint_records import (
+    BaselineCheckpointRecord,
+    BaselineCheckpointRecordStage,
+    BaselineManifestRecord,
+)
+from inference_lab.storage.chunk_records import ChunkSetSelectionRecord
 from inference_lab.storage.errors import (
     RepositoryClosedError,
     RepositoryUnavailableError,
@@ -295,6 +308,48 @@ class SQLiteMetadataRepository:
         """Return durable preparing and ready work for explicit recovery."""
         return list_non_terminal_corpus_updates(self._connection_or_raise())
 
+    def get_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> BaselineManifestRecord | None:
+        """Return one durable baseline manifest, or ``None`` when absent."""
+        return get_baseline_manifest(
+            self._connection_or_raise(),
+            corpus_id,
+            proposed_corpus_version,
+        )
+
+    def get_baseline_checkpoint(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        document_version_id: DocumentVersionId,
+        stage: BaselineCheckpointRecordStage,
+        configuration_identity: ConfigurationIdentity,
+    ) -> BaselineCheckpointRecord | None:
+        """Return one exact baseline checkpoint, or ``None`` when absent."""
+        return get_baseline_checkpoint(
+            self._connection_or_raise(),
+            corpus_id,
+            proposed_corpus_version,
+            document_version_id,
+            stage,
+            configuration_identity,
+        )
+
+    def list_baseline_checkpoints(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> tuple[BaselineCheckpointRecord, ...]:
+        """Return proposal checkpoints in canonical work-key order."""
+        return list_baseline_checkpoints(
+            self._connection_or_raise(),
+            corpus_id,
+            proposed_corpus_version,
+        )
+
     def list_corpus_update_document_memberships(
         self,
         corpus_id: CorpusId,
@@ -339,6 +394,20 @@ class SQLiteMetadataRepository:
         return list_corpus_document_version_memberships(
             self._connection_or_raise(),
             corpus_id,
+        )
+
+    def get_chunk_set_selection(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> ChunkSetSelectionRecord | None:
+        """Return one exact corpus-visible chunk-set selection, or ``None``."""
+        return get_chunk_set_selection(
+            self._connection_or_raise(),
+            corpus_id,
+            document_version_id,
+            configuration_identity,
         )
 
     def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:

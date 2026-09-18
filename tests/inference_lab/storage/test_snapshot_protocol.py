@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Self
 
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusId,
     CorpusVersionId,
@@ -24,6 +25,7 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 from inference_lab.storage import (
+    ChunkSetSelectionRecord,
     CorpusSnapshot,
     CorpusVersion,
     CorpusVersionManifest,
@@ -73,6 +75,13 @@ class _SnapshotWithoutClose:
         self,
         document_version_id: DocumentVersionId,
     ) -> SourceArtefact | None:
+        raise NotImplementedError
+
+    def get_chunk_set_selection(
+        self,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> ChunkSetSelectionRecord | None:
         raise NotImplementedError
 
     def read_source_bytes(
