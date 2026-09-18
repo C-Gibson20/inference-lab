@@ -237,6 +237,24 @@ def deserialise_chunk_set(data: bytes) -> ChunkSet:
         ) from None
 
 
+def deserialise_chunk_set_selection(
+    data: bytes,
+    *,
+    corpus_id: CorpusId,
+) -> ChunkSet:
+    """Reconstruct a corpus-scoped chunk set from its detached selection payload."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    payload = _load_payload(data)
+    if "corpus_id" in payload:
+        raise InvalidChunkSerialisationError(
+            "selection payload must not contain corpus identity."
+        )
+    payload_with_corpus = dict(payload)
+    payload_with_corpus["corpus_id"] = corpus_id.as_str()
+    return deserialise_chunk_set(canonical_json_bytes(payload_with_corpus))
+
+
 def _parse_chunk(value: JsonValue) -> Chunk:
     """Parse one complete chunk object with exact field validation."""
     payload = _require_object(value, field_name="chunk", keys=_CHUNK_KEYS)

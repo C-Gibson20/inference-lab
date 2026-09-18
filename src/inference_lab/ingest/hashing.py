@@ -388,3 +388,208 @@ def hash_source_candidate(
             **failure_log_fields(result),
         )
     return result
+
+
+def _snapshot_failure(
+    snapshot: VerifiedSourceSnapshot,
+    *,
+    ordinal: int,
+    category: DiscoveryFailureCategory,
+) -> DiscoveryFailure:
+    """Build a payload-free failure for one snapshot reacquisition."""
+    return DiscoveryFailure.for_category(
+        ordinal=ordinal,
+        category=category,
+        locator=snapshot.locator,
+        file_kind=DiscoveryFileKind.REGULAR_FILE,
+        media_type=snapshot.media_type,
+    )
+
+
+def _read_verified_open_source(
+    binary_source: BinaryIO,
+    *,
+    snapshot: VerifiedSourceSnapshot,
+    ordinal: int,
+    max_source_bytes: int,
+    filesystem: StableReadFileSystem,
+) -> bytes | DiscoveryFailure:
+    """Read one open source and compare it with the discovery snapshot."""
+    opened = _validated_metadata(filesystem.fstat(binary_source))
+    if (
+        not _is_regular(opened)
+        or opened.byte_count > max_source_bytes
+        or _file_evidence(opened) != snapshot.file_evidence.opened
+    ):
+        return _snapshot_failure(
+            snapshot,
+            ordinal=ordinal,
+            category=DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+        )
+
+    content = bytearray()
+    digest = hashlib.sha256()
+    while True:
+        chunk = filesystem.read(binary_source, _HASH_CHUNK_SIZE_BYTES)
+        if not isinstance(chunk, bytes):
+            raise TypeError("filesystem read must return bytes.")
+        if not chunk:
+            break
+        if len(content) + len(chunk) > max_source_bytes:
+            return _snapshot_failure(
+                snapshot,
+                ordinal=ordinal,
+                category=DiscoveryFailureCategory.SOURCE_TOO_LARGE,
+            )
+        content.extend(chunk)
+        digest.update(chunk)
+
+    opened_after_read = _validated_metadata(filesystem.fstat(binary_source))
+    path = snapshot.locator.path
+    _validate_path_ancestors_without_links(path, filesystem)
+    path_after_read = _validated_metadata(filesystem.lstat(path))
+    if not all(
+        _is_regular(metadata) for metadata in (opened_after_read, path_after_read)
+    ):
+        return _snapshot_failure(
+            snapshot,
+            ordinal=ordinal,
+            category=DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+        )
+    if (
+        _file_evidence(opened_after_read) != snapshot.file_evidence.opened_after_read
+        or _file_evidence(path_after_read) != snapshot.file_evidence.path_after_read
+        or len(content) != snapshot.byte_count
+        or digest.hexdigest() != snapshot.content_hash.digest
+    ):
+        return _snapshot_failure(
+            snapshot,
+            ordinal=ordinal,
+            category=DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+        )
+    return bytes(content)
+
+
+def read_verified_source(
+    snapshot: VerifiedSourceSnapshot,
+    *,
+    ordinal: int,
+    max_source_bytes: int,
+    filesystem: StableReadFileSystem | None = None,
+    clock: Clock = time.monotonic_ns,
+) -> bytes | DiscoveryFailure:
+    """Reacquire and verify the exact bytes represented by a source snapshot."""
+    if not isinstance(snapshot, VerifiedSourceSnapshot):
+        raise TypeError("snapshot must be a VerifiedSourceSnapshot.")
+    if not is_strict_integer(ordinal):
+        raise TypeError("ordinal must be an integer.")
+    if ordinal < 0:
+        raise ValueError("ordinal must be non-negative.")
+    if not is_strict_integer(max_source_bytes):
+        raise TypeError("max_source_bytes must be an integer.")
+    if max_source_bytes <= 0:
+        raise ValueError("max_source_bytes must be positive.")
+    selected_filesystem = (
+        _LOCAL_STABLE_READ_FILESYSTEM if filesystem is None else filesystem
+    )
+    if not isinstance(selected_filesystem, StableReadFileSystem):
+        raise TypeError("filesystem must implement StableReadFileSystem.")
+    if not callable(clock):
+        raise TypeError("clock must be callable.")
+
+    started_ns = _read_clock(clock)
+    result: bytes | DiscoveryFailure = _snapshot_failure(
+        snapshot,
+        ordinal=ordinal,
+        category=DiscoveryFailureCategory.SOURCE_READ_FAILED,
+    )
+    if snapshot.byte_count > max_source_bytes:
+        result = _snapshot_failure(
+            snapshot,
+            ordinal=ordinal,
+            category=DiscoveryFailureCategory.SOURCE_TOO_LARGE,
+        )
+    else:
+        try:
+            _validate_path_ancestors_without_links(
+                snapshot.locator.path,
+                selected_filesystem,
+            )
+            pre_open = _validated_metadata(
+                selected_filesystem.lstat(snapshot.locator.path)
+            )
+            if not _is_regular(pre_open):
+                result = _snapshot_failure(
+                    snapshot,
+                    ordinal=ordinal,
+                    category=DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+                )
+            elif _file_evidence(pre_open) != snapshot.file_evidence.pre_open:
+                result = _snapshot_failure(
+                    snapshot,
+                    ordinal=ordinal,
+                    category=DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+                )
+            else:
+                try:
+                    binary_source = selected_filesystem.open_binary(
+                        snapshot.locator.path
+                    )
+                except FileNotFoundError:
+                    result = _snapshot_failure(
+                        snapshot,
+                        ordinal=ordinal,
+                        category=DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+                    )
+                except OSError:
+                    result = _snapshot_failure(
+                        snapshot,
+                        ordinal=ordinal,
+                        category=DiscoveryFailureCategory.SOURCE_READ_FAILED,
+                    )
+                else:
+                    with binary_source:
+                        result = _read_verified_open_source(
+                            binary_source,
+                            snapshot=snapshot,
+                            ordinal=ordinal,
+                            max_source_bytes=max_source_bytes,
+                            filesystem=selected_filesystem,
+                        )
+        except (FileNotFoundError, _InvalidPathComponentError):
+            result = _snapshot_failure(
+                snapshot,
+                ordinal=ordinal,
+                category=DiscoveryFailureCategory.SOURCE_CHANGED_DURING_READ,
+            )
+        except OSError:
+            result = _snapshot_failure(
+                snapshot,
+                ordinal=ordinal,
+                category=DiscoveryFailureCategory.SOURCE_READ_FAILED,
+            )
+
+    finished_ns = _read_clock(clock)
+    if finished_ns < started_ns:
+        raise ValueError("clock must not move backwards during source reading.")
+    duration_ms = (finished_ns - started_ns) / 1_000_000
+
+    if isinstance(result, bytes):
+        emit_discovery_event(
+            __name__,
+            "debug",
+            "source_reacquired",
+            source_ordinal=ordinal,
+            media_type=snapshot.media_type,
+            byte_count=len(result),
+            duration_ms=duration_ms,
+        )
+    else:
+        emit_discovery_event(
+            __name__,
+            "error",
+            "source_reacquisition_failed",
+            duration_ms=duration_ms,
+            **failure_log_fields(result),
+        )
+    return result
