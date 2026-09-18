@@ -72,21 +72,21 @@ def test_explicit_schema_policy_initialises_and_reopens_idempotently(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert (
             connection.execute("SELECT count(*) FROM migration_history").fetchone()[0]
-            == 4
+            == 6
         )
     finally:
         connection.close()
 
     reopened = open_sqlite_database(database_path, apply_migrations=True)
     try:
-        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 6
         assert (
             reopened.execute("SELECT count(*) FROM migration_history").fetchone()[0]
-            == 4
+            == 6
         )
     finally:
         reopened.close()
@@ -199,8 +199,8 @@ def test_successful_open_logs_bounded_lifecycle_metadata(tmp_path: Path) -> None
         "repository_initialisation_completed",
         "repository_open_completed",
     ]
-    assert logs[-1]["schema_revision"] == 4
-    assert logs[-1]["applied_migration_count"] == 4
+    assert logs[-1]["schema_revision"] == 6
+    assert logs[-1]["applied_migration_count"] == 6
     assert all(log["pipeline_stage"] == "storage" for log in logs)
     assert str(database_path) not in repr(logs)
 

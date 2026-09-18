@@ -1,5 +1,15 @@
 """Persistent corpus metadata, indexes, and version-aware storage boundaries."""
 
+from inference_lab.storage.baseline_checkpoint_records import (
+    BaselineCheckpointIdentityRecord,
+    BaselineCheckpointRecord,
+    BaselineCheckpointRecordFailureCategory,
+    BaselineCheckpointRecordIdentityKind,
+    BaselineCheckpointRecordStage,
+    BaselineCheckpointRecordStatus,
+    BaselineManifestRecord,
+    BaselineManifestRecordState,
+)
 from inference_lab.storage.errors import (
     CorruptStorageError,
     IncompatibleSchemaError,
@@ -21,11 +31,14 @@ from inference_lab.storage.locator_continuity import (
 )
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
+    BeginBaselineManifestOutcome,
     BeginCorpusUpdateOutcome,
     CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
     RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
+    TransitionBaselineManifestOutcome,
+    WriteBaselineCheckpointOutcome,
 )
 from inference_lab.storage.parse_records import (
     ParseFailureCategory,
@@ -46,6 +59,9 @@ from inference_lab.storage.parsed_serialisation import (
 )
 from inference_lab.storage.producers import ProducerIdentity
 from inference_lab.storage.protocols import (
+    BaselineCheckpointReader,
+    BaselineCheckpointRepository,
+    BaselineCheckpointWriter,
     ComponentGenerationValidator,
     MetadataReader,
     MetadataRepository,
@@ -93,6 +109,18 @@ __all__ = [
     "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
     "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
     "AbortCorpusUpdateOutcome",
+    "BaselineCheckpointIdentityRecord",
+    "BaselineCheckpointReader",
+    "BaselineCheckpointRecord",
+    "BaselineCheckpointRecordFailureCategory",
+    "BaselineCheckpointRecordIdentityKind",
+    "BaselineCheckpointRecordStage",
+    "BaselineCheckpointRecordStatus",
+    "BaselineCheckpointRepository",
+    "BaselineCheckpointWriter",
+    "BaselineManifestRecord",
+    "BaselineManifestRecordState",
+    "BeginBaselineManifestOutcome",
     "BeginCorpusUpdateOutcome",
     "BoundingBox",
     "CollectionAvailability",
@@ -147,6 +175,8 @@ __all__ = [
     "StorageTransactionError",
     "StructuralBlock",
     "StructuralBlockKind",
+    "TransitionBaselineManifestOutcome",
+    "WriteBaselineCheckpointOutcome",
     "build_parsed_representation_output_digest",
     "build_source_blob_storage_key",
     "open_metadata_repository",

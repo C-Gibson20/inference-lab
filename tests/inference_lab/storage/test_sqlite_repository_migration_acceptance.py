@@ -109,12 +109,12 @@ def _failing_source_persistence_migration() -> MigrationDefinition:
     )
 
 
-def _failing_revision_five() -> MigrationDefinition:
+def _failing_revision_seven() -> MigrationDefinition:
     return MigrationDefinition(
-        revision=5,
-        migration_id="test_failing_revision_five",
+        revision=7,
+        migration_id="test_failing_revision_seven",
         statements=(
-            "CREATE TABLE revision_five_marker (value TEXT) STRICT",
+            "CREATE TABLE revision_six_marker (value TEXT) STRICT",
             "CREATE TABLE documents (conflicting_value TEXT)",
         ),
     )
@@ -229,7 +229,7 @@ def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert reopened.schema_inspection.current_revision == 4
+        assert reopened.schema_inspection.current_revision == 6
         assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
             _CORPUS_ID, "Primary corpus"
         )
@@ -273,7 +273,7 @@ def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
 
     reopened_without_permission = SQLiteMetadataRepository.open(database_path)
     try:
-        assert reopened_without_permission.schema_inspection.current_revision == 4
+        assert reopened_without_permission.schema_inspection.current_revision == 6
         _assert_complete_graph(reopened_without_permission)
     finally:
         reopened_without_permission.close()
@@ -356,7 +356,7 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert migrated.schema_inspection.current_revision == 4
+        assert migrated.schema_inspection.current_revision == 6
         _assert_complete_graph(migrated)
     finally:
         migrated.close()
@@ -386,13 +386,25 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
             MIGRATIONS[3].checksum,
             "2026-09-01T12:30:00.000000+00:00",
         ),
+        (
+            5,
+            "baseline_checkpoint_persistence",
+            MIGRATIONS[4].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        ),
+        (
+            6,
+            "baseline_checkpoint_records",
+            MIGRATIONS[5].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        ),
     )
 
     reopened = SQLiteMetadataRepository.open(
         database_path,
     )
     try:
-        assert reopened.schema_inspection.current_revision == 4
+        assert reopened.schema_inspection.current_revision == 6
         _assert_complete_graph(reopened)
     finally:
         reopened.close()
@@ -418,7 +430,7 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         SQLiteMetadataRepository.open(
             database_path,
             apply_migrations=True,
-            migrations=(*MIGRATIONS, _failing_revision_five()),
+            migrations=(*MIGRATIONS, _failing_revision_seven()),
             applied_at_factory=_fixed_applied_at,
         )
 
@@ -426,7 +438,7 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         database_path,
     )
     try:
-        assert recovered.schema_inspection.current_revision == 4
+        assert recovered.schema_inspection.current_revision == 6
         _assert_complete_graph(recovered)
     finally:
         recovered.close()
@@ -436,13 +448,13 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         assert (
             connection.execute(
                 """SELECT 1 FROM sqlite_schema
-            WHERE name = 'revision_five_marker'"""
+                WHERE name = 'revision_six_marker'"""
             ).fetchone()
             is None
         )
         assert connection.execute(
             "SELECT count(*) FROM migration_history"
-        ).fetchone() == (4,)
+        ).fetchone() == (6,)
     finally:
         connection.close()
 

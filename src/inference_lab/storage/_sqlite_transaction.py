@@ -8,6 +8,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar, cast
 
 from inference_lab.provenance import (
+    ConfigurationIdentity,
     ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -27,6 +28,14 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
     SourceSpanId,
+)
+from inference_lab.storage._sqlite_baseline_checkpoints import (
+    begin_baseline_manifest,
+    get_baseline_checkpoint,
+    get_baseline_manifest,
+    list_baseline_checkpoints,
+    transition_baseline_manifest,
+    write_baseline_checkpoint,
 )
 from inference_lab.storage._sqlite_cleanup import rollback_preserving_primary
 from inference_lab.storage._sqlite_connection import translate_sqlite_error
@@ -126,6 +135,13 @@ from inference_lab.storage._sqlite_versions import (
     get_document_version,
     list_document_versions,
 )
+from inference_lab.storage.baseline_checkpoint_records import (
+    BaselineCheckpointRecord,
+    BaselineCheckpointRecordStage,
+    BaselineCheckpointRecordStatus,
+    BaselineManifestRecord,
+    BaselineManifestRecordState,
+)
 from inference_lab.storage.errors import (
     StorageError,
     StorageTransactionError,
@@ -136,11 +152,14 @@ from inference_lab.storage.locator_continuity import (
 )
 from inference_lab.storage.outcomes import (
     AbortCorpusUpdateOutcome,
+    BeginBaselineManifestOutcome,
     BeginCorpusUpdateOutcome,
     CommitCorpusUpdateOutcome,
     NoCorpusChangeOutcome,
     RollbackCorpusVersionOutcome,
     SealCorpusUpdateOutcome,
+    TransitionBaselineManifestOutcome,
+    WriteBaselineCheckpointOutcome,
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
@@ -286,6 +305,135 @@ class SQLiteMetadataTransaction:
     def list_non_terminal_corpus_updates(self) -> tuple[CorpusUpdate, ...]:
         """Return durable preparing and ready work within this transaction."""
         return self._execute(list_non_terminal_corpus_updates)
+
+    def get_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> BaselineManifestRecord | None:
+        """Return one durable baseline manifest within this transaction."""
+        return self._execute(
+            get_baseline_manifest,
+            corpus_id,
+            proposed_corpus_version,
+        )
+
+    def get_baseline_checkpoint(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        document_version_id: DocumentVersionId,
+        stage: BaselineCheckpointRecordStage,
+        configuration_identity: ConfigurationIdentity,
+    ) -> BaselineCheckpointRecord | None:
+        """Return one exact baseline checkpoint within this transaction."""
+        return self._execute(
+            get_baseline_checkpoint,
+            corpus_id,
+            proposed_corpus_version,
+            document_version_id,
+            stage,
+            configuration_identity,
+        )
+
+    def list_baseline_checkpoints(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+    ) -> tuple[BaselineCheckpointRecord, ...]:
+        """Return proposal checkpoints in canonical work-key order."""
+        return self._execute(
+            list_baseline_checkpoints,
+            corpus_id,
+            proposed_corpus_version,
+        )
+
+    def begin_baseline_manifest(
+        self,
+        manifest: BaselineManifestRecord,
+    ) -> BeginBaselineManifestOutcome:
+        """Insert a preparing manifest or return its exact replay."""
+        outcome = self._execute(begin_baseline_manifest, manifest)
+        self._pending_success_logs.append(
+            (
+                "baseline_manifest_started",
+                {
+                    "corpus_id": outcome.manifest.corpus_id.as_str(),
+                    "corpus_version": (
+                        outcome.manifest.proposed_corpus_version.as_str()
+                    ),
+                    "manifest_state": outcome.manifest.state.value,
+                    "required_component_count": len(
+                        outcome.manifest.required_component_kinds
+                    ),
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
+
+    def transition_baseline_manifest(
+        self,
+        corpus_id: CorpusId,
+        proposed_corpus_version: CorpusVersionId,
+        *,
+        expected_state: BaselineManifestRecordState,
+        next_state: BaselineManifestRecordState,
+    ) -> TransitionBaselineManifestOutcome:
+        """Compare-and-set one manifest state within this transaction."""
+        outcome = self._execute(
+            transition_baseline_manifest,
+            corpus_id,
+            proposed_corpus_version,
+            expected_state=expected_state,
+            next_state=next_state,
+        )
+        self._pending_success_logs.append(
+            (
+                "baseline_manifest_transitioned",
+                {
+                    "corpus_id": outcome.manifest.corpus_id.as_str(),
+                    "corpus_version": (
+                        outcome.manifest.proposed_corpus_version.as_str()
+                    ),
+                    "manifest_state": outcome.manifest.state.value,
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
+
+    def write_baseline_checkpoint(
+        self,
+        checkpoint: BaselineCheckpointRecord,
+        *,
+        expected_status: BaselineCheckpointRecordStatus | None,
+    ) -> WriteBaselineCheckpointOutcome:
+        """Insert or compare-and-set one baseline checkpoint."""
+        outcome = self._execute(
+            write_baseline_checkpoint,
+            checkpoint,
+            expected_status=expected_status,
+        )
+        self._pending_success_logs.append(
+            (
+                "baseline_checkpoint_written",
+                {
+                    "corpus_id": outcome.checkpoint.corpus_id.as_str(),
+                    "corpus_version": (
+                        outcome.checkpoint.proposed_corpus_version.as_str()
+                    ),
+                    "document_id": outcome.checkpoint.document_id.as_str(),
+                    "document_version_id": (
+                        outcome.checkpoint.document_version_id.as_str()
+                    ),
+                    "checkpoint_stage": outcome.checkpoint.stage.value,
+                    "checkpoint_status": outcome.checkpoint.status.value,
+                    "replayed": outcome.replayed,
+                },
+            )
+        )
+        return outcome
 
     def list_corpus_update_document_memberships(
         self,
