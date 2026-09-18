@@ -4,6 +4,7 @@ from threading import Event, Lock
 from time import sleep
 
 import pytest
+from structlog.contextvars import get_contextvars
 from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
@@ -14,11 +15,12 @@ from inference_lab.ingest import (
     BaselineFailureCategory,
     BaselineFailureScope,
     BaselineFailureSeverity,
+    BaselineProfilingContext,
     BaselineRequestExecutionError,
     BaselineStage,
     execute_baseline_documents,
 )
-from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.provenance import CorpusId, CorpusVersionId, DocumentId
 
 from .fixtures import fixture_settings  # noqa: TID252
 
@@ -80,14 +82,51 @@ def test_document_execution_is_bounded_and_returns_discovery_order() -> None:
     assert tuple(outcome.ordinal for outcome in outcomes) == (0, 1, 2, 3)
     assert maximum_active == 2
     assert [record["event"] for record in logs] == [
-        "baseline_documents_started",
         "baseline_document_completed",
         "baseline_document_completed",
         "baseline_document_completed",
         "baseline_document_completed",
-        "baseline_documents_completed",
     ]
-    assert [record["document_ordinal"] for record in logs[1:-1]] == [0, 1, 2, 3]
+    assert [record["document_ordinal"] for record in logs] == [0, 1, 2, 3]
+
+
+def test_document_workers_receive_explicit_run_and_parent_context() -> None:
+    seen: list[tuple[int, dict[str, object]]] = []
+    lock = Lock()
+    document_ids = (DocumentId.generate(), DocumentId.generate())
+
+    def worker(ordinal: int):
+        def run(cancellation: Event) -> BaselineDocumentOutcome:
+            del cancellation
+            with lock:
+                seen.append((ordinal, get_contextvars()))
+            return _outcome(ordinal)
+
+        return run
+
+    profiling = BaselineProfilingContext.create(run_id="run-documents")
+    execute_baseline_documents(
+        tuple(
+            BaselineDocumentTask(
+                ordinal=ordinal,
+                worker=worker(ordinal),
+                document_id=document_ids[ordinal],
+            )
+            for ordinal in range(2)
+        ),
+        settings=fixture_settings(max_concurrent_documents=2),
+        corpus_id=CorpusId.generate(),
+        proposed_corpus_version=CorpusVersionId.generate(),
+        profiling=profiling,
+        parent_stage_id="run-documents:discovery:request",
+    )
+
+    assert {ordinal for ordinal, _ in seen} == {0, 1}
+    for ordinal, contextvars in seen:
+        assert contextvars["run_id"] == "run-documents"
+        assert contextvars["parent_stage_id"] == "run-documents:discovery:request"
+        assert contextvars["document_ordinal"] == ordinal
+        assert contextvars["document_id"] == document_ids[ordinal].as_str()
 
 
 def test_request_failure_stops_new_admission_and_is_payload_free() -> None:

@@ -16,6 +16,7 @@ from inference_lab.ingest.baseline_contracts import (
     BaselineFailureSeverity,
     BaselineStage,
 )
+from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.provenance import CorpusId, CorpusVersionId, DocumentId
 from inference_lab.settings import Settings
 
@@ -143,6 +144,8 @@ def execute_baseline_documents(
     corpus_id: CorpusId,
     proposed_corpus_version: CorpusVersionId,
     cancellation: Event | None = None,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
 ) -> tuple[BaselineDocumentOutcome, ...]:
     """Run independent document work with bounded admission and stable output."""
     _validate_tasks(tasks)
@@ -154,24 +157,25 @@ def execute_baseline_documents(
         raise TypeError("proposed_corpus_version must be a CorpusVersionId.")
     if cancellation is not None and not isinstance(cancellation, Event):
         raise TypeError("cancellation must be an Event or None.")
+    if profiling is not None and not isinstance(profiling, BaselineProfilingContext):
+        raise TypeError("profiling must be a BaselineProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
 
     cancel_event = cancellation if cancellation is not None else Event()
+    selected_profiling = (
+        profiling if profiling is not None else BaselineProfilingContext.create()
+    )
     maximum_workers = settings.ingest.max_concurrent_documents
     context = bound_contextvars(
         corpus_id=corpus_id.as_str(),
         corpus_version=proposed_corpus_version.as_str(),
         pipeline_stage="document",
+        run_id=selected_profiling.run_id,
+        request_id=selected_profiling.request_id,
+        parent_stage_id=parent_stage_id,
     )
     with context:
-        try:
-            _LOGGER.info(
-                "baseline_documents_started",
-                document_count=len(tasks),
-                max_concurrent_documents=maximum_workers,
-            )
-        except Exception:
-            pass
-
         if cancel_event.is_set():
             raise _failure(BaselineFailureCategory.CANCELLED)
 
@@ -180,6 +184,22 @@ def execute_baseline_documents(
         results: dict[int, BaselineDocumentOutcome] = {}
         next_index = 0
         request_failure: BaselineRequestExecutionError | None = None
+
+        def run_task(task: BaselineDocumentTask) -> BaselineDocumentOutcome:
+            """Run one worker with explicit correlation context in its thread."""
+            with bound_contextvars(
+                corpus_id=corpus_id.as_str(),
+                corpus_version=proposed_corpus_version.as_str(),
+                pipeline_stage="document",
+                run_id=selected_profiling.run_id,
+                request_id=selected_profiling.request_id,
+                parent_stage_id=parent_stage_id,
+                document_ordinal=task.ordinal,
+                document_id=(
+                    task.document_id.as_str() if task.document_id is not None else None
+                ),
+            ):
+                return task.worker(cancel_event)
 
         def admit() -> None:
             """Admit only the bounded number of not-yet-started tasks."""
@@ -192,7 +212,7 @@ def execute_baseline_documents(
             ):
                 task = tasks[next_index]
                 next_index += 1
-                pending[executor.submit(task.worker, cancel_event)] = task
+                pending[executor.submit(run_task, task)] = task
 
         try:
             admit()
@@ -241,13 +261,6 @@ def execute_baseline_documents(
                     task=task,
                     outcome=results[task.ordinal],
                 )
-            try:
-                _LOGGER.info(
-                    "baseline_documents_completed",
-                    document_count=len(ordered),
-                )
-            except Exception:
-                pass
             return ordered
         finally:
             executor.shutdown(wait=True, cancel_futures=True)
