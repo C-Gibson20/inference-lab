@@ -13,9 +13,11 @@ from structlog.testing import capture_logs
 from inference_lab.ingest import (
     BaselineChunkGenerationEntry,
     BaselineChunkGenerationManifest,
+    BaselineProfilingContext,
     begin_baseline_corpus_update,
     publish_baseline_chunk_generation,
 )
+from inference_lab.profiling import FailureEvent, StageTiming
 from inference_lab.provenance import (
     ConfigurationIdentity,
     ContentHash,
@@ -66,6 +68,16 @@ class _UncertainCommitConnection(sqlite3.Connection):
     def commit(self) -> None:
         super().commit()
         raise sqlite3.OperationalError("private-uncertain-acknowledgement")
+
+
+class _CollectingSink:
+    """Collect shared profiling records without rendering them."""
+
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
 
 
 def _open(path: Path) -> SQLiteMetadataRepository:
@@ -266,6 +278,108 @@ def test_sqlite_publication_commits_and_reopens_exact_generation(
         reopened.close()
 
 
+def test_sqlite_publication_profiles_commit_and_no_change_counts(
+    tmp_path: Path,
+) -> None:
+    repository = _open(tmp_path / "metadata.sqlite3")
+    try:
+        selection = _seed_catalogue(repository)
+        sink = _CollectingSink()
+        clock_values = iter((0, 10_000_000, 20_000_000, 30_000_000))
+        profiling = BaselineProfilingContext.create(
+            run_id="run-publication",
+            sink=sink,
+            clock=lambda: next(clock_values),
+            observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+        )
+
+        first_version = CorpusVersionId.generate()
+        membership = _membership()
+        first_manifest = _manifest(
+            first_version,
+            membership,
+            selection,
+            generation_id="generation-first",
+        )
+        first_result: NoCorpusChangeOutcome | CommitCorpusUpdateOutcome | None = None
+        with repository.transaction() as transaction:
+            begin_baseline_corpus_update(
+                transaction,
+                _CORPUS_ID,
+                first_version,
+                expected_corpus_version=None,
+            )
+            transaction.add_corpus_update_document_membership(
+                _CORPUS_ID,
+                first_version,
+                membership,
+            )
+            first_result = publish_baseline_chunk_generation(
+                transaction,
+                repository,
+                first_manifest,
+                profiling=profiling,
+                parent_stage_id="run-publication:membership:request",
+                profiling_identity="first",
+            )
+
+        assert isinstance(first_result, CommitCorpusUpdateOutcome)
+
+        second_version = CorpusVersionId.generate()
+        second_manifest = _manifest(
+            second_version,
+            membership,
+            selection,
+            generation_id="generation-replay",
+        )
+        second_result: NoCorpusChangeOutcome | CommitCorpusUpdateOutcome | None = None
+        with repository.transaction() as transaction:
+            begin_baseline_corpus_update(
+                transaction,
+                _CORPUS_ID,
+                second_version,
+                expected_corpus_version=first_version,
+            )
+            transaction.add_corpus_update_document_membership(
+                _CORPUS_ID,
+                second_version,
+                membership,
+            )
+            second_result = publish_baseline_chunk_generation(
+                transaction,
+                repository,
+                second_manifest,
+                profiling=profiling,
+                profiling_identity="replay",
+            )
+
+        assert isinstance(second_result, NoCorpusChangeOutcome)
+        completions = [
+            record
+            for record in sink.records
+            if isinstance(record, StageTiming) and record.event == "stage_completed"
+        ]
+        assert [
+            (
+                record.pipeline_stage,
+                record.status,
+                record.items_processed,
+                record.records_emitted,
+                record.parent_stage_id,
+            )
+            for record in completions
+        ] == [
+            ("publication", "completed", 1, 1, "run-publication:membership:request"),
+            ("publication", "completed", 1, 0, None),
+        ]
+        assert len({record.stage_id for record in completions}) == 2
+        assert not [
+            record for record in sink.records if isinstance(record, FailureEvent)
+        ]
+    finally:
+        repository.close()
+
+
 def test_sqlite_publication_replays_exactly_after_cold_restart(
     tmp_path: Path,
 ) -> None:
@@ -450,7 +564,7 @@ def test_sqlite_publication_replays_after_ambiguous_commit_acknowledgement(
                     )
 
         assert "private-uncertain-acknowledgement" not in str(raised.value)
-        assert logs == [
+        assert [log for log in logs if log["event"] == "transaction_failed"] == [
             {
                 "event": "transaction_failed",
                 "pipeline_stage": "storage",

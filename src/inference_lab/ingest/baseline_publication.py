@@ -9,6 +9,7 @@ from inference_lab.ingest.baseline_generation import (
     BaselineChunkGenerationManifest,
     BaselineGenerationValidationError,
 )
+from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.provenance import CorpusId, CorpusVersionId
 from inference_lab.storage import (
     BeginCorpusUpdateOutcome,
@@ -83,6 +84,10 @@ def publish_baseline_generations(
     transaction: MetadataTransaction,
     reader: ChunkSetReader,
     participants: tuple[BaselineGenerationParticipant, ...],
+    *,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
 ) -> BaselinePublicationOutcome:
     """Register, seal, and commit a complete set of component generations.
 
@@ -96,6 +101,12 @@ def publish_baseline_generations(
         raise ValueError("participants must not be empty.")
     if not callable(getattr(reader, "get_chunk_set_selection", None)):
         raise TypeError("reader must provide corpus-scoped chunk selections.")
+    if profiling is not None and not isinstance(profiling, BaselineProfilingContext):
+        raise TypeError("profiling must be a BaselineProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    if not isinstance(profiling_identity, str) or not profiling_identity:
+        raise ValueError("profiling_identity must be a non-empty string.")
 
     prepared: list[
         tuple[ComponentGenerationReference, ComponentGenerationValidator]
@@ -112,47 +123,75 @@ def publish_baseline_generations(
         prepared.append((generation, validator))
 
     first_generation = prepared[0][0]
-    component_kinds = tuple(item[0].component_kind for item in prepared)
-    if any(
-        generation.corpus_id != first_generation.corpus_id
-        or generation.corpus_version != first_generation.corpus_version
-        for generation, _ in prepared
-    ) or len(component_kinds) != len(set(component_kinds)):
-        raise BaselineGenerationValidationError(
-            BaselineFailureCategory.GENERATION_VALIDATION_FAILED,
-        )
-
-    for generation, validator in prepared:
-        registered = transaction.register_corpus_update_component_generation(
-            first_generation.corpus_id,
-            first_generation.corpus_version,
-            generation,
-            validator=validator,
-        )
-        expected_ready = replace(generation, state=ComponentGenerationState.READY)
-        if registered != expected_ready:
+    selected_profiling = (
+        profiling if profiling is not None else BaselineProfilingContext.create()
+    )
+    published: BaselinePublicationOutcome | None = None
+    with selected_profiling.observed_stage(
+        stage="publication",
+        stage_id=selected_profiling.stage_id("publication", profiling_identity),
+        document_id=None,
+        corpus_id=first_generation.corpus_id.as_str(),
+        corpus_version=first_generation.corpus_version.as_str(),
+        parent_stage_id=parent_stage_id,
+    ) as stage:
+        stage.set_counts(items_processed=len(prepared), records_emitted=0)
+        component_kinds = tuple(item[0].component_kind for item in prepared)
+        if any(
+            generation.corpus_id != first_generation.corpus_id
+            or generation.corpus_version != first_generation.corpus_version
+            for generation, _ in prepared
+        ) or len(component_kinds) != len(set(component_kinds)):
             raise BaselineGenerationValidationError(
-                BaselineFailureCategory.CORRUPT_STATE,
+                BaselineFailureCategory.GENERATION_VALIDATION_FAILED,
             )
 
-    sealed = transaction.seal_corpus_update(
-        first_generation.corpus_id,
-        first_generation.corpus_version,
-    )
-    if isinstance(sealed, NoCorpusChangeOutcome):
-        return sealed
-    return transaction.commit_corpus_update(
-        first_generation.corpus_id,
-        first_generation.corpus_version,
-    )
+        for generation, validator in prepared:
+            registered = transaction.register_corpus_update_component_generation(
+                first_generation.corpus_id,
+                first_generation.corpus_version,
+                generation,
+                validator=validator,
+            )
+            expected_ready = replace(generation, state=ComponentGenerationState.READY)
+            if registered != expected_ready:
+                raise BaselineGenerationValidationError(
+                    BaselineFailureCategory.CORRUPT_STATE,
+                )
+
+        sealed = transaction.seal_corpus_update(
+            first_generation.corpus_id,
+            first_generation.corpus_version,
+        )
+        if isinstance(sealed, NoCorpusChangeOutcome):
+            published = sealed
+        else:
+            published = transaction.commit_corpus_update(
+                first_generation.corpus_id,
+                first_generation.corpus_version,
+            )
+            stage.set_counts(items_processed=len(prepared), records_emitted=1)
+    assert published is not None
+    return published
 
 
 def publish_baseline_chunk_generation(
     transaction: MetadataTransaction,
     reader: ChunkSetReader,
     manifest: BaselineChunkGenerationManifest,
+    *,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
 ) -> BaselineChunkPublicationOutcome:
     """Register, seal, and commit one complete baseline chunks generation."""
     if not isinstance(manifest, BaselineChunkGenerationManifest):
         raise TypeError("manifest must be a BaselineChunkGenerationManifest.")
-    return publish_baseline_generations(transaction, reader, (manifest,))
+    return publish_baseline_generations(
+        transaction,
+        reader,
+        (manifest,),
+        profiling=profiling,
+        parent_stage_id=parent_stage_id,
+        profiling_identity=profiling_identity,
+    )
