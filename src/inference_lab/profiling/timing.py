@@ -10,7 +10,12 @@ from types import TracebackType
 from typing import Final, Literal, Self, get_args
 
 from inference_lab._clock import utc_now
-from inference_lab.profiling._validation import validate_utc_datetime
+from inference_lab.profiling._validation import (
+    is_snake_case,
+    validate_optional_correlation,
+    validate_utc_datetime,
+)
+from inference_lab.profiling.contracts import StageCondition, validate_stage_condition
 from inference_lab.profiling.types import LogLevel
 from inference_lab.profiling.versioning import (
     CURRENT_RECORD_SCHEMA_VERSION,
@@ -69,6 +74,7 @@ class StageTiming:
     document_id: str | None = None
     corpus_version: str | None = None
     parent_stage_id: str | None = None
+    condition: StageCondition = "uncontrolled"
     record_schema_version: str = CURRENT_RECORD_SCHEMA_VERSION
     corpus_id: str | None = None
 
@@ -79,12 +85,25 @@ class StageTiming:
         """Validate the timing record invariants."""
         if self.event not in _EVENTS:
             raise ValueError("event must be a valid stage event")
-        if not self.module:
+        if not isinstance(self.module, str) or not self.module:
             raise ValueError("module must not be empty")
-        if not self.pipeline_stage:
-            raise ValueError("pipeline_stage must not be empty")
-        if not self.stage_id:
-            raise ValueError("stage_id must not be empty")
+        if not isinstance(self.pipeline_stage, str) or not is_snake_case(
+            self.pipeline_stage
+        ):
+            raise ValueError("pipeline_stage must use non-empty snake_case")
+        validate_optional_correlation(self.stage_id, "stage_id")
+        if self.stage_id is None:
+            raise ValueError("stage_id must be a non-empty correlation value")
+        for field_name in (
+            "run_id",
+            "request_id",
+            "document_id",
+            "corpus_id",
+            "corpus_version",
+            "parent_stage_id",
+        ):
+            validate_optional_correlation(getattr(self, field_name), field_name)
+        validate_stage_condition(self.condition)
         if self.status not in _STATUSES:
             raise ValueError("status must be a valid stage status")
         if self.event == "stage_started" and self.status != "started":
@@ -120,6 +139,7 @@ class StageTiming:
             "corpus_id": self.corpus_id,
             "corpus_version": self.corpus_version,
             "parent_stage_id": self.parent_stage_id,
+            "condition": self.condition,
             "record_schema_version": self.record_schema_version,
         }
 
@@ -156,6 +176,7 @@ class StageTimer:
         corpus_id: str | None = None,
         corpus_version: str | None = None,
         parent_stage_id: str | None = None,
+        condition: StageCondition = "uncontrolled",
     ) -> None:
         """Configure a timer without starting the stage."""
         if not callable(emit):
@@ -164,8 +185,26 @@ class StageTimer:
             raise TypeError("clock must be callable")
         if not callable(observed_at_factory):
             raise TypeError("observed_at_factory must be callable")
+        validated_condition = validate_stage_condition(condition)
 
         self._module = module
+        if not isinstance(module, str) or not module:
+            raise ValueError("module must not be empty")
+        if not isinstance(pipeline_stage, str) or not is_snake_case(pipeline_stage):
+            raise ValueError("pipeline_stage must use non-empty snake_case")
+        validate_optional_correlation(stage_id, "stage_id")
+        if not stage_id:
+            raise ValueError("stage_id must be a non-empty correlation value")
+        for field_name, value in (
+            ("run_id", run_id),
+            ("request_id", request_id),
+            ("document_id", document_id),
+            ("corpus_id", corpus_id),
+            ("corpus_version", corpus_version),
+            ("parent_stage_id", parent_stage_id),
+        ):
+            validate_optional_correlation(value, field_name)
+
         self._pipeline_stage = pipeline_stage
         self._stage_id = stage_id
         self._emit = emit
@@ -177,11 +216,63 @@ class StageTimer:
         self._corpus_id = corpus_id
         self._corpus_version = corpus_version
         self._parent_stage_id = parent_stage_id
+        self._condition: StageCondition = validated_condition
         self._start_ns: int | None = None
         self._items_processed: int | None = None
         self._records_emitted: int | None = None
         self._entered = False
         self._finished = False
+        self._terminal_status: Status | None = None
+
+    @property
+    def pipeline_stage(self) -> str:
+        """Return the stage name carried by this timer."""
+        return self._pipeline_stage
+
+    @property
+    def stage_id(self) -> str:
+        """Return the opaque stage correlation ID."""
+        return self._stage_id
+
+    @property
+    def run_id(self) -> str | None:
+        """Return the optional run correlation ID."""
+        return self._run_id
+
+    @property
+    def request_id(self) -> str | None:
+        """Return the optional request correlation ID."""
+        return self._request_id
+
+    @property
+    def document_id(self) -> str | None:
+        """Return the optional document correlation ID."""
+        return self._document_id
+
+    @property
+    def corpus_id(self) -> str | None:
+        """Return the optional corpus correlation ID."""
+        return self._corpus_id
+
+    @property
+    def corpus_version(self) -> str | None:
+        """Return the optional corpus-version correlation ID."""
+        return self._corpus_version
+
+    @property
+    def observed_at_factory(self) -> ObservationTimeFactory:
+        """Return the injected observation clock for related records."""
+        return self._observed_at_factory
+
+    @property
+    def record_schema_version(self) -> str:
+        """Return the current profiling record schema version."""
+        return CURRENT_RECORD_SCHEMA_VERSION
+
+    @property
+    def module(self) -> str:
+        """Return the emitting module namespace."""
+        return self._module
 
     def __enter__(self) -> Self:
         """Start timing and emit the stage-started record."""
@@ -206,9 +297,12 @@ class StageTimer:
         if self._finished:
             raise RuntimeError("StageTimer has already finished")
 
-        duration_ms = (self._clock() - self._start_ns) / 1_000_000
+        finished_ns = self._clock()
+        if exc_type is None and finished_ns < self._start_ns:
+            raise ValueError("clock must not move backwards.")
+        duration_ms = (finished_ns - self._start_ns) / 1_000_000
         if exc_type is None:
-            status: Status = "completed"
+            status = self._terminal_status or "completed"
         elif issubclass(exc_type, asyncio.CancelledError):
             status = "cancelled"
         else:
@@ -222,6 +316,18 @@ class StageTimer:
             if exc_type is None:
                 raise
         return False
+
+    def set_terminal_status(
+        self, status: Literal["completed", "failed", "cancelled"]
+    ) -> None:
+        """Set the terminal status for a returned domain outcome."""
+        if not self._entered or self._finished:
+            raise RuntimeError(
+                "terminal status can only be set while the timer is active"
+            )
+        if status not in {"completed", "failed", "cancelled"}:
+            raise ValueError("terminal status must be completed, failed, or cancelled")
+        self._terminal_status = status
 
     def set_counts(
         self,
@@ -264,4 +370,5 @@ class StageTimer:
             corpus_id=self._corpus_id,
             corpus_version=self._corpus_version,
             parent_stage_id=self._parent_stage_id,
+            condition=self._condition,
         )

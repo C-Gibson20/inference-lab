@@ -1,6 +1,7 @@
 """Tests for the resumable baseline parse-stage executor."""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -13,6 +14,7 @@ from inference_lab.ingest import (
     BaselineParseErrorCategory,
     BaselineParseExecutionError,
     BaselineParseRequest,
+    BaselineProfilingContext,
     BaselineStage,
     BaselineStageDisposition,
     ClassifiedSourceCandidate,
@@ -32,6 +34,7 @@ from inference_lab.ingest import (
 )
 from inference_lab.ingest.baseline_checkpoints import BaselineWorkKey
 from inference_lab.ingest.parser import ParseOutcome, ParserInput
+from inference_lab.profiling import FailureEvent, StageTiming
 from inference_lab.provenance import (
     ConfigurationIdentity,
     CorpusDocumentVersionMembership,
@@ -63,6 +66,16 @@ class _RaisingParser:
     def parse(self, source: ParserInput, *, settings: Settings) -> ParseOutcome:
         del source, settings
         raise RuntimeError("injected parser failure")
+
+
+class _CollectingSink:
+    """Collect shared profiling records without rendering them."""
+
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
 
 
 def _classification() -> SourceClassification:
@@ -242,20 +255,99 @@ def test_parse_stage_publishes_then_reuses_reconstructed_output(
     assert published.parse_id == case.request.parse_id
     assert published.parsed_record_id == case.request.parsed_record_id
     assert case.repository.publication_count == 1
-    assert [record["event"] for record in logs] == [
-        "baseline_parse_started",
+    assert [
+        record["event"]
+        for record in logs
+        if record["event"] not in {"stage_started", "stage_completed"}
+    ] == [
         "source_reacquired",
         "document_started",
         "document_completed",
-        "parse_persistence_started",
-        "parse_persistence_completed",
-        "baseline_parse_completed",
-        "baseline_parse_started",
         "baseline_parse_reused",
     ]
     rendered = repr(logs)
     assert "private-parse-source.txt" not in rendered
     assert case.content.decode() not in rendered
+
+
+def test_parse_stage_profiles_each_attempt_and_replay_without_payloads(
+    tmp_path: Path,
+) -> None:
+    case = _case(tmp_path)
+    sink = _CollectingSink()
+    clock_values = iter(range(0, 80_000_000, 10_000_000))
+    profiling = BaselineProfilingContext.create(
+        run_id="run-parse",
+        sink=sink,
+        clock=lambda: next(clock_values),
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    execute_baseline_parse(
+        case.repository,
+        case.request,
+        settings=fixture_settings(max_source_bytes=1024),
+        profiling=profiling,
+    )
+
+    timings = [record for record in sink.records if isinstance(record, StageTiming)]
+    assert [
+        (record.event, record.pipeline_stage, record.status) for record in timings
+    ] == [
+        ("stage_started", "parse_persistence", "started"),
+        ("stage_completed", "parse_persistence", "completed"),
+        ("stage_started", "source_acquisition", "started"),
+        ("stage_completed", "source_acquisition", "completed"),
+        ("stage_started", "parse", "started"),
+        ("stage_completed", "parse", "completed"),
+        ("stage_started", "parse_persistence", "started"),
+        ("stage_completed", "parse_persistence", "completed"),
+    ]
+    assert [record.duration_ms for record in timings[1::2]] == [10.0] * 4
+    assert all(record.run_id == "run-parse" for record in timings)
+    assert all(record.document_id is not None for record in timings)
+    assert len({record.stage_id for record in timings}) == 4
+    assert not [record for record in sink.records if isinstance(record, FailureEvent)]
+    assert "private-parse-source.txt" not in repr(sink.records)
+    assert case.content.decode() not in repr(sink.records)
+
+
+def test_parse_stage_maps_source_failure_to_one_safe_failure_record(
+    tmp_path: Path,
+) -> None:
+    case = _case(tmp_path)
+    case.request.source.snapshot.locator.path.write_bytes(b"changed")
+    sink = _CollectingSink()
+    clock_values = iter(range(0, 40_000_000, 10_000_000))
+    profiling = BaselineProfilingContext.create(
+        run_id="run-parse-failure",
+        sink=sink,
+        clock=lambda: next(clock_values),
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    with pytest.raises(BaselineParseExecutionError):
+        execute_baseline_parse(
+            case.repository,
+            case.request,
+            settings=fixture_settings(max_source_bytes=1024),
+            profiling=profiling,
+        )
+
+    timings = [record for record in sink.records if isinstance(record, StageTiming)]
+    failures = [record for record in sink.records if isinstance(record, FailureEvent)]
+    assert [
+        (record.pipeline_stage, record.status)
+        for record in timings
+        if record.event == "stage_completed"
+    ] == [
+        ("parse_persistence", "completed"),
+        ("source_acquisition", "failed"),
+    ]
+    assert len(failures) == 1
+    assert failures[0].failure_category == "dependency"
+    assert failures[0].failure_code == "source_acquisition_failed"
+    assert "changed" not in repr(sink.records)
 
 
 def test_parse_stage_reuses_a_persisted_fatal_outcome(

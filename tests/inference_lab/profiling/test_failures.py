@@ -47,7 +47,7 @@ def test_failed_event_serialises_operational_fields() -> None:
         "partial": True,
         "exception_type": "ValueError",
         "observed_at": "2026-08-21T12:00:00+00:00",
-        "record_schema_version": "3.0.0",
+        "record_schema_version": "4.0.0",
     }
 
 

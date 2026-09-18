@@ -193,6 +193,7 @@ def persist_parse_request(
     request: ParsePersistenceRequest,
     *,
     settings: Settings,
+    emit_lifecycle_events: bool = True,
 ) -> ParsePersistenceResult:
     """Validate, map, and publish one observable immutable parse bundle."""
     _validate_repository(repository)
@@ -200,6 +201,8 @@ def persist_parse_request(
         raise TypeError("request must be a ParsePersistenceRequest.")
     if not isinstance(settings, Settings):
         raise TypeError("settings must be Settings.")
+    if type(emit_lifecycle_events) is not bool:
+        raise TypeError("emit_lifecycle_events must be a boolean.")
 
     log_fields = _request_log_fields(request)
     with bound_contextvars(
@@ -207,7 +210,8 @@ def persist_parse_request(
         document_id=request.parser_input.document_id.as_str(),
         corpus_version=None,
     ):
-        _emit_event("info", "parse_persistence_started", **log_fields)
+        if emit_lifecycle_events:
+            _emit_event("info", "parse_persistence_started", **log_fields)
         try:
             result, source_byte_count, outcome, representation = _persist_parse_request(
                 repository,
@@ -215,26 +219,30 @@ def persist_parse_request(
                 max_source_bytes=settings.ingest.max_source_bytes,
             )
         except Exception as error:
-            _emit_event(
-                "error",
-                "parse_persistence_failed",
-                **log_fields,
-                **_failure_log_fields(error),
-            )
+            if emit_lifecycle_events:
+                _emit_event(
+                    "error",
+                    "parse_persistence_failed",
+                    **log_fields,
+                    **_failure_log_fields(error),
+                )
             raise
 
-        _emit_event(
-            "info",
-            "parse_persistence_completed",
-            **log_fields,
-            source_byte_count=source_byte_count,
-            record_count=2 + int(representation is not None),
-            block_count=len(representation.blocks) if representation is not None else 0,
-            span_count=(
-                len(representation.source_locations)
-                if representation is not None
-                else 0
-            ),
-            failure_count=len(outcome.failures),
-        )
+        if emit_lifecycle_events:
+            _emit_event(
+                "info",
+                "parse_persistence_completed",
+                **log_fields,
+                source_byte_count=source_byte_count,
+                record_count=2 + int(representation is not None),
+                block_count=(
+                    len(representation.blocks) if representation is not None else 0
+                ),
+                span_count=(
+                    len(representation.source_locations)
+                    if representation is not None
+                    else 0
+                ),
+                failure_count=len(outcome.failures),
+            )
         return result

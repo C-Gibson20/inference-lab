@@ -6,7 +6,11 @@ from datetime import datetime
 from typing import Final, Literal, get_args
 
 from inference_lab._clock import utc_now
-from inference_lab.profiling._validation import validate_utc_datetime
+from inference_lab.profiling._validation import (
+    is_snake_case,
+    validate_optional_correlation,
+    validate_utc_datetime,
+)
 from inference_lab.profiling.types import LogLevel
 from inference_lab.profiling.versioning import (
     CURRENT_RECORD_SCHEMA_VERSION,
@@ -85,12 +89,16 @@ def _validate_identity_and_status(
     """Validate resource discriminants and operational context fields."""
     if category not in RESOURCE_CATEGORIES:
         raise ValueError("category must be a supported resource category")
-    if not module:
+    if not isinstance(module, str) or not module:
         raise ValueError("module must not be empty")
-    if pipeline_stage == "":
-        raise ValueError("pipeline_stage must not be empty")
-    if stage_id == "":
-        raise ValueError("stage_id must not be empty")
+    if pipeline_stage is not None and (
+        not isinstance(pipeline_stage, str) or not is_snake_case(pipeline_stage)
+    ):
+        if pipeline_stage == "":
+            raise ValueError("pipeline_stage must not be empty")
+        raise ValueError("pipeline_stage must use non-empty snake_case")
+    validate_optional_correlation(pipeline_stage, "pipeline_stage")
+    validate_optional_correlation(stage_id, "stage_id")
     if status not in MEASUREMENT_STATUSES:
         raise ValueError("status must be a valid measurement status")
     if measurement_kind not in _MEASUREMENT_KINDS:
@@ -195,6 +203,14 @@ class ResourceMeasurement:
         _validate_measurement_value(self.value, self.status)
         _validate_value_range(self.category, self.value)
         _validate_sampling(self.measurement_kind, self.sample_duration_ms)
+        for field_name in (
+            "run_id",
+            "request_id",
+            "document_id",
+            "corpus_id",
+            "corpus_version",
+        ):
+            validate_optional_correlation(getattr(self, field_name), field_name)
         validate_utc_datetime(self.observed_at, "observed_at")
         validate_record_schema_version(self.record_schema_version)
 

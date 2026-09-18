@@ -2,6 +2,7 @@
 
 import hashlib
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Self
 
@@ -16,6 +17,7 @@ from inference_lab.ingest import (
     BaselineChunkRequest,
     BaselineChunkResult,
     BaselineParseResult,
+    BaselineProfilingContext,
     BaselineStage,
     BaselineStageDisposition,
     ChunkingPolicy,
@@ -29,6 +31,7 @@ from inference_lab.ingest import (
 from inference_lab.ingest.baseline_checkpoints import BaselineWorkKey
 from inference_lab.ingest.outcomes import ParseOutcome
 from inference_lab.ingest.parse_reconstruction import ReconstructedParseOutcome
+from inference_lab.profiling import FailureEvent, StageTiming
 from inference_lab.provenance import (
     ConfigurationIdentity,
     CorpusId,
@@ -81,6 +84,16 @@ class _Repository:
         self.selection = request.selection
         self.write_count += 1
         return WriteChunkSetOutcome(selection=request.selection, replayed=replayed)
+
+
+class _CollectingSink:
+    """Collect shared profiling records without rendering them."""
+
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
 
 
 class _Transaction:
@@ -199,14 +212,88 @@ def test_chunk_stage_publishes_then_reuses_complete_payload() -> None:
     assert published.chunk_set == reused.chunk_set
     assert published.chunk_set.chunks
     assert case.repository.write_count == 1
-    assert [record["event"] for record in logs] == [
-        "baseline_chunk_started",
-        "chunk_started",
-        "chunk_completed",
-        "baseline_chunk_completed",
-        "baseline_chunk_started",
+    assert [
+        record["event"]
+        for record in logs
+        if record["event"] not in {"stage_started", "stage_completed"}
+    ] == [
         "baseline_chunk_reused",
     ]
+
+
+def test_chunk_stage_profiles_construction_and_persistence_without_payloads() -> None:
+    case = _case()
+    sink = _CollectingSink()
+    clock_values = iter(range(0, 60_000_000, 10_000_000))
+    profiling = BaselineProfilingContext.create(
+        run_id="run-chunk",
+        sink=sink,
+        clock=lambda: next(clock_values),
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    result = execute_baseline_chunk(
+        case.repository,
+        case.request,
+        profiling=profiling,
+        profiling_identity="document-ordinal-0",
+        parent_stage_id="run-chunk:discovery:request",
+    )
+
+    timings = [record for record in sink.records if isinstance(record, StageTiming)]
+    completions = [record for record in timings if record.event == "stage_completed"]
+    assert [(record.pipeline_stage, record.status) for record in completions] == [
+        ("chunk_persistence", "completed"),
+        ("chunk", "completed"),
+        ("chunk_persistence", "completed"),
+    ]
+    assert completions[0].items_processed == 0
+    assert completions[0].records_emitted == 0
+    assert completions[1].items_processed == 1
+    assert completions[1].records_emitted == len(result.chunk_set.chunks)
+    assert completions[2].items_processed == len(result.chunk_set.chunks)
+    assert completions[2].records_emitted == len(result.chunk_set.chunks)
+    assert [record.duration_ms for record in completions] == [10.0] * 3
+    assert len({record.stage_id for record in timings}) == 3
+    assert all(record.run_id == "run-chunk" for record in timings)
+    assert all(record.document_id is not None for record in timings)
+    assert not [record for record in sink.records if isinstance(record, FailureEvent)]
+    assert "fixture" not in repr(sink.records)
+
+
+def test_chunk_stage_maps_persistence_failure_to_one_safe_failure_record() -> None:
+    case = _case()
+    case.repository.fail_write = True
+    sink = _CollectingSink()
+    clock_values = iter(range(0, 60_000_000, 10_000_000))
+    profiling = BaselineProfilingContext.create(
+        run_id="run-chunk-failure",
+        sink=sink,
+        clock=lambda: next(clock_values),
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    with pytest.raises(BaselineChunkExecutionError):
+        execute_baseline_chunk(
+            case.repository,
+            case.request,
+            profiling=profiling,
+        )
+
+    timings = [record for record in sink.records if isinstance(record, StageTiming)]
+    failures = [record for record in sink.records if isinstance(record, FailureEvent)]
+    assert [
+        (record.pipeline_stage, record.status)
+        for record in timings
+        if record.event == "stage_completed"
+    ] == [
+        ("chunk_persistence", "completed"),
+        ("chunk", "completed"),
+        ("chunk_persistence", "failed"),
+    ]
+    assert len(failures) == 1
+    assert failures[0].failure_category == "dependency"
+    assert failures[0].failure_code == "chunk_persistence_failed"
 
 
 def test_chunk_stage_persists_a_complete_zero_chunk_set() -> None:

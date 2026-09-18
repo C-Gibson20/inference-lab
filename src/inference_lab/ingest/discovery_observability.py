@@ -1,13 +1,12 @@
-"""Privacy-safe lifecycle logging for local source discovery."""
+"""Privacy-safe lifecycle observation for local source discovery."""
 
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Final
 
 from structlog.contextvars import bound_contextvars
 
-from inference_lab._validation import is_strict_integer
+from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.ingest.classification import (
     CURRENT_SOURCE_CLASSIFIER,
     ClassificationInventory,
@@ -19,41 +18,54 @@ from inference_lab.ingest.discovery import (
     DiscoveryRequest,
 )
 from inference_lab.ingest.discovery_failures import DiscoveryFailure
-from inference_lab.ingest.discovery_logging import emit_discovery_event
 from inference_lab.ingest.discovery_results import DiscoveryResult, DiscoveryStatus
 from inference_lab.ingest.discovery_summary import build_discovery_result
 from inference_lab.ingest.identity_application import IdentityApplicationResult
+from inference_lab.profiling import FailureMapping, ObservedStage
 
-Clock = Callable[[], int]
-
-_COUNT_FIELDS: Final = (
-    "files_seen",
-    "supported",
-    "unsupported",
-    "hashed",
-    "unchanged",
-    "changed",
-    "new",
-    "duplicate",
-    "ambiguous",
-    "conflicting",
-    "failed",
+_INPUT_FAILURES = frozenset(
+    {
+        "invalid_request",
+        "invalid_root",
+        "storage_root_overlap",
+        "recognised_unsupported_format",
+        "unknown_format",
+    }
+)
+_DEPENDENCY_FAILURES = frozenset(
+    {
+        "root_not_found",
+        "root_inaccessible",
+        "source_not_found",
+        "source_inaccessible",
+        "traversal_failed",
+        "source_read_failed",
+        "repository_unavailable",
+        "concurrent_write_conflict",
+        "identity_write_failed",
+    }
 )
 
 
-def _read_clock(clock: Clock) -> int:
-    value = clock()
-    if not is_strict_integer(value):
-        raise TypeError("clock must return an integer nanosecond value.")
-    return value
-
-
-def _completion_level(status: DiscoveryStatus) -> str:
-    if status is DiscoveryStatus.COMPLETED:
-        return "info"
-    if status is DiscoveryStatus.PARTIAL:
-        return "warning"
-    return "error"
+def _discovery_failure_mapping(
+    failure: DiscoveryFailure,
+    *,
+    partial: bool,
+) -> FailureMapping:
+    """Map one returned discovery failure to a bounded stage failure."""
+    category = failure.category.value
+    if category in _INPUT_FAILURES:
+        failure_category = "input"
+    elif category in _DEPENDENCY_FAILURES:
+        failure_category = "dependency"
+    else:
+        failure_category = "internal"
+    return FailureMapping(
+        failure_category=failure_category,
+        failure_code=category,
+        recoverable=failure.retryable,
+        partial=partial,
+    )
 
 
 class _DiscoveryLifecycle:
@@ -64,13 +76,11 @@ class _DiscoveryLifecycle:
         request: DiscoveryRequest,
         *,
         policy: DiscoveryPolicy,
-        started_ns: int,
-        clock: Clock,
+        profiling_stage: ObservedStage,
     ) -> None:
         self._request = request
         self._policy = policy
-        self._started_ns = started_ns
-        self._clock = clock
+        self._profiling_stage = profiling_stage
         self._completed = False
 
     @property
@@ -84,7 +94,7 @@ class _DiscoveryLifecycle:
         classification: ClassificationInventory,
         identity_results: tuple[IdentityApplicationResult | DiscoveryFailure, ...],
     ) -> DiscoveryResult:
-        """Build and emit the single terminal discovery result."""
+        """Build and complete the single observed discovery stage."""
         if self._completed:
             raise RuntimeError("discovery lifecycle has already been completed.")
 
@@ -99,28 +109,20 @@ class _DiscoveryLifecycle:
             classification,
             identity_results=identity_results,
         )
-        finished_ns = _read_clock(self._clock)
-        if finished_ns < self._started_ns:
-            raise ValueError("clock must not move backwards during discovery.")
-        duration_ms = (finished_ns - self._started_ns) / 1_000_000
         self._completed = True
-
-        count_fields = {
-            field_name: getattr(result.counts, field_name)
-            for field_name in _COUNT_FIELDS
-        }
-        emit_discovery_event(
-            __name__,
-            _completion_level(result.status),
-            "discovery_completed",
-            policy_name=result.policy.policy_name,
-            policy_version=result.policy.policy_version,
-            classifier_name=result.policy.classifier_name,
-            classifier_version=result.policy.classifier_version,
-            status=result.status.value,
-            duration_ms=duration_ms,
-            **count_fields,
+        self._profiling_stage.set_counts(
+            items_processed=result.counts.files_seen,
+            records_emitted=len(result.sources) + len(result.failures),
         )
+        if result.status is DiscoveryStatus.COMPLETED:
+            self._profiling_stage.mark_success()
+        else:
+            self._profiling_stage.mark_failure(
+                _discovery_failure_mapping(
+                    result.failures[0],
+                    partial=result.status is DiscoveryStatus.PARTIAL,
+                )
+            )
         return result
 
 
@@ -129,48 +131,54 @@ def observe_discovery(
     request: DiscoveryRequest,
     *,
     classifier: SourceClassifierRegistry = CURRENT_SOURCE_CLASSIFIER,
-    clock: Clock = time.monotonic_ns,
+    clock: Callable[[], int] = time.monotonic_ns,
+    profiling: BaselineProfilingContext | None = None,
+    profiling_identity: str = "request",
 ) -> Iterator[_DiscoveryLifecycle]:
-    """Bind and log one discovery operation until its result is complete."""
+    """Bind and observe one discovery operation until its result is complete."""
     if not isinstance(request, DiscoveryRequest):
         raise TypeError("request must be a DiscoveryRequest.")
     if not isinstance(classifier, SourceClassifierRegistry):
         raise TypeError("classifier must be a SourceClassifierRegistry.")
     if not callable(clock):
         raise TypeError("clock must be callable.")
+    if profiling is not None and not isinstance(profiling, BaselineProfilingContext):
+        raise TypeError("profiling must be a BaselineProfilingContext or None.")
+    if not isinstance(profiling_identity, str) or not profiling_identity:
+        raise ValueError("profiling_identity must be a non-empty string.")
 
     policy = CURRENT_DISCOVERY_POLICY.with_classifier_identity(
         classifier_name=classifier.classifier_name,
         classifier_version=classifier.classifier_version,
     )
-    started_ns = _read_clock(clock)
-    lifecycle = _DiscoveryLifecycle(
-        request,
-        policy=policy,
-        started_ns=started_ns,
-        clock=clock,
-    )
+    selected_profiling = profiling or BaselineProfilingContext.create(clock=clock)
+    stage_id = selected_profiling.stage_id("discovery", profiling_identity)
     with bound_contextvars(
         corpus_id=request.corpus_id.as_str(),
         corpus_version=None,
         document_id=None,
+        run_id=selected_profiling.run_id,
+        request_id=selected_profiling.request_id,
     ):
-        emit_discovery_event(
-            __name__,
-            "info",
-            "discovery_started",
-            policy_name=policy.policy_name,
-            policy_version=policy.policy_version,
-            classifier_name=policy.classifier_name,
-            classifier_version=policy.classifier_version,
-            input_count=len(request.inputs),
-        )
-        try:
-            yield lifecycle
-        except BaseException:
-            raise
-        else:
-            if not lifecycle.completed:
-                raise RuntimeError(
-                    "discovery lifecycle exited without a terminal result."
-                )
+        with selected_profiling.observed_stage(
+            stage="discovery",
+            stage_id=stage_id,
+            document_id=None,
+            corpus_id=request.corpus_id.as_str(),
+            corpus_version=None,
+            parent_stage_id=None,
+        ) as profiling_stage:
+            lifecycle = _DiscoveryLifecycle(
+                request,
+                policy=policy,
+                profiling_stage=profiling_stage,
+            )
+            try:
+                yield lifecycle
+            except BaseException:
+                raise
+            else:
+                if not lifecycle.completed:
+                    raise RuntimeError(
+                        "discovery lifecycle exited without a terminal result."
+                    )

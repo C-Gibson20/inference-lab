@@ -5,7 +5,6 @@ from structlog.contextvars import get_contextvars
 from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
-    CURRENT_DISCOVERY_POLICY,
     DiscoveryFailure,
     DiscoveryFailureCategory,
     DiscoveryStatus,
@@ -45,10 +44,16 @@ def test_lifecycle_uses_and_validates_the_selected_classifier_policy() -> None:
             )
 
     assert result.policy == classification.policy
-    assert logs[0]["classifier_name"] == "custom-classifier"
-    assert logs[0]["classifier_version"] == "2.0.0"
-    assert logs[-1]["classifier_name"] == "custom-classifier"
-    assert logs[-1]["classifier_version"] == "2.0.0"
+    assert result.policy.classifier_name == "custom-classifier"
+    assert result.policy.classifier_version == "2.0.0"
+    assert [
+        (record["event"], record["status"])
+        for record in logs
+        if record["event"] == "stage_completed"
+    ] == [("stage_completed", "failed")]
+    assert [record["event"] for record in logs if record["event"] == "unit_failed"] == [
+        "unit_failed"
+    ]
 
     with pytest.raises(ValueError, match="classification policy must match"):
         with observe_discovery(request, clock=lambda: 0) as lifecycle:
@@ -73,11 +78,12 @@ def test_lifecycle_binds_context_and_logs_privacy_safe_partial_summary() -> None
 
     with capture_logs() as logs:
         with observe_discovery(request, clock=clock_values.__next__) as lifecycle:
-            assert get_contextvars() == {
-                "corpus_id": request.corpus_id.as_str(),
-                "corpus_version": None,
-                "document_id": None,
-            }
+            contextvars = get_contextvars()
+            assert contextvars["corpus_id"] == request.corpus_id.as_str()
+            assert contextvars["corpus_version"] is None
+            assert contextvars["document_id"] is None
+            assert isinstance(contextvars["run_id"], str)
+            assert contextvars["request_id"] is None
             result = lifecycle.complete(
                 classification=classification,
                 identity_results=(
@@ -91,25 +97,16 @@ def test_lifecycle_binds_context_and_logs_privacy_safe_partial_summary() -> None
 
     assert result.status is DiscoveryStatus.PARTIAL
     assert get_contextvars() == {}
-    assert [(record["event"], record["log_level"]) for record in logs] == [
-        ("discovery_started", "info"),
-        ("discovery_completed", "warning"),
-    ]
-    assert logs[0] == {
-        "pipeline_stage": "ingest",
-        "policy_name": CURRENT_DISCOVERY_POLICY.policy_name,
-        "policy_version": CURRENT_DISCOVERY_POLICY.policy_version,
-        "classifier_name": CURRENT_DISCOVERY_POLICY.classifier_name,
-        "classifier_version": CURRENT_DISCOVERY_POLICY.classifier_version,
-        "input_count": 1,
-        "event": "discovery_started",
-        "log_level": "info",
-    }
-    assert logs[1]["status"] == "partial"
-    assert logs[1]["duration_ms"] == 25.0
-    assert logs[1]["files_seen"] == 2
-    assert logs[1]["supported"] == 1
-    assert logs[1]["failed"] == 1
+    completions = [record for record in logs if record["event"] == "stage_completed"]
+    failures = [record for record in logs if record["event"] == "unit_failed"]
+    assert len(completions) == 1
+    assert completions[0]["status"] == "failed"
+    assert completions[0]["duration_ms"] == 25.0
+    assert completions[0]["items_processed"] == 2
+    assert completions[0]["records_emitted"] == 2
+    assert len(failures) == 1
+    assert failures[0]["failure_category"] == "dependency"
+    assert failures[0]["failure_code"] == "source_inaccessible"
     log_payload = repr(logs)
     assert "source-0.txt" not in log_payload
     assert _DIGEST not in log_payload
@@ -190,4 +187,4 @@ def test_lifecycle_rejects_a_clock_that_moves_backwards() -> None:
                     identity_results=(),
                 )
 
-    assert [record["event"] for record in logs] == ["discovery_started"]
+    assert [record["event"] for record in logs] == ["stage_started"]

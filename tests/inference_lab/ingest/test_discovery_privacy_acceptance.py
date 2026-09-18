@@ -90,16 +90,18 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
 
     assert len(result.sources) == 1
     assert isinstance(identity_results[0], IdentityApplicationResult)
-    events = [record["event"] for record in logs]
+    events = [
+        record["event"]
+        for record in logs
+        if record["event"] not in {"stage_started", "stage_completed"}
+    ]
     assert events == [
-        "discovery_started",
         "source_discovered",
         "source_hashed",
         "identity_resolution_completed",
         "source_identity_assigned",
         "transaction_completed",
         "identity_persistence_completed",
-        "discovery_completed",
     ]
 
     payload = repr(logs)

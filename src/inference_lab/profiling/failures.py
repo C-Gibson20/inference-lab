@@ -6,7 +6,11 @@ from datetime import datetime
 from typing import Final, Literal, get_args
 
 from inference_lab._clock import utc_now
-from inference_lab.profiling._validation import is_snake_case, validate_utc_datetime
+from inference_lab.profiling._validation import (
+    is_snake_case,
+    validate_optional_correlation,
+    validate_utc_datetime,
+)
 from inference_lab.profiling.types import LogLevel
 from inference_lab.profiling.versioning import (
     CURRENT_RECORD_SCHEMA_VERSION,
@@ -54,12 +58,19 @@ def _validate_identity_and_context(
         raise ValueError("failure_category must be supported")
     if not failure_code or not is_snake_case(failure_code):
         raise ValueError("failure_code must use non-empty snake_case")
-    if not module:
+    if not isinstance(module, str) or not module:
         raise ValueError("module must not be empty")
-    if pipeline_stage == "":
-        raise ValueError("pipeline_stage must not be empty")
-    if stage_id == "":
-        raise ValueError("stage_id must not be empty")
+    if pipeline_stage is not None and (
+        not isinstance(pipeline_stage, str) or not is_snake_case(pipeline_stage)
+    ):
+        if pipeline_stage == "":
+            raise ValueError("pipeline_stage must not be empty")
+        raise ValueError("pipeline_stage must use non-empty snake_case")
+    for field_name, value in (
+        ("pipeline_stage", pipeline_stage),
+        ("stage_id", stage_id),
+    ):
+        validate_optional_correlation(value, field_name)
 
 
 def _validate_state_relationships(
@@ -171,6 +182,14 @@ class FailureEvent:
             partial=self.partial,
         )
         _validate_exception_type(self.exception_type)
+        for field_name in (
+            "run_id",
+            "request_id",
+            "document_id",
+            "corpus_id",
+            "corpus_version",
+        ):
+            validate_optional_correlation(getattr(self, field_name), field_name)
         validate_utc_datetime(self.observed_at, "observed_at")
         validate_record_schema_version(self.record_schema_version)
 
