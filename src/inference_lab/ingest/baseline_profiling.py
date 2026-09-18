@@ -152,7 +152,7 @@ class BaselineProfilingContext:
         stage_id: str,
         document_id: str | None,
         corpus_id: str,
-        corpus_version: str,
+        corpus_version: str | None,
         parent_stage_id: str | None,
     ) -> ObservedStage:
         """Build one observed stage sharing this context's clocks and sink."""
