@@ -7,6 +7,7 @@ from inference_lab.storage.baseline_checkpoint_records import (
     BaselineManifestRecord,
     BaselineManifestRecordState,
 )
+from inference_lab.storage.chunk_records import ChunkSetSelectionRecord
 from inference_lab.storage.versioning import (
     CorpusUpdate,
     CorpusUpdateState,
@@ -276,4 +277,21 @@ class WriteBaselineCheckpointOutcome:
         """Validate a checkpoint write result."""
         if not isinstance(self.checkpoint, BaselineCheckpointRecord):
             raise TypeError("checkpoint must be a BaselineCheckpointRecord.")
+        _validate_replayed(self.replayed)
+
+
+@dataclass(frozen=True, slots=True)
+class WriteChunkSetOutcome:
+    """Return a newly written or exactly replayed immutable chunk set."""
+
+    selection: ChunkSetSelectionRecord
+    replayed: bool = False
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the selection and explicit replay disposition."""
+        if not isinstance(self.selection, ChunkSetSelectionRecord):
+            raise TypeError("selection must be a ChunkSetSelectionRecord.")
         _validate_replayed(self.replayed)

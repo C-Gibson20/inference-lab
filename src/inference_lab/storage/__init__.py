@@ -10,6 +10,20 @@ from inference_lab.storage.baseline_checkpoint_records import (
     BaselineManifestRecord,
     BaselineManifestRecordState,
 )
+from inference_lab.storage.chunk_records import (
+    CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION,
+    ChunkerVersionRecord,
+    ChunkingPolicyRecord,
+    ChunkMinimumExceptionRecord,
+    ChunkOversizeUnitPolicy,
+    ChunkParserVersionRecord,
+    ChunkSetSelectionRecord,
+    ChunkSetWriteRequest,
+    ChunkSourceReferenceRecord,
+    ChunkSplitReasonRecord,
+    ChunkStructuralBoundaryPolicy,
+    ChunkTokeniserIdentityRecord,
+)
 from inference_lab.storage.errors import (
     CorruptStorageError,
     IncompatibleSchemaError,
@@ -39,6 +53,7 @@ from inference_lab.storage.outcomes import (
     SealCorpusUpdateOutcome,
     TransitionBaselineManifestOutcome,
     WriteBaselineCheckpointOutcome,
+    WriteChunkSetOutcome,
 )
 from inference_lab.storage.parse_records import (
     ParseFailureCategory,
@@ -62,6 +77,8 @@ from inference_lab.storage.protocols import (
     BaselineCheckpointReader,
     BaselineCheckpointRepository,
     BaselineCheckpointWriter,
+    ChunkSetReader,
+    ChunkSetWriter,
     ComponentGenerationValidator,
     MetadataReader,
     MetadataRepository,
@@ -106,6 +123,7 @@ from inference_lab.storage.versioning import (
 
 __all__ = [
     "CORPUS_MANIFEST_CONTRACT_VERSION",
+    "CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION",
     "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
     "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
     "AbortCorpusUpdateOutcome",
@@ -123,6 +141,19 @@ __all__ = [
     "BeginBaselineManifestOutcome",
     "BeginCorpusUpdateOutcome",
     "BoundingBox",
+    "ChunkMinimumExceptionRecord",
+    "ChunkOversizeUnitPolicy",
+    "ChunkParserVersionRecord",
+    "ChunkSetReader",
+    "ChunkSetSelectionRecord",
+    "ChunkSetWriteRequest",
+    "ChunkSetWriter",
+    "ChunkSourceReferenceRecord",
+    "ChunkSplitReasonRecord",
+    "ChunkStructuralBoundaryPolicy",
+    "ChunkTokeniserIdentityRecord",
+    "ChunkerVersionRecord",
+    "ChunkingPolicyRecord",
     "CollectionAvailability",
     "CommitCorpusUpdateOutcome",
     "ComponentGenerationReference",
@@ -177,6 +208,7 @@ __all__ = [
     "StructuralBlockKind",
     "TransitionBaselineManifestOutcome",
     "WriteBaselineCheckpointOutcome",
+    "WriteChunkSetOutcome",
     "build_parsed_representation_output_digest",
     "build_source_blob_storage_key",
     "open_metadata_repository",

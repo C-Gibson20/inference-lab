@@ -40,6 +40,7 @@ from inference_lab.storage import (
     BaselineManifestRecordState,
     BeginBaselineManifestOutcome,
     BeginCorpusUpdateOutcome,
+    ChunkSetWriteRequest,
     CommitCorpusUpdateOutcome,
     ComponentGenerationReference,
     ComponentGenerationValidator,
@@ -60,6 +61,7 @@ from inference_lab.storage import (
     SourceLocatorRevision,
     TransitionBaselineManifestOutcome,
     WriteBaselineCheckpointOutcome,
+    WriteChunkSetOutcome,
 )
 
 
@@ -262,6 +264,12 @@ class StructuralTransaction:
         *,
         expected_status: BaselineCheckpointRecordStatus | None,
     ) -> WriteBaselineCheckpointOutcome:
+        raise NotImplementedError
+
+    def write_chunk_set(
+        self,
+        request: ChunkSetWriteRequest,
+    ) -> WriteChunkSetOutcome:
         raise NotImplementedError
 
     def get_corpus(self, corpus_id: CorpusId) -> CorpusMetadata | None:
@@ -525,6 +533,15 @@ class StructuralRepository(StructuralTransaction):
     ) -> CorpusSnapshot:
         raise NotImplementedError
 
+    def get_chunk_set_selection(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> storage.ChunkSetSelectionRecord | None:
+        del corpus_id, document_version_id, configuration_identity
+        return None
+
     def read_source_bytes(
         self,
         corpus_id: CorpusId,
@@ -646,6 +663,7 @@ def test_reader_without_writes_is_not_a_transaction() -> None:
 def test_public_storage_api_contains_only_contract_boundary() -> None:
     expected_exports = {
         "CORPUS_MANIFEST_CONTRACT_VERSION",
+        "CURRENT_CHUNK_PAYLOAD_SCHEMA_VERSION",
         "CURRENT_SOURCE_RECORD_SCHEMA_VERSION",
         "SUPPORTED_SOURCE_RECORD_SCHEMA_VERSIONS",
         "AbortCorpusUpdateOutcome",
@@ -668,6 +686,19 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "BaselineManifestRecordState",
         "BeginCorpusUpdateOutcome",
         "BoundingBox",
+        "ChunkerVersionRecord",
+        "ChunkingPolicyRecord",
+        "ChunkMinimumExceptionRecord",
+        "ChunkParserVersionRecord",
+        "ChunkSplitReasonRecord",
+        "ChunkSourceReferenceRecord",
+        "ChunkSetReader",
+        "ChunkSetSelectionRecord",
+        "ChunkSetWriteRequest",
+        "ChunkSetWriter",
+        "ChunkTokeniserIdentityRecord",
+        "ChunkOversizeUnitPolicy",
+        "ChunkStructuralBoundaryPolicy",
         "CollectionAvailability",
         "CommitCorpusUpdateOutcome",
         "ComponentGenerationReference",
@@ -722,6 +753,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "StructuralBlockKind",
         "TransitionBaselineManifestOutcome",
         "WriteBaselineCheckpointOutcome",
+        "WriteChunkSetOutcome",
         "TransitionBaselineManifestOutcome",
         "WriteBaselineCheckpointOutcome",
         "build_parsed_representation_output_digest",

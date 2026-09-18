@@ -131,6 +131,36 @@ block publication.
 The repository may be closed after a snapshot is open because the snapshot
 owns its dedicated connection. The snapshot itself still must be closed.
 
+## Canonical chunk persistence
+
+Baseline ingest stores one complete immutable `ChunkSet` for each document
+version and compatible parser, chunker, tokeniser, and policy identity. The
+chunk set is deployment-global physical state; explicit corpus membership still
+controls whether a catalogue or pinned snapshot can select it. Sharing a
+document version or its canonical bytes between corpora does not grant
+cross-corpus visibility.
+
+The write boundary is atomic. An interrupted or rolled-back write leaves no
+partially visible chunk set, and an exact retry returns the same result without
+creating a duplicate. A changed immutable payload, configuration, ownership,
+or source association is a storage conflict and must be reconciled by the
+owning workflow rather than overwritten. A reachable row that fails digest or
+metadata reconstruction is corrupt state; readers fail closed instead of
+returning partial payloads.
+
+Repository creation and supported forward migrations are explicit operations.
+Open an older database through the configured metadata-repository factory with
+`apply_migrations=True`; do not edit `chunk_sets`, migration history, or other
+SQLite tables by hand. After a clean restart, reopen the repository and select
+the same corpus and exact configuration to verify replay or catalogue reads.
+
+If a chunk read or write reports `CorruptStorageError`, preserve the database
+and the associated source state for investigation. Do not delete rows, replace
+canonical payloads, change stored digests, or infer a repair from a mutable
+filesystem path. Use a validated deployment backup or the owning ingest
+rebuild workflow when that workflow is available. The command-line entry point
+does not yet expose a chunk repair command.
+
 ## Roll back an active corpus
 
 Rollback is a new publication, not a pointer rewind:

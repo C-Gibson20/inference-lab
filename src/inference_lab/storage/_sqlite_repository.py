@@ -41,6 +41,7 @@ from inference_lab.storage._sqlite_baseline_checkpoints import (
     get_baseline_manifest,
     list_baseline_checkpoints,
 )
+from inference_lab.storage._sqlite_chunk_sets import get_chunk_set_selection
 from inference_lab.storage._sqlite_cleanup import close_preserving_primary
 from inference_lab.storage._sqlite_connection import (
     DEFAULT_BUSY_TIMEOUT_MS,
@@ -131,6 +132,7 @@ from inference_lab.storage.baseline_checkpoint_records import (
     BaselineCheckpointRecordStage,
     BaselineManifestRecord,
 )
+from inference_lab.storage.chunk_records import ChunkSetSelectionRecord
 from inference_lab.storage.errors import (
     RepositoryClosedError,
     RepositoryUnavailableError,
@@ -392,6 +394,20 @@ class SQLiteMetadataRepository:
         return list_corpus_document_version_memberships(
             self._connection_or_raise(),
             corpus_id,
+        )
+
+    def get_chunk_set_selection(
+        self,
+        corpus_id: CorpusId,
+        document_version_id: DocumentVersionId,
+        configuration_identity: ConfigurationIdentity,
+    ) -> ChunkSetSelectionRecord | None:
+        """Return one exact corpus-visible chunk-set selection, or ``None``."""
+        return get_chunk_set_selection(
+            self._connection_or_raise(),
+            corpus_id,
+            document_version_id,
+            configuration_identity,
         )
 
     def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:

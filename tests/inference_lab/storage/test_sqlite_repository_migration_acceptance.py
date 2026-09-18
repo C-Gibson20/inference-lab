@@ -109,12 +109,12 @@ def _failing_source_persistence_migration() -> MigrationDefinition:
     )
 
 
-def _failing_revision_seven() -> MigrationDefinition:
+def _failing_revision_eight() -> MigrationDefinition:
     return MigrationDefinition(
-        revision=7,
-        migration_id="test_failing_revision_seven",
+        revision=8,
+        migration_id="test_failing_revision_eight",
         statements=(
-            "CREATE TABLE revision_six_marker (value TEXT) STRICT",
+            "CREATE TABLE revision_seven_marker (value TEXT) STRICT",
             "CREATE TABLE documents (conflicting_value TEXT)",
         ),
     )
@@ -229,7 +229,7 @@ def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert reopened.schema_inspection.current_revision == 6
+        assert reopened.schema_inspection.current_revision == 7
         assert reopened.get_corpus(_CORPUS_ID) == CorpusMetadata(
             _CORPUS_ID, "Primary corpus"
         )
@@ -273,10 +273,49 @@ def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
 
     reopened_without_permission = SQLiteMetadataRepository.open(database_path)
     try:
-        assert reopened_without_permission.schema_inspection.current_revision == 6
+        assert reopened_without_permission.schema_inspection.current_revision == 7
         _assert_complete_graph(reopened_without_permission)
     finally:
         reopened_without_permission.close()
+
+
+@pytest.mark.parametrize("legacy_revision", range(1, 7))
+def test_each_supported_legacy_revision_upgrades_to_chunk_schema(
+    tmp_path: Path,
+    legacy_revision: int,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    _create_complete_baseline(
+        database_path,
+        migrations=MIGRATIONS[:legacy_revision],
+    )
+
+    migrated = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+        applied_at_factory=_fixed_applied_at,
+    )
+    try:
+        assert migrated.schema_inspection.current_revision == 7
+        _assert_complete_graph(migrated)
+    finally:
+        migrated.close()
+
+    connection = sqlite3.connect(database_path)
+    try:
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'chunk_sets'"
+        ).fetchone() == ("chunk_sets",)
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'chunk_sets_selection_idx'"
+        ).fetchone() == ("chunk_sets_selection_idx",)
+        assert connection.execute(
+            "SELECT count(*) FROM migration_history WHERE revision = 7"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
 
 
 def test_non_empty_repository_requires_explicit_upgrade_without_mutation(
@@ -356,7 +395,7 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
         applied_at_factory=_fixed_applied_at,
     )
     try:
-        assert migrated.schema_inspection.current_revision == 6
+        assert migrated.schema_inspection.current_revision == 7
         _assert_complete_graph(migrated)
     finally:
         migrated.close()
@@ -398,13 +437,19 @@ def test_supported_upgrade_preserves_complete_graph_and_reopens_idempotently(
             MIGRATIONS[5].checksum,
             "2026-09-01T12:30:00.000000+00:00",
         ),
+        (
+            7,
+            "canonical_chunk_sets",
+            MIGRATIONS[6].checksum,
+            "2026-09-01T12:30:00.000000+00:00",
+        ),
     )
 
     reopened = SQLiteMetadataRepository.open(
         database_path,
     )
     try:
-        assert reopened.schema_inspection.current_revision == 6
+        assert reopened.schema_inspection.current_revision == 7
         _assert_complete_graph(reopened)
     finally:
         reopened.close()
@@ -430,7 +475,7 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         SQLiteMetadataRepository.open(
             database_path,
             apply_migrations=True,
-            migrations=(*MIGRATIONS, _failing_revision_seven()),
+            migrations=(*MIGRATIONS, _failing_revision_eight()),
             applied_at_factory=_fixed_applied_at,
         )
 
@@ -438,7 +483,7 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         database_path,
     )
     try:
-        assert recovered.schema_inspection.current_revision == 6
+        assert recovered.schema_inspection.current_revision == 7
         _assert_complete_graph(recovered)
     finally:
         recovered.close()
@@ -448,13 +493,13 @@ def test_failed_later_migration_preserves_last_checkpoint_and_domain_data(
         assert (
             connection.execute(
                 """SELECT 1 FROM sqlite_schema
-                WHERE name = 'revision_six_marker'"""
+                WHERE name = 'revision_seven_marker'"""
             ).fetchone()
             is None
         )
         assert connection.execute(
             "SELECT count(*) FROM migration_history"
-        ).fetchone() == (6,)
+        ).fetchone() == (7,)
     finally:
         connection.close()
 
