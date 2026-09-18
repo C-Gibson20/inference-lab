@@ -11,6 +11,7 @@ from inference_lab.ingest.baseline_contracts import (
     BaselineFailureCategory,
     BaselineStageDisposition,
 )
+from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -330,7 +331,7 @@ def _outcome_signature(
     return outcome.kind, outcome.document_version_id
 
 
-def plan_baseline_membership(
+def _plan_baseline_membership(
     corpus_id: CorpusId,
     parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
     outcomes: tuple[BaselineDocumentOutcome, ...],
@@ -454,7 +455,52 @@ def plan_baseline_membership(
     )
 
 
-def apply_baseline_membership_plan(
+def plan_baseline_membership(
+    corpus_id: CorpusId,
+    parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
+    outcomes: tuple[BaselineDocumentOutcome, ...],
+    *,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
+) -> BaselineMembershipPlan:
+    """Plan membership changes while observing one request-level stage."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if profiling is not None and not isinstance(profiling, BaselineProfilingContext):
+        raise TypeError("profiling must be a BaselineProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    if not isinstance(profiling_identity, str) or not profiling_identity:
+        raise ValueError("profiling_identity must be a non-empty string.")
+
+    selected_profiling = (
+        profiling if profiling is not None else BaselineProfilingContext.create()
+    )
+    stage_id = selected_profiling.stage_id("membership", f"{profiling_identity}:plan")
+    plan: BaselineMembershipPlan | None = None
+    with selected_profiling.observed_stage(
+        stage="membership",
+        stage_id=stage_id,
+        document_id=None,
+        corpus_id=corpus_id.as_str(),
+        corpus_version=None,
+        parent_stage_id=parent_stage_id,
+    ) as stage:
+        stage.set_counts(
+            items_processed=len(outcomes) if isinstance(outcomes, tuple) else None,
+            records_emitted=0,
+        )
+        plan = _plan_baseline_membership(corpus_id, parent_memberships, outcomes)
+        stage.set_counts(
+            items_processed=len(outcomes),
+            records_emitted=len(plan.changes),
+        )
+    assert plan is not None
+    return plan
+
+
+def _apply_baseline_membership_plan(
     transaction: MetadataTransaction,
     proposed_corpus_version: CorpusVersionId,
     plan: BaselineMembershipPlan,
@@ -527,3 +573,51 @@ def apply_baseline_membership_plan(
         raise BaselineMembershipApplicationError(
             BaselineFailureCategory.STORAGE_UNAVAILABLE,
         ) from error
+
+
+def apply_baseline_membership_plan(
+    transaction: MetadataTransaction,
+    proposed_corpus_version: CorpusVersionId,
+    plan: BaselineMembershipPlan,
+    *,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
+) -> tuple[CorpusDocumentVersionMembership, ...]:
+    """Apply a membership plan while observing one request-level stage."""
+    if not isinstance(proposed_corpus_version, CorpusVersionId):
+        raise TypeError("proposed_corpus_version must be a CorpusVersionId.")
+    if not isinstance(plan, BaselineMembershipPlan):
+        raise TypeError("plan must be a BaselineMembershipPlan.")
+    if profiling is not None and not isinstance(profiling, BaselineProfilingContext):
+        raise TypeError("profiling must be a BaselineProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    if not isinstance(profiling_identity, str) or not profiling_identity:
+        raise ValueError("profiling_identity must be a non-empty string.")
+
+    selected_profiling = (
+        profiling if profiling is not None else BaselineProfilingContext.create()
+    )
+    stage_id = selected_profiling.stage_id("membership", f"{profiling_identity}:apply")
+    persisted: tuple[CorpusDocumentVersionMembership, ...] | None = None
+    with selected_profiling.observed_stage(
+        stage="membership",
+        stage_id=stage_id,
+        document_id=None,
+        corpus_id=plan.corpus_id.as_str(),
+        corpus_version=proposed_corpus_version.as_str(),
+        parent_stage_id=parent_stage_id,
+    ) as stage:
+        stage.set_counts(items_processed=len(plan.changes), records_emitted=0)
+        persisted = _apply_baseline_membership_plan(
+            transaction,
+            proposed_corpus_version,
+            plan,
+        )
+        stage.set_counts(
+            items_processed=len(plan.changes),
+            records_emitted=len(persisted),
+        )
+    assert persisted is not None
+    return persisted

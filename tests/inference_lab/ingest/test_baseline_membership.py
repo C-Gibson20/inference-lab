@@ -1,5 +1,6 @@
 """Tests for deterministic baseline membership-change contracts."""
 
+from datetime import UTC, datetime
 from typing import cast
 
 import pytest
@@ -15,11 +16,13 @@ from inference_lab.ingest import (
     BaselineMembershipChange,
     BaselineMembershipChangeKind,
     BaselineMembershipPlanningError,
+    BaselineProfilingContext,
     BaselineStage,
     BaselineStageDisposition,
     apply_baseline_membership_plan,
     plan_baseline_membership,
 )
+from inference_lab.profiling import FailureEvent, StageTiming
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -28,6 +31,16 @@ from inference_lab.provenance import (
     DocumentVersionId,
 )
 from inference_lab.storage import MetadataTransaction, StorageConflictError
+
+
+class _CollectingSink:
+    """Collect shared profiling records without rendering them."""
+
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
 
 
 def _membership(
@@ -191,6 +204,113 @@ def test_planner_adds_successful_new_document() -> None:
         ),
     )
     assert plan.changes[0].kind is BaselineMembershipChangeKind.ADD
+
+
+def test_membership_plan_and_application_emit_request_stage_records() -> None:
+    corpus_id = CorpusId.generate()
+    document_id = DocumentId.generate()
+    version_id = DocumentVersionId.generate()
+    outcome = _outcome(
+        ordinal=0,
+        kind=BaselineDocumentOutcomeKind.NEW_DOCUMENT,
+        document_id=document_id,
+        document_version_id=version_id,
+    )
+    sink = _CollectingSink()
+    clock_values = iter(range(0, 40_000_000, 10_000_000))
+    profiling = BaselineProfilingContext.create(
+        run_id="run-membership",
+        sink=sink,
+        clock=lambda: next(clock_values),
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    plan = plan_baseline_membership(
+        corpus_id,
+        (),
+        (outcome,),
+        profiling=profiling,
+    )
+    persisted = apply_baseline_membership_plan(
+        cast(MetadataTransaction, _FakeMembershipTransaction(())),
+        CorpusVersionId.generate(),
+        plan,
+        profiling=profiling,
+        parent_stage_id="run-membership:discovery:request",
+    )
+
+    assert persisted == plan.final_memberships
+    completions = [
+        record
+        for record in sink.records
+        if isinstance(record, StageTiming) and record.event == "stage_completed"
+    ]
+    assert [
+        (
+            record.pipeline_stage,
+            record.status,
+            record.items_processed,
+            record.records_emitted,
+        )
+        for record in completions
+    ] == [
+        ("membership", "completed", 1, 1),
+        ("membership", "completed", 1, 1),
+    ]
+    assert len({record.stage_id for record in completions}) == 2
+    assert completions[0].parent_stage_id is None
+    assert completions[1].parent_stage_id == "run-membership:discovery:request"
+    assert all(record.run_id == "run-membership" for record in completions)
+    assert not [record for record in sink.records if isinstance(record, FailureEvent)]
+
+
+def test_membership_application_maps_conflict_to_one_safe_failure_record() -> None:
+    parent = _membership()
+    replacement = _membership(
+        corpus_id=parent.corpus_id,
+        document_id=parent.document_id,
+    )
+    plan = plan_baseline_membership(
+        parent.corpus_id,
+        (parent,),
+        (
+            _outcome(
+                ordinal=0,
+                kind=BaselineDocumentOutcomeKind.CHANGED_VERSION,
+                document_id=parent.document_id,
+                document_version_id=replacement.document_version_id,
+            ),
+        ),
+    )
+    sink = _CollectingSink()
+    clock_values = iter((0, 10_000_000))
+    profiling = BaselineProfilingContext.create(
+        run_id="run-membership-failure",
+        sink=sink,
+        clock=lambda: next(clock_values),
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    with pytest.raises(BaselineMembershipApplicationError):
+        apply_baseline_membership_plan(
+            cast(MetadataTransaction, _FakeMembershipTransaction((replacement,))),
+            CorpusVersionId.generate(),
+            plan,
+            profiling=profiling,
+        )
+
+    completions = [
+        record
+        for record in sink.records
+        if isinstance(record, StageTiming) and record.event == "stage_completed"
+    ]
+    failures = [record for record in sink.records if isinstance(record, FailureEvent)]
+    assert [(record.status, record.items_processed) for record in completions] == [
+        ("failed", 1)
+    ]
+    assert len(failures) == 1
+    assert failures[0].failure_category == "internal"
+    assert failures[0].failure_code == "membership_conflict"
 
 
 def test_planner_replaces_successful_changed_document() -> None:
