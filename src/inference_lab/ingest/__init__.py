@@ -85,6 +85,7 @@ from inference_lab.ingest.baseline_parse import (
     BaselineParseResult,
     execute_baseline_parse,
 )
+from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.ingest.baseline_publication import (
     BaselineChunkPublicationOutcome,
     BaselineGenerationParticipant,
@@ -343,6 +344,7 @@ __all__ = [
     "BaselineParseRepository",
     "BaselineParseRequest",
     "BaselineParseResult",
+    "BaselineProfilingContext",
     "BaselinePublicationOutcome",
     "BaselinePublicationStatus",
     "BaselineRequestExecutionError",
