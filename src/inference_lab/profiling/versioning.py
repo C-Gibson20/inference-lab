@@ -4,7 +4,7 @@ from typing import Final
 
 from inference_lab._validation import is_canonical_semantic_version
 
-CURRENT_RECORD_SCHEMA_VERSION: Final[str] = "3.0.0"
+CURRENT_RECORD_SCHEMA_VERSION: Final[str] = "4.0.0"
 SUPPORTED_RECORD_SCHEMA_VERSIONS: Final[frozenset[str]] = frozenset(
     {CURRENT_RECORD_SCHEMA_VERSION}
 )

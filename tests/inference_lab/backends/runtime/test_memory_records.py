@@ -111,7 +111,7 @@ def test_emission_uses_safe_runtime_records_and_required_fields() -> None:
         assert line["document_id"] is None
         assert line["corpus_id"] is None
         assert line["corpus_version"] is None
-        assert line["record_schema_version"] == "3.0.0"
+        assert line["record_schema_version"] == "4.0.0"
         assert line["timestamp"].endswith("Z")
 
 

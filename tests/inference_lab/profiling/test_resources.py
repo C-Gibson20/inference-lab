@@ -65,7 +65,7 @@ def test_measured_resource_serialises_all_fields() -> None:
         "document_id": None,
         "corpus_id": None,
         "corpus_version": None,
-        "record_schema_version": "3.0.0",
+        "record_schema_version": "4.0.0",
     }
 
 
