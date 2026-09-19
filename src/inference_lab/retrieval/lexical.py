@@ -140,7 +140,7 @@ class LexicalIndexConfiguration:
     engine: str = LEXICAL_IMPLEMENTATION
     engine_revision: str = "sqlite-fts5-baseline"
     index_schema_version: str = LEXICAL_FORMAT_VERSION
-    fts_tokenizer: str = 'unicode61 remove_diacritics 0 tokenchars "-._:/+"'
+    fts_tokenizer: str = "unicode61 remove_diacritics 0 tokenchars '-._:/+'"
     unicode_normalisation: str = "NFC"
     term_case_policy: str = "fts5-unicode61"
     identifier_grammar_version: str = "bounded-alnum-internal-punctuation-v1"
@@ -547,3 +547,30 @@ def lexical_order_key(score: int | float, record_id: RecordId) -> tuple[float, s
     if not isinstance(record_id, RecordId):
         raise TypeError("record_id must be a RecordId.")
     return (-float(score), record_id.as_str())
+
+
+def derive_lexical_generation_id(
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+    configuration: LexicalIndexConfiguration,
+    source_manifest_digest: str,
+) -> str:
+    """Derive the stable, path-free identity of one lexical generation."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if not isinstance(corpus_version, CorpusVersionId):
+        raise TypeError("corpus_version must be a CorpusVersionId.")
+    if not isinstance(configuration, LexicalIndexConfiguration):
+        raise TypeError("configuration must be a LexicalIndexConfiguration.")
+    _validate_sha256(source_manifest_digest, "source_manifest_digest")
+    payload: JsonObject = {
+        "component_kind": LEXICAL_COMPONENT_KIND,
+        "configuration_digest": configuration.configuration_identity.digest,
+        "contract_version": LEXICAL_CONTRACT_VERSION,
+        "corpus_id": corpus_id.as_str(),
+        "corpus_version": corpus_version.as_str(),
+        "format_version": LEXICAL_FORMAT_VERSION,
+        "source_manifest_digest": source_manifest_digest,
+    }
+    digest = hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+    return f"lexical-{digest}"
