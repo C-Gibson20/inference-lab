@@ -2,7 +2,9 @@
 
 import hashlib
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -32,10 +34,15 @@ from inference_lab.provenance import (
 from inference_lab.retrieval import (
     LexicalError,
     LexicalFailureCategory,
+    LexicalGenerationParticipant,
     build_lexical_generation,
     open_lexical_generation,
 )
-from inference_lab.storage import ChunkSetSelectionRecord
+from inference_lab.storage import (
+    ChunkSetReader,
+    ChunkSetSelectionRecord,
+    ComponentGenerationState,
+)
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
 CORPUS_VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000002")
@@ -202,6 +209,61 @@ def test_full_build_publishes_restartable_generation_with_source_links(
 
     reopened = open_lexical_generation(tmp_path, outcome.manifest.generation_id)
     reopened.close()
+
+
+def test_stor03_reference_and_validator_require_exact_reopenable_generation(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    outcome = build_lexical_generation(tmp_path, source_manifest)
+    participant = LexicalGenerationParticipant(
+        tmp_path,
+        outcome,
+        source_manifest,
+    )
+    reference = participant.component_generation()
+    validator = participant.build_validator(cast(ChunkSetReader, object()))
+    memberships = tuple(entry.membership for entry in source_manifest.entries)
+
+    assert reference.component_kind.as_str() == "lexical-index"
+    assert reference.state is ComponentGenerationState.PREPARING
+    assert validator.validate_component_generation(reference, memberships) is True
+    assert validator.validate_component_generation(reference, memberships[:-1]) is False
+    assert (
+        validator.validate_component_generation(
+            replace(reference, corpus_id=CorpusId.generate()),
+            memberships,
+        )
+        is False
+    )
+    assert (
+        validator.validate_component_generation(
+            replace(reference, source_manifest_digest="0" * 64),
+            memberships,
+        )
+        is False
+    )
+
+
+def test_stor03_validator_rejects_checksum_corruption_without_disclosure(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    outcome = build_lexical_generation(tmp_path, source_manifest)
+    participant = LexicalGenerationParticipant(tmp_path, outcome, source_manifest)
+    validator = participant.build_validator(cast(ChunkSetReader, object()))
+    database = tmp_path / "lexical" / outcome.manifest.generation_id / "index.sqlite3"
+    with database.open("ab") as stream:
+        stream.write(b"corruption")
+
+    memberships = tuple(entry.membership for entry in source_manifest.entries)
+    assert (
+        validator.validate_component_generation(
+            participant.component_generation(),
+            memberships,
+        )
+        is False
+    )
 
 
 def test_zero_chunk_member_is_retained_and_exact_replay_reuses_database(

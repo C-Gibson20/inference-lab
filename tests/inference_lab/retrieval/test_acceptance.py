@@ -136,6 +136,8 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "LexicalIndexConfiguration",
         "LexicalIndexManifest",
         "LexicalGeneration",
+        "LexicalGenerationParticipant",
+        "LexicalGenerationValidator",
         "LexicalIndexedChunk",
         "LexicalMemberSelection",
         "LexicalMatchMode",

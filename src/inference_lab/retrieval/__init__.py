@@ -60,6 +60,8 @@ from inference_lab.retrieval.lexical_serialisation import (
 )
 from inference_lab.retrieval.lexical_store import (
     LexicalGeneration,
+    LexicalGenerationParticipant,
+    LexicalGenerationValidator,
     LexicalIndexedChunk,
     LexicalMemberSelection,
     LexicalSourceLink,
@@ -115,6 +117,8 @@ __all__ = [
     "LexicalError",
     "LexicalFailureCategory",
     "LexicalGeneration",
+    "LexicalGenerationParticipant",
+    "LexicalGenerationValidator",
     "LexicalIndexBuildOutcome",
     "LexicalIndexBuildStatistics",
     "LexicalIndexConfiguration",

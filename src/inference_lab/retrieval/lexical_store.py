@@ -19,6 +19,7 @@ from inference_lab.ingest import (
     deserialise_chunk_set_selection,
 )
 from inference_lab.provenance import (
+    CorpusDocumentVersionMembership,
     DocumentId,
     DocumentVersionId,
     RecordId,
@@ -38,12 +39,20 @@ from inference_lab.retrieval.lexical_serialisation import (
     deserialise_lexical_manifest,
     serialise_lexical_manifest,
 )
+from inference_lab.storage import (
+    ChunkSetReader,
+    ComponentGenerationReference,
+    ComponentGenerationState,
+    ComponentGenerationValidator,
+    ComponentKind,
+)
 
 LEXICAL_DIRECTORY_NAME: Final[str] = "lexical"
 LEXICAL_DATABASE_NAME: Final[str] = "index.sqlite3"
 LEXICAL_MANIFEST_NAME: Final[str] = "manifest.json"
 _LEXICAL_DATABASE_USER_VERSION: Final[int] = 2
 _GENERATION_ID_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+_LEXICAL_COMPONENT_KIND: Final[ComponentKind] = ComponentKind("lexical-index")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +123,177 @@ class _DiffStatistics:
     replaced_chunks: int
     removed_chunks: int
     identifiers_emitted: int
+
+
+def _component_generation_reference(
+    manifest: LexicalIndexManifest,
+) -> ComponentGenerationReference:
+    """Return the storage reference represented by one lexical manifest."""
+    if not isinstance(manifest, LexicalIndexManifest):
+        raise TypeError("manifest must be a LexicalIndexManifest.")
+    return ComponentGenerationReference(
+        component_kind=_LEXICAL_COMPONENT_KIND,
+        generation_id=manifest.generation_id,
+        implementation=manifest.implementation,
+        format_version=manifest.format_version,
+        contract_version=manifest.contract_version,
+        configuration_digest=manifest.configuration_digest,
+        source_manifest_digest=manifest.source_manifest_digest,
+        corpus_id=manifest.corpus_id,
+        corpus_version=manifest.corpus_version,
+        state=ComponentGenerationState.PREPARING,
+    )
+
+
+class LexicalGenerationParticipant:
+    """Expose a prepared lexical generation to the generic publication seam."""
+
+    def __init__(
+        self,
+        index_dir: Path,
+        outcome: LexicalIndexBuildOutcome,
+        source_manifest: BaselineChunkGenerationManifest,
+    ) -> None:
+        """Bind one built lexical generation to its exact staged source."""
+        if not isinstance(index_dir, Path):
+            raise TypeError("index_dir must be a Path.")
+        if not isinstance(outcome, LexicalIndexBuildOutcome):
+            raise TypeError("outcome must be a LexicalIndexBuildOutcome.")
+        if not isinstance(source_manifest, BaselineChunkGenerationManifest):
+            raise TypeError(
+                "source_manifest must be a BaselineChunkGenerationManifest."
+            )
+        if (
+            outcome.manifest.corpus_id != source_manifest.corpus_id
+            or outcome.manifest.corpus_version != source_manifest.corpus_version
+            or outcome.manifest.source_manifest_digest
+            != source_manifest.source_manifest_digest
+        ):
+            raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)
+        self._index_dir = index_dir
+        self._outcome = outcome
+        self._source_manifest = source_manifest
+
+    def component_generation(self) -> ComponentGenerationReference:
+        """Return the preparing reference for generic registration."""
+        return _component_generation_reference(self._outcome.manifest)
+
+    def build_validator(
+        self,
+        reader: ChunkSetReader,
+    ) -> ComponentGenerationValidator:
+        """Build a validator for this exact staged lexical generation."""
+        return LexicalGenerationValidator(
+            self._index_dir,
+            self._outcome.manifest,
+            self._source_manifest,
+        )
+
+
+class LexicalGenerationValidator:
+    """Validate one lexical generation before component registration."""
+
+    def __init__(
+        self,
+        index_dir: Path,
+        manifest: LexicalIndexManifest,
+        source_manifest: BaselineChunkGenerationManifest,
+    ) -> None:
+        """Bind one lexical manifest to its complete staged source manifest."""
+        if not isinstance(index_dir, Path):
+            raise TypeError("index_dir must be a Path.")
+        if not isinstance(manifest, LexicalIndexManifest):
+            raise TypeError("manifest must be a LexicalIndexManifest.")
+        if not isinstance(source_manifest, BaselineChunkGenerationManifest):
+            raise TypeError(
+                "source_manifest must be a BaselineChunkGenerationManifest."
+            )
+        self._index_dir = index_dir
+        self._manifest = manifest
+        self._source_manifest = source_manifest
+
+    def validate_component_generation(
+        self,
+        generation: ComponentGenerationReference,
+        document_memberships: tuple[CorpusDocumentVersionMembership, ...],
+    ) -> bool:
+        """Return whether the durable generation is exact and complete."""
+        if not isinstance(generation, ComponentGenerationReference):
+            raise TypeError("generation must be a ComponentGenerationReference.")
+        if not isinstance(document_memberships, tuple):
+            raise TypeError("document_memberships must be a tuple.")
+
+        try:
+            if generation != _component_generation_reference(self._manifest):
+                return False
+            if (
+                self._manifest.corpus_id != self._source_manifest.corpus_id
+                or self._manifest.corpus_version != self._source_manifest.corpus_version
+                or self._manifest.source_manifest_digest
+                != self._source_manifest.source_manifest_digest
+            ):
+                return False
+
+            expected_memberships = tuple(
+                entry.membership for entry in self._source_manifest.entries
+            )
+            if document_memberships != expected_memberships:
+                return False
+
+            expected_chunks, expected_members = _prepare_chunks(self._source_manifest)
+            expected_selections = tuple(
+                LexicalMemberSelection(
+                    document_id=member.document_id,
+                    document_version_id=member.document_version_id,
+                    selection_digest=member.selection_digest,
+                    chunk_count=member.chunk_count,
+                )
+                for member in expected_members
+            )
+            expected_by_record_id = {
+                chunk.record_id: chunk for chunk in expected_chunks
+            }
+
+            with open_lexical_generation(
+                self._index_dir,
+                generation.generation_id,
+            ) as opened:
+                if opened.manifest != self._manifest:
+                    return False
+                if opened.member_selections() != expected_selections:
+                    return False
+
+                actual_chunks = opened.iter_chunks()
+                if len(actual_chunks) != len(expected_chunks):
+                    return False
+                seen_record_ids: set[RecordId] = set()
+                for actual in actual_chunks:
+                    if actual.record_id in seen_record_ids:
+                        return False
+                    seen_record_ids.add(actual.record_id)
+                    expected = expected_by_record_id.get(actual.record_id)
+                    if expected is None:
+                        return False
+                    if (
+                        actual.document_id != expected.document_id
+                        or actual.document_version_id != expected.document_version_id
+                        or actual.ordinal != expected.ordinal
+                        or actual.content != expected.content
+                        or actual.token_count != expected.token_count
+                        or actual.source_links != expected.source_links
+                    ):
+                        return False
+                return seen_record_ids == set(expected_by_record_id)
+        except (
+            LexicalError,
+            OSError,
+            sqlite3.Error,
+            TypeError,
+            ValueError,
+            KeyError,
+            IndexError,
+        ):
+            return False
 
 
 def build_lexical_generation(
