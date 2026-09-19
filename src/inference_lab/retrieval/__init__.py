@@ -61,6 +61,7 @@ from inference_lab.retrieval.lexical_serialisation import (
 from inference_lab.retrieval.lexical_store import (
     LexicalGeneration,
     LexicalIndexedChunk,
+    LexicalMemberSelection,
     LexicalSourceLink,
     build_lexical_generation,
     open_lexical_generation,
@@ -120,6 +121,7 @@ __all__ = [
     "LexicalIndexManifest",
     "LexicalIndexedChunk",
     "LexicalMatchMode",
+    "LexicalMemberSelection",
     "LexicalQuery",
     "LexicalRetrievalRequest",
     "LexicalSourceLink",
