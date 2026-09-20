@@ -1,5 +1,6 @@
 """Reusable profiling helpers; experiment outputs belong in top-level benchmarks/."""
 
+from inference_lab.profiling.context import ProfilingContext
 from inference_lab.profiling.contracts import (
     BASELINE_STAGES,
     STAGE_CONDITIONS,
@@ -54,6 +55,7 @@ __all__ = [
     "MeasurementStatus",
     "MemoryResourceCategory",
     "ObservedStage",
+    "ProfilingContext",
     "ProfilingLogger",
     "ProfilingSink",
     "ResourceCategory",
