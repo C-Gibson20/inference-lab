@@ -1,5 +1,6 @@
 """Tests for pre-limit metadata filtering of ranked lexical matches."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -7,6 +8,7 @@ from typing import cast
 import pytest
 
 import inference_lab.retrieval.lexical_retrieval as lexical_retrieval
+from inference_lab.profiling import FailureEvent, ProfilingContext, StageTiming
 from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
@@ -121,6 +123,16 @@ class _Repository:
 
     def open_corpus_snapshot(self, *_: object) -> _SnapshotContext:
         return self.snapshot
+
+
+class _CollectingSink:
+    """Collect profiling records in emission order for orchestration tests."""
+
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
 
 
 def _candidate(ordinal: int) -> LexicalIndexedChunk:
@@ -246,6 +258,85 @@ def test_execute_filtered_retrieval_uses_pinned_generation_and_preserves_hits(
     assert tuple(hit.contributions[0].raw_score for hit in result.hits) == (2.0, 3.0)
     assert generation.visited == 4
     assert snapshot.closed is True
+
+
+def test_filtered_execution_profiles_exact_metadata_counts_and_parentage(
+    monkeypatch,
+) -> None:
+    candidates = tuple(_candidate(ordinal) for ordinal in range(1, 5))
+    generation = _GenerationContext(
+        tuple((candidate, float(index)) for index, candidate in enumerate(candidates)),
+        "generation-1",
+    )
+    snapshot = _SnapshotContext("generation-1")
+    metadata = {
+        candidate.record_id: {"language": "fr" if index < 2 else "en"}
+        for index, candidate in enumerate(candidates)
+    }
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "open_lexical_generation",
+        lambda *_: generation,
+    )
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "resolve_lexical_candidate_metadata",
+        lambda _snapshot, candidate: SimpleNamespace(
+            values=metadata[candidate.record_id]
+        ),
+    )
+    sink = _CollectingSink()
+    profiling = ProfilingContext.create(
+        run_id="run-filter-profile",
+        sink=sink,
+        clock=iter(range(0, 40_000_000, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 20, tzinfo=UTC),
+    )
+
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _Repository(snapshot)),
+        Path("indexes"),
+        CORPUS_ID,
+        _query(limit=2),
+        profiling=profiling,
+        profiling_identity="filtered",
+    )
+
+    assert result.status is ResultStatus.COMPLETED
+    completions = [
+        record
+        for record in sink.records
+        if isinstance(record, StageTiming) and record.event == "stage_completed"
+    ]
+    assert [
+        (
+            record.pipeline_stage,
+            record.status,
+            record.items_processed,
+            record.records_emitted,
+            record.stage_id,
+            record.parent_stage_id,
+        )
+        for record in completions
+    ] == [
+        (
+            "metadata_filter",
+            "completed",
+            4,
+            2,
+            "run-filter-profile:metadata_filter:filtered",
+            "run-filter-profile:lexical_retrieval:filtered",
+        ),
+        (
+            "lexical_retrieval",
+            "completed",
+            None,
+            2,
+            "run-filter-profile:lexical_retrieval:filtered",
+            None,
+        ),
+    ]
+    assert not [record for record in sink.records if isinstance(record, FailureEvent)]
 
 
 def test_execute_filtered_retrieval_returns_successful_empty_result(
@@ -381,6 +472,7 @@ def test_orchestration_accepts_original_filtered_retrieval_query(monkeypatch) ->
         _corpus_id: CorpusId,
         captured_query: RetrievalQuery,
         lexical_request: LexicalQuery,
+        **_: object,
     ) -> EvidenceResult:
         captured["query"] = captured_query
         captured["lexical_request"] = lexical_request

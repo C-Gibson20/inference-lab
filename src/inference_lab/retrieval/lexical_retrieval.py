@@ -1,5 +1,7 @@
 """Pinned-snapshot execution for the lexical retrieval channel."""
 
+import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 
 from inference_lab.profiling import FailureMapping, ProfilingContext
@@ -33,6 +35,7 @@ from inference_lab.retrieval.metadata_adapter import (
     resolve_lexical_candidate_metadata,
 )
 from inference_lab.retrieval.metadata_filters import (
+    InvalidMetadataFilterError,
     MetadataFilterValidation,
     evaluate_metadata_filter,
     validate_metadata_filter,
@@ -48,9 +51,18 @@ from inference_lab.retrieval.values import RetrievalChannel
 from inference_lab.storage import (
     ComponentGenerationState,
     CorpusSnapshot,
+    CorruptStorageError,
     MetadataRepository,
     StorageError,
 )
+
+
+@dataclass(slots=True)
+class _MetadataFilterObservation:
+    """Carry exact filter counts from execution to its observed stage."""
+
+    items_processed: int | None = None
+    records_emitted: int | None = None
 
 
 def _failed_result(
@@ -111,6 +123,49 @@ def _map_result_failure(result: EvidenceResult) -> FailureMapping | None:
     )
 
 
+def _map_metadata_filter_failure(error: BaseException) -> FailureMapping:
+    """Map a raised metadata-filter failure without retaining its payload."""
+    if isinstance(error, InvalidMetadataFilterError):
+        return FailureMapping(
+            failure_category="input",
+            failure_code="invalid_metadata_filter",
+        )
+    if isinstance(error, asyncio.CancelledError):
+        return FailureMapping(
+            failure_category="cancelled",
+            failure_code="metadata_filter_cancelled",
+            status="cancelled",
+        )
+    return FailureMapping(
+        failure_category="internal",
+        failure_code="metadata_filter_failed",
+    )
+
+
+def _map_metadata_result_failure(result: EvidenceResult) -> FailureMapping:
+    """Map one returned filtered-retrieval failure to profiling diagnostics."""
+    if (
+        result.failures
+        and result.failures[0].category is FailureCategory.CHANNEL_UNAVAILABLE
+    ):
+        return FailureMapping(
+            failure_category="dependency",
+            failure_code="metadata_dependency_unavailable",
+        )
+    if (
+        result.failures
+        and result.failures[0].category is FailureCategory.INVALID_CHANNEL_RESPONSE
+    ):
+        return FailureMapping(
+            failure_category="internal",
+            failure_code="metadata_state_invalid",
+        )
+    return FailureMapping(
+        failure_category="internal",
+        failure_code="metadata_filter_failed",
+    )
+
+
 def execute_lexical_retrieval(
     repository: MetadataRepository,
     index_dir: Path,
@@ -158,13 +213,45 @@ def execute_lexical_retrieval(
         module="inference_lab.retrieval",
         failure_mapper=map_lexical_failure,
     ) as stage:
-        result = _execute_lexical_retrieval(
-            repository,
-            index_dir,
-            corpus_id,
-            query,
-            lexical_request,
-        )
+        if query.filter is None:
+            result = _execute_lexical_retrieval(
+                repository,
+                index_dir,
+                corpus_id,
+                query,
+                lexical_request,
+            )
+        else:
+            metadata_observation = _MetadataFilterObservation()
+            metadata_stage_id = selected_profiling.stage_id(
+                "metadata_filter", profiling_identity
+            )
+            with selected_profiling.observed_stage(
+                stage="metadata_filter",
+                stage_id=metadata_stage_id,
+                document_id=None,
+                corpus_id=corpus_id.as_str(),
+                corpus_version=query.corpus_version.as_str(),
+                parent_stage_id=stage_id,
+                module="inference_lab.retrieval",
+                failure_mapper=_map_metadata_filter_failure,
+            ) as metadata_stage:
+                result = _execute_lexical_retrieval(
+                    repository,
+                    index_dir,
+                    corpus_id,
+                    query,
+                    lexical_request,
+                    metadata_observation=metadata_observation,
+                )
+                if result.status is ResultStatus.COMPLETED:
+                    metadata_stage.set_counts(
+                        items_processed=metadata_observation.items_processed,
+                        records_emitted=metadata_observation.records_emitted,
+                    )
+                else:
+                    metadata_stage.mark_failure(_map_metadata_result_failure(result))
+        assert result is not None
         # SQLite FTS5 does not expose a cheap, reliable count of candidates
         # examined by its scorer; leave items_processed unavailable rather than
         # performing a second payload-bearing scan.
@@ -182,6 +269,8 @@ def _execute_lexical_retrieval(
     corpus_id: CorpusId,
     query: RetrievalQuery,
     lexical_request: LexicalQuery,
+    *,
+    metadata_observation: _MetadataFilterObservation | None = None,
 ) -> EvidenceResult:
     """Execute one lexical query against exactly one pinned corpus snapshot."""
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
@@ -253,13 +342,26 @@ def _execute_lexical_retrieval(
                     if metadata_validation is None:
                         matches = generation.search(lexical_request)
                     else:
-                        matches = _filter_ranked_matches(
-                            generation,
-                            lexical_request,
-                            query,
-                            metadata_validation,
-                            snapshot,
-                        )
+                        if metadata_observation is None:
+                            matches = _filter_ranked_matches(
+                                generation,
+                                lexical_request,
+                                query,
+                                metadata_validation,
+                                snapshot,
+                            )
+                        else:
+                            matches, items_processed = (
+                                _filter_ranked_matches_with_count(
+                                    generation,
+                                    lexical_request,
+                                    query,
+                                    metadata_validation,
+                                    snapshot,
+                                )
+                            )
+                            metadata_observation.items_processed = items_processed
+                            metadata_observation.records_emitted = len(matches)
                     hits = _build_hits(lexical_request, matches)
                     return EvidenceResult.from_query(
                         query,
@@ -274,8 +376,16 @@ def _execute_lexical_retrieval(
                     FailureCategory.INVALID_CHANNEL_RESPONSE,
                 )
             except LexicalError as error:
-                return _failed_result(query, _map_lexical_failure(error))
-    except StorageError:
+                failure_category = _map_lexical_failure(error)
+                if (
+                    metadata_observation is not None
+                    and error.category is LexicalFailureCategory.CORRUPT_GENERATION
+                ):
+                    failure_category = FailureCategory.CHANNEL_EXECUTION_FAILURE
+                return _failed_result(query, failure_category)
+    except StorageError as error:
+        if metadata_observation is not None and isinstance(error, CorruptStorageError):
+            return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
         return _failed_result(query, FailureCategory.CHANNEL_UNAVAILABLE)
     return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
 
@@ -308,14 +418,34 @@ def _filter_ranked_matches(
     snapshot: CorpusSnapshot,
 ) -> tuple[tuple[LexicalIndexedChunk, int | float], ...]:
     """Retain eligible ranked matches before applying the final result limit."""
+    matches, _ = _filter_ranked_matches_with_count(
+        generation,
+        lexical_request,
+        query,
+        validation,
+        snapshot,
+    )
+    return matches
+
+
+def _filter_ranked_matches_with_count(
+    generation: LexicalGeneration,
+    lexical_request: LexicalQuery,
+    query: RetrievalQuery,
+    validation: MetadataFilterValidation,
+    snapshot: CorpusSnapshot,
+) -> tuple[tuple[tuple[LexicalIndexedChunk, int | float], ...], int]:
+    """Retain ranked matches and count candidates whose metadata was evaluated."""
     matches: list[tuple[LexicalIndexedChunk, int | float]] = []
+    items_processed = 0
     for chunk, score in generation.iter_ranked_matches(lexical_request):
         metadata = resolve_lexical_candidate_metadata(snapshot, chunk)
+        items_processed += 1
         if evaluate_metadata_filter(validation, metadata.values):
             matches.append((chunk, score))
             if len(matches) == query.limit.value:
                 break
-    return tuple(matches)
+    return tuple(matches), items_processed
 
 
 def _build_hits(
