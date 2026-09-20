@@ -153,6 +153,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "deserialise_evidence_result",
         "deserialise_query",
         "escape_fts5_literal",
+        "execute_lexical_retrieval",
         "expose_bm25_score",
         "extract_identifiers",
         "identifier_score",

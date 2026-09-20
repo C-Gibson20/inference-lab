@@ -42,13 +42,20 @@ from inference_lab.provenance import (
     HashAlgorithm,
 )
 from inference_lab.retrieval import (
+    CandidateKind,
+    EvidenceResult,
     LexicalError,
     LexicalFailureCategory,
     LexicalGenerationParticipant,
     LexicalIndexConfiguration,
+    LexicalMatchMode,
+    LexicalQuery,
+    RetrievalLimit,
+    RetrievalQuery,
     build_lexical_generation,
     build_lexical_generation_for_corpus_update,
     derive_lexical_generation_id,
+    execute_lexical_retrieval,
     open_lexical_generation,
     select_lexical_parent_reference,
 )
@@ -363,6 +370,122 @@ def test_full_build_publishes_restartable_generation_with_source_links(
 
     reopened = open_lexical_generation(tmp_path, outcome.manifest.generation_id)
     reopened.close()
+
+
+def test_pr4_query_executes_terms_phrase_and_identifier_modes_from_pinned_snapshot(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        published = build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+            expected_corpus_version=None,
+        )
+        assert isinstance(published, CommitCorpusUpdateOutcome)
+
+        terms = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "alpha",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+        phrase = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "alpha cites",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                ),
+                LexicalMatchMode.EXACT_PHRASE,
+            ),
+        )
+        identifier = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "10.1234/ABC-7",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                ),
+                LexicalMatchMode.IDENTIFIER,
+            ),
+        )
+
+        assert all(
+            isinstance(result, EvidenceResult)
+            and result.status.value == "completed"
+            and not result.failures
+            for result in (terms, phrase, identifier)
+        )
+        assert len(terms.hits) == 1
+        assert terms.hits[0].candidate.kind is CandidateKind.ORIGINAL_PASSAGE
+        assert terms.hits[0].candidate.content.startswith("alpha cites")
+        assert terms.hits[0].candidate.sources
+        assert len(phrase.hits) == 1
+        assert phrase.hits[0].candidate.record_id == terms.hits[0].candidate.record_id
+        assert len(identifier.hits) == 1
+        assert (
+            identifier.hits[0].candidate.record_id == terms.hits[0].candidate.record_id
+        )
+        assert identifier.hits[0].contributions[0].score_label == (
+            "sqlite_exact_identifier_occurrences_v1"
+        )
+    finally:
+        repository.close()
+
+
+def test_pr4_query_returns_empty_completed_result_for_no_matches(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+            expected_corpus_version=None,
+        )
+        result = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "unmatchedterm",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(3),
+                )
+            ),
+        )
+
+        assert result.status.value == "completed"
+        assert result.hits == ()
+        assert result.failures == ()
+    finally:
+        repository.close()
 
 
 def test_lexical_build_profiles_success_and_reuse_with_shared_context(

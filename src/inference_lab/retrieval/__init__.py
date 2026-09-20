@@ -54,6 +54,7 @@ from inference_lab.retrieval.lexical import (
     lexical_order_key,
     lexical_score_label,
 )
+from inference_lab.retrieval.lexical_retrieval import execute_lexical_retrieval
 from inference_lab.retrieval.lexical_serialisation import (
     deserialise_lexical_manifest,
     serialise_lexical_manifest,
@@ -151,6 +152,7 @@ __all__ = [
     "deserialise_lexical_manifest",
     "deserialise_query",
     "escape_fts5_literal",
+    "execute_lexical_retrieval",
     "expose_bm25_score",
     "extract_identifiers",
     "identifier_score",
