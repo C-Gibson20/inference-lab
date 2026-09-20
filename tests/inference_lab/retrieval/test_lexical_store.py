@@ -1,6 +1,7 @@
 """Tests for persistent immutable lexical generations."""
 
 import hashlib
+import shutil
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -58,6 +59,7 @@ from inference_lab.retrieval import (
     execute_lexical_retrieval,
     open_lexical_generation,
     select_lexical_parent_reference,
+    serialise_lexical_manifest,
 )
 from inference_lab.storage import (
     ChunkSetReader,
@@ -108,6 +110,16 @@ class _FakeRepository:
 
     def open_active_corpus_snapshot(self, corpus_id: CorpusId) -> _FakeSnapshot:
         assert corpus_id == self._snapshot.manifest.corpus_id
+        self.open_count += 1
+        return self._snapshot
+
+    def open_corpus_snapshot(
+        self,
+        corpus_id: CorpusId,
+        corpus_version: CorpusVersionId,
+    ) -> _FakeSnapshot:
+        assert corpus_id == self._snapshot.manifest.corpus_id
+        assert corpus_version == self._snapshot.manifest.corpus_version
         self.open_count += 1
         return self._snapshot
 
@@ -272,6 +284,34 @@ def _seed_metadata_repository(
                     selection=entry.selection,
                 )
             )
+
+
+def _publish_query_fixture(
+    repository: SQLiteMetadataRepository,
+    index_dir: Path,
+    source_manifest: BaselineChunkGenerationManifest,
+) -> CommitCorpusUpdateOutcome:
+    """Publish one complete lexical fixture for query acceptance tests."""
+    _seed_metadata_repository(repository, source_manifest)
+    outcome = build_and_publish_baseline_lexical_generation(
+        repository,
+        index_dir,
+        source_manifest,
+        expected_corpus_version=None,
+    )
+    assert isinstance(outcome, CommitCorpusUpdateOutcome)
+    return outcome
+
+
+def _published_lexical_generation_id(outcome: CommitCorpusUpdateOutcome) -> str:
+    """Return the committed lexical generation identity from one outcome."""
+    lexical_generations = tuple(
+        generation
+        for generation in outcome.manifest.component_generations
+        if generation.component_kind.as_str() == "lexical-index"
+    )
+    assert len(lexical_generations) == 1
+    return lexical_generations[0].generation_id
 
 
 def _rebind_source_manifest(
@@ -559,6 +599,211 @@ def test_pr4_query_returns_empty_completed_result_for_no_matches(
         assert result.failures == ()
     finally:
         repository.close()
+
+
+def test_pr4_query_reopens_published_generation_after_repository_restart(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    database_path = tmp_path / "metadata.sqlite3"
+    index_dir = tmp_path / "indexes"
+    repository = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
+    _publish_query_fixture(repository, index_dir, source_manifest)
+    repository.close()
+
+    reopened = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
+    try:
+        result = execute_lexical_retrieval(
+            reopened,
+            index_dir,
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "alpha",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+
+        assert result.status.value == "completed"
+        assert len(result.hits) == 1
+        assert result.hits[0].candidate.content.startswith("alpha cites")
+    finally:
+        reopened.close()
+
+
+def test_pr4_query_fails_closed_when_referenced_generation_is_missing(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        outcome = _publish_query_fixture(
+            repository, tmp_path / "indexes", source_manifest
+        )
+        generation_dir = (
+            tmp_path / "indexes" / "lexical" / _published_lexical_generation_id(outcome)
+        )
+        shutil.rmtree(generation_dir)
+
+        result = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "alpha",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+
+        assert result.status.value == "failed"
+        assert result.hits == ()
+        assert result.failures[0].category.value == "channel_unavailable"
+    finally:
+        repository.close()
+
+
+def test_pr4_query_fails_closed_when_referenced_generation_is_corrupt(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        outcome = _publish_query_fixture(
+            repository, tmp_path / "indexes", source_manifest
+        )
+        database = (
+            tmp_path
+            / "indexes"
+            / "lexical"
+            / _published_lexical_generation_id(outcome)
+            / "index.sqlite3"
+        )
+        with database.open("ab") as stream:
+            stream.write(b"corruption")
+
+        result = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "alpha",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+
+        assert result.status.value == "failed"
+        assert result.hits == ()
+        assert result.failures[0].category.value == "channel_unavailable"
+        assert "corruption" not in repr(result)
+        assert str(tmp_path) not in repr(result)
+    finally:
+        repository.close()
+
+
+def test_pr4_query_rejects_generation_with_incompatible_reference_metadata(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        outcome = _publish_query_fixture(
+            repository, tmp_path / "indexes", source_manifest
+        )
+        manifest_path = (
+            tmp_path
+            / "indexes"
+            / "lexical"
+            / _published_lexical_generation_id(outcome)
+            / "manifest.json"
+        )
+        with open_lexical_generation(
+            tmp_path / "indexes",
+            _published_lexical_generation_id(outcome),
+        ) as generation:
+            manifest = replace(generation.manifest, format_version="2.0.0")
+        manifest_path.write_bytes(serialise_lexical_manifest(manifest))
+
+        result = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "alpha",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+
+        assert result.status.value == "failed"
+        assert result.hits == ()
+        assert result.failures[0].category.value == "invalid_channel_response"
+    finally:
+        repository.close()
+
+
+def test_pr4_query_rejects_foreign_generation_reference_before_opening_files(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    outcome = build_lexical_generation(tmp_path, source_manifest)
+    reference = replace(
+        LexicalGenerationParticipant(
+            tmp_path,
+            outcome,
+            source_manifest,
+        ).component_generation(),
+        corpus_id=SECOND_CORPUS_ID,
+        state=ComponentGenerationState.READY,
+    )
+    fake_manifest = type(
+        "QueryManifest",
+        (),
+        {
+            "corpus_id": CORPUS_ID,
+            "corpus_version": source_manifest.corpus_version,
+            "component_generations": (reference,),
+        },
+    )()
+    repository = _FakeRepository(
+        _FakeSnapshot(cast(CorpusVersionManifest, fake_manifest))
+    )
+
+    result = execute_lexical_retrieval(
+        cast(MetadataRepository, repository),
+        tmp_path,
+        CORPUS_ID,
+        LexicalQuery(
+            RetrievalQuery(
+                "alpha",
+                source_manifest.corpus_version,
+                RetrievalLimit(5),
+            )
+        ),
+    )
+
+    assert result.status.value == "failed"
+    assert result.hits == ()
+    assert result.failures[0].category.value == "invalid_channel_response"
+    assert repository.open_count == 1
 
 
 def test_pr4_query_profiles_unavailable_generation_without_payloads(

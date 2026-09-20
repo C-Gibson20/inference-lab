@@ -204,6 +204,16 @@ def _execute_lexical_retrieval(
                         or generation.manifest.corpus_version
                         != request.query.corpus_version
                         or generation.manifest.generation_id != reference.generation_id
+                        or generation.manifest.implementation
+                        != reference.implementation
+                        or generation.manifest.format_version
+                        != reference.format_version
+                        or generation.manifest.contract_version
+                        != reference.contract_version
+                        or generation.manifest.configuration_digest
+                        != reference.configuration_digest
+                        or generation.manifest.source_manifest_digest
+                        != reference.source_manifest_digest
                     ):
                         return _failed_result(
                             request,
