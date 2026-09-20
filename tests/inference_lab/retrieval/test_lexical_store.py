@@ -314,6 +314,58 @@ def _published_lexical_generation_id(outcome: CommitCorpusUpdateOutcome) -> str:
     return lexical_generations[0].generation_id
 
 
+def _prepare_changed_manifest(
+    repository: SQLiteMetadataRepository,
+    source_manifest: BaselineChunkGenerationManifest,
+    *,
+    corpus_version: CorpusVersionId,
+) -> BaselineChunkGenerationManifest:
+    """Persist a changed first member while removing the second member."""
+    first_entry = next(
+        entry
+        for entry in source_manifest.entries
+        if b"alpha cites" in entry.selection.canonical_payload
+    )
+    changed_version = DocumentVersionId.generate()
+    _, changed_selection = _selection(
+        "changed lexical content",
+        document_id=first_entry.membership.document_id,
+        document_version_id=changed_version,
+    )
+    changed_membership = CorpusDocumentVersionMembership(
+        corpus_id=source_manifest.corpus_id,
+        document_id=first_entry.membership.document_id,
+        document_version_id=changed_version,
+    )
+    with repository.transaction() as transaction:
+        transaction.add_document_version(
+            DocumentVersion(
+                changed_version,
+                changed_membership.document_id,
+                ContentHash(HashAlgorithm.SHA256, "c" * 64),
+            )
+        )
+        transaction.add_corpus_document_version_membership(changed_membership)
+        transaction.write_chunk_set(
+            ChunkSetWriteRequest(
+                corpus_id=source_manifest.corpus_id,
+                selection=changed_selection,
+            )
+        )
+    return BaselineChunkGenerationManifest(
+        corpus_id=source_manifest.corpus_id,
+        corpus_version=corpus_version,
+        configuration_identity=source_manifest.configuration_identity,
+        generation_id="baseline-query-update",
+        entries=(
+            BaselineChunkGenerationEntry(
+                membership=changed_membership,
+                selection=changed_selection,
+            ),
+        ),
+    )
+
+
 def _rebind_source_manifest(
     source_manifest: BaselineChunkGenerationManifest,
     *,
@@ -804,6 +856,277 @@ def test_pr4_query_rejects_foreign_generation_reference_before_opening_files(
     assert result.hits == ()
     assert result.failures[0].category.value == "invalid_channel_response"
     assert repository.open_count == 1
+
+
+def test_pr4_query_preserves_historical_results_and_applies_update_removal(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    database_path = tmp_path / "metadata.sqlite3"
+    index_dir = tmp_path / "indexes"
+    repository = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
+    try:
+        _publish_query_fixture(repository, index_dir, source_manifest)
+        changed_version = CorpusVersionId.generate()
+        changed_manifest = _prepare_changed_manifest(
+            repository,
+            source_manifest,
+            corpus_version=changed_version,
+        )
+        updated = build_and_publish_baseline_lexical_generation(
+            repository,
+            index_dir,
+            changed_manifest,
+            expected_corpus_version=source_manifest.corpus_version,
+        )
+        assert isinstance(updated, CommitCorpusUpdateOutcome)
+
+        old_alpha = execute_lexical_retrieval(
+            repository,
+            index_dir,
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "alpha",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+        old_changed = execute_lexical_retrieval(
+            repository,
+            index_dir,
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "changed",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+        current_changed = execute_lexical_retrieval(
+            repository,
+            index_dir,
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "changed",
+                    changed_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+        current_removed = execute_lexical_retrieval(
+            repository,
+            index_dir,
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "beta",
+                    changed_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+
+        assert old_alpha.status.value == "completed"
+        assert len(old_alpha.hits) == 1
+        assert old_alpha.hits[0].candidate.content.startswith("alpha cites")
+        assert old_changed.hits == ()
+        assert current_changed.status.value == "completed"
+        assert len(current_changed.hits) == 1
+        assert current_changed.hits[0].candidate.content == "changed lexical content"
+        assert current_removed.status.value == "completed"
+        assert current_removed.hits == ()
+    finally:
+        repository.close()
+
+
+def test_pr4_query_keeps_old_reader_queryable_during_new_publication(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    old_reader: EvidenceResult | None = None
+    new_reader: EvidenceResult | None = None
+    try:
+        index_dir = tmp_path / "indexes"
+        _publish_query_fixture(repository, index_dir, source_manifest)
+        with repository.open_corpus_snapshot(
+            CORPUS_ID,
+            source_manifest.corpus_version,
+        ) as entered_old_snapshot:
+            old_snapshot = _FakeSnapshot(entered_old_snapshot.manifest)
+            changed_version = CorpusVersionId.generate()
+            changed_manifest = _prepare_changed_manifest(
+                repository,
+                source_manifest,
+                corpus_version=changed_version,
+            )
+            updated = build_and_publish_baseline_lexical_generation(
+                repository,
+                index_dir,
+                changed_manifest,
+                expected_corpus_version=source_manifest.corpus_version,
+            )
+            assert isinstance(updated, CommitCorpusUpdateOutcome)
+
+            old_reader = execute_lexical_retrieval(
+                cast(MetadataRepository, _FakeRepository(old_snapshot)),
+                index_dir,
+                CORPUS_ID,
+                LexicalQuery(
+                    RetrievalQuery(
+                        "alpha",
+                        source_manifest.corpus_version,
+                        RetrievalLimit(5),
+                    )
+                ),
+            )
+            new_reader = execute_lexical_retrieval(
+                repository,
+                index_dir,
+                CORPUS_ID,
+                LexicalQuery(
+                    RetrievalQuery(
+                        "changed",
+                        changed_version,
+                        RetrievalLimit(5),
+                    )
+                ),
+            )
+
+        assert old_reader is not None
+        assert new_reader is not None
+        assert old_reader.status.value == "completed"
+        assert len(old_reader.hits) == 1
+        assert old_reader.hits[0].candidate.content.startswith("alpha cites")
+        assert new_reader.status.value == "completed"
+        assert len(new_reader.hits) == 1
+        assert new_reader.hits[0].candidate.content == "changed lexical content"
+    finally:
+        repository.close()
+
+
+def test_pr4_query_isolates_two_corpora_with_overlapping_document_versions(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    shared_entry = next(
+        entry
+        for entry in source_manifest.entries
+        if b"alpha cites" in entry.selection.canonical_payload
+    )
+    unique_document_id = DocumentId.generate()
+    unique_version_id = DocumentVersionId.generate()
+    _, unique_selection = _selection(
+        "second corpus only",
+        document_id=unique_document_id,
+        document_version_id=unique_version_id,
+    )
+    second_manifest = BaselineChunkGenerationManifest(
+        corpus_id=SECOND_CORPUS_ID,
+        corpus_version=CorpusVersionId.generate(),
+        configuration_identity=source_manifest.configuration_identity,
+        generation_id="baseline-second-query-corpus",
+        entries=tuple(
+            sorted(
+                (
+                    BaselineChunkGenerationEntry(
+                        membership=CorpusDocumentVersionMembership(
+                            corpus_id=SECOND_CORPUS_ID,
+                            document_id=shared_entry.membership.document_id,
+                            document_version_id=shared_entry.membership.document_version_id,
+                        ),
+                        selection=shared_entry.selection,
+                    ),
+                    BaselineChunkGenerationEntry(
+                        membership=CorpusDocumentVersionMembership(
+                            corpus_id=SECOND_CORPUS_ID,
+                            document_id=unique_document_id,
+                            document_version_id=unique_version_id,
+                        ),
+                        selection=unique_selection,
+                    ),
+                ),
+                key=lambda entry: entry.key(),
+            )
+        ),
+    )
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        _publish_query_fixture(repository, tmp_path / "indexes", source_manifest)
+        with repository.transaction() as transaction:
+            transaction.add_document(DocumentIdentity(unique_document_id))
+            transaction.add_document_version(
+                DocumentVersion(
+                    unique_version_id,
+                    unique_document_id,
+                    ContentHash(HashAlgorithm.SHA256, "2" * 64),
+                )
+            )
+        _seed_metadata_repository(repository, second_manifest, seed_catalogue=False)
+        second = build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            second_manifest,
+            expected_corpus_version=None,
+        )
+        assert isinstance(second, CommitCorpusUpdateOutcome)
+
+        first_only = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "second corpus only",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+        second_only = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            SECOND_CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "second corpus only",
+                    second_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+        second_beta = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            SECOND_CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "beta",
+                    second_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+        )
+
+        assert first_only.status.value == "completed"
+        assert first_only.hits == ()
+        assert second_only.status.value == "completed"
+        assert len(second_only.hits) == 1
+        assert second_only.hits[0].candidate.content == "second corpus only"
+        assert second_beta.status.value == "completed"
+        assert second_beta.hits == ()
+    finally:
+        repository.close()
 
 
 def test_pr4_query_profiles_unavailable_generation_without_payloads(
