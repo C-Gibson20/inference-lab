@@ -71,6 +71,25 @@ from inference_lab.retrieval.lexical_store import (
     open_lexical_generation,
     select_lexical_parent_reference,
 )
+from inference_lab.retrieval.metadata_filters import (
+    CURRENT_METADATA_FILTER_REGISTRY,
+    MAX_METADATA_FILTER_DEPTH,
+    MAX_METADATA_FILTER_NODES,
+    METADATA_FILTER_REGISTRY_VERSION,
+    InvalidMetadataFilterError,
+    MetadataCardinality,
+    MetadataFieldDescriptor,
+    MetadataFieldType,
+    MetadataFilterErrorCategory,
+    MetadataFilterOperator,
+    MetadataFilterRegistry,
+    MetadataFilterValidation,
+    MetadataMissingPolicy,
+    MetadataValue,
+    MetadataValues,
+    evaluate_metadata_filter,
+    validate_metadata_filter,
+)
 from inference_lab.retrieval.query import RetrievalQuery
 from inference_lab.retrieval.results import (
     EvidenceResult,
@@ -91,6 +110,7 @@ from inference_lab.retrieval.versioning import (
 )
 
 __all__ = [
+    "CURRENT_METADATA_FILTER_REGISTRY",
     "CURRENT_RETRIEVAL_SCHEMA_VERSION",
     "LEXICAL_COMPONENT_KIND",
     "LEXICAL_CONTRACT_VERSION",
@@ -99,6 +119,9 @@ __all__ = [
     "LEXICAL_IMPLEMENTATION",
     "LEXICAL_MANIFEST_SCHEMA_VERSION",
     "LEXICAL_SCORE_LABEL",
+    "MAX_METADATA_FILTER_DEPTH",
+    "MAX_METADATA_FILTER_NODES",
+    "METADATA_FILTER_REGISTRY_VERSION",
     "SUPPORTED_RETRIEVAL_SCHEMA_VERSIONS",
     "AllFilter",
     "AnyFilter",
@@ -114,6 +137,7 @@ __all__ = [
     "FilterScalar",
     "InvalidLexicalContractError",
     "InvalidLexicalSerialisationError",
+    "InvalidMetadataFilterError",
     "InvalidRetrievalContractError",
     "InvalidRetrievalResultError",
     "InvalidRetrievalSerialisationError",
@@ -132,6 +156,16 @@ __all__ = [
     "LexicalQuery",
     "LexicalRetrievalRequest",
     "LexicalSourceLink",
+    "MetadataCardinality",
+    "MetadataFieldDescriptor",
+    "MetadataFieldType",
+    "MetadataFilterErrorCategory",
+    "MetadataFilterOperator",
+    "MetadataFilterRegistry",
+    "MetadataFilterValidation",
+    "MetadataMissingPolicy",
+    "MetadataValue",
+    "MetadataValues",
     "MissingFilter",
     "NotFilter",
     "OneOfFilter",
@@ -152,6 +186,7 @@ __all__ = [
     "deserialise_lexical_manifest",
     "deserialise_query",
     "escape_fts5_literal",
+    "evaluate_metadata_filter",
     "execute_lexical_retrieval",
     "expose_bm25_score",
     "extract_identifiers",
@@ -163,4 +198,5 @@ __all__ = [
     "serialise_evidence_result",
     "serialise_lexical_manifest",
     "serialise_query",
+    "validate_metadata_filter",
 ]
