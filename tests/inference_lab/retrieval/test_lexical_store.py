@@ -20,16 +20,22 @@ from inference_lab.ingest import (
     ParsedDocument,
     SourceSpan,
     StructuralBlock,
+    build_and_publish_baseline_lexical_generation,
     build_chunk_set,
     generate_source_span_id,
     map_chunk_set,
 )
 from inference_lab.provenance import (
+    ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     CorpusVersionId,
     DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
     DocumentVersionId,
+    HashAlgorithm,
 )
 from inference_lab.retrieval import (
     LexicalError,
@@ -43,11 +49,15 @@ from inference_lab.retrieval import (
 from inference_lab.storage import (
     ChunkSetReader,
     ChunkSetSelectionRecord,
+    ChunkSetWriteRequest,
+    CommitCorpusUpdateOutcome,
     ComponentGenerationState,
     ComponentKind,
     CorpusVersionManifest,
     MetadataRepository,
+    NoCorpusChangeOutcome,
 )
+from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
 CORPUS_VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000002")
@@ -211,6 +221,31 @@ def _source_manifest() -> tuple[BaselineChunkGenerationManifest, ChunkSet, Chunk
     return manifest, first, second
 
 
+def _seed_metadata_repository(
+    repository: SQLiteMetadataRepository,
+    source_manifest: BaselineChunkGenerationManifest,
+) -> None:
+    """Persist the catalogue and exact chunk selections used by publication."""
+    with repository.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(CORPUS_ID, "test corpus"))
+        for ordinal, entry in enumerate(source_manifest.entries, start=1):
+            transaction.add_document(DocumentIdentity(entry.membership.document_id))
+            transaction.add_document_version(
+                DocumentVersion(
+                    entry.membership.document_version_id,
+                    entry.membership.document_id,
+                    ContentHash(HashAlgorithm.SHA256, str(ordinal).zfill(64)),
+                )
+            )
+            transaction.add_corpus_document_version_membership(entry.membership)
+            transaction.write_chunk_set(
+                ChunkSetWriteRequest(
+                    corpus_id=source_manifest.corpus_id,
+                    selection=entry.selection,
+                )
+            )
+
+
 def test_full_build_publishes_restartable_generation_with_source_links(
     tmp_path: Path,
 ) -> None:
@@ -248,6 +283,93 @@ def test_full_build_publishes_restartable_generation_with_source_links(
 
     reopened = open_lexical_generation(tmp_path, outcome.manifest.generation_id)
     reopened.close()
+
+
+def test_pr3_build_and_publish_uses_one_atomic_phase5_path(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    index_dir = tmp_path / "indexes"
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        result = build_and_publish_baseline_lexical_generation(
+            repository,
+            index_dir,
+            source_manifest,
+            expected_corpus_version=None,
+        )
+
+        assert isinstance(result, CommitCorpusUpdateOutcome)
+        with repository.open_active_corpus_snapshot(CORPUS_ID) as snapshot:
+            assert snapshot.version.corpus_version == CORPUS_VERSION_ID
+            assert snapshot.manifest.document_memberships == tuple(
+                entry.membership for entry in source_manifest.entries
+            )
+            assert tuple(
+                generation.component_kind.as_str()
+                for generation in snapshot.manifest.component_generations
+            ) == ("chunks", "lexical-index")
+            assert all(
+                generation.state is ComponentGenerationState.READY
+                for generation in snapshot.manifest.component_generations
+            )
+    finally:
+        repository.close()
+
+    reopened = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+    )
+    try:
+        with reopened.open_active_corpus_snapshot(CORPUS_ID) as snapshot:
+            assert snapshot.version.corpus_version == CORPUS_VERSION_ID
+            assert len(snapshot.manifest.component_generations) == 2
+    finally:
+        reopened.close()
+
+
+def test_pr3_build_and_publish_preserves_no_change_on_exact_parent_replay(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        first = build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+            expected_corpus_version=None,
+        )
+        assert isinstance(first, CommitCorpusUpdateOutcome)
+
+        replay_manifest = BaselineChunkGenerationManifest(
+            corpus_id=source_manifest.corpus_id,
+            corpus_version=CorpusVersionId.generate(),
+            configuration_identity=source_manifest.configuration_identity,
+            generation_id="baseline-replay-generation",
+            entries=source_manifest.entries,
+        )
+        replay = build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            replay_manifest,
+            expected_corpus_version=source_manifest.corpus_version,
+        )
+
+        assert isinstance(replay, NoCorpusChangeOutcome)
+        with repository.open_active_corpus_snapshot(CORPUS_ID) as snapshot:
+            assert snapshot.version.corpus_version == source_manifest.corpus_version
+    finally:
+        repository.close()
 
 
 def test_stor03_reference_and_validator_require_exact_reopenable_generation(

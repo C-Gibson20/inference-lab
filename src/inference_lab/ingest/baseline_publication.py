@@ -1,7 +1,10 @@
 """Register, seal, and publish baseline component generations."""
 
+from __future__ import annotations
+
 from dataclasses import replace
-from typing import Protocol, TypeAlias
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 from inference_lab.ingest.baseline_contracts import BaselineFailureCategory
 from inference_lab.ingest.baseline_generation import (
@@ -16,6 +19,7 @@ from inference_lab.storage import (
     ChunkSetReader,
     CommitCorpusUpdateOutcome,
     ComponentGenerationValidator,
+    MetadataRepository,
     MetadataTransaction,
     NoCorpusChangeOutcome,
 )
@@ -24,6 +28,9 @@ from inference_lab.storage.versioning import (
     ComponentGenerationState,
     ComponentKind,
 )
+
+if TYPE_CHECKING:
+    from inference_lab.retrieval.lexical import LexicalIndexConfiguration
 
 BaselinePublicationOutcome: TypeAlias = (
     CommitCorpusUpdateOutcome | NoCorpusChangeOutcome
@@ -231,6 +238,66 @@ def publish_baseline_lexical_generations(
         parent_stage_id=parent_stage_id,
         profiling_identity=profiling_identity,
     )
+
+
+def build_and_publish_baseline_lexical_generation(
+    repository: MetadataRepository,
+    index_dir: Path,
+    manifest: BaselineChunkGenerationManifest,
+    *,
+    expected_corpus_version: CorpusVersionId | None,
+    configuration: LexicalIndexConfiguration | None = None,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
+) -> BaselinePublicationOutcome:
+    """Build outside metadata, then publish chunks and lexical state atomically."""
+    if not callable(getattr(repository, "transaction", None)):
+        raise TypeError("repository must provide metadata transactions.")
+    if not isinstance(index_dir, Path):
+        raise TypeError("index_dir must be a Path.")
+    if not isinstance(manifest, BaselineChunkGenerationManifest):
+        raise TypeError("manifest must be a BaselineChunkGenerationManifest.")
+
+    from inference_lab.retrieval import (
+        LexicalGenerationParticipant,
+        build_lexical_generation_for_corpus_update,
+    )
+
+    outcome = build_lexical_generation_for_corpus_update(
+        index_dir,
+        manifest,
+        repository,
+        expected_corpus_version=expected_corpus_version,
+        configuration=configuration,
+    )
+    participant = LexicalGenerationParticipant(index_dir, outcome, manifest)
+
+    published: BaselinePublicationOutcome | None = None
+    with repository.transaction() as transaction:
+        begin_baseline_lexical_corpus_update(
+            transaction,
+            manifest.corpus_id,
+            manifest.corpus_version,
+            expected_corpus_version=expected_corpus_version,
+        )
+        for entry in manifest.entries:
+            transaction.add_corpus_update_document_membership(
+                manifest.corpus_id,
+                manifest.corpus_version,
+                entry.membership,
+            )
+        published = publish_baseline_lexical_generations(
+            transaction,
+            repository,
+            manifest,
+            participant,
+            profiling=profiling,
+            parent_stage_id=parent_stage_id,
+            profiling_identity=profiling_identity,
+        )
+    assert published is not None
+    return published
 
 
 def publish_baseline_chunk_generation(
