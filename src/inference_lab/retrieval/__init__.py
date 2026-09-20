@@ -66,7 +66,9 @@ from inference_lab.retrieval.lexical_store import (
     LexicalMemberSelection,
     LexicalSourceLink,
     build_lexical_generation,
+    build_lexical_generation_for_corpus_update,
     open_lexical_generation,
+    select_lexical_parent_reference,
 )
 from inference_lab.retrieval.query import RetrievalQuery
 from inference_lab.retrieval.results import (
@@ -143,6 +145,7 @@ __all__ = [
     "analyse_terms",
     "build_fts5_query",
     "build_lexical_generation",
+    "build_lexical_generation_for_corpus_update",
     "derive_lexical_generation_id",
     "deserialise_evidence_result",
     "deserialise_lexical_manifest",
@@ -154,6 +157,7 @@ __all__ = [
     "lexical_order_key",
     "lexical_score_label",
     "open_lexical_generation",
+    "select_lexical_parent_reference",
     "serialise_evidence_result",
     "serialise_lexical_manifest",
     "serialise_query",

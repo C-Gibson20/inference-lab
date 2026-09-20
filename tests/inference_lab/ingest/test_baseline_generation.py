@@ -8,14 +8,17 @@ import pytest
 
 from inference_lab.ingest import (
     BASELINE_CHUNK_COMPONENT_KIND,
+    BASELINE_LEXICAL_REQUIRED_COMPONENT_KINDS,
     BaselineChunkGenerationEntry,
     BaselineChunkGenerationManifest,
     BaselineChunkGenerationValidator,
     BaselineFailureCategory,
     BaselineGenerationValidationError,
     begin_baseline_corpus_update,
+    begin_baseline_lexical_corpus_update,
     publish_baseline_chunk_generation,
     publish_baseline_generations,
+    publish_baseline_lexical_generations,
 )
 from inference_lab.provenance import (
     ConfigurationIdentity,
@@ -38,6 +41,7 @@ from inference_lab.storage import (
     ChunkTokeniserIdentityRecord,
     ComponentGenerationReference,
     ComponentGenerationState,
+    ComponentKind,
     MetadataTransaction,
     StorageConflictError,
 )
@@ -280,8 +284,16 @@ def test_validator_rejects_generation_reference_mismatch() -> None:
 class _FakePublicationTransaction:
     """Capture lifecycle calls while exposing exact selections to the validator."""
 
-    def __init__(self, manifest: BaselineChunkGenerationManifest) -> None:
+    def __init__(
+        self,
+        manifest: BaselineChunkGenerationManifest,
+        *,
+        expected_required_component_kinds: tuple[ComponentKind, ...] = (
+            BASELINE_CHUNK_COMPONENT_KIND,
+        ),
+    ) -> None:
         self.manifest = manifest
+        self.expected_required_component_kinds = expected_required_component_kinds
         self.calls: list[str] = []
         self.selections = {
             entry.membership.document_version_id: entry.selection
@@ -345,8 +357,38 @@ class _FakePublicationTransaction:
     ) -> object:
         del corpus_id, corpus_version, expected_corpus_version
         self.calls.append("begin")
-        assert tuple(required_component_kinds) == (BASELINE_CHUNK_COMPONENT_KIND,)
+        assert tuple(required_component_kinds) == self.expected_required_component_kinds
         return object()
+
+
+class _FakeLexicalParticipant:
+    """Expose a valid lexical-shaped participant for publication tests."""
+
+    def __init__(self, manifest: BaselineChunkGenerationManifest) -> None:
+        self._generation = replace(
+            manifest.component_generation(),
+            component_kind=ComponentKind("lexical-index"),
+            generation_id="lexical-generation",
+            implementation="sqlite-fts5",
+        )
+
+    def component_generation(self) -> ComponentGenerationReference:
+        return self._generation
+
+    def build_validator(
+        self,
+        reader: ChunkSetReader,
+    ) -> "_FakeLexicalParticipant":
+        del reader
+        return self
+
+    def validate_component_generation(
+        self,
+        generation: ComponentGenerationReference,
+        document_memberships: tuple[CorpusDocumentVersionMembership, ...],
+    ) -> bool:
+        del document_memberships
+        return generation == self._generation
 
 
 def test_publication_registers_seals_and_commits_in_order() -> None:
@@ -375,6 +417,32 @@ def test_generic_publication_seam_accepts_chunk_manifest_participant() -> None:
 
     assert result is transaction.commit_result
     assert transaction.calls == ["register", "seal", "commit"]
+
+
+def test_phase5_publication_requires_chunks_and_lexical_generation_together() -> None:
+    manifest, _ = _manifest()
+    transaction = _FakePublicationTransaction(
+        manifest,
+        expected_required_component_kinds=BASELINE_LEXICAL_REQUIRED_COMPONENT_KINDS,
+    )
+    lexical_participant = _FakeLexicalParticipant(manifest)
+
+    begin_result = begin_baseline_lexical_corpus_update(
+        cast(MetadataTransaction, transaction),
+        manifest.corpus_id,
+        manifest.corpus_version,
+        expected_corpus_version=None,
+    )
+    result = publish_baseline_lexical_generations(
+        cast(MetadataTransaction, transaction),
+        cast(ChunkSetReader, transaction),
+        manifest,
+        lexical_participant,
+    )
+
+    assert begin_result is not None
+    assert result is transaction.commit_result
+    assert transaction.calls == ["begin", "register", "register", "seal", "commit"]
 
 
 def test_publication_preserves_storage_conflict_category() -> None:

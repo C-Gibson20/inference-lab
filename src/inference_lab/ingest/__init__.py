@@ -87,12 +87,17 @@ from inference_lab.ingest.baseline_parse import (
 )
 from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.ingest.baseline_publication import (
+    BASELINE_LEXICAL_COMPONENT_KIND,
+    BASELINE_LEXICAL_REQUIRED_COMPONENT_KINDS,
     BaselineChunkPublicationOutcome,
     BaselineGenerationParticipant,
     BaselinePublicationOutcome,
     begin_baseline_corpus_update,
+    begin_baseline_lexical_corpus_update,
+    build_and_publish_baseline_lexical_generation,
     publish_baseline_chunk_generation,
     publish_baseline_generations,
+    publish_baseline_lexical_generations,
 )
 from inference_lab.ingest.baseline_serialisation import (
     baseline_ingest_summary_payload,
@@ -299,6 +304,8 @@ __all__ = [
     "BASELINE_CHUNK_CONTRACT_VERSION",
     "BASELINE_CHUNK_FORMAT_VERSION",
     "BASELINE_CHUNK_IMPLEMENTATION",
+    "BASELINE_LEXICAL_COMPONENT_KIND",
+    "BASELINE_LEXICAL_REQUIRED_COMPONENT_KINDS",
     "CHUNK_PAYLOAD_SCHEMA_VERSION",
     "CURRENT_CHUNKER_VERSION",
     "CURRENT_DISCOVERY_POLICY",
@@ -473,6 +480,8 @@ __all__ = [
     "baseline_manifest_from_record",
     "baseline_manifest_to_record",
     "begin_baseline_corpus_update",
+    "begin_baseline_lexical_corpus_update",
+    "build_and_publish_baseline_lexical_generation",
     "build_canonical_source_boundary_map",
     "build_chunk_set",
     "build_chunking_outcome",
@@ -509,6 +518,7 @@ __all__ = [
     "prepare_text",
     "publish_baseline_chunk_generation",
     "publish_baseline_generations",
+    "publish_baseline_lexical_generations",
     "read_verified_source",
     "reconstruct_parse_outcome",
     "resolve_discovered_source_identity",
