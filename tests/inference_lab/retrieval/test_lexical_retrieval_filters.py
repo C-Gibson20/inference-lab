@@ -1,5 +1,7 @@
 """Tests for pre-limit metadata filtering of ranked lexical matches."""
 
+import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -7,6 +9,13 @@ from typing import cast
 import pytest
 
 import inference_lab.retrieval.lexical_retrieval as lexical_retrieval
+from inference_lab.profiling import (
+    FailureEvent,
+    FanoutSink,
+    ProfilingContext,
+    ProfilingSink,
+    StageTiming,
+)
 from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
@@ -35,6 +44,7 @@ from inference_lab.storage import (
     CorpusSnapshot,
     CorruptStorageError,
     MetadataRepository,
+    RepositoryUnavailableError,
 )
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
@@ -121,6 +131,47 @@ class _Repository:
 
     def open_corpus_snapshot(self, *_: object) -> _SnapshotContext:
         return self.snapshot
+
+
+class _CollectingSink:
+    """Collect profiling records in emission order for orchestration tests."""
+
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
+
+
+def _profiling(sink: object, *, run_id: str = "run-filter-profile") -> ProfilingContext:
+    """Build a deterministic profiling context for one orchestration test."""
+    return ProfilingContext.create(
+        run_id=run_id,
+        sink=cast(ProfilingSink, sink),
+        clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 20, tzinfo=UTC),
+    )
+
+
+def _metadata_completions(sink: _CollectingSink) -> list[StageTiming]:
+    """Return terminal timing records for the metadata stage."""
+    return [
+        record
+        for record in sink.records
+        if isinstance(record, StageTiming)
+        and record.event == "stage_completed"
+        and record.pipeline_stage == "metadata_filter"
+    ]
+
+
+def _metadata_failures(sink: _CollectingSink) -> list[FailureEvent]:
+    """Return failure records emitted by the metadata stage."""
+    return [
+        record
+        for record in sink.records
+        if isinstance(record, FailureEvent)
+        and record.pipeline_stage == "metadata_filter"
+    ]
 
 
 def _candidate(ordinal: int) -> LexicalIndexedChunk:
@@ -246,6 +297,311 @@ def test_execute_filtered_retrieval_uses_pinned_generation_and_preserves_hits(
     assert tuple(hit.contributions[0].raw_score for hit in result.hits) == (2.0, 3.0)
     assert generation.visited == 4
     assert snapshot.closed is True
+
+
+def test_filtered_execution_profiles_exact_metadata_counts_and_parentage(
+    monkeypatch,
+) -> None:
+    candidates = tuple(_candidate(ordinal) for ordinal in range(1, 5))
+    generation = _GenerationContext(
+        tuple((candidate, float(index)) for index, candidate in enumerate(candidates)),
+        "generation-1",
+    )
+    snapshot = _SnapshotContext("generation-1")
+    metadata = {
+        candidate.record_id: {"language": "fr" if index < 2 else "en"}
+        for index, candidate in enumerate(candidates)
+    }
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "open_lexical_generation",
+        lambda *_: generation,
+    )
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "resolve_lexical_candidate_metadata",
+        lambda _snapshot, candidate: SimpleNamespace(
+            values=metadata[candidate.record_id]
+        ),
+    )
+    sink = _CollectingSink()
+    profiling = ProfilingContext.create(
+        run_id="run-filter-profile",
+        sink=sink,
+        clock=iter(range(0, 40_000_000, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 20, tzinfo=UTC),
+    )
+
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _Repository(snapshot)),
+        Path("indexes"),
+        CORPUS_ID,
+        _query(limit=2),
+        profiling=profiling,
+        profiling_identity="filtered",
+    )
+
+    assert result.status is ResultStatus.COMPLETED
+    completions = [
+        record
+        for record in sink.records
+        if isinstance(record, StageTiming) and record.event == "stage_completed"
+    ]
+    assert [
+        (
+            record.pipeline_stage,
+            record.status,
+            record.items_processed,
+            record.records_emitted,
+            record.stage_id,
+            record.parent_stage_id,
+        )
+        for record in completions
+    ] == [
+        (
+            "metadata_filter",
+            "completed",
+            4,
+            2,
+            "run-filter-profile:metadata_filter:filtered",
+            "run-filter-profile:lexical_retrieval:filtered",
+        ),
+        (
+            "lexical_retrieval",
+            "completed",
+            None,
+            2,
+            "run-filter-profile:lexical_retrieval:filtered",
+            None,
+        ),
+    ]
+    assert not [record for record in sink.records if isinstance(record, FailureEvent)]
+
+
+def test_profiled_filtered_empty_result_records_evaluated_and_retained_counts(
+    monkeypatch,
+) -> None:
+    candidate = _candidate(1)
+    generation = _GenerationContext(((candidate, 1.0),), "generation-1")
+    snapshot = _SnapshotContext("generation-1")
+    monkeypatch.setattr(
+        lexical_retrieval, "open_lexical_generation", lambda *_: generation
+    )
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "resolve_lexical_candidate_metadata",
+        lambda _snapshot, _candidate: SimpleNamespace(values={"language": "fr"}),
+    )
+    sink = _CollectingSink()
+
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _Repository(snapshot)),
+        Path("indexes"),
+        CORPUS_ID,
+        _query(limit=1),
+        profiling=_profiling(sink),
+    )
+
+    assert result.status is ResultStatus.COMPLETED
+    assert result.hits == ()
+    assert _metadata_completions(sink)[0].items_processed == 1
+    assert _metadata_completions(sink)[0].records_emitted == 0
+    assert _metadata_failures(sink) == []
+
+
+def test_profiled_invalid_filter_is_input_failure_without_private_payloads() -> None:
+    query_marker = "private-query-marker"
+    filter_marker = "private-filter-marker"
+    query = _query(
+        text=query_marker,
+        filter_expression=ExactFilter("assignee", filter_marker),
+    )
+    sink = _CollectingSink()
+
+    with pytest.raises(InvalidMetadataFilterError) as raised:
+        lexical_retrieval.execute_lexical_retrieval(
+            cast(MetadataRepository, _Repository(_SnapshotContext("generation-1"))),
+            Path("private-index-path"),
+            CORPUS_ID,
+            query,
+            profiling=_profiling(sink),
+        )
+
+    assert raised.value.category.value == "unsupported_field"
+    assert _metadata_completions(sink)[0].status == "failed"
+    assert _metadata_completions(sink)[0].items_processed is None
+    assert _metadata_completions(sink)[0].records_emitted is None
+    failures = _metadata_failures(sink)
+    assert len(failures) == 1
+    assert failures[0].failure_category == "input"
+    assert failures[0].failure_code == "invalid_metadata_filter"
+    assert query_marker not in repr(sink.records)
+    assert filter_marker not in repr(sink.records)
+    assert "private-index-path" not in repr(sink.records)
+
+
+def test_profiled_unavailable_dependency_returns_safe_failed_result() -> None:
+    query = _query(
+        text="private-query-marker",
+        filter_expression=ExactFilter("language", "private-filter-marker"),
+    )
+
+    class _UnavailableRepository:
+        def open_corpus_snapshot(self, *_: object) -> None:
+            raise RepositoryUnavailableError()
+
+    sink = _CollectingSink()
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _UnavailableRepository()),
+        Path("private-index-path"),
+        CORPUS_ID,
+        query,
+        profiling=_profiling(sink),
+    )
+
+    assert result.status is ResultStatus.FAILED
+    assert result.hits == ()
+    assert _metadata_completions(sink)[0].status == "failed"
+    assert _metadata_completions(sink)[0].items_processed is None
+    assert _metadata_completions(sink)[0].records_emitted is None
+    failures = _metadata_failures(sink)
+    assert len(failures) == 1
+    assert failures[0].failure_category == "dependency"
+    assert failures[0].failure_code == "metadata_dependency_unavailable"
+    assert "private-query-marker" not in repr(sink.records)
+    assert "private-filter-marker" not in repr(sink.records)
+    assert "private-index-path" not in repr(sink.records)
+
+
+def test_profiled_corrupt_metadata_is_internal_failure_without_payloads(
+    monkeypatch,
+) -> None:
+    candidate = _candidate(1)
+    generation = _GenerationContext(((candidate, 1.0),), "generation-1")
+    snapshot = _SnapshotContext("generation-1")
+    raw_error_marker = "private-corruption-details"
+    monkeypatch.setattr(
+        lexical_retrieval, "open_lexical_generation", lambda *_: generation
+    )
+
+    def raise_corruption(_snapshot: object, _candidate: object) -> object:
+        raise CorruptStorageError()
+
+    monkeypatch.setattr(
+        lexical_retrieval, "resolve_lexical_candidate_metadata", raise_corruption
+    )
+    sink = _CollectingSink()
+
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _Repository(snapshot)),
+        Path("private-index-path"),
+        CORPUS_ID,
+        _query(text=raw_error_marker),
+        profiling=_profiling(sink),
+    )
+
+    assert result.status is ResultStatus.FAILED
+    assert _metadata_completions(sink)[0].status == "failed"
+    failure = _metadata_failures(sink)[0]
+    assert failure.failure_category == "internal"
+    assert failure.failure_code == "metadata_filter_failed"
+    assert raw_error_marker not in repr(sink.records)
+    assert "private-index-path" not in repr(sink.records)
+
+
+def test_profiled_cancellation_preserves_primary_cancellation(monkeypatch) -> None:
+    candidate = _candidate(1)
+    generation = _GenerationContext(((candidate, 1.0),), "generation-1")
+    snapshot = _SnapshotContext("generation-1")
+
+    def cancel(_request: LexicalQuery) -> None:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(generation, "iter_ranked_matches", cancel)
+    monkeypatch.setattr(
+        lexical_retrieval, "open_lexical_generation", lambda *_: generation
+    )
+    sink = _CollectingSink()
+
+    with pytest.raises(asyncio.CancelledError):
+        lexical_retrieval.execute_lexical_retrieval(
+            cast(MetadataRepository, _Repository(snapshot)),
+            Path("indexes"),
+            CORPUS_ID,
+            _query(),
+            profiling=_profiling(sink),
+        )
+
+    completion = _metadata_completions(sink)[0]
+    assert completion.status == "cancelled"
+    assert completion.items_processed is None
+    assert completion.records_emitted is None
+    failure = _metadata_failures(sink)[0]
+    assert failure.status == "cancelled"
+    assert failure.failure_category == "cancelled"
+    assert failure.failure_code == "metadata_filter_cancelled"
+
+
+def test_profiled_unexpected_failure_preserves_primary_exception(monkeypatch) -> None:
+    candidate = _candidate(1)
+    generation = _GenerationContext(((candidate, 1.0),), "generation-1")
+    snapshot = _SnapshotContext("generation-1")
+    primary = RuntimeError("private-raw-exception-marker")
+    monkeypatch.setattr(
+        lexical_retrieval, "open_lexical_generation", lambda *_: generation
+    )
+
+    def raise_unexpected(_snapshot: object, _candidate: object) -> object:
+        raise primary
+
+    monkeypatch.setattr(
+        lexical_retrieval, "resolve_lexical_candidate_metadata", raise_unexpected
+    )
+    sink = _CollectingSink()
+
+    with pytest.raises(RuntimeError) as raised:
+        lexical_retrieval.execute_lexical_retrieval(
+            cast(MetadataRepository, _Repository(snapshot)),
+            Path("indexes"),
+            CORPUS_ID,
+            _query(),
+            profiling=_profiling(sink),
+        )
+
+    assert raised.value is primary
+    failure = _metadata_failures(sink)[0]
+    assert failure.failure_category == "internal"
+    assert failure.failure_code == "metadata_filter_failed"
+    assert "private-raw-exception-marker" not in repr(sink.records)
+
+
+def test_profiled_metadata_stage_reaches_every_fanout_sink(monkeypatch) -> None:
+    candidate = _candidate(1)
+    generation = _GenerationContext(((candidate, 1.0),), "generation-1")
+    snapshot = _SnapshotContext("generation-1")
+    monkeypatch.setattr(
+        lexical_retrieval, "open_lexical_generation", lambda *_: generation
+    )
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "resolve_lexical_candidate_metadata",
+        lambda _snapshot, _candidate: SimpleNamespace(values={"language": "en"}),
+    )
+    first = _CollectingSink()
+    second = _CollectingSink()
+    sink = FanoutSink(first, second)
+
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _Repository(snapshot)),
+        Path("indexes"),
+        CORPUS_ID,
+        _query(limit=1),
+        profiling=_profiling(sink, run_id="run-filter-fanout"),
+    )
+
+    assert result.status is ResultStatus.COMPLETED
+    assert _metadata_completions(first)[0].records_emitted == 1
+    assert _metadata_completions(second)[0].records_emitted == 1
 
 
 def test_execute_filtered_retrieval_returns_successful_empty_result(
@@ -381,6 +737,7 @@ def test_orchestration_accepts_original_filtered_retrieval_query(monkeypatch) ->
         _corpus_id: CorpusId,
         captured_query: RetrievalQuery,
         lexical_request: LexicalQuery,
+        **_: object,
     ) -> EvidenceResult:
         captured["query"] = captured_query
         captured["lexical_request"] = lexical_request
