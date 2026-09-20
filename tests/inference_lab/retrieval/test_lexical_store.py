@@ -452,6 +452,79 @@ def test_pr4_query_executes_terms_phrase_and_identifier_modes_from_pinned_snapsh
         repository.close()
 
 
+def test_pr4_query_profiles_success_with_unknown_candidate_count(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    sink = _CollectingSink()
+    profiling = ProfilingContext.create(
+        run_id="run-lexical-retrieval",
+        sink=sink,
+        clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+            expected_corpus_version=None,
+        )
+
+        result = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    "alpha",
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+            profiling=profiling,
+            parent_stage_id="run-lexical-retrieval:request",
+            profiling_identity="terms",
+        )
+
+        assert result.status.value == "completed"
+        completions = [
+            record
+            for record in sink.records
+            if isinstance(record, StageTiming) and record.event == "stage_completed"
+        ]
+        assert [
+            (
+                record.module,
+                record.pipeline_stage,
+                record.status,
+                record.items_processed,
+                record.records_emitted,
+                record.parent_stage_id,
+            )
+            for record in completions
+        ] == [
+            (
+                "inference_lab.retrieval",
+                "lexical_retrieval",
+                "completed",
+                None,
+                1,
+                "run-lexical-retrieval:request",
+            )
+        ]
+        assert not [
+            record for record in sink.records if isinstance(record, FailureEvent)
+        ]
+    finally:
+        repository.close()
+
+
 def test_pr4_query_returns_empty_completed_result_for_no_matches(
     tmp_path: Path,
 ) -> None:
@@ -484,6 +557,67 @@ def test_pr4_query_returns_empty_completed_result_for_no_matches(
         assert result.status.value == "completed"
         assert result.hits == ()
         assert result.failures == ()
+    finally:
+        repository.close()
+
+
+def test_pr4_query_profiles_unavailable_generation_without_payloads(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    sink = _CollectingSink()
+    profiling = ProfilingContext.create(
+        run_id="run-lexical-retrieval-failure",
+        sink=sink,
+        clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+    marker = "private-lexical-query-marker"
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        result = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            LexicalQuery(
+                RetrievalQuery(
+                    marker,
+                    source_manifest.corpus_version,
+                    RetrievalLimit(5),
+                )
+            ),
+            profiling=profiling,
+            profiling_identity="unavailable",
+        )
+
+        assert result.status.value == "failed"
+        assert result.hits == ()
+        completions = [
+            record
+            for record in sink.records
+            if isinstance(record, StageTiming) and record.event == "stage_completed"
+        ]
+        assert [
+            (
+                record.pipeline_stage,
+                record.status,
+                record.items_processed,
+                record.records_emitted,
+            )
+            for record in completions
+        ] == [("lexical_retrieval", "failed", None, 0)]
+        failures = [
+            record for record in sink.records if isinstance(record, FailureEvent)
+        ]
+        assert len(failures) == 1
+        assert failures[0].failure_category == "dependency"
+        assert failures[0].failure_code == "generation_unavailable"
+        assert marker not in repr(sink.records)
+        assert str(tmp_path) not in repr(sink.records)
     finally:
         repository.close()
 
