@@ -71,6 +71,10 @@ from inference_lab.retrieval.lexical_store import (
     open_lexical_generation,
     select_lexical_parent_reference,
 )
+from inference_lab.retrieval.metadata_adapter import (
+    LexicalCandidateMetadata,
+    resolve_lexical_candidate_metadata,
+)
 from inference_lab.retrieval.metadata_filters import (
     CURRENT_METADATA_FILTER_REGISTRY,
     MAX_METADATA_FILTER_DEPTH,
@@ -141,6 +145,7 @@ __all__ = [
     "InvalidRetrievalContractError",
     "InvalidRetrievalResultError",
     "InvalidRetrievalSerialisationError",
+    "LexicalCandidateMetadata",
     "LexicalError",
     "LexicalFailureCategory",
     "LexicalGeneration",
@@ -194,6 +199,7 @@ __all__ = [
     "lexical_order_key",
     "lexical_score_label",
     "open_lexical_generation",
+    "resolve_lexical_candidate_metadata",
     "select_lexical_parent_reference",
     "serialise_evidence_result",
     "serialise_lexical_manifest",
