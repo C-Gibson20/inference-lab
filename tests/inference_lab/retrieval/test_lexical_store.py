@@ -21,6 +21,9 @@ from inference_lab.ingest import (
     FakeChunkTokeniser,
     NormalisedText,
     ParsedDocument,
+    ParseOutcome,
+    ParsePersistenceRequest,
+    ParserInput,
     SourceSpan,
     StructuralBlock,
     begin_baseline_lexical_corpus_update,
@@ -28,6 +31,7 @@ from inference_lab.ingest import (
     build_chunk_set,
     generate_source_span_id,
     map_chunk_set,
+    persist_parse_request,
     publish_baseline_lexical_generations,
 )
 from inference_lab.profiling import FailureEvent, ProfilingContext, StageTiming
@@ -42,6 +46,7 @@ from inference_lab.provenance import (
     DocumentVersion,
     DocumentVersionId,
     HashAlgorithm,
+    RecordId,
 )
 from inference_lab.retrieval import (
     CandidateKind,
@@ -52,6 +57,8 @@ from inference_lab.retrieval import (
     LexicalIndexConfiguration,
     LexicalMatchMode,
     LexicalQuery,
+    RangeFilter,
+    ResultStatus,
     RetrievalLimit,
     RetrievalQuery,
     build_lexical_generation,
@@ -75,6 +82,7 @@ from inference_lab.storage import (
     StorageConflictError,
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
+from tests.inference_lab.ingest.fixtures import fixture_settings  # noqa: TID252
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
 CORPUS_VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000002")
@@ -602,6 +610,137 @@ def test_pr4_query_executes_terms_phrase_and_identifier_modes_from_pinned_snapsh
         assert identifier.hits[0].contributions[0].score_label == (
             "sqlite_exact_identifier_occurrences_v1"
         )
+    finally:
+        repository.close()
+
+
+def test_pr5_filtered_query_profiles_real_snapshot_execution(
+    tmp_path: Path,
+) -> None:
+    source_manifest, first, second = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+        source_dir=tmp_path / "source-data",
+    )
+    sink = _CollectingSink()
+    profiling = ProfilingContext.create(
+        run_id="run-real-filter",
+        sink=sink,
+        clock=iter(range(0, 40_000_000, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 20, tzinfo=UTC),
+    )
+    try:
+        with repository.transaction() as transaction:
+            transaction.add_corpus(CorpusMetadata(CORPUS_ID, "test corpus"))
+            for chunk_set in (first, second):
+                document = _parsed_document(
+                    chunk_set.chunks[0].text,
+                    document_id=chunk_set.document_id,
+                    document_version_id=chunk_set.document_version_id,
+                )
+                transaction.add_document(DocumentIdentity(document.document_id))
+                transaction.add_document_version(
+                    DocumentVersion(
+                        document.document_version_id,
+                        document.document_id,
+                        ContentHash(
+                            HashAlgorithm.SHA256,
+                            hashlib.sha256(
+                                document.text.source_text.encode("utf-8")
+                            ).hexdigest(),
+                        ),
+                    )
+                )
+                transaction.add_corpus_document_version_membership(
+                    CorpusDocumentVersionMembership(
+                        CORPUS_ID,
+                        document.document_id,
+                        document.document_version_id,
+                    )
+                )
+                transaction.write_chunk_set(
+                    ChunkSetWriteRequest(
+                        corpus_id=CORPUS_ID,
+                        selection=map_chunk_set(chunk_set),
+                    )
+                )
+        for chunk_set in (first, second):
+            document = _parsed_document(
+                chunk_set.chunks[0].text,
+                document_id=chunk_set.document_id,
+                document_version_id=chunk_set.document_version_id,
+            )
+            persist_parse_request(
+                repository,
+                ParsePersistenceRequest(
+                    corpus_id=CORPUS_ID,
+                    parser_input=ParserInput(
+                        document_id=document.document_id,
+                        document_version_id=document.document_version_id,
+                        content=document.text.source_text.encode("utf-8"),
+                        media_type="text/plain",
+                        encoding="utf-8",
+                    ),
+                    parser_version=CURRENT_PARSER_VERSION,
+                    outcome=ParseOutcome("succeeded", document, ()),
+                    parse_id=RecordId.generate(),
+                    parsed_record_id=RecordId.generate(),
+                ),
+                settings=fixture_settings(),
+                emit_lifecycle_events=False,
+            )
+        published = build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+            expected_corpus_version=None,
+        )
+        assert isinstance(published, CommitCorpusUpdateOutcome)
+
+        result = execute_lexical_retrieval(
+            repository,
+            tmp_path / "indexes",
+            CORPUS_ID,
+            RetrievalQuery(
+                "alpha",
+                source_manifest.corpus_version,
+                RetrievalLimit(1),
+                filter=RangeFilter("character-count", lower=1),
+            ),
+            profiling=profiling,
+            profiling_identity="real-filter",
+        )
+
+        assert result.status is ResultStatus.COMPLETED
+        assert len(result.hits) == 1
+        assert result.hits[0].candidate.content.startswith("alpha cites")
+        assert result.hits[0].candidate.sources
+        completions = [
+            record
+            for record in sink.records
+            if isinstance(record, StageTiming) and record.event == "stage_completed"
+        ]
+        assert [
+            (
+                record.pipeline_stage,
+                record.items_processed,
+                record.records_emitted,
+                record.parent_stage_id,
+            )
+            for record in completions
+        ] == [
+            (
+                "metadata_filter",
+                1,
+                1,
+                "run-real-filter:lexical_retrieval:real-filter",
+            ),
+            ("lexical_retrieval", None, 1, None),
+        ]
+        assert not [
+            record for record in sink.records if isinstance(record, FailureEvent)
+        ]
     finally:
         repository.close()
 
