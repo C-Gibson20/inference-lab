@@ -20,6 +20,8 @@ from inference_lab.ingest import (
 )
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
+    CorpusId,
+    CorpusVersionId,
     DocumentId,
     DocumentVersionId,
     RecordId,
@@ -45,6 +47,8 @@ from inference_lab.storage import (
     ComponentGenerationState,
     ComponentGenerationValidator,
     ComponentKind,
+    MetadataRepository,
+    StorageError,
 )
 
 LEXICAL_DIRECTORY_NAME: Final[str] = "lexical"
@@ -153,6 +157,7 @@ class LexicalGenerationParticipant:
         index_dir: Path,
         outcome: LexicalIndexBuildOutcome,
         source_manifest: BaselineChunkGenerationManifest,
+        expected_parent_reference: ComponentGenerationReference | None = None,
     ) -> None:
         """Bind one built lexical generation to its exact staged source."""
         if not isinstance(index_dir, Path):
@@ -163,6 +168,22 @@ class LexicalGenerationParticipant:
             raise TypeError(
                 "source_manifest must be a BaselineChunkGenerationManifest."
             )
+        if expected_parent_reference is not None and not isinstance(
+            expected_parent_reference,
+            ComponentGenerationReference,
+        ):
+            raise TypeError(
+                "expected_parent_reference must be a ComponentGenerationReference "
+                "or None."
+            )
+        if expected_parent_reference is not None and (
+            expected_parent_reference.component_kind != _LEXICAL_COMPONENT_KIND
+            or expected_parent_reference.state is not ComponentGenerationState.READY
+            or expected_parent_reference.corpus_id != source_manifest.corpus_id
+            or expected_parent_reference.corpus_version
+            == source_manifest.corpus_version
+        ):
+            raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)
         if (
             outcome.manifest.corpus_id != source_manifest.corpus_id
             or outcome.manifest.corpus_version != source_manifest.corpus_version
@@ -173,6 +194,7 @@ class LexicalGenerationParticipant:
         self._index_dir = index_dir
         self._outcome = outcome
         self._source_manifest = source_manifest
+        self._expected_parent_reference = expected_parent_reference
 
     def component_generation(self) -> ComponentGenerationReference:
         """Return the preparing reference for generic registration."""
@@ -188,6 +210,79 @@ class LexicalGenerationParticipant:
             self._outcome.manifest,
             self._source_manifest,
         )
+
+
+def select_lexical_parent_reference(
+    repository: MetadataRepository,
+    corpus_id: CorpusId,
+    expected_corpus_version: CorpusVersionId | None,
+) -> ComponentGenerationReference | None:
+    """Select the committed lexical parent from the expected active snapshot."""
+    if not callable(getattr(repository, "open_active_corpus_snapshot", None)):
+        raise TypeError("repository must provide active corpus snapshots.")
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if expected_corpus_version is not None and not isinstance(
+        expected_corpus_version,
+        CorpusVersionId,
+    ):
+        raise TypeError("expected_corpus_version must be a CorpusVersionId or None.")
+    if expected_corpus_version is None:
+        return None
+
+    try:
+        with repository.open_active_corpus_snapshot(corpus_id) as snapshot:
+            if snapshot.version.corpus_version != expected_corpus_version:
+                raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)
+            lexical_references = tuple(
+                generation
+                for generation in snapshot.manifest.component_generations
+                if generation.component_kind == _LEXICAL_COMPONENT_KIND
+            )
+            if len(lexical_references) != 1:
+                raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)
+            reference = lexical_references[0]
+            if (
+                reference.state is not ComponentGenerationState.READY
+                or reference.corpus_id != corpus_id
+                or reference.corpus_version != expected_corpus_version
+            ):
+                raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)
+            return reference
+    except LexicalError:
+        raise
+    except StorageError:
+        raise LexicalError(LexicalFailureCategory.GENERATION_UNAVAILABLE) from None
+    except (OSError, TypeError, ValueError, KeyError, IndexError):
+        raise LexicalError(LexicalFailureCategory.EXECUTION_FAILURE) from None
+
+
+def build_lexical_generation_for_corpus_update(
+    index_dir: Path,
+    source_manifest: BaselineChunkGenerationManifest,
+    repository: MetadataRepository,
+    *,
+    expected_corpus_version: CorpusVersionId | None,
+    configuration: LexicalIndexConfiguration | None = None,
+) -> LexicalIndexBuildOutcome:
+    """Build a lexical generation using only the expected committed parent."""
+    if not isinstance(source_manifest, BaselineChunkGenerationManifest):
+        raise TypeError("source_manifest must be a BaselineChunkGenerationManifest.")
+    if expected_corpus_version == source_manifest.corpus_version:
+        raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)
+    parent_reference = select_lexical_parent_reference(
+        repository,
+        source_manifest.corpus_id,
+        expected_corpus_version,
+    )
+    return build_lexical_generation(
+        index_dir,
+        source_manifest,
+        configuration=configuration,
+        parent_generation_id=(
+            None if parent_reference is None else parent_reference.generation_id
+        ),
+    )
 
 
 class LexicalGenerationValidator:

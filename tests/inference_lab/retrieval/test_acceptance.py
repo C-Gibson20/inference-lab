@@ -147,6 +147,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "analyse_terms",
         "build_fts5_query",
         "build_lexical_generation",
+        "build_lexical_generation_for_corpus_update",
         "derive_lexical_generation_id",
         "deserialise_lexical_manifest",
         "deserialise_evidence_result",
@@ -161,6 +162,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "serialise_evidence_result",
         "serialise_lexical_manifest",
         "serialise_query",
+        "select_lexical_parent_reference",
     }
     assert set(retrieval.__all__) == expected
     assert not hasattr(retrieval, "_filter_payload")

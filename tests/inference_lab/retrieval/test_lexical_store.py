@@ -36,16 +36,55 @@ from inference_lab.retrieval import (
     LexicalFailureCategory,
     LexicalGenerationParticipant,
     build_lexical_generation,
+    build_lexical_generation_for_corpus_update,
     open_lexical_generation,
+    select_lexical_parent_reference,
 )
 from inference_lab.storage import (
     ChunkSetReader,
     ChunkSetSelectionRecord,
     ComponentGenerationState,
+    ComponentKind,
+    CorpusVersionManifest,
+    MetadataRepository,
 )
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
 CORPUS_VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000002")
+
+
+class _FakeSnapshot:
+    """Pin one supplied committed manifest for parent-selection tests."""
+
+    def __init__(self, manifest: CorpusVersionManifest) -> None:
+        self._manifest = manifest
+
+    def __enter__(self) -> "_FakeSnapshot":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    @property
+    def version(self) -> object:
+        return type("Version", (), {"corpus_version": self._manifest.corpus_version})()
+
+    @property
+    def manifest(self) -> CorpusVersionManifest:
+        return self._manifest
+
+
+class _FakeRepository:
+    """Expose only the active-snapshot boundary used by lexical building."""
+
+    def __init__(self, snapshot: _FakeSnapshot) -> None:
+        self._snapshot = snapshot
+        self.open_count = 0
+
+    def open_active_corpus_snapshot(self, corpus_id: CorpusId) -> _FakeSnapshot:
+        assert corpus_id == self._snapshot.manifest.corpus_id
+        self.open_count += 1
+        return self._snapshot
 
 
 def _parsed_document(
@@ -264,6 +303,120 @@ def test_stor03_validator_rejects_checksum_corruption_without_disclosure(
         )
         is False
     )
+
+
+def test_pr3_parent_selection_uses_expected_active_lexical_reference(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    parent = build_lexical_generation(tmp_path, source_manifest)
+    parent_reference = replace(
+        LexicalGenerationParticipant(
+            tmp_path,
+            parent,
+            source_manifest,
+        ).component_generation(),
+        state=ComponentGenerationState.READY,
+    )
+    active_manifest = CorpusVersionManifest(
+        corpus_id=source_manifest.corpus_id,
+        corpus_version=source_manifest.corpus_version,
+        document_memberships=tuple(
+            entry.membership for entry in source_manifest.entries
+        ),
+        component_generations=(parent_reference,),
+    )
+    repository = _FakeRepository(_FakeSnapshot(active_manifest))
+
+    selected = select_lexical_parent_reference(
+        cast(MetadataRepository, repository),
+        source_manifest.corpus_id,
+        source_manifest.corpus_version,
+    )
+
+    assert selected == parent_reference
+    assert selected is not None
+    assert selected.component_kind == ComponentKind("lexical-index")
+    assert repository.open_count == 1
+
+    child_manifest = BaselineChunkGenerationManifest(
+        corpus_id=source_manifest.corpus_id,
+        corpus_version=CorpusVersionId.generate(),
+        configuration_identity=source_manifest.configuration_identity,
+        generation_id=source_manifest.generation_id,
+        entries=source_manifest.entries,
+    )
+    child = build_lexical_generation_for_corpus_update(
+        tmp_path,
+        child_manifest,
+        cast(MetadataRepository, repository),
+        expected_corpus_version=source_manifest.corpus_version,
+    )
+
+    assert child.statistics.database_reused is True
+    assert child.statistics.reused_chunks == parent.manifest.chunk_count
+    assert repository.open_count == 2
+
+
+def test_pr3_parent_selection_rejects_missing_or_unexpected_active_reference(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    missing_manifest = CorpusVersionManifest(
+        corpus_id=source_manifest.corpus_id,
+        corpus_version=source_manifest.corpus_version,
+        document_memberships=tuple(
+            entry.membership for entry in source_manifest.entries
+        ),
+        component_generations=(),
+    )
+    repository = _FakeRepository(_FakeSnapshot(missing_manifest))
+
+    with pytest.raises(LexicalError) as missing_error:
+        select_lexical_parent_reference(
+            cast(MetadataRepository, repository),
+            source_manifest.corpus_id,
+            source_manifest.corpus_version,
+        )
+    assert (
+        missing_error.value.category is LexicalFailureCategory.INCOMPATIBLE_GENERATION
+    )
+
+    with pytest.raises(LexicalError) as mismatch_error:
+        select_lexical_parent_reference(
+            cast(MetadataRepository, repository),
+            source_manifest.corpus_id,
+            CorpusVersionId.generate(),
+        )
+    assert (
+        mismatch_error.value.category is LexicalFailureCategory.INCOMPATIBLE_GENERATION
+    )
+
+
+def test_pr3_parent_selection_skips_parent_when_no_expected_version(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = _FakeRepository(
+        _FakeSnapshot(
+            CorpusVersionManifest(
+                corpus_id=source_manifest.corpus_id,
+                corpus_version=source_manifest.corpus_version,
+                document_memberships=(),
+                component_generations=(),
+            )
+        )
+    )
+
+    assert (
+        select_lexical_parent_reference(
+            cast(MetadataRepository, repository),
+            source_manifest.corpus_id,
+            None,
+        )
+        is None
+    )
+    assert repository.open_count == 0
 
 
 def test_zero_chunk_member_is_retained_and_exact_replay_reuses_database(
