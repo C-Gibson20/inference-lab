@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from collections.abc import Iterator
+from itertools import islice
 from pathlib import Path
 
 from inference_lab.provenance import (
@@ -184,6 +186,60 @@ class LexicalGeneration:
         self._require_open()
         limit = request.query.limit.value
         try:
+            return tuple(
+                islice(
+                    self.iter_ranked_matches(request, page_size=limit),
+                    limit,
+                )
+            )
+        except LexicalError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError, KeyError, IndexError):
+            raise LexicalError(LexicalFailureCategory.EXECUTION_FAILURE) from None
+
+    def iter_ranked_matches(
+        self,
+        request: LexicalQuery,
+        *,
+        page_size: int = 64,
+    ) -> Iterator[tuple[LexicalIndexedChunk, int | float]]:
+        """Iterate deterministic ranked pages without applying the request limit.
+
+        The iterator is bounded to one SQLite page at a time.  Callers that need
+        to apply an additional predicate must do so while consuming the ranked
+        stream, before imposing their final result limit.
+        """
+        if not isinstance(request, LexicalQuery):
+            raise TypeError("request must be a LexicalQuery.")
+        if type(page_size) is not int:
+            raise TypeError("page_size must be an int.")
+        if page_size <= 0:
+            raise ValueError("page_size must be positive.")
+        self._require_open()
+        return self._iter_ranked_matches(request, page_size=page_size)
+
+    def _iter_ranked_matches(
+        self,
+        request: LexicalQuery,
+        *,
+        page_size: int,
+    ) -> Iterator[tuple[LexicalIndexedChunk, int | float]]:
+        offset = 0
+        while True:
+            page = self._ranked_page(request, limit=page_size, offset=offset)
+            yield from page
+            if len(page) < page_size:
+                return
+            offset += len(page)
+
+    def _ranked_page(
+        self,
+        request: LexicalQuery,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[tuple[LexicalIndexedChunk, int | float], ...]:
+        try:
             if request.identifier is not None:
                 rows = self._connection.execute(
                     """
@@ -193,7 +249,7 @@ class LexicalGeneration:
                         JOIN chunks AS c ON c.record_id = i.record_id
                         WHERE i.lexeme = ?
                         ORDER BY i.occurrence_count DESC, c.record_id
-                        LIMIT ?
+                        LIMIT ? OFFSET ?
                     )
                     SELECT c.record_id, c.document_id, c.document_version_id,
                            c.ordinal, c.content, c.token_count,
@@ -206,7 +262,7 @@ class LexicalGeneration:
                     ORDER BY ranked.occurrence_count DESC, c.record_id,
                              s.block_ordinal, s.source_span_id
                     """,
-                    (request.identifier, limit),
+                    (request.identifier, limit, offset),
                 ).fetchall()
                 occurrence_by_record = {
                     str(row["record_id"]): int(row["occurrence_count"]) for row in rows
@@ -230,7 +286,7 @@ class LexicalGeneration:
                     JOIN chunks AS c ON c.record_id = chunk_fts.record_id
                     WHERE chunk_fts MATCH ?
                     ORDER BY engine_score, c.record_id
-                    LIMIT ?
+                    LIMIT ? OFFSET ?
                 )
                 SELECT c.record_id, c.document_id, c.document_version_id,
                        c.ordinal, c.content, c.token_count,
@@ -243,7 +299,7 @@ class LexicalGeneration:
                 ORDER BY ranked.engine_score, c.record_id,
                          s.block_ordinal, s.source_span_id
                 """,
-                (engine_query, limit),
+                (engine_query, limit, offset),
             ).fetchall()
             score_by_record = {
                 str(row["record_id"]): expose_bm25_score(

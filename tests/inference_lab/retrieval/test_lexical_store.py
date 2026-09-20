@@ -474,6 +474,58 @@ def test_full_build_publishes_restartable_generation_with_source_links(
     reopened.close()
 
 
+def test_ranked_iteration_pages_past_request_limit_before_final_limiting(
+    tmp_path: Path,
+) -> None:
+    selections = tuple(
+        _selection(f"common marker {ordinal}")[1] for ordinal in range(3)
+    )
+    source_manifest = _manifest(selections)
+    outcome = build_lexical_generation(tmp_path, source_manifest)
+    request = LexicalQuery(
+        RetrievalQuery(
+            "common",
+            source_manifest.corpus_version,
+            RetrievalLimit(1),
+        )
+    )
+
+    with open_lexical_generation(
+        tmp_path, outcome.manifest.generation_id
+    ) as generation:
+        ranked = tuple(generation.iter_ranked_matches(request, page_size=1))
+        direct = generation.search(request)
+
+    assert len(ranked) == 3
+    assert ranked[:1] == direct
+
+
+@pytest.mark.parametrize(
+    ("page_size", "expected_error"),
+    ((True, TypeError), (0, ValueError), (-1, ValueError), ("1", TypeError)),
+)
+def test_ranked_iteration_rejects_invalid_page_sizes(
+    tmp_path: Path,
+    page_size: object,
+    expected_error: type[Exception],
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    outcome = build_lexical_generation(tmp_path, source_manifest)
+    request = LexicalQuery(
+        RetrievalQuery(
+            "alpha",
+            source_manifest.corpus_version,
+            RetrievalLimit(1),
+        )
+    )
+
+    with open_lexical_generation(
+        tmp_path, outcome.manifest.generation_id
+    ) as generation:
+        with pytest.raises(expected_error):
+            generation.iter_ranked_matches(request, page_size=page_size)  # type: ignore[arg-type]
+
+
 def test_pr4_query_executes_terms_phrase_and_identifier_modes_from_pinned_snapshot(
     tmp_path: Path,
 ) -> None:
