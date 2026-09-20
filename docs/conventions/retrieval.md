@@ -19,6 +19,36 @@ are sorted canonically within their single scalar type. `AllFilter` and
 preserved in canonical bytes; consumers must not infer relevance or authority
 from that order.
 
+### Executable metadata filters
+
+RET-03's executable metadata registry is versioned independently from the
+retrieval wire schema. The current registry is `1.0.0` and is deliberately
+closed: a field is executable only when it appears in this matrix.
+
+| Field | Type | Allowed operators | Missing policy | Durable source |
+| --- | --- | --- | --- | --- |
+| `character-count` | integer | exact, one-of, range, exists, missing | required | parsed representation |
+| `document-type` | string | exact, one-of, exists, missing | required | source artefact |
+| `language` | string | exact, one-of, exists, missing | nullable | parsed representation |
+| `page-count` | integer | exact, one-of, range, exists, missing | nullable | parsed representation |
+| `source-byte-count` | integer | exact, one-of, range, exists, missing | required | source artefact |
+| `token-count` | integer | exact, one-of, range, exists, missing | nullable | parsed representation |
+
+`range` is restricted to integer fields and honours the filter's explicit
+inclusive or exclusive bounds. `exists` and `missing` test the reconstructed
+value in the pinned snapshot. A missing value is not the same as an unsupported
+field: `MissingFilter("language")` is valid, while an unregistered field is
+invalid input. Required fields are expected to be present in a valid reachable
+record; corruption or ambiguity is a failure, not a normal missing value.
+
+The execution boundary validates the complete filter before ranked index
+execution, resolves metadata and lexical candidates from one owned immutable
+corpus snapshot, applies the predicate before the final lexical limit, and
+fails closed if the required source or parsed provenance cannot be reconstructed.
+Dates and assignees are not in the current registry and remain explicitly
+deferred; callers must not approximate them with string fields or interpret
+their absence as a negative result.
+
 ## Candidates, scores, and results
 
 Every `RetrievalCandidate` has a `RecordId`, a candidate-kind authority label,
