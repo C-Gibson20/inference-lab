@@ -143,6 +143,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "LexicalGeneration",
         "LexicalGenerationParticipant",
         "LexicalGenerationValidator",
+        "LexicalCandidateMetadata",
         "LexicalIndexedChunk",
         "LexicalMemberSelection",
         "LexicalMatchMode",
@@ -179,6 +180,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "serialise_evidence_result",
         "serialise_lexical_manifest",
         "serialise_query",
+        "resolve_lexical_candidate_metadata",
         "validate_metadata_filter",
         "select_lexical_parent_reference",
     }
