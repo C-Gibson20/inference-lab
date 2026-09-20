@@ -29,6 +29,11 @@ BaselinePublicationOutcome: TypeAlias = (
     CommitCorpusUpdateOutcome | NoCorpusChangeOutcome
 )
 BaselineChunkPublicationOutcome: TypeAlias = BaselinePublicationOutcome
+BASELINE_LEXICAL_COMPONENT_KIND = ComponentKind("lexical-index")
+BASELINE_LEXICAL_REQUIRED_COMPONENT_KINDS = (
+    BASELINE_CHUNK_COMPONENT_KIND,
+    BASELINE_LEXICAL_COMPONENT_KIND,
+)
 
 
 class BaselineGenerationParticipant(Protocol):
@@ -77,6 +82,23 @@ def begin_baseline_corpus_update(
         proposed_corpus_version,
         expected_corpus_version=expected_corpus_version,
         required_component_kinds=required_component_kinds,
+    )
+
+
+def begin_baseline_lexical_corpus_update(
+    transaction: MetadataTransaction,
+    corpus_id: CorpusId,
+    proposed_corpus_version: CorpusVersionId,
+    *,
+    expected_corpus_version: CorpusVersionId | None,
+) -> BeginCorpusUpdateOutcome:
+    """Begin a Phase 5 update that requires chunks and lexical retrieval."""
+    return begin_baseline_corpus_update(
+        transaction,
+        corpus_id,
+        proposed_corpus_version,
+        expected_corpus_version=expected_corpus_version,
+        required_component_kinds=BASELINE_LEXICAL_REQUIRED_COMPONENT_KINDS,
     )
 
 
@@ -173,6 +195,42 @@ def publish_baseline_generations(
             stage.set_counts(items_processed=len(prepared), records_emitted=1)
     assert published is not None
     return published
+
+
+def publish_baseline_lexical_generations(
+    transaction: MetadataTransaction,
+    reader: ChunkSetReader,
+    manifest: BaselineChunkGenerationManifest,
+    lexical_participant: BaselineGenerationParticipant,
+    *,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
+) -> BaselinePublicationOutcome:
+    """Publish chunks and lexical generations as one Phase 5 update."""
+    if not isinstance(manifest, BaselineChunkGenerationManifest):
+        raise TypeError("manifest must be a BaselineChunkGenerationManifest.")
+    generation = lexical_participant.component_generation()
+    if not isinstance(generation, ComponentGenerationReference):
+        raise TypeError(
+            "lexical_participant must return a ComponentGenerationReference."
+        )
+    if (
+        generation.component_kind != BASELINE_LEXICAL_COMPONENT_KIND
+        or generation.corpus_id != manifest.corpus_id
+        or generation.corpus_version != manifest.corpus_version
+    ):
+        raise BaselineGenerationValidationError(
+            BaselineFailureCategory.GENERATION_VALIDATION_FAILED,
+        )
+    return publish_baseline_generations(
+        transaction,
+        reader,
+        (manifest, lexical_participant),
+        profiling=profiling,
+        parent_stage_id=parent_stage_id,
+        profiling_identity=profiling_identity,
+    )
 
 
 def publish_baseline_chunk_generation(
