@@ -3,6 +3,7 @@
 import hashlib
 import sqlite3
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -27,6 +28,7 @@ from inference_lab.ingest import (
     map_chunk_set,
     publish_baseline_lexical_generations,
 )
+from inference_lab.profiling import FailureEvent, ProfilingContext, StageTiming
 from inference_lab.provenance import (
     ContentHash,
     CorpusDocumentVersionMembership,
@@ -101,6 +103,16 @@ class _FakeRepository:
         assert corpus_id == self._snapshot.manifest.corpus_id
         self.open_count += 1
         return self._snapshot
+
+
+class _CollectingSink:
+    """Collect shared profiling records without rendering them."""
+
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
 
 
 def _parsed_document(
@@ -351,6 +363,162 @@ def test_full_build_publishes_restartable_generation_with_source_links(
 
     reopened = open_lexical_generation(tmp_path, outcome.manifest.generation_id)
     reopened.close()
+
+
+def test_lexical_build_profiles_success_and_reuse_with_shared_context(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    sink = _CollectingSink()
+    clock_values = iter(range(0, 100_000_000, 10_000_000))
+    profiling = ProfilingContext.create(
+        run_id="run-lexical",
+        sink=sink,
+        clock=lambda: next(clock_values),
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    first = build_lexical_generation(
+        tmp_path,
+        source_manifest,
+        profiling=profiling,
+        parent_stage_id="run-lexical:publication:request",
+        profiling_identity="first",
+    )
+    replay = build_lexical_generation(
+        tmp_path,
+        source_manifest,
+        profiling=profiling,
+        profiling_identity="replay",
+    )
+
+    assert replay.statistics.database_reused is True
+    completions = [
+        record
+        for record in sink.records
+        if isinstance(record, StageTiming) and record.event == "stage_completed"
+    ]
+    assert [
+        (
+            record.module,
+            record.pipeline_stage,
+            record.status,
+            record.items_processed,
+            record.records_emitted,
+            record.parent_stage_id,
+        )
+        for record in completions
+    ] == [
+        (
+            "inference_lab.retrieval",
+            "lexical_index",
+            "completed",
+            first.manifest.chunk_count,
+            first.manifest.chunk_count,
+            "run-lexical:publication:request",
+        ),
+        (
+            "inference_lab.retrieval",
+            "lexical_index",
+            "completed",
+            replay.manifest.chunk_count,
+            replay.manifest.chunk_count,
+            None,
+        ),
+    ]
+    assert all(record.run_id == "run-lexical" for record in completions)
+    assert not [record for record in sink.records if isinstance(record, FailureEvent)]
+
+
+def test_lexical_build_profiles_generation_failure_without_payloads(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    sink = _CollectingSink()
+    profiling = ProfilingContext.create(
+        run_id="run-lexical-failure",
+        sink=sink,
+        clock=iter((0, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    with pytest.raises(LexicalError) as raised:
+        build_lexical_generation(
+            tmp_path,
+            source_manifest,
+            parent_generation_id="missing-parent",
+            profiling=profiling,
+        )
+
+    assert raised.value.category is LexicalFailureCategory.GENERATION_UNAVAILABLE
+    failures = [record for record in sink.records if isinstance(record, FailureEvent)]
+    assert len(failures) == 1
+    assert failures[0].failure_category == "dependency"
+    assert failures[0].failure_code == "generation_unavailable"
+    assert "missing-parent" not in repr(sink.records)
+    assert str(tmp_path) not in repr(sink.records)
+
+
+def test_pr3_atomic_publication_profiles_lexical_index_and_publication(
+    tmp_path: Path,
+) -> None:
+    source_manifest, first, second = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    sink = _CollectingSink()
+    profiling = ProfilingContext.create(
+        run_id="run-atomic-lexical",
+        sink=sink,
+        clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        result = build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+            expected_corpus_version=None,
+            profiling=profiling,
+            parent_stage_id="run-atomic-lexical:request",
+            profiling_identity="first",
+        )
+        assert isinstance(result, CommitCorpusUpdateOutcome)
+
+        completions = [
+            record
+            for record in sink.records
+            if isinstance(record, StageTiming) and record.event == "stage_completed"
+        ]
+        assert [
+            (
+                record.module,
+                record.pipeline_stage,
+                record.items_processed,
+                record.records_emitted,
+                record.parent_stage_id,
+            )
+            for record in completions
+        ] == [
+            (
+                "inference_lab.retrieval",
+                "lexical_index",
+                len(first.chunks) + len(second.chunks),
+                len(first.chunks) + len(second.chunks),
+                "run-atomic-lexical:request",
+            ),
+            (
+                "inference_lab.ingest",
+                "publication",
+                2,
+                1,
+                "run-atomic-lexical:request",
+            ),
+        ]
+    finally:
+        repository.close()
 
 
 def test_pr3_build_and_publish_uses_one_atomic_phase5_path(

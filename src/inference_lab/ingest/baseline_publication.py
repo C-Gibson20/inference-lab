@@ -12,7 +12,11 @@ from inference_lab.ingest.baseline_generation import (
     BaselineChunkGenerationManifest,
     BaselineGenerationValidationError,
 )
-from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
+from inference_lab.ingest.baseline_profiling import (
+    BaselineProfilingContext,
+    map_baseline_failure,
+)
+from inference_lab.profiling import ProfilingContext
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -119,7 +123,7 @@ def publish_baseline_generations(
     reader: ChunkSetReader,
     participants: tuple[BaselineGenerationParticipant, ...],
     *,
-    profiling: BaselineProfilingContext | None = None,
+    profiling: ProfilingContext | None = None,
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
 ) -> BaselinePublicationOutcome:
@@ -135,8 +139,8 @@ def publish_baseline_generations(
         raise ValueError("participants must not be empty.")
     if not callable(getattr(reader, "get_chunk_set_selection", None)):
         raise TypeError("reader must provide corpus-scoped chunk selections.")
-    if profiling is not None and not isinstance(profiling, BaselineProfilingContext):
-        raise TypeError("profiling must be a BaselineProfilingContext or None.")
+    if profiling is not None and not isinstance(profiling, ProfilingContext):
+        raise TypeError("profiling must be a ProfilingContext or None.")
     if parent_stage_id is not None and not isinstance(parent_stage_id, str):
         raise TypeError("parent_stage_id must be a string or None.")
     if not isinstance(profiling_identity, str) or not profiling_identity:
@@ -168,6 +172,8 @@ def publish_baseline_generations(
         corpus_id=first_generation.corpus_id.as_str(),
         corpus_version=first_generation.corpus_version.as_str(),
         parent_stage_id=parent_stage_id,
+        module="inference_lab.ingest",
+        failure_mapper=map_baseline_failure,
     ) as stage:
         stage.set_counts(items_processed=len(prepared), records_emitted=0)
         component_kinds = tuple(item[0].component_kind for item in prepared)
@@ -215,7 +221,7 @@ def publish_baseline_lexical_generations(
     manifest: BaselineChunkGenerationManifest,
     lexical_participant: BaselineGenerationParticipant,
     *,
-    profiling: BaselineProfilingContext | None = None,
+    profiling: ProfilingContext | None = None,
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
 ) -> BaselinePublicationOutcome:
@@ -252,7 +258,7 @@ def build_and_publish_baseline_lexical_generation(
     *,
     expected_corpus_version: CorpusVersionId | None,
     configuration: LexicalIndexConfiguration | None = None,
-    profiling: BaselineProfilingContext | None = None,
+    profiling: ProfilingContext | None = None,
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
 ) -> BaselinePublicationOutcome:
@@ -275,6 +281,9 @@ def build_and_publish_baseline_lexical_generation(
         repository,
         expected_corpus_version=expected_corpus_version,
         configuration=configuration,
+        profiling=profiling,
+        parent_stage_id=parent_stage_id,
+        profiling_identity=profiling_identity,
     )
     participant = LexicalGenerationParticipant(index_dir, outcome, manifest)
 
@@ -337,7 +346,7 @@ def publish_baseline_chunk_generation(
     reader: ChunkSetReader,
     manifest: BaselineChunkGenerationManifest,
     *,
-    profiling: BaselineProfilingContext | None = None,
+    profiling: ProfilingContext | None = None,
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
 ) -> BaselineChunkPublicationOutcome:

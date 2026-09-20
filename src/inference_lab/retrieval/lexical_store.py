@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -18,6 +19,7 @@ from inference_lab.ingest import (
     BaselineChunkGenerationManifest,
     deserialise_chunk_set_selection,
 )
+from inference_lab.profiling import FailureMapping, ProfilingContext
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -57,6 +59,35 @@ LEXICAL_MANIFEST_NAME: Final[str] = "manifest.json"
 _LEXICAL_DATABASE_USER_VERSION: Final[int] = 2
 _GENERATION_ID_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _LEXICAL_COMPONENT_KIND: Final[ComponentKind] = ComponentKind("lexical-index")
+
+
+def map_lexical_failure(error: BaseException) -> FailureMapping:
+    """Map lexical build failures to the closed profiling vocabulary."""
+    if isinstance(error, asyncio.CancelledError):
+        return FailureMapping(
+            failure_category="cancelled",
+            failure_code="stage_cancelled",
+            status="cancelled",
+        )
+    if isinstance(error, LexicalError):
+        if error.category is LexicalFailureCategory.INVALID_REQUEST:
+            failure_category = "input"
+        else:
+            failure_category = "dependency"
+        if error.category is LexicalFailureCategory.CANCELLED:
+            return FailureMapping(
+                failure_category="cancelled",
+                failure_code=error.category.value,
+                status="cancelled",
+            )
+        return FailureMapping(
+            failure_category=failure_category,
+            failure_code=error.category.value,
+        )
+    return FailureMapping(
+        failure_category="internal",
+        failure_code="stage_failed",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +295,9 @@ def build_lexical_generation_for_corpus_update(
     *,
     expected_corpus_version: CorpusVersionId | None,
     configuration: LexicalIndexConfiguration | None = None,
+    profiling: ProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
 ) -> LexicalIndexBuildOutcome:
     """Build a lexical generation using only the expected committed parent."""
     if not isinstance(source_manifest, BaselineChunkGenerationManifest):
@@ -282,6 +316,9 @@ def build_lexical_generation_for_corpus_update(
         parent_generation_id=(
             None if parent_reference is None else parent_reference.generation_id
         ),
+        profiling=profiling,
+        parent_stage_id=parent_stage_id,
+        profiling_identity=profiling_identity,
     )
 
 
@@ -391,7 +428,7 @@ class LexicalGenerationValidator:
             return False
 
 
-def build_lexical_generation(
+def _build_lexical_generation(
     index_dir: Path,
     source_manifest: BaselineChunkGenerationManifest,
     *,
@@ -481,6 +518,64 @@ def build_lexical_generation(
     finally:
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
+
+
+def build_lexical_generation(
+    index_dir: Path,
+    source_manifest: BaselineChunkGenerationManifest,
+    *,
+    configuration: LexicalIndexConfiguration | None = None,
+    parent_generation_id: str | None = None,
+    profiling: ProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
+) -> LexicalIndexBuildOutcome:
+    """Build or reuse one lexical generation with lifecycle profiling."""
+    if not isinstance(index_dir, Path):
+        raise TypeError("index_dir must be a Path.")
+    if not isinstance(source_manifest, BaselineChunkGenerationManifest):
+        raise TypeError("source_manifest must be a BaselineChunkGenerationManifest.")
+    if configuration is None:
+        configuration = LexicalIndexConfiguration()
+    if not isinstance(configuration, LexicalIndexConfiguration):
+        raise TypeError("configuration must be a LexicalIndexConfiguration.")
+    if parent_generation_id is not None and not isinstance(parent_generation_id, str):
+        raise TypeError("parent_generation_id must be a string or None.")
+    if profiling is not None and not isinstance(profiling, ProfilingContext):
+        raise TypeError("profiling must be a ProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    if not isinstance(profiling_identity, str) or not profiling_identity:
+        raise ValueError("profiling_identity must be a non-empty string.")
+
+    selected_profiling = (
+        profiling if profiling is not None else ProfilingContext.create()
+    )
+    stage_id = selected_profiling.stage_id("lexical_index", profiling_identity)
+    outcome: LexicalIndexBuildOutcome | None = None
+    with selected_profiling.observed_stage(
+        stage="lexical_index",
+        stage_id=stage_id,
+        document_id=None,
+        corpus_id=source_manifest.corpus_id.as_str(),
+        corpus_version=source_manifest.corpus_version.as_str(),
+        parent_stage_id=parent_stage_id,
+        module="inference_lab.retrieval",
+        failure_mapper=map_lexical_failure,
+    ) as stage:
+        stage.set_counts(items_processed=0, records_emitted=0)
+        outcome = _build_lexical_generation(
+            index_dir,
+            source_manifest,
+            configuration=configuration,
+            parent_generation_id=parent_generation_id,
+        )
+        stage.set_counts(
+            items_processed=outcome.statistics.chunks_processed,
+            records_emitted=outcome.manifest.chunk_count,
+        )
+    assert outcome is not None
+    return outcome
 
 
 def open_lexical_generation(index_dir: Path, generation_id: str) -> LexicalGeneration:
