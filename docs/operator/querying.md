@@ -32,6 +32,35 @@ request so every metadata and index read uses one immutable manifest. See the
 [corpus-version runbook](corpus-versions.md) for snapshot lifetime and
 historical selection.
 
+## Supported metadata filters
+
+The query command/API is not exposed yet, but integrations implementing the
+baseline query contract must use the following closed metadata registry
+(`1.0.0`). Filters are evaluated against canonical metadata reconstructed from
+the same pinned corpus snapshot as lexical retrieval.
+
+| Field | Values | Operators | Missing values |
+| --- | --- | --- | --- |
+| `character-count` | integer | exact, one-of, range, exists, missing | invalid record state |
+| `document-type` | string | exact, one-of, exists, missing | invalid record state |
+| `language` | string | exact, one-of, exists, missing | allowed; `missing` matches |
+| `page-count` | integer | exact, one-of, range, exists, missing | allowed; `missing` matches |
+| `source-byte-count` | integer | exact, one-of, range, exists, missing | invalid record state |
+| `token-count` | integer | exact, one-of, range, exists, missing | allowed; `missing` matches |
+
+`range` is available only for integer fields and uses the bounds explicitly
+specified by the caller. `exists` and `missing` refer to the canonical value,
+not to text inferred from a passage. An unsupported field is rejected; it is
+not converted into a `missing` match. Dates and assignees are intentionally
+deferred and are not supported filter fields in this release.
+
+Invalid fields, operators, scalar types, or oversized filter trees fail before
+ranked execution. A valid filter that retains no candidates is a successful
+empty result. Storage, index, or provenance corruption fails closed without
+returning hits. Query text, filter values, metadata values, passages, paths,
+SQL, and raw exception details must remain out of operational logs and
+profiling records; see the [logging conventions](../conventions/logging.md).
+
 The baseline is lexical search. It is not yet a generated answer and should
 not be described as supporting citation verification, abstention, sessions, or
 follow-up questions until the relevant serving issues land.
