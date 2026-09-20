@@ -13,7 +13,12 @@ from inference_lab.ingest.baseline_generation import (
     BaselineGenerationValidationError,
 )
 from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
-from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.provenance import (
+    CorpusDocumentVersionMembership,
+    CorpusId,
+    CorpusVersionId,
+    DocumentId,
+)
 from inference_lab.storage import (
     BeginCorpusUpdateOutcome,
     ChunkSetReader,
@@ -273,6 +278,17 @@ def build_and_publish_baseline_lexical_generation(
     )
     participant = LexicalGenerationParticipant(index_dir, outcome, manifest)
 
+    previous_memberships: dict[DocumentId, CorpusDocumentVersionMembership] = {}
+    if expected_corpus_version is not None:
+        with repository.open_active_corpus_snapshot(manifest.corpus_id) as snapshot:
+            previous_memberships = {
+                membership.document_id: membership
+                for membership in snapshot.manifest.document_memberships
+            }
+    proposed_memberships = {
+        entry.membership.document_id: entry.membership for entry in manifest.entries
+    }
+
     published: BaselinePublicationOutcome | None = None
     with repository.transaction() as transaction:
         begin_baseline_lexical_corpus_update(
@@ -281,12 +297,28 @@ def build_and_publish_baseline_lexical_generation(
             manifest.corpus_version,
             expected_corpus_version=expected_corpus_version,
         )
-        for entry in manifest.entries:
-            transaction.add_corpus_update_document_membership(
-                manifest.corpus_id,
-                manifest.corpus_version,
-                entry.membership,
-            )
+        for document_id, previous_membership in previous_memberships.items():
+            if document_id not in proposed_memberships:
+                transaction.remove_corpus_update_document_membership(
+                    manifest.corpus_id,
+                    manifest.corpus_version,
+                    previous_membership,
+                )
+        for membership in proposed_memberships.values():
+            previous_membership = previous_memberships.get(membership.document_id)
+            if previous_membership is None or previous_membership == membership:
+                transaction.add_corpus_update_document_membership(
+                    manifest.corpus_id,
+                    manifest.corpus_version,
+                    membership,
+                )
+            else:
+                transaction.replace_corpus_update_document_membership(
+                    manifest.corpus_id,
+                    manifest.corpus_version,
+                    previous_membership,
+                    membership,
+                )
         published = publish_baseline_lexical_generations(
             transaction,
             repository,

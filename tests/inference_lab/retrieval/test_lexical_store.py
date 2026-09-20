@@ -20,10 +20,12 @@ from inference_lab.ingest import (
     ParsedDocument,
     SourceSpan,
     StructuralBlock,
+    begin_baseline_lexical_corpus_update,
     build_and_publish_baseline_lexical_generation,
     build_chunk_set,
     generate_source_span_id,
     map_chunk_set,
+    publish_baseline_lexical_generations,
 )
 from inference_lab.provenance import (
     ContentHash,
@@ -41,8 +43,10 @@ from inference_lab.retrieval import (
     LexicalError,
     LexicalFailureCategory,
     LexicalGenerationParticipant,
+    LexicalIndexConfiguration,
     build_lexical_generation,
     build_lexical_generation_for_corpus_update,
+    derive_lexical_generation_id,
     open_lexical_generation,
     select_lexical_parent_reference,
 )
@@ -56,11 +60,13 @@ from inference_lab.storage import (
     CorpusVersionManifest,
     MetadataRepository,
     NoCorpusChangeOutcome,
+    StorageConflictError,
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
 CORPUS_VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000002")
+SECOND_CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000003")
 
 
 class _FakeSnapshot:
@@ -224,19 +230,22 @@ def _source_manifest() -> tuple[BaselineChunkGenerationManifest, ChunkSet, Chunk
 def _seed_metadata_repository(
     repository: SQLiteMetadataRepository,
     source_manifest: BaselineChunkGenerationManifest,
+    *,
+    seed_catalogue: bool = True,
 ) -> None:
     """Persist the catalogue and exact chunk selections used by publication."""
     with repository.transaction() as transaction:
-        transaction.add_corpus(CorpusMetadata(CORPUS_ID, "test corpus"))
+        transaction.add_corpus(CorpusMetadata(source_manifest.corpus_id, "test corpus"))
         for ordinal, entry in enumerate(source_manifest.entries, start=1):
-            transaction.add_document(DocumentIdentity(entry.membership.document_id))
-            transaction.add_document_version(
-                DocumentVersion(
-                    entry.membership.document_version_id,
-                    entry.membership.document_id,
-                    ContentHash(HashAlgorithm.SHA256, str(ordinal).zfill(64)),
+            if seed_catalogue:
+                transaction.add_document(DocumentIdentity(entry.membership.document_id))
+                transaction.add_document_version(
+                    DocumentVersion(
+                        entry.membership.document_version_id,
+                        entry.membership.document_id,
+                        ContentHash(HashAlgorithm.SHA256, str(ordinal).zfill(64)),
+                    )
                 )
-            )
             transaction.add_corpus_document_version_membership(entry.membership)
             transaction.write_chunk_set(
                 ChunkSetWriteRequest(
@@ -244,6 +253,65 @@ def _seed_metadata_repository(
                     selection=entry.selection,
                 )
             )
+
+
+def _rebind_source_manifest(
+    source_manifest: BaselineChunkGenerationManifest,
+    *,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+    generation_id: str,
+) -> BaselineChunkGenerationManifest:
+    """Reuse detached selections under a different corpus/version identity."""
+    entries = tuple(
+        sorted(
+            (
+                BaselineChunkGenerationEntry(
+                    membership=CorpusDocumentVersionMembership(
+                        corpus_id=corpus_id,
+                        document_id=entry.membership.document_id,
+                        document_version_id=entry.membership.document_version_id,
+                    ),
+                    selection=entry.selection,
+                )
+                for entry in source_manifest.entries
+            ),
+            key=lambda entry: entry.key(),
+        )
+    )
+    return BaselineChunkGenerationManifest(
+        corpus_id=corpus_id,
+        corpus_version=corpus_version,
+        configuration_identity=source_manifest.configuration_identity,
+        generation_id=generation_id,
+        entries=entries,
+    )
+
+
+def _install_publication_failure(database_path: Path) -> None:
+    """Install a private SQLite failure at component registration."""
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """CREATE TRIGGER reject_lexical_publication
+            BEFORE INSERT ON corpus_update_component_generations
+            BEGIN
+                SELECT RAISE(ABORT, 'private-lexical-publication-failure');
+            END"""
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _remove_publication_failure(database_path: Path) -> None:
+    """Remove the private SQLite publication failure trigger."""
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("DROP TRIGGER reject_lexical_publication")
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def test_full_build_publishes_restartable_generation_with_source_links(
@@ -368,6 +436,232 @@ def test_pr3_build_and_publish_preserves_no_change_on_exact_parent_replay(
         assert isinstance(replay, NoCorpusChangeOutcome)
         with repository.open_active_corpus_snapshot(CORPUS_ID) as snapshot:
             assert snapshot.version.corpus_version == source_manifest.corpus_version
+    finally:
+        repository.close()
+
+
+def test_pr3_failed_publication_keeps_active_version_and_leaves_orphan_unreachable(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "metadata.sqlite3"
+    index_dir = tmp_path / "indexes"
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        database_path,
+        apply_migrations=True,
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        first = build_and_publish_baseline_lexical_generation(
+            repository,
+            index_dir,
+            source_manifest,
+            expected_corpus_version=None,
+        )
+        assert isinstance(first, CommitCorpusUpdateOutcome)
+
+        child = _rebind_source_manifest(
+            source_manifest,
+            corpus_id=CORPUS_ID,
+            corpus_version=CorpusVersionId.generate(),
+            generation_id="baseline-failed-generation",
+        )
+        child_generation_id = derive_lexical_generation_id(
+            child.corpus_id,
+            child.corpus_version,
+            LexicalIndexConfiguration(),
+            child.source_manifest_digest,
+        )
+        child_outcome = build_lexical_generation_for_corpus_update(
+            index_dir,
+            child,
+            repository,
+            expected_corpus_version=source_manifest.corpus_version,
+        )
+        child_participant = LexicalGenerationParticipant(
+            index_dir,
+            child_outcome,
+            child,
+        )
+        _install_publication_failure(database_path)
+
+        with pytest.raises(StorageConflictError) as raised:
+            with repository.transaction() as transaction:
+                begin_baseline_lexical_corpus_update(
+                    transaction,
+                    child.corpus_id,
+                    child.corpus_version,
+                    expected_corpus_version=source_manifest.corpus_version,
+                )
+                for entry in child.entries:
+                    transaction.add_corpus_update_document_membership(
+                        child.corpus_id,
+                        child.corpus_version,
+                        entry.membership,
+                    )
+                publish_baseline_lexical_generations(
+                    transaction,
+                    repository,
+                    child,
+                    child_participant,
+                )
+
+        assert "private-lexical-publication-failure" not in str(raised.value)
+        _remove_publication_failure(database_path)
+        with repository.open_active_corpus_snapshot(CORPUS_ID) as snapshot:
+            assert snapshot.version.corpus_version == source_manifest.corpus_version
+            assert len(snapshot.manifest.component_generations) == 2
+
+        orphan = index_dir / "lexical" / child_generation_id
+        assert orphan.is_dir()
+        with open_lexical_generation(index_dir, child_generation_id) as generation:
+            assert generation.manifest.corpus_version == child.corpus_version
+    finally:
+        repository.close()
+
+
+def test_pr3_reader_snapshot_stays_pinned_while_new_version_commits(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+            expected_corpus_version=None,
+        )
+
+        changed_version = DocumentVersionId.generate()
+        _, changed_selection = _selection(
+            "changed lexical content",
+            document_id=source_manifest.entries[0].membership.document_id,
+            document_version_id=changed_version,
+        )
+        changed_membership = CorpusDocumentVersionMembership(
+            corpus_id=CORPUS_ID,
+            document_id=source_manifest.entries[0].membership.document_id,
+            document_version_id=changed_version,
+        )
+        changed_entries = list(source_manifest.entries)
+        changed_entries[0] = BaselineChunkGenerationEntry(
+            membership=changed_membership,
+            selection=changed_selection,
+        )
+        changed_manifest = BaselineChunkGenerationManifest(
+            corpus_id=CORPUS_ID,
+            corpus_version=CorpusVersionId.generate(),
+            configuration_identity=source_manifest.configuration_identity,
+            generation_id="baseline-reader-update",
+            entries=tuple(sorted(changed_entries, key=lambda entry: entry.key())),
+        )
+        with repository.transaction() as transaction:
+            transaction.add_document_version(
+                DocumentVersion(
+                    changed_version,
+                    changed_membership.document_id,
+                    ContentHash(HashAlgorithm.SHA256, "c" * 64),
+                )
+            )
+            transaction.add_corpus_document_version_membership(changed_membership)
+            transaction.write_chunk_set(
+                ChunkSetWriteRequest(
+                    corpus_id=CORPUS_ID,
+                    selection=changed_selection,
+                )
+            )
+
+        with repository.open_active_corpus_snapshot(CORPUS_ID) as old_snapshot:
+            result = build_and_publish_baseline_lexical_generation(
+                repository,
+                tmp_path / "indexes",
+                changed_manifest,
+                expected_corpus_version=source_manifest.corpus_version,
+            )
+            assert isinstance(result, CommitCorpusUpdateOutcome)
+            assert old_snapshot.version.corpus_version == source_manifest.corpus_version
+            assert old_snapshot.manifest.document_memberships == tuple(
+                entry.membership for entry in source_manifest.entries
+            )
+
+        with repository.open_active_corpus_snapshot(CORPUS_ID) as current_snapshot:
+            assert (
+                current_snapshot.version.corpus_version
+                == changed_manifest.corpus_version
+            )
+            assert current_snapshot.manifest.document_memberships == tuple(
+                entry.membership for entry in changed_manifest.entries
+            )
+    finally:
+        repository.close()
+
+
+def test_pr3_two_corpora_isolate_active_lexical_generations(
+    tmp_path: Path,
+) -> None:
+    source_manifest, _, _ = _source_manifest()
+    second_manifest = _rebind_source_manifest(
+        source_manifest,
+        corpus_id=SECOND_CORPUS_ID,
+        corpus_version=CorpusVersionId.generate(),
+        generation_id="baseline-second-corpus",
+    )
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    try:
+        _seed_metadata_repository(repository, source_manifest)
+        _seed_metadata_repository(
+            repository,
+            second_manifest,
+            seed_catalogue=False,
+        )
+        first = build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+            expected_corpus_version=None,
+        )
+        second = build_and_publish_baseline_lexical_generation(
+            repository,
+            tmp_path / "indexes",
+            second_manifest,
+            expected_corpus_version=None,
+        )
+        assert isinstance(first, CommitCorpusUpdateOutcome)
+        assert isinstance(second, CommitCorpusUpdateOutcome)
+
+        with repository.open_active_corpus_snapshot(CORPUS_ID) as first_snapshot:
+            first_lexical = next(
+                (
+                    generation
+                    for generation in first_snapshot.manifest.component_generations
+                    if generation.component_kind.as_str() == "lexical-index"
+                ),
+                None,
+            )
+            assert first_lexical is not None
+            with repository.open_active_corpus_snapshot(
+                SECOND_CORPUS_ID
+            ) as second_snapshot:
+                second_lexical = next(
+                    (
+                        generation
+                        for generation in second_snapshot.manifest.component_generations
+                        if generation.component_kind.as_str() == "lexical-index"
+                    ),
+                    None,
+                )
+                assert second_lexical is not None
+                assert first_lexical.corpus_id == CORPUS_ID
+                assert second_lexical.corpus_id == SECOND_CORPUS_ID
+                assert first_lexical.generation_id != second_lexical.generation_id
     finally:
         repository.close()
 
