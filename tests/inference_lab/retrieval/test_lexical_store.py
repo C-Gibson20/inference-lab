@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     CURRENT_PARSER_VERSION,
@@ -256,6 +257,15 @@ def _source_manifest() -> tuple[BaselineChunkGenerationManifest, ChunkSet, Chunk
         entries=entries,
     )
     return manifest, first, second
+
+
+def _privacy_source_manifest() -> BaselineChunkGenerationManifest:
+    """Return a fixture with distinctive query and indexed payload markers."""
+    _, first_selection = _selection(
+        "private lexical chunk marker with 10.1234/PRIVATE-7"
+    )
+    _, second_selection = _selection("private secondary chunk marker")
+    return _manifest((first_selection, second_selection))
 
 
 def _seed_metadata_repository(
@@ -1186,6 +1196,105 @@ def test_pr4_query_profiles_unavailable_generation_without_payloads(
         assert failures[0].failure_code == "generation_unavailable"
         assert marker not in repr(sink.records)
         assert str(tmp_path) not in repr(sink.records)
+    finally:
+        repository.close()
+
+
+def test_pr4_query_keeps_payloads_out_of_observability_surfaces(
+    tmp_path: Path,
+) -> None:
+    source_manifest = _privacy_source_manifest()
+    repository = SQLiteMetadataRepository.open(
+        tmp_path / "metadata.sqlite3",
+        apply_migrations=True,
+    )
+    sink = _CollectingSink()
+    profiling = ProfilingContext.create(
+        run_id="run-lexical-privacy",
+        sink=sink,
+        clock=iter(range(0, 200_000_000, 10_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
+    )
+    query_marker = "private lexical query marker"
+    chunk_marker = "private lexical chunk marker"
+    identifier_marker = "10.1234/PRIVATE-7"
+    raw_error_marker = "private lexical sqlite error marker"
+    try:
+        outcome = _publish_query_fixture(
+            repository,
+            tmp_path / "indexes",
+            source_manifest,
+        )
+        with capture_logs() as logs:
+            result = execute_lexical_retrieval(
+                repository,
+                tmp_path / "indexes",
+                CORPUS_ID,
+                LexicalQuery(
+                    RetrievalQuery(
+                        query_marker,
+                        source_manifest.corpus_version,
+                        RetrievalLimit(5),
+                    )
+                ),
+                profiling=profiling,
+                profiling_identity="privacy-success",
+            )
+
+        assert result.status.value == "completed"
+        assert result.hits == ()
+        assert result.failures == ()
+        safe_surfaces = (repr(result), repr(sink.records), repr(logs))
+        for marker in (
+            query_marker,
+            chunk_marker,
+            identifier_marker,
+            str(tmp_path),
+        ):
+            assert all(marker not in surface for surface in safe_surfaces)
+
+        database = (
+            tmp_path
+            / "indexes"
+            / "lexical"
+            / _published_lexical_generation_id(outcome)
+            / "index.sqlite3"
+        )
+        with database.open("ab") as stream:
+            stream.write(raw_error_marker.encode())
+
+        with capture_logs() as failure_logs:
+            failed = execute_lexical_retrieval(
+                repository,
+                tmp_path / "indexes",
+                CORPUS_ID,
+                LexicalQuery(
+                    RetrievalQuery(
+                        query_marker,
+                        source_manifest.corpus_version,
+                        RetrievalLimit(5),
+                    )
+                ),
+                profiling=profiling,
+                profiling_identity="privacy-failure",
+            )
+
+        assert failed.status.value == "failed"
+        assert failed.hits == ()
+        assert failed.failures[0].category.value == "channel_unavailable"
+        failure_surfaces = (
+            repr(failed),
+            repr(sink.records),
+            repr(failure_logs),
+        )
+        for marker in (
+            query_marker,
+            chunk_marker,
+            identifier_marker,
+            raw_error_marker,
+            str(tmp_path),
+        ):
+            assert all(marker not in surface for surface in failure_surfaces)
     finally:
         repository.close()
 
