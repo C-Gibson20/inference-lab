@@ -40,10 +40,10 @@ runtime values.
 
 ## Current status
 
-The entry point is currently a skeleton. Ingest, search, and answer commands
-will be added through the dependency-ordered serving work. Once the first
-executable query workflow is available, this page will include a complete
-clean-checkout walkthrough:
+The local Python serving API supports corpus creation, ingest, and lexical
+search. The entry point is still a skeleton, so use the executable query
+example in [Running queries](querying.md) after ingesting through the API.
+The clean local workflow is:
 
 1. create or select a named corpus;
 2. prepare deterministic or local sources and ingest them incrementally into
@@ -53,7 +53,8 @@ clean-checkout walkthrough:
 5. confirm source-linked results.
 
 Do not treat successful process startup as evidence that a corpus is indexed
-or queryable.
+or queryable. Verify the committed corpus version and run the fresh-process
+query example against the same `config.toml`.
 
 The discovery APIs and their current operational boundaries are documented in
 [local source discovery](source-discovery.md). There is not yet a supported

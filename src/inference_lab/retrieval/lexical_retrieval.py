@@ -1,6 +1,7 @@
 """Pinned-snapshot execution for the lexical retrieval channel."""
 
 import asyncio
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -176,14 +177,23 @@ def execute_lexical_retrieval(
     profiling: ProfilingContext | None = None,
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
+    snapshot: CorpusSnapshot | None = None,
 ) -> EvidenceResult:
-    """Execute one lexical query and instrument its bounded retrieval stage."""
+    """Execute one lexical query and instrument its bounded retrieval stage.
+
+    When ``snapshot`` is supplied, it is borrowed for the duration of this
+    call and is never closed here.  This lets a serving owner keep lexical
+    execution, metadata filtering, and source-location resolution on one
+    pinned corpus version.
+    """
     if profiling is not None and not isinstance(profiling, ProfilingContext):
         raise TypeError("profiling must be a ProfilingContext or None.")
     if parent_stage_id is not None and not isinstance(parent_stage_id, str):
         raise TypeError("parent_stage_id must be a string or None.")
     if not isinstance(profiling_identity, str) or not profiling_identity:
         raise ValueError("profiling_identity must be a non-empty string.")
+    if snapshot is not None and not _is_snapshot_reader(snapshot):
+        raise TypeError("snapshot must provide corpus snapshot reads or be None.")
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
         raise TypeError("repository must provide corpus snapshots.")
     if not isinstance(index_dir, Path):
@@ -220,6 +230,7 @@ def execute_lexical_retrieval(
                 corpus_id,
                 query,
                 lexical_request,
+                snapshot=snapshot,
             )
         else:
             metadata_observation = _MetadataFilterObservation()
@@ -243,6 +254,7 @@ def execute_lexical_retrieval(
                     query,
                     lexical_request,
                     metadata_observation=metadata_observation,
+                    snapshot=snapshot,
                 )
                 if result.status is ResultStatus.COMPLETED:
                     metadata_stage.set_counts(
@@ -271,6 +283,7 @@ def _execute_lexical_retrieval(
     lexical_request: LexicalQuery,
     *,
     metadata_observation: _MetadataFilterObservation | None = None,
+    snapshot: CorpusSnapshot | None = None,
 ) -> EvidenceResult:
     """Execute one lexical query against exactly one pinned corpus snapshot."""
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
@@ -283,27 +296,36 @@ def _execute_lexical_retrieval(
         raise TypeError("query must be a RetrievalQuery.")
     if not isinstance(lexical_request, LexicalQuery):
         raise TypeError("lexical_request must be a LexicalQuery.")
+    if snapshot is not None and not _is_snapshot_reader(snapshot):
+        raise TypeError("snapshot must provide corpus snapshot reads or be None.")
 
     metadata_validation = (
         None if query.filter is None else validate_metadata_filter(query.filter)
     )
 
     try:
-        with repository.open_corpus_snapshot(
-            corpus_id,
-            query.corpus_version,
-        ) as snapshot:
-            if snapshot.version.corpus_version != query.corpus_version:
+        snapshot_context = (
+            nullcontext(snapshot)
+            if snapshot is not None
+            else repository.open_corpus_snapshot(
+                corpus_id,
+                query.corpus_version,
+            )
+        )
+        with snapshot_context as selected_snapshot:
+            if selected_snapshot is None:
+                return _failed_result(query, FailureCategory.CHANNEL_UNAVAILABLE)
+            if selected_snapshot.version.corpus_version != query.corpus_version:
                 return EvidenceResult.from_query(
                     query,
-                    observed_corpus_version=snapshot.version.corpus_version,
+                    observed_corpus_version=selected_snapshot.version.corpus_version,
                     hits=(),
                     status=ResultStatus.FAILED,
                     failures=(),
                 )
             references = tuple(
                 generation
-                for generation in snapshot.manifest.component_generations
+                for generation in selected_snapshot.manifest.component_generations
                 if generation.component_kind.as_str() == LEXICAL_COMPONENT_KIND
             )
             if len(references) != 1:
@@ -348,7 +370,7 @@ def _execute_lexical_retrieval(
                                 lexical_request,
                                 query,
                                 metadata_validation,
-                                snapshot,
+                                selected_snapshot,
                             )
                         else:
                             matches, items_processed = (
@@ -357,7 +379,7 @@ def _execute_lexical_retrieval(
                                     lexical_request,
                                     query,
                                     metadata_validation,
-                                    snapshot,
+                                    selected_snapshot,
                                 )
                             )
                             metadata_observation.items_processed = items_processed
@@ -365,7 +387,7 @@ def _execute_lexical_retrieval(
                     hits = _build_hits(lexical_request, matches)
                     return EvidenceResult.from_query(
                         query,
-                        observed_corpus_version=snapshot.version.corpus_version,
+                        observed_corpus_version=selected_snapshot.version.corpus_version,
                         hits=hits,
                         status=ResultStatus.COMPLETED,
                         failures=(),
@@ -388,6 +410,20 @@ def _execute_lexical_retrieval(
             return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
         return _failed_result(query, FailureCategory.CHANNEL_UNAVAILABLE)
     return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
+
+
+def _is_snapshot_reader(snapshot: object) -> bool:
+    """Check the narrow borrowed snapshot surface used by this executor."""
+    return all(
+        callable(getattr(snapshot, method_name, None))
+        for method_name in (
+            "get_source_artefact",
+            "get_parsed_representation",
+            "resolve_source_span",
+        )
+    ) and all(
+        hasattr(snapshot, property_name) for property_name in ("version", "manifest")
+    )
 
 
 def _normalise_request(
