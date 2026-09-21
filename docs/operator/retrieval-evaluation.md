@@ -1,9 +1,8 @@
 # Retrieval-evaluation runbook
 
-> **Status:** The reproducible retrieval-evaluation runner, publication bundle,
+> **Status:** The reproducible runner, local lexical adapter, publication bundle,
 > comparison, and deterministic report are implemented. This checkout contains
-> only synthetic contract fixtures; run a real evaluation only in the local
-> deployment that owns the pinned dataset, corpus snapshot, and adapter.
+> only synthetic contract fixtures; no real-corpus baseline score is claimed.
 
 This procedure measures one selected split of one immutable evaluation dataset
 against exactly one pinned corpus version. It does not send queries to a
@@ -16,9 +15,10 @@ corpus version implicitly.
    that its `corpus_id` and `corpus_version` identify the intended corpus
    generation.
 2. Prepare a deployment-local zero-argument request factory returning a
-   complete `RetrievalEvaluationRequest`. It owns dataset loading, the pinned
-   relationship snapshot, the retrieval adapter, and any private query
-   construction.
+   complete `RetrievalEvaluationRequest`. The shipped
+   `LocalLexicalEvaluationAdapter` uses the case question verbatim in lexical
+   terms mode, pins the selected historical generation, and declares its
+   actual configuration and generation identity.
 3. Ensure the adapter declares a complete path-free
    `RetrievalSystemIdentity`. Its algorithm, configuration, component
    generations, and model identities are part of reproducibility.
@@ -34,12 +34,82 @@ not discover files, open storage, choose a corpus version, or construct a
 query from command-line text. It invokes the injected adapter with one shared
 profiling context and keeps timing observations out of quality identity.
 
+For a real 30–50-question dataset, save the following file outside the
+repository as `/deployment/private/retrieval_request.py`. Run it from the
+directory containing that deployment's `config.toml`. Set `EVAL_DATASET_MANIFEST`
+to the validated, immutable local dataset manifest. Keep the question file,
+this factory, source storage, and reports private.
+
+```python
+import atexit
+import os
+from pathlib import Path
+
+from inference_lab.evaluation import (
+    LocalLexicalEvaluationAdapter,
+    RetrievalEvaluationPolicy,
+    RetrievalEvaluationRequest,
+    lexical_relationship_snapshot,
+    load_dataset,
+    validate_final_benchmark,
+)
+from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.settings import get_settings
+from inference_lab.storage import open_metadata_repository
+
+
+def build_request():
+    dataset = load_dataset(Path(os.environ["EVAL_DATASET_MANIFEST"]))
+    validate_final_benchmark(dataset.cases)
+    corpus_id = CorpusId.from_str(dataset.manifest.corpus_id)
+    corpus_version = CorpusVersionId.from_str(dataset.manifest.corpus_version)
+    settings = get_settings()
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=False,
+    )
+    atexit.register(repository.close)
+    return RetrievalEvaluationRequest(
+        dataset=dataset,
+        selected_case_ids=tuple(dataset.manifest.splits["held_out"]),
+        selected_split="held_out",
+        corpus_id=corpus_id,
+        corpus_version=corpus_version,
+        policy=RetrievalEvaluationPolicy(
+            passage_cutoffs=(1, 5, 10), candidate_depth=50
+        ),
+        relationship_snapshot=lexical_relationship_snapshot(
+            repository, corpus_id, corpus_version
+        ),
+        adapter=LocalLexicalEvaluationAdapter(
+            repository,
+            settings.storage.index_dir,
+            corpus_id,
+            corpus_version,
+        ),
+    )
+```
+
+The snapshot helper reads the selected version's visible membership, duplicate,
+and family records. Do not substitute the mutable corpus catalogue for this
+version-scoped snapshot. For development iteration, change both
+`selected_split` and `selected_case_ids` to `development`; never tune against
+the held-out result. Verbatim terms mode applies the lexical engine's AND-term
+policy to the whole question, including ordinary question words. This is an
+intentionally strict, measurable baseline, not a query-rewriting or answer
+quality claim. Record its no-result and failure denominators before comparing
+future retrieval stages against it.
+
 ## Run and publish
 
-From the repository root, run:
+From the deployment directory containing `config.toml`, set the absolute
+checkout path and run:
 
 ```sh
-uv run python scripts/inference_lab/evaluation/run-retrieval-evaluation.py \
+export CHECKOUT=/absolute/path/to/inference-lab
+export EVAL_DATASET_MANIFEST=/deployment/private/retrieval-dataset/manifest.json
+uv run --project "$CHECKOUT" python "$CHECKOUT/scripts/inference_lab/evaluation/run-retrieval-evaluation.py" \
   --request-factory /deployment/private/retrieval_request.py:build_request \
   --output /deployment/private/retrieval-output/run-001
 ```
@@ -93,7 +163,7 @@ Run the same request factory into a second absent directory and compare it with
 the first run before publication:
 
 ```sh
-uv run python scripts/inference_lab/evaluation/run-retrieval-evaluation.py \
+uv run --project "$CHECKOUT" python "$CHECKOUT/scripts/inference_lab/evaluation/run-retrieval-evaluation.py" \
   --request-factory /deployment/private/retrieval_request.py:build_request \
   --compare-to /deployment/private/retrieval-output/run-001 \
   --output /deployment/private/retrieval-output/run-002
