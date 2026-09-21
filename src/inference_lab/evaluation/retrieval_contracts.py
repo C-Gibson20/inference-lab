@@ -575,7 +575,18 @@ class DuplicateRelationshipSnapshot:
             )
         )
         canonical_duplicates = tuple(sorted(duplicates, key=DuplicateRelationship.key))
-        canonical_families = tuple(sorted(families, key=DocumentFamilyMembership.key))
+        canonical_families = tuple(
+            sorted(
+                families,
+                key=lambda membership: (
+                    membership.family_id.as_str(),
+                    membership.document_id.as_str(),
+                    membership.document_version_id.as_str()
+                    if membership.document_version_id is not None
+                    else "",
+                ),
+            )
+        )
         object.__setattr__(self, "memberships", canonical_memberships)
         object.__setattr__(self, "duplicate_relationships", canonical_duplicates)
         object.__setattr__(self, "family_memberships", canonical_families)
@@ -819,6 +830,78 @@ class RecallMetric:
 
 
 @dataclass(frozen=True, slots=True)
+class RecallMatchRanks:
+    """Earliest result rank for each private relevance target."""
+
+    cutoff: int
+    ranks: tuple[int | None, ...]
+
+    def __post_init__(self) -> None:
+        """Validate bounded match-rank diagnostics."""
+        _require_positive_integer(self.cutoff, "cutoff")
+        ranks = cast(
+            tuple[int | None, ...],
+            _require_tuple(self.ranks, "ranks"),
+        )
+        for rank in ranks:
+            if rank is not None:
+                _require_positive_integer(rank, "match rank")
+
+    def as_dict(self) -> dict[str, object]:
+        """Return match ranks without exposing the matched target identities."""
+        return {"cutoff": self.cutoff, "ranks": list(self.ranks)}
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateDiagnostics:
+    """Bounded per-case diagnostics for duplicate and family crowding."""
+
+    raw_hit_count: int
+    distinct_record_count: int
+    distinct_document_count: int
+    distinct_duplicate_group_count: int
+    distinct_family_count: int
+    unknown_family_document_count: int
+    exact_document_repeat_excess: int
+    byte_identical_group_repeat_excess: int
+    family_member_repeat_excess: int
+    relevant_non_gold_duplicate_copy_count: int
+
+    def __post_init__(self) -> None:
+        """Validate all diagnostic counts as non-negative integers."""
+        for field_name in (
+            "raw_hit_count",
+            "distinct_record_count",
+            "distinct_document_count",
+            "distinct_duplicate_group_count",
+            "distinct_family_count",
+            "unknown_family_document_count",
+            "exact_document_repeat_excess",
+            "byte_identical_group_repeat_excess",
+            "family_member_repeat_excess",
+            "relevant_non_gold_duplicate_copy_count",
+        ):
+            _require_non_negative_integer(getattr(self, field_name), field_name)
+
+    def as_dict(self) -> dict[str, int]:
+        """Return the bounded duplicate/family diagnostics."""
+        return {
+            "raw_hit_count": self.raw_hit_count,
+            "distinct_record_count": self.distinct_record_count,
+            "distinct_document_count": self.distinct_document_count,
+            "distinct_duplicate_group_count": self.distinct_duplicate_group_count,
+            "distinct_family_count": self.distinct_family_count,
+            "unknown_family_document_count": self.unknown_family_document_count,
+            "exact_document_repeat_excess": self.exact_document_repeat_excess,
+            "byte_identical_group_repeat_excess": self.byte_identical_group_repeat_excess,
+            "family_member_repeat_excess": self.family_member_repeat_excess,
+            "relevant_non_gold_duplicate_copy_count": (
+                self.relevant_non_gold_duplicate_copy_count
+            ),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RetrievalCaseResult:
     """One safe terminal result for one selected evaluation case."""
 
@@ -832,7 +915,11 @@ class RetrievalCaseResult:
     hits: tuple[SanitisedHitReference, ...]
     failures: tuple[SanitisedFailure, ...]
     document_recall: RecallMetric | None = None
-    passage_recall: tuple[RecallMetric, ...] = ()
+    passage_recall: tuple[RecallMetric | None, ...] = ()
+    document_match_ranks: tuple[int | None, ...] = ()
+    passage_match_ranks: tuple[RecallMatchRanks, ...] = ()
+    document_depth_exhausted: bool = False
+    duplicate_diagnostics: DuplicateDiagnostics | None = None
 
     def __post_init__(self) -> None:
         self._validate()
@@ -856,15 +943,46 @@ class RetrievalCaseResult:
             _require_tuple(self.failures, "failures"),
         )
         passage_metrics = cast(
-            tuple[RecallMetric, ...],
+            tuple[RecallMetric | None, ...],
             _require_tuple(self.passage_recall, "passage_recall"),
+        )
+        document_match_ranks = cast(
+            tuple[int | None, ...],
+            _require_tuple(self.document_match_ranks, "document_match_ranks"),
+        )
+        passage_match_ranks = cast(
+            tuple[RecallMatchRanks, ...],
+            _require_tuple(self.passage_match_ranks, "passage_match_ranks"),
         )
         if any(not isinstance(hit, SanitisedHitReference) for hit in hits):
             raise TypeError("hits must contain only SanitisedHitReference values.")
         if any(not isinstance(failure, SanitisedFailure) for failure in failures):
             raise TypeError("failures must contain only SanitisedFailure values.")
-        if any(not isinstance(metric, RecallMetric) for metric in passage_metrics):
-            raise TypeError("passage_recall must contain only RecallMetric values.")
+        if any(
+            metric is not None and not isinstance(metric, RecallMetric)
+            for metric in passage_metrics
+        ):
+            raise TypeError("passage_recall must contain RecallMetric or None values.")
+        if any(rank is not None for rank in document_match_ranks):
+            for rank in document_match_ranks:
+                if rank is not None:
+                    _require_positive_integer(rank, "document match rank")
+        if any(
+            not isinstance(match_ranks, RecallMatchRanks)
+            for match_ranks in passage_match_ranks
+        ):
+            raise TypeError(
+                "passage_match_ranks must contain only RecallMatchRanks values."
+            )
+        if type(self.document_depth_exhausted) is not bool:
+            raise TypeError("document_depth_exhausted must be a boolean.")
+        if self.duplicate_diagnostics is not None and not isinstance(
+            self.duplicate_diagnostics,
+            DuplicateDiagnostics,
+        ):
+            raise TypeError(
+                "duplicate_diagnostics must be a DuplicateDiagnostics or None."
+            )
         ranks = tuple(hit.rank for hit in hits)
         if ranks != tuple(range(1, len(hits) + 1)):
             raise RetrievalEvaluationContractError(
@@ -890,10 +1008,17 @@ class RetrievalCaseResult:
             raise RetrievalEvaluationContractError(
                 "document recall must use cutoff 10."
             )
-        cutoffs = tuple(metric.cutoff for metric in passage_metrics)
-        if cutoffs != tuple(sorted(set(cutoffs))):
+        present_cutoffs = tuple(
+            metric.cutoff for metric in passage_metrics if metric is not None
+        )
+        if present_cutoffs != tuple(sorted(set(present_cutoffs))):
             raise RetrievalEvaluationContractError(
                 "passage recall cut-offs must be strictly increasing and unique."
+            )
+        match_cutoffs = tuple(metric.cutoff for metric in passage_match_ranks)
+        if match_cutoffs != tuple(sorted(set(match_cutoffs))):
+            raise RetrievalEvaluationContractError(
+                "passage match cut-offs must be strictly increasing and unique."
             )
 
     @property
@@ -952,7 +1077,20 @@ class RetrievalCaseResult:
                 if self.document_recall is not None
                 else None
             ),
-            "passage_recall": [metric.as_dict() for metric in self.passage_recall],
+            "passage_recall": [
+                metric.as_dict() if metric is not None else None
+                for metric in self.passage_recall
+            ],
+            "document_match_ranks": list(self.document_match_ranks),
+            "passage_match_ranks": [
+                match_ranks.as_dict() for match_ranks in self.passage_match_ranks
+            ],
+            "document_depth_exhausted": self.document_depth_exhausted,
+            "duplicate_diagnostics": (
+                self.duplicate_diagnostics.as_dict()
+                if self.duplicate_diagnostics is not None
+                else None
+            ),
         }
 
     @property
@@ -1055,6 +1193,7 @@ class RetrievalEvaluationAggregate:
     case_count: int
     document: AggregateMetric
     passage: tuple[AggregateMetric, ...]
+    duplicate_diagnostics: DuplicateDiagnostics | None = None
 
     def __post_init__(self) -> None:
         self._validate()
@@ -1069,6 +1208,13 @@ class RetrievalEvaluationAggregate:
         )
         if any(not isinstance(metric, AggregateMetric) for metric in passage):
             raise TypeError("passage must contain only AggregateMetric values.")
+        if self.duplicate_diagnostics is not None and not isinstance(
+            self.duplicate_diagnostics,
+            DuplicateDiagnostics,
+        ):
+            raise TypeError(
+                "duplicate_diagnostics must be a DuplicateDiagnostics or None."
+            )
         cutoffs = tuple(metric.cutoff for metric in passage)
         if cutoffs != tuple(sorted(set(cutoffs))):
             raise RetrievalEvaluationContractError(
@@ -1097,6 +1243,11 @@ class RetrievalEvaluationAggregate:
             "case_count": self.case_count,
             "document": self.document.as_dict(),
             "passage": [metric.as_dict() for metric in self.passage],
+            "duplicate_diagnostics": (
+                self.duplicate_diagnostics.as_dict()
+                if self.duplicate_diagnostics is not None
+                else None
+            ),
         }
 
 
