@@ -144,6 +144,10 @@ from inference_lab.evaluation.retrieval_report_codec import (
 from inference_lab.evaluation.retrieval_report_contracts import (
     RetrievalEvaluationReport,
 )
+from inference_lab.evaluation.retrieval_report_publication import (
+    RetrievalEvaluationPublicationError,
+    publish_retrieval_evaluation,
+)
 from inference_lab.evaluation.retrieval_scoring import (
     DocumentRelevanceTarget,
     PassageRelevanceTarget,
@@ -271,6 +275,7 @@ __all__ = [
     "RetrievalEvaluationContractError",
     "RetrievalEvaluationExecutionError",
     "RetrievalEvaluationPolicy",
+    "RetrievalEvaluationPublicationError",
     "RetrievalEvaluationReport",
     "RetrievalEvaluationRequest",
     "RetrievalEvaluationRunArtifact",
@@ -306,6 +311,7 @@ __all__ = [
     "load_dataset",
     "parser_capability_profile",
     "publish_audit_report",
+    "publish_retrieval_evaluation",
     "render_audit_report",
     "report_content_digest",
     "retrieval_result_digest",
