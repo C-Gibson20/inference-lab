@@ -12,6 +12,7 @@ from inference_lab.ingest import (
     BaselineIngestSummary,
     BaselineManifestState,
     BaselinePublicationStatus,
+    BaselineRequestExecutionError,
     BaselineStage,
     BaselineStageCounts,
     DiscoveryStatus,
@@ -41,6 +42,7 @@ from inference_lab.storage import (
     NoCorpusChangeOutcome,
     StorageConcurrencyError,
     StorageConflictError,
+    WorkerRepositoryOpener,
 )
 
 
@@ -52,6 +54,10 @@ class LocalServingFacade:
             raise TypeError("settings must be Settings.")
         if not callable(getattr(repository, "transaction", None)):
             raise TypeError("repository must provide metadata transactions.")
+        if settings.ingest.max_concurrent_documents > 1 and not isinstance(
+            repository, WorkerRepositoryOpener
+        ):
+            raise TypeError("parallel ingest requires worker repository ownership.")
         self._repository: _ServingRepository = cast(_ServingRepository, repository)
         self._settings = settings
         self._documents = ServingDocumentRunner(self._repository, settings)
@@ -168,6 +174,15 @@ class LocalServingFacade:
             )
         except (StorageConflictError, ServingIngestError):
             raise
+        except BaselineRequestExecutionError as error:
+            return BaselineIngestSummary(
+                corpus_id=request.corpus_id,
+                proposed_corpus_version=request.proposed_corpus_version,
+                expected_corpus_version=request.expected_corpus_version,
+                execution_status=BaselineExecutionStatus.FAILED,
+                publication_status=BaselinePublicationStatus.NOT_PUBLISHED,
+                failures=(error.failure,),
+            )
         except StorageConcurrencyError:
             return self._publication.failed_summary(
                 request,

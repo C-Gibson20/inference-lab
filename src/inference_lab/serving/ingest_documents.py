@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from time import sleep
+from typing import TypeVar
+
 from inference_lab.ingest import (
     BaselineChunkRequest,
     BaselineDocumentOutcome,
     BaselineDocumentOutcomeKind,
     BaselineDocumentTask,
+    BaselineFailure,
     BaselineFailureCategory,
     BaselineFailureScope,
     BaselineFailureSeverity,
     BaselineParseRequest,
+    BaselineRequestExecutionError,
     BaselineStage,
     BaselineStageDisposition,
     BaselineWorkKey,
@@ -54,7 +60,75 @@ from inference_lab.settings import Settings
 from inference_lab.storage import (
     BaselineCheckpointRecordStage,
     BaselineCheckpointRecordStatus,
+    StorageConcurrencyError,
 )
+
+_Result = TypeVar("_Result")
+
+
+def _is_storage_contention(error: BaseException) -> bool:
+    """Recognise typed SQLite lock expiry through bounded stage wrappers."""
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, StorageConcurrencyError):
+            return True
+        current = current.__cause__
+    return False
+
+
+def _retry_storage_contention(operation: Callable[[], _Result]) -> _Result:
+    """Retry complete idempotent stage attempts after transient lock expiry."""
+    retries = 0
+    while True:
+        try:
+            return operation()
+        except Exception as error:
+            if not _is_storage_contention(error) or retries >= 3:
+                raise
+            sleep(0.01 * (2**retries))
+            retries += 1
+
+
+def _request_contention_failure(
+    stage: BaselineStage,
+    category: BaselineFailureCategory,
+) -> BaselineRequestExecutionError:
+    """Keep exhausted contention retryable without sealing the work key."""
+    return BaselineRequestExecutionError(
+        BaselineFailure(
+            stage=stage,
+            category=category,
+            scope=BaselineFailureScope.REQUEST,
+            severity=BaselineFailureSeverity.FATAL,
+            retryable=True,
+        )
+    )
+
+
+def _retry_repository_operation(
+    operation: Callable[[], _Result],
+    *,
+    stage: BaselineStage,
+) -> _Result:
+    """Keep exhausted repository contention a retryable request failure."""
+    try:
+        return _retry_storage_contention(operation)
+    except Exception as error:
+        if _is_storage_contention(error):
+            raise _request_contention_failure(
+                stage,
+                BaselineFailureCategory.STORAGE_UNAVAILABLE,
+            ) from None
+        raise
+
+
+def _checkpoint_persistence_stage(stage: BaselineStage) -> BaselineStage:
+    """Map the two durable document work keys to their storage stage."""
+    if stage is BaselineStage.PARSE:
+        return BaselineStage.PARSE_PERSISTENCE
+    if stage is BaselineStage.CHUNK:
+        return BaselineStage.CHUNK_PERSISTENCE
+    raise ValueError("checkpoint stage must be parse or chunk.")
 
 
 class ServingDocumentRunner:
@@ -127,6 +201,10 @@ class ServingDocumentRunner:
                         ),
                     )
                 assert source is not None
+                if self._settings.ingest.max_concurrent_documents > 1:
+                    return self.process_source_on_worker(
+                        request, source, profiling, parent_memberships
+                    )
                 return self.process_source(
                     request, source, profiling, parent_memberships
                 )
@@ -139,6 +217,32 @@ class ServingDocumentRunner:
                 )
             )
         return tuple(tasks)
+
+    def process_source_on_worker(
+        self,
+        request: ServingIngestRequest,
+        source: DiscoveredSource,
+        profiling: BaselineProfilingContext,
+        parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
+    ) -> BaselineDocumentOutcome:
+        """Own a validated repository only for this document worker's lifetime."""
+        repository = _retry_repository_operation(
+            self._repository.open_worker_repository,
+            stage=BaselineStage.PARSE_PERSISTENCE,
+        )
+        runner = ServingDocumentRunner(repository, self._settings)
+        try:
+            outcome = runner.process_source(
+                request, source, profiling, parent_memberships
+            )
+        except BaseException:
+            try:
+                repository.close()
+            except Exception:
+                pass
+            raise
+        repository.close()
+        return outcome
 
     def process_source(
         self,
@@ -209,25 +313,36 @@ class ServingDocumentRunner:
             )
         if (
             parse_checkpoint.status is BaselineCheckpointStatus.COMPLETED
-            and self._repository.get_parse_outcome(request.corpus_id, parse_id) is None
+            and _retry_repository_operation(
+                lambda: self._repository.get_parse_outcome(request.corpus_id, parse_id),
+                stage=BaselineStage.PARSE_PERSISTENCE,
+            )
+            is None
         ):
             raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
         try:
-            parsed = execute_baseline_parse(
-                self._repository,
-                BaselineParseRequest(
-                    work_key=parse_key,
-                    source=source,
-                    parser_version=request.parser_version,
-                    parse_id=parse_id,
-                    parsed_record_id=parsed_record_id,
-                ),
-                settings=self._settings,
-                parser_registry=request.parser_registry,
-                filesystem=request.source_filesystem,
-                profiling=profiling,
+            parsed = _retry_storage_contention(
+                lambda: execute_baseline_parse(
+                    self._repository,
+                    BaselineParseRequest(
+                        work_key=parse_key,
+                        source=source,
+                        parser_version=request.parser_version,
+                        parse_id=parse_id,
+                        parsed_record_id=parsed_record_id,
+                    ),
+                    settings=self._settings,
+                    parser_registry=request.parser_registry,
+                    filesystem=request.source_filesystem,
+                    profiling=profiling,
+                )
             )
         except Exception as error:
+            if _is_storage_contention(error):
+                raise _request_contention_failure(
+                    BaselineStage.PARSE_PERSISTENCE,
+                    BaselineFailureCategory.PARSE_PERSISTENCE_FAILED,
+                ) from None
             if parse_checkpoint.status is BaselineCheckpointStatus.COMPLETED:
                 raise ServingIngestError(
                     ServingIngestFailureCategory.INCOMPATIBLE_RESUME
@@ -313,28 +428,38 @@ class ServingDocumentRunner:
             )
         if (
             chunk_checkpoint.status is BaselineCheckpointStatus.COMPLETED
-            and self._repository.get_chunk_set_selection(
-                request.corpus_id,
-                version.document_version_id,
-                request.configuration_identity,
+            and _retry_repository_operation(
+                lambda: self._repository.get_chunk_set_selection(
+                    request.corpus_id,
+                    version.document_version_id,
+                    request.configuration_identity,
+                ),
+                stage=BaselineStage.CHUNK_PERSISTENCE,
             )
             is None
         ):
             raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
         try:
-            chunked = execute_baseline_chunk(
-                self._repository,
-                BaselineChunkRequest(
-                    corpus_id=request.corpus_id,
-                    work_key=chunk_key,
-                    parse_result=parsed,
-                    tokeniser=request.tokeniser,
-                    policy=request.chunking_policy,
-                    chunker_version=request.chunker_version,
-                ),
-                profiling=profiling,
+            chunked = _retry_storage_contention(
+                lambda: execute_baseline_chunk(
+                    self._repository,
+                    BaselineChunkRequest(
+                        corpus_id=request.corpus_id,
+                        work_key=chunk_key,
+                        parse_result=parsed,
+                        tokeniser=request.tokeniser,
+                        policy=request.chunking_policy,
+                        chunker_version=request.chunker_version,
+                    ),
+                    profiling=profiling,
+                )
             )
         except Exception as error:
+            if _is_storage_contention(error):
+                raise _request_contention_failure(
+                    BaselineStage.CHUNK_PERSISTENCE,
+                    BaselineFailureCategory.CHUNK_PERSISTENCE_FAILED,
+                ) from None
             if chunk_checkpoint.status is BaselineCheckpointStatus.COMPLETED:
                 raise ServingIngestError(
                     ServingIngestFailureCategory.INCOMPATIBLE_RESUME
@@ -397,12 +522,15 @@ class ServingDocumentRunner:
         started: BaselineCheckpoint,
     ) -> BaselineCheckpoint:
         """Recover an exact stage attempt or create its first durable marker."""
-        record = self._repository.get_baseline_checkpoint(
-            request.corpus_id,
-            request.proposed_corpus_version,
-            started.work_key.document_version_id,
-            BaselineCheckpointRecordStage(started.work_key.stage.value),
-            request.configuration_identity,
+        record = _retry_repository_operation(
+            lambda: self._repository.get_baseline_checkpoint(
+                request.corpus_id,
+                request.proposed_corpus_version,
+                started.work_key.document_version_id,
+                BaselineCheckpointRecordStage(started.work_key.stage.value),
+                request.configuration_identity,
+            ),
+            stage=_checkpoint_persistence_stage(started.work_key.stage),
         )
         if record is None:
             self.write_checkpoint(request, started)
@@ -460,12 +588,19 @@ class ServingDocumentRunner:
     ) -> None:
         """Persist one exact checkpoint transition."""
         record = baseline_checkpoint_to_record(checkpoint, corpus_id=request.corpus_id)
-        with self._repository.transaction() as transaction:
-            transaction.write_baseline_checkpoint(
-                record,
-                expected_status=(
-                    None
-                    if expected_status is None
-                    else BaselineCheckpointRecordStatus(expected_status.value)
-                ),
-            )
+
+        def write() -> None:
+            with self._repository.transaction() as transaction:
+                transaction.write_baseline_checkpoint(
+                    record,
+                    expected_status=(
+                        None
+                        if expected_status is None
+                        else BaselineCheckpointRecordStatus(expected_status.value)
+                    ),
+                )
+
+        _retry_repository_operation(
+            write,
+            stage=_checkpoint_persistence_stage(checkpoint.work_key.stage),
+        )

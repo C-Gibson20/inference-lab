@@ -88,7 +88,10 @@ is committed.
 A storage conflict means the expected active version or immutable inputs no
 longer agree. Do not blind-retry it. A concurrency error means the bounded
 SQLite lock wait expired and the complete transaction may be retried under a
-bounded caller policy. Follow the [corpus-version runbook](corpus-versions.md)
+bounded caller policy. Parallel ingest retries complete parse/chunk stage
+attempts a limited number of times; if contention persists, its retryable
+request failure leaves the proposal's unfinished checkpoints available for
+the same-request resume. Follow the [corpus-version runbook](corpus-versions.md)
 for publication and recovery checks.
 
 ## A reader still sees the previous corpus version
