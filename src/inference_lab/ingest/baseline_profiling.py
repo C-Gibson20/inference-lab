@@ -4,6 +4,10 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 
+from inference_lab.ingest.baseline_contracts import (
+    BaselineFailure,
+    BaselineFailureSeverity,
+)
 from inference_lab.profiling import (
     FailureMapper,
     FailureMapping,
@@ -14,6 +18,7 @@ _INPUT_FAILURES = frozenset(
     {
         "invalid_request",
         "incompatible_resume",
+        "corpus_not_found",
     }
 )
 _DEPENDENCY_FAILURES = frozenset(
@@ -24,6 +29,7 @@ _DEPENDENCY_FAILURES = frozenset(
         "parse_persistence_failed",
         "chunk_persistence_failed",
         "storage_unavailable",
+        "publication_concurrency",
     }
 )
 
@@ -57,6 +63,33 @@ def map_baseline_failure(error: BaseException) -> FailureMapping:
     return FailureMapping(
         failure_category=failure_category,
         failure_code=failure_code,
+    )
+
+
+def map_baseline_result_failure(
+    failure: BaselineFailure,
+    *,
+    partial: bool = False,
+) -> FailureMapping:
+    """Map a returned bounded ingest failure without exception payloads."""
+    if not isinstance(failure, BaselineFailure):
+        raise TypeError("failure must be a BaselineFailure.")
+    if not isinstance(partial, bool):
+        raise TypeError("partial must be a boolean.")
+    code = failure.category.value
+    if code in _INPUT_FAILURES:
+        category = "input"
+    elif code in _DEPENDENCY_FAILURES:
+        category = "dependency"
+    else:
+        category = "internal"
+    return FailureMapping(
+        failure_category=category,
+        failure_code=code,
+        recoverable=(
+            failure.retryable or failure.severity is BaselineFailureSeverity.RECOVERABLE
+        ),
+        partial=partial,
     )
 
 

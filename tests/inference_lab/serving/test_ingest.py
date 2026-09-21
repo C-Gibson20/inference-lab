@@ -5,9 +5,11 @@ import os
 import subprocess
 import sys
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier, Lock, get_ident
 from time import perf_counter_ns
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -19,6 +21,7 @@ from inference_lab.ingest import (
     BaselineCheckpointStatus,
     BaselineDocumentOutcome,
     BaselineDocumentOutcomeKind,
+    BaselineFailureCategory,
     BaselineParseRepository,
     BaselineParseRequest,
     BaselineParseResult,
@@ -36,6 +39,7 @@ from inference_lab.ingest import (
     execute_baseline_parse,
 )
 from inference_lab.ingest._chunk_identity import _configuration_identity_from_values
+from inference_lab.profiling import FailureEvent, ProfilingSink, StageTiming
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -122,6 +126,278 @@ def _request(
         chunking_policy=ChunkingPolicy(min_tokens=1, max_tokens=32),
         tokeniser=FakeChunkTokeniser(),
     )
+
+
+class _CollectingSink:
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
+
+
+def _profiling(sink: _CollectingSink) -> BaselineProfilingContext:
+    return BaselineProfilingContext.create(
+        run_id="ingest-run",
+        request_id="ingest-request",
+        condition="cold",
+        sink=cast(ProfilingSink, sink),
+        clock=iter(range(0, 10_000_000_000, 1_000_000)).__next__,
+        observed_at_factory=lambda: datetime(2026, 9, 21, tzinfo=UTC),
+    )
+
+
+def _terminal_timings(sink: _CollectingSink) -> list[StageTiming]:
+    return [
+        record
+        for record in sink.records
+        if isinstance(record, StageTiming) and record.event == "stage_completed"
+    ]
+
+
+def test_ingest_profiles_discovery_and_work_under_one_request(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    source = tmp_path / "private-source.txt"
+    source.write_text("private passage content", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Private corpus", corpus_id=corpus_id)
+        sink = _CollectingSink()
+        result = facade.ingest(request, profiling=_profiling(sink))
+        assert result.execution_status.value == "completed"
+
+        timings = _terminal_timings(sink)
+        by_stage = {record.pipeline_stage: record for record in timings}
+        request_id = "ingest-run:serving:ingest-request"
+        assert {
+            "serving",
+            "discovery",
+            "source_acquisition",
+            "parse",
+            "chunk",
+            "membership",
+            "lexical_index",
+            "publication",
+        } <= by_stage.keys()
+        assert by_stage["serving"].stage_id == request_id
+        assert by_stage["serving"].items_processed == 1
+        assert by_stage["serving"].records_emitted == 1
+        assert by_stage["discovery"].items_processed == 1
+        assert by_stage["discovery"].records_emitted == 1
+        assert all(
+            record.parent_stage_id == request_id
+            for record in timings
+            if record.pipeline_stage
+            in {
+                "discovery",
+                "parse",
+                "chunk",
+                "membership",
+                "lexical_index",
+                "publication",
+            }
+        )
+        assert all(record.run_id == "ingest-run" for record in timings)
+        assert all(record.request_id == "ingest-request" for record in timings)
+        assert all(record.condition == "cold" for record in timings)
+        assert str(source) not in repr(sink.records)
+        assert "private passage content" not in repr(sink.records)
+    finally:
+        repository.close()
+
+
+def test_ingest_profiles_returned_discovery_failure(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (tmp_path / "missing.txt",),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Corpus", corpus_id=corpus_id)
+        sink = _CollectingSink()
+        summary = facade.ingest(request, profiling=_profiling(sink))
+        assert summary.failures[0].stage is BaselineStage.DISCOVERY
+        assert summary.failures[0].category is BaselineFailureCategory.DISCOVERY_FAILED
+        timings = _terminal_timings(sink)
+        assert [(record.pipeline_stage, record.status) for record in timings] == [
+            ("discovery", "failed"),
+            ("serving", "failed"),
+        ]
+        failures = [
+            record for record in sink.records if isinstance(record, FailureEvent)
+        ]
+        assert [record.pipeline_stage for record in failures] == [
+            "discovery",
+            "serving",
+        ]
+        assert failures[-1].failure_code == "discovery_failed"
+        assert failures[-1].failure_category == "dependency"
+    finally:
+        repository.close()
+
+
+@pytest.mark.parametrize(
+    ("target", "stage", "category"),
+    [
+        (
+            "inference_lab.serving.ingest_discovery.inventory_local_sources",
+            BaselineStage.DISCOVERY,
+            BaselineFailureCategory.DISCOVERY_FAILED,
+        ),
+        (
+            "inference_lab.serving.ingest.plan_baseline_membership",
+            BaselineStage.MEMBERSHIP,
+            BaselineFailureCategory.MEMBERSHIP_CONFLICT,
+        ),
+        (
+            "inference_lab.serving.ingest_publication.build_lexical_generation_for_corpus_update",
+            BaselineStage.PUBLICATION,
+            BaselineFailureCategory.GENERATION_BUILD_FAILED,
+        ),
+    ],
+)
+def test_ingest_unexpected_failure_keeps_its_phase(
+    tmp_path: Path,
+    target: str,
+    stage: BaselineStage,
+    category: BaselineFailureCategory,
+) -> None:
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("source content", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Corpus", corpus_id=corpus_id)
+        sink = _CollectingSink()
+        with patch(target, side_effect=RuntimeError("sensitive internal detail")):
+            summary = facade.ingest(request, profiling=_profiling(sink))
+        assert summary.failures[0].stage is stage
+        assert summary.failures[0].category is category
+        assert any(
+            isinstance(record, FailureEvent)
+            and record.pipeline_stage == "serving"
+            and record.failure_code == category.value
+            for record in sink.records
+        )
+        if stage is BaselineStage.DISCOVERY:
+            assert any(
+                isinstance(record, FailureEvent)
+                and record.pipeline_stage == "discovery"
+                for record in sink.records
+            )
+        assert "sensitive internal detail" not in repr(sink.records)
+    finally:
+        repository.close()
+
+
+def test_ingest_preserves_primary_exception_when_failure_emission_fails(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (tmp_path / "unused.txt",),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Corpus", corpus_id=corpus_id)
+
+        class _BrokenSink(_CollectingSink):
+            def emit(self, record: object) -> None:
+                if (
+                    isinstance(record, StageTiming)
+                    and record.event == "stage_completed"
+                ):
+                    raise RuntimeError("instrumentation unavailable")
+                super().emit(record)
+
+        sink = _BrokenSink()
+        with patch(
+            "inference_lab.serving.ingest.discover_sources",
+            side_effect=KeyboardInterrupt(),
+        ):
+            with pytest.raises(KeyboardInterrupt):
+                facade.ingest(request, profiling=_profiling(sink))
+        assert any(isinstance(record, FailureEvent) for record in sink.records)
+    finally:
+        repository.close()
+
+
+def test_committed_replay_verification_error_is_not_returned_as_unpublished(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("source content", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Corpus", corpus_id=corpus_id)
+        assert facade.ingest(request).publication_status.value == "committed"
+        with patch.object(
+            ServingPublicationCoordinator,
+            "verify_published",
+            side_effect=RuntimeError("verification unavailable"),
+        ):
+            with pytest.raises(RuntimeError, match="verification unavailable"):
+                facade.ingest(request, profiling=_profiling(_CollectingSink()))
+        assert repository.get_active_corpus_version(corpus_id) is not None
+    finally:
+        repository.close()
 
 
 def _membership_hashes(
@@ -1011,6 +1287,8 @@ def test_parallel_ingest_owns_connections_and_isolates_corpora(tmp_path: Path) -
             source: DiscoveredSource,
             profiling: BaselineProfilingContext,
             parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
+            *,
+            parent_stage_id: str | None = None,
         ) -> BaselineDocumentOutcome:
             if ingest_request.corpus_id == first_id:
                 assert runner._repository is not repository
@@ -1025,6 +1303,7 @@ def test_parallel_ingest_owns_connections_and_isolates_corpora(tmp_path: Path) -
                 source,
                 profiling,
                 parent_memberships,
+                parent_stage_id=parent_stage_id,
             )
 
         with patch.object(ServingDocumentRunner, "process_source", observe_worker):
@@ -1085,6 +1364,7 @@ def test_parallel_ingest_resumes_mixed_document_outcomes(tmp_path: Path) -> None
             parser_registry: ParserRegistry,
             filesystem: StableReadFileSystem | None,
             profiling: BaselineProfilingContext,
+            parent_stage_id: str | None = None,
         ) -> BaselineParseResult:
             if parse_request.source.ordinal == 1:
                 raise RuntimeError("simulated parse failure")
@@ -1095,6 +1375,7 @@ def test_parallel_ingest_resumes_mixed_document_outcomes(tmp_path: Path) -> None
                 parser_registry=parser_registry,
                 filesystem=filesystem,
                 profiling=profiling,
+                parent_stage_id=parent_stage_id,
             )
 
         with (

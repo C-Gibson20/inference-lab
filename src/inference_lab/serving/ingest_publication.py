@@ -188,6 +188,8 @@ class ServingPublicationCoordinator:
         request: ServingIngestRequest,
         membership_plan: BaselineMembershipPlan,
         profiling: BaselineProfilingContext,
+        *,
+        parent_stage_id: str | None = None,
     ) -> None:
         """Create the exact storage proposal and seal the ingest manifest."""
         with self._repository.transaction() as transaction:
@@ -207,6 +209,7 @@ class ServingPublicationCoordinator:
                     request.proposed_corpus_version,
                     membership_plan,
                     profiling=profiling,
+                    parent_stage_id=parent_stage_id,
                 )
             transaction.transition_baseline_manifest(
                 request.corpus_id,
@@ -264,6 +267,8 @@ class ServingPublicationCoordinator:
         request: ServingIngestRequest,
         chunk_manifest: BaselineChunkGenerationManifest,
         profiling: BaselineProfilingContext,
+        *,
+        parent_stage_id: str | None = None,
     ) -> BaselinePublicationStatus:
         """Build immutable lexical data, then atomically publish both components."""
         if self._is_unchanged_parent(request, chunk_manifest):
@@ -305,6 +310,7 @@ class ServingPublicationCoordinator:
             expected_corpus_version=request.expected_corpus_version,
             configuration=request.lexical_configuration,
             profiling=profiling,
+            parent_stage_id=parent_stage_id,
         )
         participant = LexicalGenerationParticipant(
             self._settings.storage.index_dir,
@@ -325,6 +331,7 @@ class ServingPublicationCoordinator:
                 chunk_manifest,
                 participant,
                 profiling=profiling,
+                parent_stage_id=parent_stage_id,
             )
             transaction.transition_baseline_manifest(
                 request.corpus_id,
@@ -445,18 +452,10 @@ class ServingPublicationCoordinator:
         request: ServingIngestRequest,
         category: BaselineFailureCategory,
         *,
+        stage: BaselineStage,
         retryable: bool = False,
     ) -> BaselineIngestSummary:
         """Return a stable failed result without copying exception details."""
-        failure_stage = (
-            BaselineStage.PUBLICATION
-            if category
-            in {
-                BaselineFailureCategory.GENERATION_BUILD_FAILED,
-                BaselineFailureCategory.PUBLICATION_CONCURRENCY,
-            }
-            else BaselineStage.DISCOVERY
-        )
         return BaselineIngestSummary(
             corpus_id=request.corpus_id,
             proposed_corpus_version=request.proposed_corpus_version,
@@ -465,7 +464,7 @@ class ServingPublicationCoordinator:
             publication_status=BaselinePublicationStatus.NOT_PUBLISHED,
             failures=(
                 failure(
-                    stage=failure_stage,
+                    stage=stage,
                     category=category,
                     scope=BaselineFailureScope.REQUEST,
                     severity=BaselineFailureSeverity.FATAL,
