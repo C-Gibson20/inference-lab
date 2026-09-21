@@ -8,7 +8,10 @@ import pytest
 from inference_lab.evaluation import (
     PUBLISHED_ARTIFACT_NAMES,
     AggregateMetric,
+    AnswerClaim,
+    DuplicateDiagnostics,
     DuplicateRelationshipSnapshot,
+    EvidenceReference,
     MetricFraction,
     PublishedArtifact,
     PublishedRetrievalEvaluationManifest,
@@ -18,10 +21,14 @@ from inference_lab.evaluation import (
     RetrievalEvaluationContractError,
     RetrievalEvaluationPolicy,
     RetrievalEvaluationRunIdentity,
+    RetrievalEvaluationScoringError,
     RetrievalSystemIdentity,
     SanitisedFailure,
     SanitisedHitReference,
     SanitisedSourceReference,
+    aggregate_retrieval_case_results,
+    build_relevance_targets,
+    score_retrieval_case,
 )
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.schemas import AbstentionExpectation, ExpectedAnswer
@@ -359,3 +366,476 @@ def test_aggregate_reconciles_counts_and_metric_applicability() -> None:
             matched_target_count=0,
             relevant_target_count=0,
         )
+
+
+def scoring_snapshot() -> DuplicateRelationshipSnapshot:
+    """Return a corpus fixture with a duplicate copy and a family."""
+    corpus_id = identifier(100, CorpusId)
+    corpus_version = identifier(101, CorpusVersionId)
+    document_a = identifier(102, DocumentId)
+    document_b = identifier(103, DocumentId)
+    document_c = identifier(104, DocumentId)
+    version_a = identifier(105, DocumentVersionId)
+    version_b = identifier(106, DocumentVersionId)
+    version_c = identifier(107, DocumentVersionId)
+    family_id = identifier(108, DocumentFamilyId)
+    return DuplicateRelationshipSnapshot(
+        corpus_id,
+        corpus_version,
+        (
+            CorpusDocumentVersionMembership(corpus_id, document_a, version_a),
+            CorpusDocumentVersionMembership(corpus_id, document_b, version_b),
+            CorpusDocumentVersionMembership(corpus_id, document_c, version_c),
+        ),
+        (DuplicateRelationship(version_a, version_b, DuplicateClass.BYTE_IDENTICAL),),
+        (
+            DocumentFamilyMembership(family_id, document_a),
+            DocumentFamilyMembership(family_id, document_b),
+        ),
+    )
+
+
+def scoring_case(snapshot: DuplicateRelationshipSnapshot) -> EvaluationCase:
+    """Return two authoritative spans plus context-only evidence."""
+    document_a = identifier(102, DocumentId)
+    document_c = identifier(104, DocumentId)
+    version_a = identifier(105, DocumentVersionId)
+    version_c = identifier(107, DocumentVersionId)
+    span_a = identifier(109, SourceSpanId)
+    span_c = identifier(110, SourceSpanId)
+    evidence = (
+        EvidenceReference(
+            evidence_id="evidence-a",
+            kind="source_span",
+            role="authoritative",
+            corpus_version=snapshot.corpus_version.as_str(),
+            document_id=document_a.as_str(),
+            document_version_id=version_a.as_str(),
+            source_span_id=span_a.as_str(),
+        ),
+        EvidenceReference(
+            evidence_id="evidence-c",
+            kind="source_span",
+            role="authoritative",
+            corpus_version=snapshot.corpus_version.as_str(),
+            document_id=document_c.as_str(),
+            document_version_id=version_c.as_str(),
+            source_span_id=span_c.as_str(),
+        ),
+        EvidenceReference(
+            evidence_id="evidence-context",
+            kind="document",
+            role="context",
+            corpus_version=snapshot.corpus_version.as_str(),
+            document_id=document_a.as_str(),
+        ),
+    )
+    return EvaluationCase(
+        case_id="case-101",
+        question="private retrieval question",
+        question_type="lookup",
+        expected_answer=ExpectedAnswer(
+            claims=(
+                AnswerClaim(
+                    key="claim_a",
+                    evidence_ids=("evidence-a",),
+                    description="private expected answer A",
+                ),
+                AnswerClaim(
+                    key="claim_c",
+                    evidence_ids=("evidence-c",),
+                    description="private expected answer C",
+                ),
+            )
+        ),
+        evidence=evidence,
+        abstention=AbstentionExpectation(expected=False, reason="not_applicable"),
+        split="development",
+    )
+
+
+def retrieval_hit(
+    *,
+    record_number: int,
+    rank: int,
+    kind: CandidateKind,
+    sources: tuple[EvidenceSource, ...],
+) -> EvidenceHit:
+    """Build one ranked hit whose candidate content is intentionally private."""
+    return EvidenceHit(
+        RetrievalCandidate(
+            identifier(record_number, RecordId),
+            kind,
+            "private candidate content sentinel",
+            sources,
+        ),
+        (ChannelScore(RetrievalChannel.LEXICAL, rank),),
+        rank,
+    )
+
+
+def test_relevance_targets_exclude_context_and_non_passage_records() -> None:
+    snapshot = scoring_snapshot()
+    targets = build_relevance_targets(scoring_case(snapshot), snapshot)
+
+    assert len(targets.documents) == 2
+    assert len(targets.passages) == 2
+
+
+def test_authoritative_record_evidence_creates_document_target_only() -> None:
+    snapshot = scoring_snapshot()
+    document_c = identifier(104, DocumentId)
+    case = EvaluationCase(
+        case_id="case-record",
+        question="private record question",
+        question_type="lookup",
+        expected_answer=ExpectedAnswer(
+            claims=(
+                AnswerClaim(
+                    key="claim_record",
+                    evidence_ids=("evidence-record",),
+                    description="private expected record",
+                ),
+            )
+        ),
+        evidence=(
+            EvidenceReference(
+                evidence_id="evidence-record",
+                kind="record",
+                role="authoritative",
+                corpus_version=snapshot.corpus_version.as_str(),
+                document_id=document_c.as_str(),
+                record_id=identifier(130, RecordId).as_str(),
+            ),
+        ),
+        abstention=AbstentionExpectation(expected=False, reason="not_applicable"),
+        split="development",
+    )
+
+    targets = build_relevance_targets(case, snapshot)
+
+    assert len(targets.documents) == 1
+    assert targets.documents[0].document_id == document_c
+    assert targets.passages == ()
+
+
+def test_transitive_duplicate_components_collapse_logical_documents() -> None:
+    snapshot = scoring_snapshot()
+    document_a = identifier(102, DocumentId)
+    document_c = identifier(104, DocumentId)
+    version_a = identifier(105, DocumentVersionId)
+    version_b = identifier(106, DocumentVersionId)
+    version_c = identifier(107, DocumentVersionId)
+    transitive_snapshot = DuplicateRelationshipSnapshot(
+        snapshot.corpus_id,
+        snapshot.corpus_version,
+        snapshot.memberships,
+        (
+            DuplicateRelationship(version_b, version_c, DuplicateClass.BYTE_IDENTICAL),
+            DuplicateRelationship(version_a, version_b, DuplicateClass.BYTE_IDENTICAL),
+        ),
+        snapshot.family_memberships,
+    )
+
+    targets = build_relevance_targets(
+        scoring_case(transitive_snapshot), transitive_snapshot
+    )
+
+    assert len(targets.documents) == 1
+    assert targets.documents[0].document_id in {document_a, document_c}
+
+
+def test_one_original_passage_hit_can_match_multiple_labelled_spans() -> None:
+    snapshot = scoring_snapshot()
+    case = scoring_case(snapshot)
+    result = EvidenceResult(
+        snapshot.corpus_version,
+        RetrievalLimit(10),
+        (
+            retrieval_hit(
+                record_number=131,
+                rank=1,
+                kind=CandidateKind.ORIGINAL_PASSAGE,
+                sources=(
+                    EvidenceSource(
+                        identifier(102, DocumentId),
+                        identifier(105, DocumentVersionId),
+                        identifier(109, SourceSpanId),
+                    ),
+                    EvidenceSource(
+                        identifier(104, DocumentId),
+                        identifier(107, DocumentVersionId),
+                        identifier(110, SourceSpanId),
+                    ),
+                ),
+            ),
+        ),
+        ResultStatus.COMPLETED,
+        (),
+    )
+
+    scored = score_retrieval_case(
+        case=case,
+        result=result,
+        corpus_id=snapshot.corpus_id,
+        snapshot=snapshot,
+        policy=base_policy(),
+    )
+
+    assert scored.document_recall is not None
+    assert scored.document_recall.value == MetricFraction(2, 2)
+    assert scored.document_match_ranks == (1, 2)
+    assert tuple(metric.value for metric in scored.passage_recall if metric) == (
+        MetricFraction(2, 2),
+        MetricFraction(2, 2),
+        MetricFraction(2, 2),
+    )
+    assert tuple(match.ranks for match in scored.passage_match_ranks) == (
+        (1, 1),
+        (1, 1),
+        (1, 1),
+    )
+
+
+def test_family_members_do_not_satisfy_another_document_target() -> None:
+    snapshot = scoring_snapshot()
+    family_snapshot = DuplicateRelationshipSnapshot(
+        snapshot.corpus_id,
+        snapshot.corpus_version,
+        snapshot.memberships,
+        (),
+        snapshot.family_memberships,
+    )
+    result = EvidenceResult(
+        family_snapshot.corpus_version,
+        RetrievalLimit(10),
+        (
+            retrieval_hit(
+                record_number=132,
+                rank=1,
+                kind=CandidateKind.ORIGINAL_PASSAGE,
+                sources=(
+                    EvidenceSource(
+                        identifier(103, DocumentId),
+                        identifier(106, DocumentVersionId),
+                        identifier(133, SourceSpanId),
+                    ),
+                ),
+            ),
+            retrieval_hit(
+                record_number=134,
+                rank=2,
+                kind=CandidateKind.ORIGINAL_PASSAGE,
+                sources=(
+                    EvidenceSource(
+                        identifier(104, DocumentId),
+                        identifier(107, DocumentVersionId),
+                        identifier(110, SourceSpanId),
+                    ),
+                ),
+            ),
+        ),
+        ResultStatus.COMPLETED,
+        (),
+    )
+
+    scored = score_retrieval_case(
+        case=scoring_case(family_snapshot),
+        result=result,
+        corpus_id=family_snapshot.corpus_id,
+        snapshot=family_snapshot,
+        policy=base_policy(),
+    )
+
+    assert scored.document_recall is not None
+    assert scored.document_recall.value == MetricFraction(1, 2)
+    assert scored.document_match_ranks == (None, 2)
+
+
+def test_scoring_collapses_duplicate_documents_but_requires_exact_passages() -> None:
+    snapshot = scoring_snapshot()
+    case = scoring_case(snapshot)
+    document_a = identifier(102, DocumentId)
+    document_b = identifier(103, DocumentId)
+    document_c = identifier(104, DocumentId)
+    version_a = identifier(105, DocumentVersionId)
+    version_b = identifier(106, DocumentVersionId)
+    version_c = identifier(107, DocumentVersionId)
+    span_a = identifier(109, SourceSpanId)
+    span_c = identifier(110, SourceSpanId)
+    result = EvidenceResult(
+        snapshot.corpus_version,
+        RetrievalLimit(5),
+        (
+            retrieval_hit(
+                record_number=111,
+                rank=1,
+                kind=CandidateKind.ORIGINAL_PASSAGE,
+                sources=(
+                    EvidenceSource(
+                        document_b, version_b, identifier(112, SourceSpanId)
+                    ),
+                ),
+            ),
+            retrieval_hit(
+                record_number=113,
+                rank=2,
+                kind=CandidateKind.ORIGINAL_PASSAGE,
+                sources=(
+                    EvidenceSource(
+                        document_b, version_b, identifier(114, SourceSpanId)
+                    ),
+                ),
+            ),
+            retrieval_hit(
+                record_number=115,
+                rank=3,
+                kind=CandidateKind.ORIGINAL_PASSAGE,
+                sources=(EvidenceSource(document_c, version_c, span_c),),
+            ),
+            retrieval_hit(
+                record_number=116,
+                rank=4,
+                kind=CandidateKind.ORIGINAL_PASSAGE,
+                sources=(EvidenceSource(document_a, version_a, span_a),),
+            ),
+            retrieval_hit(
+                record_number=117,
+                rank=5,
+                kind=CandidateKind.GENERATED_SUMMARY,
+                sources=(
+                    EvidenceSource(
+                        document_a, version_a, identifier(118, SourceSpanId)
+                    ),
+                ),
+            ),
+        ),
+        ResultStatus.COMPLETED,
+        (),
+    )
+    policy = RetrievalEvaluationPolicy(passage_cutoffs=(1, 5, 10), candidate_depth=10)
+
+    scored = score_retrieval_case(
+        case=case,
+        result=result,
+        corpus_id=snapshot.corpus_id,
+        snapshot=snapshot,
+        policy=policy,
+    )
+
+    assert scored.document_recall is not None
+    assert scored.document_recall.value == MetricFraction(2, 2)
+    assert tuple(
+        metric.value if metric is not None else None for metric in scored.passage_recall
+    ) == (
+        MetricFraction(0, 2),
+        MetricFraction(2, 2),
+        MetricFraction(2, 2),
+    )
+    assert scored.document_match_ranks == (1, 2)
+    assert scored.document_depth_exhausted is True
+    assert tuple(match.ranks for match in scored.passage_match_ranks) == (
+        (None, None),
+        (4, 3),
+        (4, 3),
+    )
+    assert scored.duplicate_diagnostics == DuplicateDiagnostics(
+        raw_hit_count=5,
+        distinct_record_count=5,
+        distinct_document_count=3,
+        distinct_duplicate_group_count=2,
+        distinct_family_count=1,
+        unknown_family_document_count=1,
+        exact_document_repeat_excess=2,
+        byte_identical_group_repeat_excess=3,
+        family_member_repeat_excess=3,
+        relevant_non_gold_duplicate_copy_count=1,
+    )
+
+
+def test_scoring_fails_closed_for_foreign_candidate_versions() -> None:
+    snapshot = scoring_snapshot()
+    case = scoring_case(snapshot)
+    foreign_document = identifier(119, DocumentId)
+    foreign_version = identifier(120, DocumentVersionId)
+    result = EvidenceResult(
+        snapshot.corpus_version,
+        RetrievalLimit(10),
+        (
+            retrieval_hit(
+                record_number=121,
+                rank=1,
+                kind=CandidateKind.ORIGINAL_PASSAGE,
+                sources=(
+                    EvidenceSource(
+                        foreign_document,
+                        foreign_version,
+                        identifier(122, SourceSpanId),
+                    ),
+                ),
+            ),
+        ),
+        ResultStatus.COMPLETED,
+        (),
+    )
+
+    with pytest.raises(RetrievalEvaluationScoringError):
+        score_retrieval_case(
+            case=case,
+            result=result,
+            corpus_id=snapshot.corpus_id,
+            snapshot=snapshot,
+            policy=base_policy(),
+        )
+
+
+def test_aggregation_keeps_failed_cases_in_recall_denominators() -> None:
+    snapshot = scoring_snapshot()
+    case = scoring_case(snapshot)
+    policy = RetrievalEvaluationPolicy(passage_cutoffs=(1, 5, 10), candidate_depth=10)
+    successful = score_retrieval_case(
+        case=case,
+        result=EvidenceResult(
+            snapshot.corpus_version,
+            RetrievalLimit(10),
+            (
+                retrieval_hit(
+                    record_number=123,
+                    rank=1,
+                    kind=CandidateKind.ORIGINAL_PASSAGE,
+                    sources=(
+                        EvidenceSource(
+                            identifier(102, DocumentId),
+                            identifier(105, DocumentVersionId),
+                            identifier(109, SourceSpanId),
+                        ),
+                    ),
+                ),
+            ),
+            ResultStatus.COMPLETED,
+            (),
+        ),
+        corpus_id=snapshot.corpus_id,
+        snapshot=snapshot,
+        policy=policy,
+    )
+    failed = score_retrieval_case(
+        case=case.model_copy(update={"case_id": "case-102"}),
+        result=EvidenceResult(
+            snapshot.corpus_version,
+            RetrievalLimit(10),
+            (),
+            ResultStatus.FAILED,
+            (RetrievalFailure(FailureCategory.CHANNEL_UNAVAILABLE, True),),
+        ),
+        corpus_id=snapshot.corpus_id,
+        snapshot=snapshot,
+        policy=policy,
+    )
+    aggregate = aggregate_retrieval_case_results((successful, failed), policy)
+
+    assert aggregate.document.macro == MetricFraction(1, 4)
+    assert aggregate.document.micro == MetricFraction(1, 4)
+    assert aggregate.document.applicable_case_count == 2
+    assert aggregate.document.failed_case_count == 1
+    assert aggregate.document.empty_case_count == 0
