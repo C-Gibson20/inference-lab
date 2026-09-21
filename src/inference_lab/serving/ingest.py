@@ -108,16 +108,17 @@ class LocalServingFacade:
         discovery = discover_sources(self._repository, self._settings, request)
         existing = self._publication.ensure_manifest(request, discovery)
         if existing.state is BaselineManifestState.COMMITTED:
+            publication_status = self._publication.committed_publication_status(request)
             self._publication.verify_published(
                 request,
-                BaselinePublicationStatus.COMMITTED,
+                publication_status,
             )
             return BaselineIngestSummary(
                 corpus_id=request.corpus_id,
                 proposed_corpus_version=request.proposed_corpus_version,
                 expected_corpus_version=request.expected_corpus_version,
                 execution_status=BaselineExecutionStatus.COMPLETED,
-                publication_status=BaselinePublicationStatus.COMMITTED,
+                publication_status=publication_status,
             )
         if existing.state is BaselineManifestState.ABORTED:
             raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
@@ -128,12 +129,13 @@ class LocalServingFacade:
             )
 
         try:
+            parent_memberships = self._publication.parent_memberships(request)
             outcomes = self._documents.execute(
                 request,
                 discovery,
                 selected_profiling,
+                parent_memberships,
             )
-            parent_memberships = self._publication.parent_memberships(request)
             membership_plan = plan_baseline_membership(
                 request.corpus_id,
                 parent_memberships,
@@ -157,6 +159,8 @@ class LocalServingFacade:
                     membership_plan,
                     selected_profiling,
                 )
+            else:
+                self._publication.verify_ready_memberships(request, membership_plan)
             publication = self._publication.build_and_publish(
                 request,
                 chunk_manifest,

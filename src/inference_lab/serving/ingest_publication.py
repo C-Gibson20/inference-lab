@@ -48,6 +48,7 @@ from inference_lab.settings import Settings
 from inference_lab.storage import (
     BaselineManifestRecordState,
     ComponentKind,
+    CorpusUpdateState,
 )
 
 
@@ -198,6 +199,46 @@ class ServingPublicationCoordinator:
                 expected_state=BaselineManifestRecordState.PREPARING,
                 next_state=BaselineManifestRecordState.READY,
             )
+
+    def verify_ready_memberships(
+        self,
+        request: ServingIngestRequest,
+        membership_plan: BaselineMembershipPlan,
+    ) -> None:
+        """Reject a resume whose sealed ingest plan differs from staged state."""
+        update = self._repository.get_corpus_update(
+            request.corpus_id,
+            request.proposed_corpus_version,
+        )
+        if update is None or update.state is not CorpusUpdateState.PREPARING:
+            raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
+        staged = self._repository.list_corpus_update_document_memberships(
+            request.corpus_id,
+            request.proposed_corpus_version,
+        )
+        if staged != membership_plan.final_memberships:
+            raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
+
+    def committed_publication_status(
+        self,
+        request: ServingIngestRequest,
+    ) -> BaselinePublicationStatus:
+        """Distinguish a committed version from an unchanged terminal proposal."""
+        update = self._repository.get_corpus_update(
+            request.corpus_id,
+            request.proposed_corpus_version,
+        )
+        if update is None:
+            raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
+        if update.state is CorpusUpdateState.COMMITTED:
+            return BaselinePublicationStatus.COMMITTED
+        if (
+            update.state is CorpusUpdateState.ABORTED
+            and update.manifest_digest is not None
+            and request.expected_corpus_version is not None
+        ):
+            return BaselinePublicationStatus.NO_CHANGE
+        raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
 
     def build_and_publish(
         self,

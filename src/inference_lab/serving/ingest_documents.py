@@ -7,6 +7,7 @@ from inference_lab.ingest import (
     BaselineDocumentOutcome,
     BaselineDocumentOutcomeKind,
     BaselineDocumentTask,
+    BaselineFailureCategory,
     BaselineFailureScope,
     BaselineFailureSeverity,
     BaselineParseRequest,
@@ -20,6 +21,7 @@ from inference_lab.ingest import (
     execute_baseline_parse,
 )
 from inference_lab.ingest.baseline_checkpoint_mapping import (
+    baseline_checkpoint_from_record,
     baseline_checkpoint_to_record,
 )
 from inference_lab.ingest.baseline_checkpoints import (
@@ -28,8 +30,16 @@ from inference_lab.ingest.baseline_checkpoints import (
 )
 from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.ingest.discovery_results import DiscoveryResult
-from inference_lab.provenance import DocumentIdentity, DocumentVersion
+from inference_lab.provenance import (
+    CorpusDocumentVersionMembership,
+    DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
+    DocumentVersionId,
+)
 from inference_lab.serving.ingest_contracts import (
+    ServingIngestError,
+    ServingIngestFailureCategory,
     ServingIngestRequest,
     _ServingRepository,
 )
@@ -41,7 +51,10 @@ from inference_lab.serving.ingest_helpers import (
     resolution_kind,
 )
 from inference_lab.settings import Settings
-from inference_lab.storage import BaselineCheckpointRecordStatus
+from inference_lab.storage import (
+    BaselineCheckpointRecordStage,
+    BaselineCheckpointRecordStatus,
+)
 
 
 class ServingDocumentRunner:
@@ -56,9 +69,10 @@ class ServingDocumentRunner:
         request: ServingIngestRequest,
         discovery: DiscoveryResult,
         profiling: BaselineProfilingContext,
+        parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
     ) -> tuple[BaselineDocumentOutcome, ...]:
         """Create and execute bounded document tasks for one discovery result."""
-        tasks = self.tasks(request, discovery, profiling)
+        tasks = self.tasks(request, discovery, profiling, parent_memberships)
         return execute_baseline_documents(
             tasks,
             settings=self._settings,
@@ -73,6 +87,7 @@ class ServingDocumentRunner:
         request: ServingIngestRequest,
         discovery: DiscoveryResult,
         profiling: BaselineProfilingContext,
+        parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
     ) -> tuple[BaselineDocumentTask, ...]:
         """Build stable document tasks for sources and discovery failures."""
         by_ordinal = {source.ordinal: source for source in discovery.sources}
@@ -112,7 +127,9 @@ class ServingDocumentRunner:
                         ),
                     )
                 assert source is not None
-                return self.process_source(request, source, profiling)
+                return self.process_source(
+                    request, source, profiling, parent_memberships
+                )
 
             tasks.append(
                 BaselineDocumentTask(
@@ -128,6 +145,7 @@ class ServingDocumentRunner:
         request: ServingIngestRequest,
         source: DiscoveredSource,
         profiling: BaselineProfilingContext,
+        parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
     ) -> BaselineDocumentOutcome:
         """Parse, persist, chunk, and checkpoint one discovered source."""
         resolved = source.identity_outcome
@@ -141,6 +159,19 @@ class ServingDocumentRunner:
         version = resolved.version
         assert isinstance(document, DocumentIdentity)
         assert isinstance(version, DocumentVersion)
+        if kind is BaselineDocumentOutcomeKind.UNCHANGED_REUSED:
+            parent = next(
+                (
+                    membership
+                    for membership in parent_memberships
+                    if membership.document_id == document.document_id
+                ),
+                None,
+            )
+            if parent is None:
+                kind = BaselineDocumentOutcomeKind.NEW_DOCUMENT
+            elif parent.document_version_id != version.document_version_id:
+                kind = BaselineDocumentOutcomeKind.CHANGED_VERSION
         parse_id = record_id(
             "parse",
             version.document_version_id.as_str(),
@@ -157,7 +188,7 @@ class ServingDocumentRunner:
             stage=BaselineStage.PARSE,
             configuration_identity=request.configuration_identity,
         )
-        self.write_checkpoint(
+        parse_checkpoint = self.start_checkpoint(
             request,
             BaselineCheckpoint(
                 work_key=parse_key,
@@ -167,6 +198,20 @@ class ServingDocumentRunner:
                 status=BaselineCheckpointStatus.STARTED,
             ),
         )
+        if parse_checkpoint.status is BaselineCheckpointStatus.FAILED:
+            assert parse_checkpoint.failure_category is not None
+            return self.failed_outcome(
+                source,
+                document.document_id,
+                version.document_version_id,
+                stage=BaselineStage.PARSE,
+                category=parse_checkpoint.failure_category,
+            )
+        if (
+            parse_checkpoint.status is BaselineCheckpointStatus.COMPLETED
+            and self._repository.get_parse_outcome(request.corpus_id, parse_id) is None
+        ):
+            raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
         try:
             parsed = execute_baseline_parse(
                 self._repository,
@@ -182,18 +227,11 @@ class ServingDocumentRunner:
                 filesystem=request.source_filesystem,
                 profiling=profiling,
             )
-            self.write_checkpoint(
-                request,
-                BaselineCheckpoint(
-                    work_key=parse_key,
-                    document_id=document.document_id,
-                    input_identities=(version.document_version_id,),
-                    output_identities=(parse_id, parsed_record_id),
-                    status=BaselineCheckpointStatus.COMPLETED,
-                ),
-                expected_status=BaselineCheckpointStatus.STARTED,
-            )
         except Exception as error:
+            if parse_checkpoint.status is BaselineCheckpointStatus.COMPLETED:
+                raise ServingIngestError(
+                    ServingIngestFailureCategory.INCOMPATIBLE_RESUME
+                ) from None
             category = parse_failure_category(getattr(error, "category", None))
             self.write_checkpoint(
                 request,
@@ -207,20 +245,44 @@ class ServingDocumentRunner:
                 ),
                 expected_status=BaselineCheckpointStatus.STARTED,
             )
-            return BaselineDocumentOutcome(
-                ordinal=source.ordinal,
-                kind=BaselineDocumentOutcomeKind.FAILED,
-                document_id=document.document_id,
-                document_version_id=version.document_version_id,
-                parse_disposition=BaselineStageDisposition.FAILED,
-                failures=(
-                    failure(
-                        stage=BaselineStage.PARSE,
-                        category=category,
-                        scope=BaselineFailureScope.DOCUMENT,
-                        severity=BaselineFailureSeverity.RECOVERABLE,
-                    ),
-                ),
+            return self.failed_outcome(
+                source,
+                document.document_id,
+                version.document_version_id,
+                stage=BaselineStage.PARSE,
+                category=category,
+            )
+        parse_outputs = (parse_id,)
+        if parsed.parsed_record_id is not None:
+            parse_outputs = (parse_id, parsed.parsed_record_id)
+        completed_parse = BaselineCheckpoint(
+            work_key=parse_key,
+            document_id=document.document_id,
+            input_identities=(version.document_version_id,),
+            output_identities=parse_outputs,
+            status=BaselineCheckpointStatus.COMPLETED,
+        )
+        if parse_checkpoint.status is BaselineCheckpointStatus.COMPLETED:
+            if (
+                parsed.disposition is not BaselineStageDisposition.REUSED
+                or parse_checkpoint != completed_parse
+            ):
+                raise ServingIngestError(
+                    ServingIngestFailureCategory.INCOMPATIBLE_RESUME
+                )
+        else:
+            self.write_checkpoint(
+                request,
+                completed_parse,
+                expected_status=BaselineCheckpointStatus.STARTED,
+            )
+        if parsed.parsed_record_id is None:
+            return self.failed_outcome(
+                source,
+                document.document_id,
+                version.document_version_id,
+                stage=BaselineStage.PARSE,
+                category=BaselineFailureCategory.PARSE_FAILED,
             )
 
         chunk_key = BaselineWorkKey(
@@ -229,7 +291,7 @@ class ServingDocumentRunner:
             stage=BaselineStage.CHUNK,
             configuration_identity=request.configuration_identity,
         )
-        self.write_checkpoint(
+        chunk_checkpoint = self.start_checkpoint(
             request,
             BaselineCheckpoint(
                 work_key=chunk_key,
@@ -239,6 +301,26 @@ class ServingDocumentRunner:
                 status=BaselineCheckpointStatus.STARTED,
             ),
         )
+        if chunk_checkpoint.status is BaselineCheckpointStatus.FAILED:
+            assert chunk_checkpoint.failure_category is not None
+            return self.failed_outcome(
+                source,
+                document.document_id,
+                version.document_version_id,
+                stage=BaselineStage.CHUNK,
+                category=chunk_checkpoint.failure_category,
+                parse_disposition=parsed.disposition,
+            )
+        if (
+            chunk_checkpoint.status is BaselineCheckpointStatus.COMPLETED
+            and self._repository.get_chunk_set_selection(
+                request.corpus_id,
+                version.document_version_id,
+                request.configuration_identity,
+            )
+            is None
+        ):
+            raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
         try:
             chunked = execute_baseline_chunk(
                 self._repository,
@@ -252,20 +334,11 @@ class ServingDocumentRunner:
                 ),
                 profiling=profiling,
             )
-            self.write_checkpoint(
-                request,
-                BaselineCheckpoint(
-                    work_key=chunk_key,
-                    document_id=document.document_id,
-                    input_identities=(parsed_record_id,),
-                    output_identities=tuple(
-                        chunk.record_id for chunk in chunked.chunk_set.chunks
-                    ),
-                    status=BaselineCheckpointStatus.COMPLETED,
-                ),
-                expected_status=BaselineCheckpointStatus.STARTED,
-            )
         except Exception as error:
+            if chunk_checkpoint.status is BaselineCheckpointStatus.COMPLETED:
+                raise ServingIngestError(
+                    ServingIngestFailureCategory.INCOMPATIBLE_RESUME
+                ) from None
             category = parse_failure_category(getattr(error, "category", None))
             self.write_checkpoint(
                 request,
@@ -279,21 +352,35 @@ class ServingDocumentRunner:
                 ),
                 expected_status=BaselineCheckpointStatus.STARTED,
             )
-            return BaselineDocumentOutcome(
-                ordinal=source.ordinal,
-                kind=BaselineDocumentOutcomeKind.FAILED,
-                document_id=document.document_id,
-                document_version_id=version.document_version_id,
+            return self.failed_outcome(
+                source,
+                document.document_id,
+                version.document_version_id,
+                stage=BaselineStage.CHUNK,
+                category=category,
                 parse_disposition=parsed.disposition,
-                chunk_disposition=BaselineStageDisposition.FAILED,
-                failures=(
-                    failure(
-                        stage=BaselineStage.CHUNK,
-                        category=category,
-                        scope=BaselineFailureScope.DOCUMENT,
-                        severity=BaselineFailureSeverity.RECOVERABLE,
-                    ),
-                ),
+            )
+        chunk_outputs = tuple(chunk.record_id for chunk in chunked.chunk_set.chunks)
+        completed_chunk = BaselineCheckpoint(
+            work_key=chunk_key,
+            document_id=document.document_id,
+            input_identities=(parsed_record_id,),
+            output_identities=chunk_outputs,
+            status=BaselineCheckpointStatus.COMPLETED,
+        )
+        if chunk_checkpoint.status is BaselineCheckpointStatus.COMPLETED:
+            if (
+                chunked.disposition is not BaselineStageDisposition.REUSED
+                or chunk_checkpoint != completed_chunk
+            ):
+                raise ServingIngestError(
+                    ServingIngestFailureCategory.INCOMPATIBLE_RESUME
+                )
+        else:
+            self.write_checkpoint(
+                request,
+                completed_chunk,
+                expected_status=BaselineCheckpointStatus.STARTED,
             )
         return BaselineDocumentOutcome(
             ordinal=source.ordinal,
@@ -302,6 +389,66 @@ class ServingDocumentRunner:
             document_version_id=version.document_version_id,
             parse_disposition=parsed.disposition,
             chunk_disposition=chunked.disposition,
+        )
+
+    def start_checkpoint(
+        self,
+        request: ServingIngestRequest,
+        started: BaselineCheckpoint,
+    ) -> BaselineCheckpoint:
+        """Recover an exact stage attempt or create its first durable marker."""
+        record = self._repository.get_baseline_checkpoint(
+            request.corpus_id,
+            request.proposed_corpus_version,
+            started.work_key.document_version_id,
+            BaselineCheckpointRecordStage(started.work_key.stage.value),
+            request.configuration_identity,
+        )
+        if record is None:
+            self.write_checkpoint(request, started)
+            return started
+        checkpoint = baseline_checkpoint_from_record(
+            record,
+            expected_corpus_id=request.corpus_id,
+        )
+        if (
+            checkpoint.work_key != started.work_key
+            or checkpoint.document_id != started.document_id
+            or checkpoint.input_identities != started.input_identities
+        ):
+            raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
+        return checkpoint
+
+    @staticmethod
+    def failed_outcome(
+        source: DiscoveredSource,
+        document_id: DocumentId,
+        document_version_id: DocumentVersionId,
+        *,
+        stage: BaselineStage,
+        category: BaselineFailureCategory,
+        parse_disposition: BaselineStageDisposition = BaselineStageDisposition.FAILED,
+    ) -> BaselineDocumentOutcome:
+        """Keep a failed checkpoint terminal within its proposed version."""
+        return BaselineDocumentOutcome(
+            ordinal=source.ordinal,
+            kind=BaselineDocumentOutcomeKind.FAILED,
+            document_id=document_id,
+            document_version_id=document_version_id,
+            parse_disposition=parse_disposition,
+            chunk_disposition=(
+                BaselineStageDisposition.FAILED
+                if stage is BaselineStage.CHUNK
+                else BaselineStageDisposition.NOT_ATTEMPTED
+            ),
+            failures=(
+                failure(
+                    stage=stage,
+                    category=category,
+                    scope=BaselineFailureScope.DOCUMENT,
+                    severity=BaselineFailureSeverity.RECOVERABLE,
+                ),
+            ),
         )
 
     def write_checkpoint(
