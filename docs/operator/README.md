@@ -15,8 +15,8 @@ operational logs remain local in deployment.
   policy, identity outcomes, privacy boundaries, and original-source hand-off.
 - [Source availability](source-availability.md): managed-original integrity,
   backup responsibility, and failure handling.
-- [Running queries](querying.md): current query status and the operator
-  workflow as serving capabilities land.
+- [Running queries](querying.md): local API workflow and fresh-process lexical
+  search example.
 - [Corpus-version operations](corpus-versions.md): staging, atomic publication,
   reader snapshots, restart recovery, and rollback.
 - [Evaluation dataset operations](evaluation.md): local validation,
@@ -34,10 +34,8 @@ to apply that policy.
 ## Documentation status
 
 The command-line entry point currently starts a skeleton application. Discovery
-is available as a library contract, and durable corpus-version operations are
-available to Python integrations; neither has operator-facing commands. The
-first executable ingest-and-search workflow will be documented when it is
-implemented.
+and durable corpus-version operations are available to Python integrations,
+and a fresh-process search example is available in the query runbook.
 Answer generation, citation verification, sessions, chat, named-corpus
 creation/selection and updates, and deployment-wide privacy checks will extend
 these pages as those capabilities become available.

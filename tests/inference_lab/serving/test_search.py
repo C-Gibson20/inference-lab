@@ -362,9 +362,11 @@ def test_search_rejects_unsupported_filter_before_execution(
     assert repository.open_active_count == 0
 
 
+@pytest.mark.parametrize("condition", ["cold", "warm"])
 def test_search_profiles_serving_as_parent_of_lexical_retrieval(
     monkeypatch,
     tmp_path: Path,
+    condition: str,
 ) -> None:
     snapshot = _Snapshot(CORPUS_VERSION_ID)
     repository = _Repository(
@@ -375,7 +377,7 @@ def test_search_profiles_serving_as_parent_of_lexical_retrieval(
     profiling = ProfilingContext.create(
         run_id="run-serving-search",
         request_id="request-1",
-        condition="warm",
+        condition=condition,  # type: ignore[arg-type]
         sink=cast(ProfilingSink, sink),
         clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
         observed_at_factory=lambda: datetime(2026, 9, 20, tzinfo=UTC),
@@ -424,5 +426,5 @@ def test_search_profiles_serving_as_parent_of_lexical_retrieval(
     assert completions[0].parent_stage_id == ("run-serving-search:serving:request")
     assert completions[1].stage_id == "run-serving-search:serving:request"
     assert completions[1].records_emitted == 0
-    assert completions[1].condition == "warm"
+    assert completions[1].condition == condition
     assert all(record.request_id == "request-1" for record in completions)
