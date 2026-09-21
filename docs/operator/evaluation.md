@@ -1,8 +1,9 @@
 # Evaluation dataset operations
 
 The evaluation package exposes a Python library for creating and validating
-local evaluation datasets. Evaluation execution, result records, and quality
-reports are outside the current package boundary.
+local evaluation datasets and running reproducible retrieval evaluations. The
+[retrieval-evaluation runbook](retrieval-evaluation.md) covers execution,
+publication, comparison, and safe quality reports.
 
 The separate [corpus-audit runbook](corpus-audit.md) covers EVAL-02 aggregate
 coverage reports. It is intentionally distinct from question-set evaluation:
@@ -102,6 +103,6 @@ not the final corpus-backed question set.
 - Never log questions, expected answers, evidence, prompts, responses, model
   output, credentials, or sensitive paths.
 
-Run identities, evaluation-unit records, metrics, and reporting workflows are
-intentionally deferred until the corresponding evaluation issues define their
-inputs and reproducibility requirements.
+Retrieval run identities, per-case result records, exact metrics, reports, and
+comparison are owned by EVAL-03. Answer quality, citation, faithfulness, OCR,
+and held-out acceptance thresholds remain separate later evaluation work.
