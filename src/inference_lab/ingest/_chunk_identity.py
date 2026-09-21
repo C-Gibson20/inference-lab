@@ -143,6 +143,30 @@ def _configuration_identity_from_values(
     return ConfigurationIdentity(algorithm=DigestAlgorithm.SHA256, digest=digest)
 
 
+def derive_chunk_configuration_identity(
+    *,
+    parser_version: ParserVersion,
+    chunker_version: ChunkerVersion,
+    tokeniser_identity: TokeniserIdentity,
+    policy: ChunkingPolicy,
+) -> ConfigurationIdentity:
+    """Derive the public, replay-stable identity for an ingest chunk configuration."""
+    if not isinstance(parser_version, ParserVersion):
+        raise TypeError("parser_version must be a ParserVersion.")
+    if not isinstance(chunker_version, ChunkerVersion):
+        raise TypeError("chunker_version must be a ChunkerVersion.")
+    if not isinstance(tokeniser_identity, TokeniserIdentity):
+        raise TypeError("tokeniser_identity must be a TokeniserIdentity.")
+    if not isinstance(policy, ChunkingPolicy):
+        raise TypeError("policy must be a ChunkingPolicy.")
+    return _configuration_identity_from_values(
+        parser_version=parser_version,
+        chunker_version=chunker_version,
+        tokeniser_identity=tokeniser_identity,
+        policy=policy,
+    )
+
+
 def _chunk_output_digest(chunk: Chunk) -> OutputDigest:
     """Digest the canonical domain-owned chunk payload, excluding metadata."""
     return _output_digest_for_payload(_chunk_payload(chunk))

@@ -45,9 +45,10 @@ The execution boundary validates the complete filter before ranked index
 execution, resolves metadata and lexical candidates from one owned immutable
 corpus snapshot, applies the predicate before the final lexical limit, and
 fails closed if the required source or parsed provenance cannot be reconstructed.
-Dates and assignees are not in the current registry and remain explicitly
-deferred; callers must not approximate them with string fields or interpret
-their absence as a negative result.
+Dates and assignees are not in the current registry and are assigned to
+RET-11 after provenance-backed extraction and normalisation. Callers must
+not approximate them with string fields or interpret their absence as a
+negative result.
 
 ## Candidates, scores, and results
 

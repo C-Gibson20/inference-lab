@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from inference_lab.ingest import (
+    CURRENT_CHUNKER_VERSION,
+    CURRENT_PARSER_VERSION,
     ChunkingPolicy,
     ChunkTokeniserError,
     FakeChunkTokeniser,
@@ -12,6 +14,7 @@ from inference_lab.ingest import (
     NormalisedText,
     UnsafeSourceBoundaryError,
     build_canonical_source_boundary_map,
+    derive_chunk_configuration_identity,
     validate_chunk_tokeniser,
 )
 from inference_lab.ingest.tokenisation import TokenisedText, TokenOffset
@@ -83,6 +86,32 @@ def test_local_fast_tokeniser_loads_offline_and_is_path_free() -> None:
     assert str(LOCAL_TOKENISER_FIXTURE) not in tokeniser.identity.as_str()
     assert result.offsets[-1].end == len("café astral 😀")
     assert tokeniser.count_tokens("café astral 😀") == len(result.token_ids)
+
+
+def test_public_chunk_configuration_identity_is_stable_for_local_tokeniser() -> None:
+    """Expose the exact ingest request identity without private imports."""
+    tokeniser = LocalFastChunkTokeniser.from_directory(LOCAL_TOKENISER_FIXTURE)
+    policy = ChunkingPolicy()
+    first = derive_chunk_configuration_identity(
+        parser_version=CURRENT_PARSER_VERSION,
+        chunker_version=CURRENT_CHUNKER_VERSION,
+        tokeniser_identity=tokeniser.identity,
+        policy=policy,
+    )
+    assert first == derive_chunk_configuration_identity(
+        parser_version=CURRENT_PARSER_VERSION,
+        chunker_version=CURRENT_CHUNKER_VERSION,
+        tokeniser_identity=tokeniser.identity,
+        policy=policy,
+    )
+    assert str(LOCAL_TOKENISER_FIXTURE) not in first.as_str()
+    with pytest.raises(TypeError, match="policy"):
+        derive_chunk_configuration_identity(
+            parser_version=CURRENT_PARSER_VERSION,
+            chunker_version=CURRENT_CHUNKER_VERSION,
+            tokeniser_identity=tokeniser.identity,
+            policy=None,  # type: ignore[arg-type]
+        )
 
 
 def test_local_fast_tokeniser_rejects_symlinked_inventory(tmp_path: Path) -> None:
