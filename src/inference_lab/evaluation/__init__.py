@@ -141,6 +141,11 @@ from inference_lab.evaluation.retrieval_report_codec import (
     serialise_retrieval_report,
     serialise_run_artifact,
 )
+from inference_lab.evaluation.retrieval_report_comparison import (
+    RetrievalComparisonCategory,
+    RetrievalEvaluationComparison,
+    compare_retrieval_evaluations,
+)
 from inference_lab.evaluation.retrieval_report_contracts import (
     RetrievalEvaluationReport,
 )
@@ -272,9 +277,11 @@ __all__ = [
     "RecallMetric",
     "RetrievalAdapterResponse",
     "RetrievalCaseResult",
+    "RetrievalComparisonCategory",
     "RetrievalComponentIdentity",
     "RetrievalEvaluationAdapter",
     "RetrievalEvaluationAggregate",
+    "RetrievalEvaluationComparison",
     "RetrievalEvaluationContractError",
     "RetrievalEvaluationExecutionError",
     "RetrievalEvaluationPolicy",
@@ -303,6 +310,7 @@ __all__ = [
     "build_audit_report_manifest",
     "build_leakage_groups",
     "build_relevance_targets",
+    "compare_retrieval_evaluations",
     "complete_parse_observations",
     "deserialise_audit_report",
     "deserialise_case_results",
