@@ -95,6 +95,15 @@ class _SnapshotContext:
     def __exit__(self, *_: object) -> None:
         self.closed = True
 
+    def get_source_artefact(self, *_: object) -> None:
+        return None
+
+    def get_parsed_representation(self, *_: object) -> None:
+        return None
+
+    def resolve_source_span(self, *_: object) -> None:
+        return None
+
 
 class _GenerationContext(_RankedGeneration):
     """Context-managed ranked generation projection for orchestration tests."""
@@ -121,6 +130,9 @@ class _GenerationContext(_RankedGeneration):
 
     def __exit__(self, *_: object) -> None:
         return None
+
+    def search(self, request: LexicalQuery):
+        return self.matches[: request.query.limit.value]
 
 
 class _Repository:
@@ -297,6 +309,36 @@ def test_execute_filtered_retrieval_uses_pinned_generation_and_preserves_hits(
     assert tuple(hit.contributions[0].raw_score for hit in result.hits) == (2.0, 3.0)
     assert generation.visited == 4
     assert snapshot.closed is True
+
+
+def test_execute_retrieval_borrows_supplied_snapshot_without_reopening_or_closing(
+    monkeypatch,
+) -> None:
+    candidate = _candidate(1)
+    generation = _GenerationContext(((candidate, 1.0),), "generation-1")
+    snapshot = _SnapshotContext("generation-1")
+
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "open_lexical_generation",
+        lambda *_: generation,
+    )
+
+    class _RepositoryThatMustNotOpen:
+        def open_corpus_snapshot(self, *_: object) -> None:
+            raise AssertionError("the borrowed snapshot must be used")
+
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _RepositoryThatMustNotOpen()),
+        Path("indexes"),
+        CORPUS_ID,
+        _query(filter_expression=None),
+        snapshot=cast(CorpusSnapshot, snapshot),
+    )
+
+    assert result.status is ResultStatus.COMPLETED
+    assert len(result.hits) == 1
+    assert snapshot.closed is False
 
 
 def test_filtered_execution_profiles_exact_metadata_counts_and_parentage(
