@@ -19,6 +19,7 @@ from inference_lab.evaluation.retrieval_contracts import (
 )
 from inference_lab.evaluation.retrieval_execution import RetrievalEvaluationRunResult
 from inference_lab.evaluation.retrieval_report_codec import (
+    RetrievalEvaluationRunArtifact,
     deserialise_case_results,
     deserialise_retrieval_manifest,
     deserialise_retrieval_report,
@@ -135,6 +136,56 @@ def publish_retrieval_evaluation(
     except (OSError, ValueError, TypeError):
         _cleanup_staging(staging_path)
         raise RetrievalEvaluationPublicationError from None
+
+
+def load_published_retrieval_evaluation(
+    destination: str | Path,
+) -> RetrievalEvaluationRunResult:
+    """Load and cross-validate one previously published evaluation bundle."""
+    destination = validate_local_path(destination, field_name="destination")
+    if not destination.is_dir() or destination.is_symlink():
+        raise ValueError("destination must identify a published evaluation directory.")
+    expected_names = {*PUBLISHED_ARTIFACT_NAMES, "manifest.json"}
+    actual_names = {path.name for path in destination.iterdir()}
+    if actual_names != expected_names:
+        raise ValueError("published evaluation directory has an invalid inventory.")
+    manifest = deserialise_retrieval_manifest(
+        (destination / "manifest.json").read_bytes()
+    )
+    artefact_contents: dict[str, bytes] = {}
+    for artefact in manifest.artefacts:
+        path = destination / artefact.name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("published evaluation artefact is not a regular file.")
+        content = path.read_bytes()
+        if len(content) != artefact.size_bytes or _sha256(content) != artefact.checksum:
+            raise ValueError("published evaluation artefact checksum mismatch.")
+        artefact_contents[artefact.name] = content
+
+    run_artifact: RetrievalEvaluationRunArtifact = deserialise_run_artifact(
+        artefact_contents["run.json"]
+    )
+    cases = deserialise_case_results(
+        artefact_contents["cases.jsonl"],
+        run_artifact.identity,
+    )
+    report = deserialise_retrieval_report(artefact_contents["report.json"])
+    if (
+        report.run_fingerprint != manifest.run_fingerprint
+        or report.result_digest != manifest.result_digest
+        or run_artifact.identity.run_fingerprint != manifest.run_fingerprint
+        or run_artifact.result_digest != manifest.result_digest
+        or report.aggregate.case_count != len(cases)
+    ):
+        raise ValueError("published evaluation identities do not reconcile.")
+    run = RetrievalEvaluationRunResult(
+        identity=run_artifact.identity,
+        case_results=cases,
+        aggregate=report.aggregate,
+    )
+    if retrieval_result_digest(run) != manifest.result_digest:
+        raise ValueError("published evaluation result digest mismatch.")
+    return run
 
 
 def _build_manifest(
@@ -279,5 +330,6 @@ def _sha256(data: bytes) -> str:
 
 __all__ = [
     "RetrievalEvaluationPublicationError",
+    "load_published_retrieval_evaluation",
     "publish_retrieval_evaluation",
 ]

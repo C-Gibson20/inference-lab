@@ -151,6 +151,7 @@ from inference_lab.evaluation.retrieval_report_contracts import (
 )
 from inference_lab.evaluation.retrieval_report_publication import (
     RetrievalEvaluationPublicationError,
+    load_published_retrieval_evaluation,
     publish_retrieval_evaluation,
 )
 from inference_lab.evaluation.retrieval_report_rendering import (
@@ -320,6 +321,7 @@ __all__ = [
     "evaluation_json_schema",
     "generate_splits",
     "load_dataset",
+    "load_published_retrieval_evaluation",
     "parser_capability_profile",
     "publish_audit_report",
     "publish_retrieval_evaluation",
