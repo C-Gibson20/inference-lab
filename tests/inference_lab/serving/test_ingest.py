@@ -1,5 +1,9 @@
-"""Acceptance tests for the local serving ingest facade."""
+"""Acceptance tests for the local serving ingest and search facade."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from inference_lab.ingest import (
@@ -16,7 +20,11 @@ from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
 )
-from inference_lab.serving import LocalServingFacade, ServingIngestRequest
+from inference_lab.serving import (
+    LocalServingFacade,
+    ServingIngestRequest,
+    ServingSearchRequest,
+)
 from inference_lab.settings import (
     ModelPaths,
     RuntimeConfig,
@@ -93,8 +101,87 @@ def _membership_hashes(
     return hashes
 
 
+def _write_process_config(tmp_path: Path) -> None:
+    """Write a minimal config used by the fresh-process query example."""
+    config = "\n".join(
+        (
+            "[models]",
+            f"embedder_path = {json.dumps(str(tmp_path / 'models' / 'embedder'))}",
+            f"reranker_path = {json.dumps(str(tmp_path / 'models' / 'reranker'))}",
+            f"generator_path = {json.dumps(str(tmp_path / 'models' / 'generator'))}",
+            "",
+            "[runtime]",
+            "vram_budget_gb = 24",
+            "",
+            "[storage]",
+            f"index_dir = {json.dumps(str(tmp_path / 'index'))}",
+            f"metadata_db_path = {json.dumps(str(tmp_path / 'metadata.sqlite3'))}",
+            f"source_dir = {json.dumps(str(tmp_path / 'source-data'))}",
+            "",
+            "[logging]",
+            'level = "CRITICAL"',
+            'format = "json"',
+            "",
+            "[ingest]",
+            "max_source_bytes = 52428800",
+            "max_concurrent_documents = 1",
+            "",
+        )
+    )
+    (tmp_path / "config.toml").write_text(config, encoding="utf-8")
+
+
+def _run_fresh_process_search(
+    tmp_path: Path,
+    corpus_id: CorpusId,
+    query: str,
+    *,
+    corpus_version: CorpusVersionId | None = None,
+) -> dict[str, object]:
+    """Run the documented query example and decode its JSON result."""
+    script = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "inference_lab"
+        / "serving-search.py"
+    )
+    command = [
+        sys.executable,
+        str(script),
+        "--corpus-id",
+        corpus_id.as_str(),
+        "--query",
+        query,
+        "--limit",
+        "5",
+    ]
+    if corpus_version is not None:
+        command.extend(("--corpus-version", corpus_version.as_str()))
+    environment = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[3] / "src")
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        source_root
+        if not existing_pythonpath
+        else f"{source_root}{os.pathsep}{existing_pythonpath}"
+    )
+    completed = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stderr == ""
+    output = completed.stdout.strip().splitlines()
+    assert output
+    return json.loads(output[-1])
+
+
 def test_ingest_is_corpus_scoped_and_replays_after_restart(tmp_path: Path) -> None:
-    """Publish two isolated corpora and replay one proposal after reopening storage."""
+    """Publish, restart, search, and replay two isolated corpora."""
     settings = _settings(tmp_path)
     shared = tmp_path / "shared.txt"
     alpha = tmp_path / "alpha.txt"
@@ -151,9 +238,59 @@ def test_ingest_is_corpus_scoped_and_replays_after_restart(tmp_path: Path) -> No
         apply_migrations=True,
     )
     try:
-        replayed = LocalServingFacade(reopened, settings).ingest(request_a)
+        facade = LocalServingFacade(reopened, settings)
+        replayed = facade.ingest(request_a)
         assert replayed.publication_status.value == "committed"
         assert replayed.document_outcomes == ()
         assert len(reopened.list_corpus_versions(corpus_a)) == 1
+
+        active_a = reopened.get_active_corpus_version(corpus_a)
+        active_b = reopened.get_active_corpus_version(corpus_b)
+        assert active_a is not None
+        assert active_b is not None
+
+        alpha_result = facade.search(
+            ServingSearchRequest(corpus_id=corpus_a, text="alpha", limit=5)
+        )
+        beta_result = facade.search(
+            ServingSearchRequest(corpus_id=corpus_b, text="beta", limit=5)
+        )
+        historical_result = facade.search(
+            ServingSearchRequest(
+                corpus_id=corpus_a,
+                corpus_version=active_a.corpus_version,
+                text="alpha",
+                limit=5,
+            )
+        )
+        assert alpha_result.corpus_version == active_a.corpus_version
+        assert beta_result.corpus_version == active_b.corpus_version
+        assert historical_result.corpus_version == active_a.corpus_version
+        assert alpha_result.hits
+        assert beta_result.hits
+        assert historical_result.hits
+        assert all("alpha" in hit.text for hit in alpha_result.hits)
+        assert all("beta" in hit.text for hit in beta_result.hits)
+        assert all(hit.source_locations for hit in alpha_result.hits)
+        assert all(hit.source_locations for hit in beta_result.hits)
+        for hit in (*alpha_result.hits, *beta_result.hits):
+            for location in hit.source_locations:
+                assert location.start_offset < location.end_offset
+                assert location.span_start_offset <= location.span_end_offset
     finally:
         reopened.close()
+
+    _write_process_config(tmp_path)
+    fresh_alpha = _run_fresh_process_search(
+        tmp_path,
+        corpus_a,
+        "alpha",
+        corpus_version=active_a.corpus_version,
+    )
+    fresh_beta = _run_fresh_process_search(tmp_path, corpus_b, "beta")
+    assert fresh_alpha["corpus_id"] == corpus_a.as_str()
+    assert fresh_alpha["corpus_version"] == active_a.corpus_version.as_str()
+    assert fresh_beta["corpus_id"] == corpus_b.as_str()
+    assert fresh_beta["corpus_version"] == active_b.corpus_version.as_str()
+    assert fresh_alpha["hits"]
+    assert fresh_beta["hits"]
