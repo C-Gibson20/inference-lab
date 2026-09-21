@@ -18,6 +18,7 @@ from inference_lab.ingest import (
     plan_baseline_membership,
 )
 from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
+from inference_lab.profiling import ProfilingContext
 from inference_lab.provenance import CorpusId, CorpusMetadata
 from inference_lab.serving.ingest_contracts import (
     ServingIngestError,
@@ -29,6 +30,11 @@ from inference_lab.serving.ingest_discovery import discover_sources
 from inference_lab.serving.ingest_documents import ServingDocumentRunner
 from inference_lab.serving.ingest_helpers import stage_count
 from inference_lab.serving.ingest_publication import ServingPublicationCoordinator
+from inference_lab.serving.search import ServingSearchRunner
+from inference_lab.serving.search_contracts import (
+    ServingSearchRequest,
+    ServingSearchResult,
+)
 from inference_lab.settings import Settings
 from inference_lab.storage import (
     MetadataRepository,
@@ -53,10 +59,20 @@ class LocalServingFacade:
             self._repository,
             settings,
         )
+        self._search = ServingSearchRunner(self._repository, settings)
 
     def list_corpora(self) -> tuple[CorpusMetadata, ...]:
         """Return the configured deployment's named corpora and opaque IDs."""
         return self._repository.list_corpora()
+
+    def search(
+        self,
+        request: ServingSearchRequest,
+        *,
+        profiling: ProfilingContext | None = None,
+    ) -> ServingSearchResult:
+        """Search one explicitly selected corpus version for original passages."""
+        return self._search.search(request, profiling=profiling)
 
     def create_corpus(
         self,
