@@ -1,5 +1,6 @@
 """Bounded, deterministic execution for independent baseline documents."""
 
+from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from threading import Event
@@ -44,6 +45,47 @@ class BaselineRequestExecutionError(RuntimeError):
             raise ValueError("request execution errors require fatal severity.")
         super().__init__(failure.category.value)
         self.failure = failure
+
+
+class _DocumentExecutor(Protocol):
+    """Small executor surface shared by threaded and inline execution."""
+
+    def submit(
+        self,
+        function: Callable[..., BaselineDocumentOutcome],
+        /,
+        *arguments: object,
+        **keywords: object,
+    ) -> Future[BaselineDocumentOutcome]:
+        """Submit one document worker and return its future."""
+        ...
+
+    def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+        """Release executor resources."""
+        ...
+
+
+class _InlineDocumentExecutor:
+    """Run one-document work on the caller thread for thread-confined stores."""
+
+    def submit(
+        self,
+        function: Callable[..., BaselineDocumentOutcome],
+        /,
+        *arguments: object,
+        **keywords: object,
+    ) -> Future[BaselineDocumentOutcome]:
+        """Execute one worker immediately and return a completed future."""
+        future: Future[BaselineDocumentOutcome] = Future()
+        try:
+            future.set_result(function(*arguments, **keywords))
+        except BaseException as error:
+            future.set_exception(error)
+        return future
+
+    def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+        """Match the executor shutdown contract without owning resources."""
+        del wait, cancel_futures
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -179,7 +221,11 @@ def execute_baseline_documents(
         if cancel_event.is_set():
             raise _failure(BaselineFailureCategory.CANCELLED)
 
-        executor = ThreadPoolExecutor(max_workers=maximum_workers)
+        executor: _DocumentExecutor
+        if maximum_workers == 1:
+            executor = _InlineDocumentExecutor()
+        else:
+            executor = ThreadPoolExecutor(max_workers=maximum_workers)
         pending: dict[Future[BaselineDocumentOutcome], BaselineDocumentTask] = {}
         results: dict[int, BaselineDocumentOutcome] = {}
         next_index = 0
