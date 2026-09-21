@@ -148,6 +148,9 @@ from inference_lab.evaluation.retrieval_report_publication import (
     RetrievalEvaluationPublicationError,
     publish_retrieval_evaluation,
 )
+from inference_lab.evaluation.retrieval_report_rendering import (
+    render_retrieval_report,
+)
 from inference_lab.evaluation.retrieval_scoring import (
     DocumentRelevanceTarget,
     PassageRelevanceTarget,
@@ -313,6 +316,7 @@ __all__ = [
     "publish_audit_report",
     "publish_retrieval_evaluation",
     "render_audit_report",
+    "render_retrieval_report",
     "report_content_digest",
     "retrieval_result_digest",
     "run_and_publish_audit",
