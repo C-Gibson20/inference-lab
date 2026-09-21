@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from threading import Barrier, Lock, get_ident
 from unittest.mock import patch
@@ -39,6 +40,7 @@ from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
 )
+from inference_lab.retrieval import LexicalIndexConfiguration
 from inference_lab.serving import (
     LocalServingFacade,
     ServingIngestError,
@@ -56,6 +58,7 @@ from inference_lab.settings import (
     StorageConfig,
 )
 from inference_lab.storage import (
+    CorpusUpdateState,
     MetadataRepository,
     StorageConcurrencyError,
     WorkerRepositoryOpener,
@@ -510,8 +513,22 @@ def test_no_change_committed_replay_uses_parent_version(tmp_path: Path) -> None:
             proposed=CorpusVersionId.generate(),
             expected=first.proposed_corpus_version,
         )
-        assert facade.ingest(unchanged).publication_status.value == "no_change"
+        lexical_dir = settings.storage.index_dir / "lexical"
+        before = {entry.name for entry in lexical_dir.iterdir()}
+        with patch(
+            "inference_lab.serving.ingest_publication."
+            "build_lexical_generation_for_corpus_update",
+            side_effect=AssertionError("unchanged ingest must not build"),
+        ):
+            assert facade.ingest(unchanged).publication_status.value == "no_change"
+        assert {entry.name for entry in lexical_dir.iterdir()} == before
         assert len(repository.list_corpus_versions(corpus_id)) == 1
+        update = repository.get_corpus_update(
+            corpus_id, unchanged.proposed_corpus_version
+        )
+        assert update is not None
+        assert update.state is CorpusUpdateState.ABORTED
+        assert update.manifest_digest is None
     finally:
         repository.close()
 
@@ -525,6 +542,44 @@ def test_no_change_committed_replay_uses_parent_version(tmp_path: Path) -> None:
         assert len(reopened.list_corpus_versions(corpus_id)) == 1
     finally:
         reopened.close()
+
+
+def test_lexical_config_only_change_builds_new_generation(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("stable source evidence", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    first = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Lexical configuration corpus", corpus_id=corpus_id)
+        assert facade.ingest(first).publication_status.value == "committed"
+        lexical_dir = settings.storage.index_dir / "lexical"
+        before = {entry.name for entry in lexical_dir.iterdir()}
+        changed = replace(
+            _request(
+                corpus_id,
+                (source,),
+                proposed=CorpusVersionId.generate(),
+                expected=first.proposed_corpus_version,
+            ),
+            lexical_configuration=LexicalIndexConfiguration(column_weights=(2.0,)),
+        )
+        assert facade.ingest(changed).publication_status.value == "committed"
+        assert len(repository.list_corpus_versions(corpus_id)) == 2
+        assert len({entry.name for entry in lexical_dir.iterdir()} - before) == 1
+    finally:
+        repository.close()
 
 
 def test_ready_resume_rejects_staged_membership_drift(tmp_path: Path) -> None:

@@ -52,7 +52,7 @@ def _manifest(**overrides: object) -> LexicalIndexManifest:
 
 def test_configuration_identity_covers_every_result_affecting_choice() -> None:
     baseline = LexicalIndexConfiguration()
-    changed = LexicalIndexConfiguration(column_weights=(1.0, 2.0))
+    changed = LexicalIndexConfiguration(column_weights=(2.0,))
 
     assert baseline.configuration_identity != changed.configuration_identity
     assert (
@@ -69,6 +69,12 @@ def test_configuration_rejects_unsupported_baseline_policies() -> None:
         LexicalIndexConfiguration(identifier_case_policy="folded")
     with pytest.raises(InvalidLexicalContractError):
         LexicalIndexConfiguration(column_weights=(0.0,))
+    with pytest.raises(InvalidLexicalContractError):
+        LexicalIndexConfiguration(column_weights=(1.0, 2.0))
+    with pytest.raises(InvalidLexicalContractError):
+        LexicalIndexConfiguration(bm25_k1=1.5)
+    with pytest.raises(InvalidLexicalContractError):
+        LexicalIndexConfiguration(bm25_b=0.5)
 
 
 def test_analyser_normalises_unicode_and_preserves_identifier_punctuation() -> None:
@@ -150,7 +156,7 @@ def test_score_semantics_and_stable_ordering_are_explicit() -> None:
     assert expose_bm25_score(-2.5) == 2.5
     assert identifier_score(4) == 4
     assert lexical_score_label(LexicalMatchMode.TERMS) == (
-        "sqlite_fts5_negated_bm25_v1"
+        "sqlite_fts5_negated_bm25_v2"
     )
     assert lexical_score_label(LexicalMatchMode.IDENTIFIER) == (
         "sqlite_exact_identifier_occurrences_v1"

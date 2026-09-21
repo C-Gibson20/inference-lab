@@ -123,6 +123,10 @@ class _GenerationContext(_RankedGeneration):
             contract_version="1.0.0",
             configuration_digest="configuration-digest",
             source_manifest_digest="source-manifest-digest",
+            configuration=SimpleNamespace(
+                score_label="sqlite_fts5_negated_bm25_v1",
+                identifier_score_label="sqlite_exact_identifier_occurrences_v1",
+            ),
         )
 
     def __enter__(self) -> "_GenerationContext":
@@ -307,6 +311,9 @@ def test_execute_filtered_retrieval_uses_pinned_generation_and_preserves_hits(
     )
     assert tuple(hit.rank for hit in result.hits) == (1, 2)
     assert tuple(hit.contributions[0].raw_score for hit in result.hits) == (2.0, 3.0)
+    assert result.hits[0].contributions[0].score_label == (
+        "sqlite_fts5_negated_bm25_v1"
+    )
     assert generation.visited == 4
     assert snapshot.closed is True
 

@@ -384,7 +384,14 @@ def _execute_lexical_retrieval(
                             )
                             metadata_observation.items_processed = items_processed
                             metadata_observation.records_emitted = len(matches)
-                    hits = _build_hits(lexical_request, matches)
+                    score_label = (
+                        generation.manifest.configuration.identifier_score_label
+                        if lexical_request.mode is LexicalMatchMode.IDENTIFIER
+                        else generation.manifest.configuration.score_label
+                    )
+                    hits = _build_hits(
+                        lexical_request, matches, score_label=score_label
+                    )
                     return EvidenceResult.from_query(
                         query,
                         observed_corpus_version=selected_snapshot.version.corpus_version,
@@ -487,6 +494,8 @@ def _filter_ranked_matches_with_count(
 def _build_hits(
     request: LexicalQuery,
     matches: tuple[tuple[LexicalIndexedChunk, int | float], ...],
+    *,
+    score_label: str | None = None,
 ) -> tuple[EvidenceHit, ...]:
     """Build contiguous lexical hits while preserving candidate provenance."""
     return tuple(
@@ -509,7 +518,11 @@ def _build_hits(
                     RetrievalChannel.LEXICAL,
                     rank,
                     score,
-                    lexical_score_label(request.mode),
+                    (
+                        lexical_score_label(request.mode)
+                        if score_label is None
+                        else score_label
+                    ),
                 ),
             ),
             rank=rank,

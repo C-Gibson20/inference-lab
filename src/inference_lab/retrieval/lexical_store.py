@@ -20,6 +20,7 @@ from inference_lab.provenance import (
     RecordId,
 )
 from inference_lab.retrieval.lexical import (
+    LEXICAL_ENGINE_REVISION,
     LexicalError,
     LexicalFailureCategory,
     LexicalIndexBuildOutcome,
@@ -375,6 +376,8 @@ def _build_lexical_generation(
         configuration = LexicalIndexConfiguration()
     if not isinstance(configuration, LexicalIndexConfiguration):
         raise TypeError("configuration must be a LexicalIndexConfiguration.")
+    if configuration.engine_revision != LEXICAL_ENGINE_REVISION:
+        raise LexicalError(LexicalFailureCategory.INVALID_REQUEST)
     if parent_generation_id is not None and not isinstance(parent_generation_id, str):
         raise TypeError("parent_generation_id must be a string or None.")
 

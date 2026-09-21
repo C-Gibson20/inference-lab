@@ -39,7 +39,6 @@ from inference_lab.serving.search_contracts import (
 from inference_lab.settings import Settings
 from inference_lab.storage import (
     MetadataRepository,
-    NoCorpusChangeOutcome,
     StorageConcurrencyError,
     StorageConflictError,
     WorkerRepositoryOpener,
@@ -195,11 +194,7 @@ class LocalServingFacade:
                 BaselineFailureCategory.GENERATION_BUILD_FAILED,
             )
 
-        publication_status = (
-            BaselinePublicationStatus.NO_CHANGE
-            if isinstance(publication, NoCorpusChangeOutcome)
-            else BaselinePublicationStatus.COMMITTED
-        )
+        publication_status = publication
         self._publication.verify_published(request, publication_status)
         execution_status = (
             BaselineExecutionStatus.COMPLETED_WITH_FAILURES
