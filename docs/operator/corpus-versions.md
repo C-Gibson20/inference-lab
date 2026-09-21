@@ -1,10 +1,10 @@
 # Corpus-version operations
 
 > **Status:** Corpus-version staging, publication, historical selection, and
-> rollback are available through the Python storage boundary. The
-> `inference-lab` command does not yet expose these operations. Ingest and
-> serving integrations must provide their own operator controls until their
-> planned commands or APIs land.
+> rollback are available through the Python storage and serving boundaries. The
+> `inference-lab` command does not yet expose these operations. Use the local
+> Python API for ingest and the fresh-process query example in
+> [Running queries](querying.md) for a restart-safe search check.
 
 This runbook describes the operational guarantees around one named corpus.
 The normative integration contract is defined in the
