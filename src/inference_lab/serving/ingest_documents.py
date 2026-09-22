@@ -8,6 +8,7 @@ from typing import TypeVar
 
 from inference_lab.ingest import (
     BaselineChunkRequest,
+    BaselineChunkResult,
     BaselineDocumentOutcome,
     BaselineDocumentOutcomeKind,
     BaselineDocumentTask,
@@ -16,6 +17,7 @@ from inference_lab.ingest import (
     BaselineFailureScope,
     BaselineFailureSeverity,
     BaselineParseRequest,
+    BaselineParseResult,
     BaselineRequestExecutionError,
     BaselineStage,
     BaselineStageDisposition,
@@ -42,6 +44,7 @@ from inference_lab.provenance import (
     DocumentIdentity,
     DocumentVersion,
     DocumentVersionId,
+    RecordId,
 )
 from inference_lab.serving.ingest_contracts import (
     ServingIngestError,
@@ -302,19 +305,63 @@ class ServingDocumentRunner:
                 kind = BaselineDocumentOutcomeKind.NEW_DOCUMENT
             elif parent.document_version_id != version.document_version_id:
                 kind = BaselineDocumentOutcomeKind.CHANGED_VERSION
+        parse_stage = self._process_parse_stage(
+            request,
+            source,
+            document.document_id,
+            version.document_version_id,
+            profiling,
+            parent_stage_id=parent_stage_id,
+        )
+        if isinstance(parse_stage, BaselineDocumentOutcome):
+            return parse_stage
+        parsed, parsed_record_id = parse_stage
+        chunk_stage = self._process_chunk_stage(
+            request,
+            source,
+            document.document_id,
+            version.document_version_id,
+            parsed_record_id,
+            parsed,
+            profiling,
+            parent_stage_id=parent_stage_id,
+        )
+        if isinstance(chunk_stage, BaselineDocumentOutcome):
+            return chunk_stage
+        chunked = chunk_stage
+        return BaselineDocumentOutcome(
+            ordinal=source.ordinal,
+            kind=kind,
+            document_id=document.document_id,
+            document_version_id=version.document_version_id,
+            parse_disposition=parsed.disposition,
+            chunk_disposition=chunked.disposition,
+        )
+
+    def _process_parse_stage(
+        self,
+        request: ServingIngestRequest,
+        source: DiscoveredSource,
+        document_id: DocumentId,
+        document_version_id: DocumentVersionId,
+        profiling: BaselineProfilingContext,
+        *,
+        parent_stage_id: str | None,
+    ) -> tuple[BaselineParseResult, RecordId] | BaselineDocumentOutcome:
+        """Run one parse work key through replay, execution, and checkpointing."""
         parse_id = record_id(
             "parse",
-            version.document_version_id.as_str(),
+            document_version_id.as_str(),
             request.parser_version.value,
         )
         parsed_record_id = record_id(
             "parsed-representation",
-            version.document_version_id.as_str(),
+            document_version_id.as_str(),
             request.parser_version.value,
         )
         parse_key = BaselineWorkKey(
             proposed_corpus_version=request.proposed_corpus_version,
-            document_version_id=version.document_version_id,
+            document_version_id=document_version_id,
             stage=BaselineStage.PARSE,
             configuration_identity=request.configuration_identity,
         )
@@ -322,8 +369,8 @@ class ServingDocumentRunner:
             request,
             BaselineCheckpoint(
                 work_key=parse_key,
-                document_id=document.document_id,
-                input_identities=(version.document_version_id,),
+                document_id=document_id,
+                input_identities=(document_version_id,),
                 output_identities=(),
                 status=BaselineCheckpointStatus.STARTED,
             ),
@@ -332,8 +379,8 @@ class ServingDocumentRunner:
             assert parse_checkpoint.failure_category is not None
             return self.failed_outcome(
                 source,
-                document.document_id,
-                version.document_version_id,
+                document_id,
+                document_version_id,
                 stage=BaselineStage.PARSE,
                 category=parse_checkpoint.failure_category,
             )
@@ -379,8 +426,8 @@ class ServingDocumentRunner:
                 request,
                 BaselineCheckpoint(
                     work_key=parse_key,
-                    document_id=document.document_id,
-                    input_identities=(version.document_version_id,),
+                    document_id=document_id,
+                    input_identities=(document_version_id,),
                     output_identities=(),
                     status=BaselineCheckpointStatus.FAILED,
                     failure_category=category,
@@ -389,8 +436,8 @@ class ServingDocumentRunner:
             )
             return self.failed_outcome(
                 source,
-                document.document_id,
-                version.document_version_id,
+                document_id,
+                document_version_id,
                 stage=BaselineStage.PARSE,
                 category=category,
             )
@@ -399,8 +446,8 @@ class ServingDocumentRunner:
             parse_outputs = (parse_id, parsed.parsed_record_id)
         completed_parse = BaselineCheckpoint(
             work_key=parse_key,
-            document_id=document.document_id,
-            input_identities=(version.document_version_id,),
+            document_id=document_id,
+            input_identities=(document_version_id,),
             output_identities=parse_outputs,
             status=BaselineCheckpointStatus.COMPLETED,
         )
@@ -421,15 +468,29 @@ class ServingDocumentRunner:
         if parsed.parsed_record_id is None:
             return self.failed_outcome(
                 source,
-                document.document_id,
-                version.document_version_id,
+                document_id,
+                document_version_id,
                 stage=BaselineStage.PARSE,
                 category=BaselineFailureCategory.PARSE_FAILED,
             )
+        return parsed, parsed_record_id
 
+    def _process_chunk_stage(
+        self,
+        request: ServingIngestRequest,
+        source: DiscoveredSource,
+        document_id: DocumentId,
+        document_version_id: DocumentVersionId,
+        parsed_record_id: RecordId,
+        parsed: BaselineParseResult,
+        profiling: BaselineProfilingContext,
+        *,
+        parent_stage_id: str | None,
+    ) -> BaselineChunkResult | BaselineDocumentOutcome:
+        """Run one chunk work key through replay, execution, and checkpointing."""
         chunk_key = BaselineWorkKey(
             proposed_corpus_version=request.proposed_corpus_version,
-            document_version_id=version.document_version_id,
+            document_version_id=document_version_id,
             stage=BaselineStage.CHUNK,
             configuration_identity=request.configuration_identity,
         )
@@ -437,7 +498,7 @@ class ServingDocumentRunner:
             request,
             BaselineCheckpoint(
                 work_key=chunk_key,
-                document_id=document.document_id,
+                document_id=document_id,
                 input_identities=(parsed_record_id,),
                 output_identities=(),
                 status=BaselineCheckpointStatus.STARTED,
@@ -447,8 +508,8 @@ class ServingDocumentRunner:
             assert chunk_checkpoint.failure_category is not None
             return self.failed_outcome(
                 source,
-                document.document_id,
-                version.document_version_id,
+                document_id,
+                document_version_id,
                 stage=BaselineStage.CHUNK,
                 category=chunk_checkpoint.failure_category,
                 parse_disposition=parsed.disposition,
@@ -458,7 +519,7 @@ class ServingDocumentRunner:
             and _retry_repository_operation(
                 lambda: self._repository.get_chunk_set_selection(
                     request.corpus_id,
-                    version.document_version_id,
+                    document_version_id,
                     request.configuration_identity,
                 ),
                 stage=BaselineStage.CHUNK_PERSISTENCE,
@@ -497,7 +558,7 @@ class ServingDocumentRunner:
                 request,
                 BaselineCheckpoint(
                     work_key=chunk_key,
-                    document_id=document.document_id,
+                    document_id=document_id,
                     input_identities=(parsed_record_id,),
                     output_identities=(),
                     status=BaselineCheckpointStatus.FAILED,
@@ -507,8 +568,8 @@ class ServingDocumentRunner:
             )
             return self.failed_outcome(
                 source,
-                document.document_id,
-                version.document_version_id,
+                document_id,
+                document_version_id,
                 stage=BaselineStage.CHUNK,
                 category=category,
                 parse_disposition=parsed.disposition,
@@ -516,7 +577,7 @@ class ServingDocumentRunner:
         chunk_outputs = tuple(chunk.record_id for chunk in chunked.chunk_set.chunks)
         completed_chunk = BaselineCheckpoint(
             work_key=chunk_key,
-            document_id=document.document_id,
+            document_id=document_id,
             input_identities=(parsed_record_id,),
             output_identities=chunk_outputs,
             status=BaselineCheckpointStatus.COMPLETED,
@@ -535,14 +596,7 @@ class ServingDocumentRunner:
                 completed_chunk,
                 expected_status=BaselineCheckpointStatus.STARTED,
             )
-        return BaselineDocumentOutcome(
-            ordinal=source.ordinal,
-            kind=kind,
-            document_id=document.document_id,
-            document_version_id=version.document_version_id,
-            parse_disposition=parsed.disposition,
-            chunk_disposition=chunked.disposition,
-        )
+        return chunked
 
     def start_checkpoint(
         self,
