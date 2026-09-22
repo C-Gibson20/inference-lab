@@ -11,9 +11,13 @@ from inference_lab.retrieval import (
     EvidenceHit,
     EvidenceResult,
     EvidenceSource,
+    LexicalError,
+    LexicalFailureCategory,
+    LexicalGeneration,
     ResultStatus,
     RetrievalChannel,
     execute_lexical_retrieval,
+    open_lexical_generation,
     validate_metadata_filter,
 )
 from inference_lab.retrieval.metadata_filters import InvalidMetadataFilterError
@@ -25,7 +29,10 @@ from inference_lab.serving.search_contracts import (
     ServingSearchResult,
     ServingSearchSourceLink,
 )
-from inference_lab.serving.search_locations import resolve_source_locations
+from inference_lab.serving.search_locations import (
+    _lexical_reference,
+    resolve_source_locations,
+)
 from inference_lab.settings import Settings
 from inference_lab.storage import (
     CorpusSnapshot,
@@ -201,31 +208,45 @@ class ServingSearchRunner:
             module="inference_lab.serving",
             failure_mapper=map_serving_search_failure,
         ) as stage:
-            retrieval_query = request.lexical_query(selected_version)
+            retrieval_query = request.retrieval_query(selected_version)
             try:
-                evidence = execute_lexical_retrieval(
-                    self._repository,
-                    self._settings.storage.index_dir,
-                    request.corpus_id,
-                    retrieval_query,
-                    profiling=profiling,
-                    parent_stage_id=stage_id,
-                    snapshot=snapshot,
-                )
+                reference = _lexical_reference(snapshot)
+                # One full integrity check belongs to the serving request;
+                # the borrowed retrieval stage then measures ranked execution.
+                with open_lexical_generation(
+                    self._settings.storage.index_dir, reference.generation_id
+                ) as generation:
+                    evidence = execute_lexical_retrieval(
+                        self._repository,
+                        self._settings.storage.index_dir,
+                        request.corpus_id,
+                        retrieval_query,
+                        mode=request.mode,
+                        profiling=profiling,
+                        parent_stage_id=stage_id,
+                        snapshot=snapshot,
+                        generation=generation,
+                    )
+                    result = self._convert_result(
+                        request, snapshot, generation, evidence
+                    )
             except InvalidMetadataFilterError:
                 raise ServingSearchError(
                     ServingSearchFailureCategory.UNSUPPORTED_FILTER
                 ) from None
+            except LexicalError as error:
+                category = (
+                    ServingSearchFailureCategory.CORRUPT_STATE
+                    if error.category is LexicalFailureCategory.CORRUPT_GENERATION
+                    else ServingSearchFailureCategory.RETRIEVAL_FAILED
+                )
+                raise ServingSearchError(category) from None
+            except ServingSearchError:
+                raise
             except (TypeError, ValueError):
                 raise ServingSearchError(
                     ServingSearchFailureCategory.INVALID_RETRIEVAL_RESULT
                 ) from None
-            except StorageError as error:
-                raise _storage_error(error) from None
-            try:
-                result = self._convert_result(request, snapshot, evidence)
-            except ServingSearchError:
-                raise
             except StorageError as error:
                 raise _storage_error(error) from None
             stage.set_counts(items_processed=1, records_emitted=len(result.hits))
@@ -236,6 +257,7 @@ class ServingSearchRunner:
         self,
         request: ServingSearchRequest,
         snapshot: CorpusSnapshot,
+        generation: LexicalGeneration,
         evidence: EvidenceResult,
     ) -> ServingSearchResult:
         """Convert a successful RET-01 result into the serving contract."""
@@ -256,7 +278,9 @@ class ServingSearchRunner:
         if evidence.failures:
             raise ServingSearchError(ServingSearchFailureCategory.RETRIEVAL_FAILED)
 
-        hits = tuple(self._convert_hit(snapshot, hit) for hit in evidence.hits)
+        hits = tuple(
+            self._convert_hit(snapshot, generation, hit) for hit in evidence.hits
+        )
         return ServingSearchResult(
             corpus_id=request.corpus_id,
             corpus_version=snapshot.version.corpus_version,
@@ -267,6 +291,7 @@ class ServingSearchRunner:
     def _convert_hit(
         self,
         snapshot: CorpusSnapshot,
+        generation: LexicalGeneration,
         hit: object,
     ) -> ServingSearchHit:
         """Validate one original-passage hit and its corpus ownership."""
@@ -295,7 +320,7 @@ class ServingSearchRunner:
         )
         source_locations = resolve_source_locations(
             snapshot,
-            self._settings.storage.index_dir,
+            generation,
             candidate.record_id,
             candidate.content,
             tuple(candidate.sources),

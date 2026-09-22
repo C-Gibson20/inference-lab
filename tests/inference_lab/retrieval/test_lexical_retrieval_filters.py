@@ -114,6 +114,7 @@ class _GenerationContext(_RankedGeneration):
         generation_id: str,
     ) -> None:
         super().__init__(matches)
+        self.closed = False
         self.manifest = SimpleNamespace(
             corpus_id=CORPUS_ID,
             corpus_version=CORPUS_VERSION_ID,
@@ -123,12 +124,17 @@ class _GenerationContext(_RankedGeneration):
             contract_version="1.0.0",
             configuration_digest="configuration-digest",
             source_manifest_digest="source-manifest-digest",
+            configuration=SimpleNamespace(
+                score_label="sqlite_fts5_negated_bm25_v1",
+                identifier_score_label="sqlite_exact_identifier_occurrences_v1",
+            ),
         )
 
     def __enter__(self) -> "_GenerationContext":
         return self
 
     def __exit__(self, *_: object) -> None:
+        self.closed = True
         return None
 
     def search(self, request: LexicalQuery):
@@ -307,6 +313,9 @@ def test_execute_filtered_retrieval_uses_pinned_generation_and_preserves_hits(
     )
     assert tuple(hit.rank for hit in result.hits) == (1, 2)
     assert tuple(hit.contributions[0].raw_score for hit in result.hits) == (2.0, 3.0)
+    assert result.hits[0].contributions[0].score_label == (
+        "sqlite_fts5_negated_bm25_v1"
+    )
     assert generation.visited == 4
     assert snapshot.closed is True
 
@@ -321,7 +330,7 @@ def test_execute_retrieval_borrows_supplied_snapshot_without_reopening_or_closin
     monkeypatch.setattr(
         lexical_retrieval,
         "open_lexical_generation",
-        lambda *_: generation,
+        lambda *_: pytest.fail("the borrowed generation must be used"),
     )
 
     class _RepositoryThatMustNotOpen:
@@ -334,11 +343,39 @@ def test_execute_retrieval_borrows_supplied_snapshot_without_reopening_or_closin
         CORPUS_ID,
         _query(filter_expression=None),
         snapshot=cast(CorpusSnapshot, snapshot),
+        generation=cast(LexicalGeneration, generation),
     )
 
     assert result.status is ResultStatus.COMPLETED
     assert len(result.hits) == 1
     assert snapshot.closed is False
+    assert generation.closed is False
+
+
+def test_borrowed_foreign_generation_fails_closed_without_closing_it(
+    monkeypatch,
+) -> None:
+    generation = _GenerationContext(((_candidate(1), 1.0),), "other-generation")
+    snapshot = _SnapshotContext("generation-1")
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "open_lexical_generation",
+        lambda *_: pytest.fail("a borrowed generation must not reopen"),
+    )
+
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _Repository(snapshot)),
+        Path("indexes"),
+        CORPUS_ID,
+        _query(filter_expression=None),
+        snapshot=cast(CorpusSnapshot, snapshot),
+        generation=cast(LexicalGeneration, generation),
+    )
+
+    assert result.status is ResultStatus.FAILED
+    assert result.hits == ()
+    assert result.failures[0].category.value == "invalid_channel_response"
+    assert generation.closed is False
 
 
 def test_filtered_execution_profiles_exact_metadata_counts_and_parentage(

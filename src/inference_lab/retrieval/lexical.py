@@ -25,9 +25,11 @@ from inference_lab.retrieval.query import RetrievalQuery
 LEXICAL_COMPONENT_KIND: Final[str] = "lexical-index"
 LEXICAL_IMPLEMENTATION: Final[str] = "sqlite-fts5"
 LEXICAL_FORMAT_VERSION: Final[str] = "1.0.0"
-LEXICAL_CONTRACT_VERSION: Final[str] = "1.0.0"
+LEXICAL_CONTRACT_VERSION: Final[str] = "1.1.0"
+LEXICAL_ENGINE_REVISION: Final[str] = "sqlite-fts5-weighted-bm25"
+_LEGACY_ENGINE_REVISION: Final[str] = "sqlite-fts5-baseline"
 LEXICAL_MANIFEST_SCHEMA_VERSION: Final[str] = "1.0.0"
-LEXICAL_SCORE_LABEL: Final[str] = "sqlite_fts5_negated_bm25_v1"
+LEXICAL_SCORE_LABEL: Final[str] = "sqlite_fts5_negated_bm25_v2"
 LEXICAL_IDENTIFIER_SCORE_LABEL: Final[str] = "sqlite_exact_identifier_occurrences_v1"
 
 _SHA256_PATTERN: Final = re.compile(r"^[0-9a-f]{64}$")
@@ -135,10 +137,16 @@ def _validate_non_negative_integer(value: object, field_name: str) -> int:
 
 @dataclass(frozen=True, slots=True)
 class LexicalIndexConfiguration:
-    """Versioned choices that can change lexical index or result semantics."""
+    """Versioned lexical choices; the current FTS5 revision fixes k1/b.
+
+    ``column_weights`` contains the one indexed content-column weight. The
+    unindexed record ID occupies FTS5 column zero and always receives zero.
+    Legacy revision values remain decodable for published v1 generations but
+    cannot be used to build a new generation.
+    """
 
     engine: str = LEXICAL_IMPLEMENTATION
-    engine_revision: str = "sqlite-fts5-baseline"
+    engine_revision: str = LEXICAL_ENGINE_REVISION
     index_schema_version: str = LEXICAL_FORMAT_VERSION
     fts_tokenizer: str = "unicode61 remove_diacritics 0 tokenchars '-._:/+'"
     unicode_normalisation: str = "NFC"
@@ -161,6 +169,11 @@ class LexicalIndexConfiguration:
         _validate_slug(self.engine, "engine")
         if not isinstance(self.engine_revision, str) or not self.engine_revision:
             raise InvalidLexicalContractError("engine_revision must be non-empty.")
+        if self.engine_revision not in {
+            _LEGACY_ENGINE_REVISION,
+            LEXICAL_ENGINE_REVISION,
+        }:
+            raise InvalidLexicalContractError("unsupported lexical engine revision.")
         _validate_semantic_version(self.index_schema_version, "index_schema_version")
         if not isinstance(self.fts_tokenizer, str) or not self.fts_tokenizer:
             raise InvalidLexicalContractError("fts_tokenizer must be non-empty.")
@@ -187,15 +200,26 @@ class LexicalIndexConfiguration:
             )
         if not isinstance(self.bm25_k1, float) or not math.isfinite(self.bm25_k1):
             raise TypeError("bm25_k1 must be a finite float.")
-        if self.bm25_k1 <= 0:
+        if self.engine_revision == LEXICAL_ENGINE_REVISION:
+            if self.bm25_k1 != 1.2:
+                raise InvalidLexicalContractError("SQLite FTS5 fixes bm25_k1 at 1.2.")
+        elif self.bm25_k1 <= 0:
             raise InvalidLexicalContractError("bm25_k1 must be positive.")
         if not isinstance(self.bm25_b, float) or not math.isfinite(self.bm25_b):
             raise TypeError("bm25_b must be a finite float.")
-        if not 0 <= self.bm25_b <= 1:
+        if self.engine_revision == LEXICAL_ENGINE_REVISION:
+            if self.bm25_b != 0.75:
+                raise InvalidLexicalContractError("SQLite FTS5 fixes bm25_b at 0.75.")
+        elif not 0 <= self.bm25_b <= 1:
             raise InvalidLexicalContractError("bm25_b must be between zero and one.")
         if not isinstance(self.column_weights, tuple):
             raise TypeError("column_weights must be a tuple.")
-        if not self.column_weights:
+        if self.engine_revision == LEXICAL_ENGINE_REVISION:
+            if len(self.column_weights) != 1:
+                raise InvalidLexicalContractError(
+                    "column_weights must contain the single indexed content weight."
+                )
+        elif not self.column_weights:
             raise InvalidLexicalContractError("column_weights must not be empty.")
         for weight in self.column_weights:
             if not isinstance(weight, float) or not math.isfinite(weight):
@@ -427,6 +451,14 @@ class LexicalIndexManifest:
             raise InvalidLexicalContractError(
                 "manifest implementation must match its configuration engine."
             )
+        expected_revision = {
+            "1.0.0": _LEGACY_ENGINE_REVISION,
+            LEXICAL_CONTRACT_VERSION: LEXICAL_ENGINE_REVISION,
+        }.get(self.contract_version)
+        if self.configuration.engine_revision != expected_revision:
+            raise InvalidLexicalContractError(
+                "manifest contract and engine revision are incompatible."
+            )
         if (
             self.configuration_digest
             != self.configuration.configuration_identity.digest
@@ -483,6 +515,10 @@ class LexicalIndexBuildStatistics:
     database_reused: bool = False
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate bounded build counters and the reuse flag."""
         for field_name in (
             "members_processed",
             "chunks_processed",

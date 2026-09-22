@@ -87,6 +87,10 @@ from inference_lab.evaluation.coverage import (
     validate_final_benchmark,
 )
 from inference_lab.evaluation.datasets import DatasetManifest
+from inference_lab.evaluation.lexical_adapter import (
+    LocalLexicalEvaluationAdapter,
+    lexical_relationship_snapshot,
+)
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.retrieval_contracts import (
@@ -267,6 +271,7 @@ __all__ = [
     "ExpectedAnswer",
     "LeakageGroup",
     "LoadedDataset",
+    "LocalLexicalEvaluationAdapter",
     "MetricFraction",
     "NumericExpectation",
     "ParserCapabilityProfile",
@@ -320,6 +325,7 @@ __all__ = [
     "deserialise_run_artifact",
     "evaluation_json_schema",
     "generate_splits",
+    "lexical_relationship_snapshot",
     "load_dataset",
     "load_published_retrieval_evaluation",
     "parser_capability_profile",

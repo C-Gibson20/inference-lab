@@ -178,13 +178,13 @@ def execute_lexical_retrieval(
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
     snapshot: CorpusSnapshot | None = None,
+    generation: LexicalGeneration | None = None,
 ) -> EvidenceResult:
     """Execute one lexical query and instrument its bounded retrieval stage.
 
-    When ``snapshot`` is supplied, it is borrowed for the duration of this
-    call and is never closed here.  This lets a serving owner keep lexical
-    execution, metadata filtering, and source-location resolution on one
-    pinned corpus version.
+    Supplied snapshot and generation handles are borrowed, never closed here.
+    This lets serving use one pinned version and one validated lexical handle
+    through retrieval and source-location resolution.
     """
     if profiling is not None and not isinstance(profiling, ProfilingContext):
         raise TypeError("profiling must be a ProfilingContext or None.")
@@ -231,6 +231,7 @@ def execute_lexical_retrieval(
                 query,
                 lexical_request,
                 snapshot=snapshot,
+                generation=generation,
             )
         else:
             metadata_observation = _MetadataFilterObservation()
@@ -255,6 +256,7 @@ def execute_lexical_retrieval(
                     lexical_request,
                     metadata_observation=metadata_observation,
                     snapshot=snapshot,
+                    generation=generation,
                 )
                 if result.status is ResultStatus.COMPLETED:
                     metadata_stage.set_counts(
@@ -284,6 +286,7 @@ def _execute_lexical_retrieval(
     *,
     metadata_observation: _MetadataFilterObservation | None = None,
     snapshot: CorpusSnapshot | None = None,
+    generation: LexicalGeneration | None = None,
 ) -> EvidenceResult:
     """Execute one lexical query against exactly one pinned corpus snapshot."""
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
@@ -339,22 +342,27 @@ def _execute_lexical_retrieval(
                 return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
 
             try:
-                with open_lexical_generation(
-                    index_dir, reference.generation_id
-                ) as generation:
+                generation_context = (
+                    nullcontext(generation)
+                    if generation is not None
+                    else open_lexical_generation(index_dir, reference.generation_id)
+                )
+                with generation_context as selected_generation:
                     if (
-                        generation.manifest.corpus_id != corpus_id
-                        or generation.manifest.corpus_version != query.corpus_version
-                        or generation.manifest.generation_id != reference.generation_id
-                        or generation.manifest.implementation
+                        selected_generation.manifest.corpus_id != corpus_id
+                        or selected_generation.manifest.corpus_version
+                        != query.corpus_version
+                        or selected_generation.manifest.generation_id
+                        != reference.generation_id
+                        or selected_generation.manifest.implementation
                         != reference.implementation
-                        or generation.manifest.format_version
+                        or selected_generation.manifest.format_version
                         != reference.format_version
-                        or generation.manifest.contract_version
+                        or selected_generation.manifest.contract_version
                         != reference.contract_version
-                        or generation.manifest.configuration_digest
+                        or selected_generation.manifest.configuration_digest
                         != reference.configuration_digest
-                        or generation.manifest.source_manifest_digest
+                        or selected_generation.manifest.source_manifest_digest
                         != reference.source_manifest_digest
                     ):
                         return _failed_result(
@@ -362,11 +370,11 @@ def _execute_lexical_retrieval(
                             FailureCategory.INVALID_CHANNEL_RESPONSE,
                         )
                     if metadata_validation is None:
-                        matches = generation.search(lexical_request)
+                        matches = selected_generation.search(lexical_request)
                     else:
                         if metadata_observation is None:
                             matches = _filter_ranked_matches(
-                                generation,
+                                selected_generation,
                                 lexical_request,
                                 query,
                                 metadata_validation,
@@ -375,7 +383,7 @@ def _execute_lexical_retrieval(
                         else:
                             matches, items_processed = (
                                 _filter_ranked_matches_with_count(
-                                    generation,
+                                    selected_generation,
                                     lexical_request,
                                     query,
                                     metadata_validation,
@@ -384,7 +392,14 @@ def _execute_lexical_retrieval(
                             )
                             metadata_observation.items_processed = items_processed
                             metadata_observation.records_emitted = len(matches)
-                    hits = _build_hits(lexical_request, matches)
+                    score_label = (
+                        selected_generation.manifest.configuration.identifier_score_label
+                        if lexical_request.mode is LexicalMatchMode.IDENTIFIER
+                        else selected_generation.manifest.configuration.score_label
+                    )
+                    hits = _build_hits(
+                        lexical_request, matches, score_label=score_label
+                    )
                     return EvidenceResult.from_query(
                         query,
                         observed_corpus_version=selected_snapshot.version.corpus_version,
@@ -487,6 +502,8 @@ def _filter_ranked_matches_with_count(
 def _build_hits(
     request: LexicalQuery,
     matches: tuple[tuple[LexicalIndexedChunk, int | float], ...],
+    *,
+    score_label: str | None = None,
 ) -> tuple[EvidenceHit, ...]:
     """Build contiguous lexical hits while preserving candidate provenance."""
     return tuple(
@@ -509,7 +526,11 @@ def _build_hits(
                     RetrievalChannel.LEXICAL,
                     rank,
                     score,
-                    lexical_score_label(request.mode),
+                    (
+                        lexical_score_label(request.mode)
+                        if score_label is None
+                        else score_label
+                    ),
                 ),
             ),
             rank=rank,

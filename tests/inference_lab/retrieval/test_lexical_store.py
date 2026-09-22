@@ -1,7 +1,6 @@
 """Tests for persistent immutable lexical generations."""
 
 import hashlib
-import shutil
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -16,20 +15,11 @@ from inference_lab.ingest import (
     BaselineChunkGenerationEntry,
     BaselineChunkGenerationManifest,
     ChunkingPolicy,
-    ChunkingRequest,
-    ChunkSet,
-    FakeChunkTokeniser,
-    NormalisedText,
-    ParsedDocument,
     ParseOutcome,
     ParsePersistenceRequest,
     ParserInput,
-    SourceSpan,
-    StructuralBlock,
     begin_baseline_lexical_corpus_update,
     build_and_publish_baseline_lexical_generation,
-    build_chunk_set,
-    generate_source_span_id,
     map_chunk_set,
     persist_parse_request,
     publish_baseline_lexical_generations,
@@ -71,7 +61,6 @@ from inference_lab.retrieval import (
 )
 from inference_lab.storage import (
     ChunkSetReader,
-    ChunkSetSelectionRecord,
     ChunkSetWriteRequest,
     CommitCorpusUpdateOutcome,
     ComponentGenerationState,
@@ -83,10 +72,19 @@ from inference_lab.storage import (
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from tests.inference_lab.ingest.fixtures import fixture_settings  # noqa: TID252
-
-CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
-CORPUS_VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000002")
-SECOND_CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000003")
+from tests.inference_lab.retrieval import lexical_fixtures  # noqa: TID252
+from tests.inference_lab.retrieval.lexical_fixtures import (  # noqa: TID252
+    CORPUS_ID,
+    CORPUS_VERSION_ID,
+    SECOND_CORPUS_ID,
+    manifest,
+    parsed_document,
+    privacy_source_manifest,
+    publish_query_fixture,
+    published_lexical_generation_id,
+    seed_metadata_repository,
+    selection,
+)
 
 
 class _FakeSnapshot:
@@ -143,195 +141,6 @@ class _CollectingSink:
         self.records.append(record)
 
 
-def _parsed_document(
-    text: str,
-    *,
-    empty: bool = False,
-    document_id: DocumentId | None = None,
-    document_version_id: DocumentVersionId | None = None,
-) -> ParsedDocument:
-    actual_document_id = document_id or DocumentId.generate()
-    actual_document_version_id = document_version_id or DocumentVersionId.generate()
-    blocks: tuple[StructuralBlock, ...] = ()
-    if not empty:
-        span = SourceSpan(
-            source_span_id=generate_source_span_id(
-                actual_document_version_id,
-                parser_version=CURRENT_PARSER_VERSION,
-                ordinal=0,
-                kind="paragraph",
-                start_offset=0,
-                end_offset=len(text),
-            ),
-            document_version_id=actual_document_version_id,
-            start_offset=0,
-            end_offset=len(text),
-        )
-        blocks = (StructuralBlock(kind="paragraph", text=text, source_span=span),)
-    return ParsedDocument(
-        document_id=actual_document_id,
-        document_version_id=actual_document_version_id,
-        text=NormalisedText(source_text=text),
-        blocks=blocks,
-        pages=None,
-        sections=None,
-        paragraphs=blocks,
-        page_layouts=(),
-        language=None,
-        page_count=None,
-        character_count=len(text),
-        token_count=None,
-    )
-
-
-def _selection(
-    text: str,
-    *,
-    empty: bool = False,
-    document_id: DocumentId | None = None,
-    document_version_id: DocumentVersionId | None = None,
-    policy: ChunkingPolicy | None = None,
-) -> tuple[ChunkSet, ChunkSetSelectionRecord]:
-    chunk_set = build_chunk_set(
-        ChunkingRequest(
-            corpus_id=CORPUS_ID,
-            parsed_document=_parsed_document(
-                text,
-                empty=empty,
-                document_id=document_id,
-                document_version_id=document_version_id,
-            ),
-            tokeniser=FakeChunkTokeniser(),
-            policy=policy or ChunkingPolicy(min_tokens=1, max_tokens=512),
-        )
-    )
-    return chunk_set, map_chunk_set(chunk_set)
-
-
-def _manifest(
-    selections: tuple[ChunkSetSelectionRecord, ...],
-    *,
-    corpus_version: CorpusVersionId = CORPUS_VERSION_ID,
-) -> BaselineChunkGenerationManifest:
-    entries = tuple(
-        sorted(
-            tuple(
-                BaselineChunkGenerationEntry(
-                    membership=CorpusDocumentVersionMembership(
-                        corpus_id=CORPUS_ID,
-                        document_id=selection.document_id,
-                        document_version_id=selection.document_version_id,
-                    ),
-                    selection=selection,
-                )
-                for selection in selections
-            ),
-            key=lambda entry: entry.key(),
-        )
-    )
-    return BaselineChunkGenerationManifest(
-        corpus_id=CORPUS_ID,
-        corpus_version=corpus_version,
-        configuration_identity=selections[0].configuration_identity,
-        generation_id="baseline-test-generation",
-        entries=entries,
-    )
-
-
-def _source_manifest() -> tuple[BaselineChunkGenerationManifest, ChunkSet, ChunkSet]:
-    first, first_selection = _selection("alpha cites 10.1234/ABC-7 and 10.1234/ABC-7")
-    second, second_selection = _selection("beta has no identifier")
-    entries = tuple(
-        sorted(
-            (
-                BaselineChunkGenerationEntry(
-                    membership=CorpusDocumentVersionMembership(
-                        corpus_id=CORPUS_ID,
-                        document_id=selection.document_id,
-                        document_version_id=selection.document_version_id,
-                    ),
-                    selection=selection,
-                )
-                for selection in (first_selection, second_selection)
-            ),
-            key=lambda entry: entry.key(),
-        )
-    )
-    manifest = BaselineChunkGenerationManifest(
-        corpus_id=CORPUS_ID,
-        corpus_version=CORPUS_VERSION_ID,
-        configuration_identity=first.configuration_identity,
-        generation_id="baseline-test-generation",
-        entries=entries,
-    )
-    return manifest, first, second
-
-
-def _privacy_source_manifest() -> BaselineChunkGenerationManifest:
-    """Return a fixture with distinctive query and indexed payload markers."""
-    _, first_selection = _selection(
-        "private lexical chunk marker with 10.1234/PRIVATE-7"
-    )
-    _, second_selection = _selection("private secondary chunk marker")
-    return _manifest((first_selection, second_selection))
-
-
-def _seed_metadata_repository(
-    repository: SQLiteMetadataRepository,
-    source_manifest: BaselineChunkGenerationManifest,
-    *,
-    seed_catalogue: bool = True,
-) -> None:
-    """Persist the catalogue and exact chunk selections used by publication."""
-    with repository.transaction() as transaction:
-        transaction.add_corpus(CorpusMetadata(source_manifest.corpus_id, "test corpus"))
-        for ordinal, entry in enumerate(source_manifest.entries, start=1):
-            if seed_catalogue:
-                transaction.add_document(DocumentIdentity(entry.membership.document_id))
-                transaction.add_document_version(
-                    DocumentVersion(
-                        entry.membership.document_version_id,
-                        entry.membership.document_id,
-                        ContentHash(HashAlgorithm.SHA256, str(ordinal).zfill(64)),
-                    )
-                )
-            transaction.add_corpus_document_version_membership(entry.membership)
-            transaction.write_chunk_set(
-                ChunkSetWriteRequest(
-                    corpus_id=source_manifest.corpus_id,
-                    selection=entry.selection,
-                )
-            )
-
-
-def _publish_query_fixture(
-    repository: SQLiteMetadataRepository,
-    index_dir: Path,
-    source_manifest: BaselineChunkGenerationManifest,
-) -> CommitCorpusUpdateOutcome:
-    """Publish one complete lexical fixture for query acceptance tests."""
-    _seed_metadata_repository(repository, source_manifest)
-    outcome = build_and_publish_baseline_lexical_generation(
-        repository,
-        index_dir,
-        source_manifest,
-        expected_corpus_version=None,
-    )
-    assert isinstance(outcome, CommitCorpusUpdateOutcome)
-    return outcome
-
-
-def _published_lexical_generation_id(outcome: CommitCorpusUpdateOutcome) -> str:
-    """Return the committed lexical generation identity from one outcome."""
-    lexical_generations = tuple(
-        generation
-        for generation in outcome.manifest.component_generations
-        if generation.component_kind.as_str() == "lexical-index"
-    )
-    assert len(lexical_generations) == 1
-    return lexical_generations[0].generation_id
-
-
 def _prepare_changed_manifest(
     repository: SQLiteMetadataRepository,
     source_manifest: BaselineChunkGenerationManifest,
@@ -345,7 +154,7 @@ def _prepare_changed_manifest(
         if b"alpha cites" in entry.selection.canonical_payload
     )
     changed_version = DocumentVersionId.generate()
-    _, changed_selection = _selection(
+    _, changed_selection = selection(
         "changed lexical content",
         document_id=first_entry.membership.document_id,
         document_version_id=changed_version,
@@ -446,7 +255,7 @@ def _remove_publication_failure(database_path: Path) -> None:
 def test_full_build_publishes_restartable_generation_with_source_links(
     tmp_path: Path,
 ) -> None:
-    source_manifest, first, second = _source_manifest()
+    source_manifest, first, second = lexical_fixtures.source_manifest()
 
     outcome = build_lexical_generation(tmp_path, source_manifest)
     generation_dir = tmp_path / "lexical" / outcome.manifest.generation_id
@@ -485,10 +294,8 @@ def test_full_build_publishes_restartable_generation_with_source_links(
 def test_ranked_iteration_pages_past_request_limit_before_final_limiting(
     tmp_path: Path,
 ) -> None:
-    selections = tuple(
-        _selection(f"common marker {ordinal}")[1] for ordinal in range(3)
-    )
-    source_manifest = _manifest(selections)
+    selections = tuple(selection(f"common marker {ordinal}")[1] for ordinal in range(3))
+    source_manifest = manifest(selections)
     outcome = build_lexical_generation(tmp_path, source_manifest)
     request = LexicalQuery(
         RetrievalQuery(
@@ -508,6 +315,67 @@ def test_ranked_iteration_pages_past_request_limit_before_final_limiting(
     assert ranked[:1] == direct
 
 
+def test_configured_content_weight_changes_bm25_score(tmp_path: Path) -> None:
+    """The sole indexed content weight must affect the executed FTS5 rank."""
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
+    baseline = build_lexical_generation(tmp_path, source_manifest)
+    weighted = build_lexical_generation(
+        tmp_path,
+        source_manifest,
+        configuration=LexicalIndexConfiguration(column_weights=(2.0,)),
+    )
+    request = LexicalQuery(
+        RetrievalQuery("alpha", source_manifest.corpus_version, RetrievalLimit(5))
+    )
+    with open_lexical_generation(
+        tmp_path, baseline.manifest.generation_id
+    ) as baseline_generation:
+        baseline_matches = baseline_generation.search(request)
+    with open_lexical_generation(
+        tmp_path, weighted.manifest.generation_id
+    ) as weighted_generation:
+        weighted_matches = weighted_generation.search(request)
+
+    assert len(baseline_matches) == len(weighted_matches) == 1
+    assert baseline_matches[0][0].record_id == weighted_matches[0][0].record_id
+    assert weighted_matches[0][1] > baseline_matches[0][1]
+
+    # Simulate a previously published v1 generation: its advertised knobs
+    # were ignored, so opening it must retain the original unweighted score.
+    legacy = LexicalIndexConfiguration(
+        engine_revision="sqlite-fts5-baseline",
+        bm25_k1=1.5,
+        bm25_b=0.5,
+        column_weights=(1.0, 2.0),
+        score_label="sqlite_fts5_negated_bm25_v1",
+    )
+    generation_dir = tmp_path / "lexical" / weighted.manifest.generation_id
+    database = generation_dir / "index.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE generation_metadata SET value = ? WHERE key = ?",
+            (legacy.configuration_identity.digest, "configuration_digest"),
+        )
+    legacy_manifest = replace(
+        weighted.manifest,
+        configuration=legacy,
+        configuration_digest=legacy.configuration_identity.digest,
+        database_checksum=hashlib.sha256(database.read_bytes()).hexdigest(),
+        contract_version="1.0.0",
+    )
+    (generation_dir / "manifest.json").write_bytes(
+        serialise_lexical_manifest(legacy_manifest)
+    )
+    with open_lexical_generation(
+        tmp_path, legacy_manifest.generation_id
+    ) as legacy_generation:
+        legacy_matches = legacy_generation.search(request)
+    assert legacy_matches[0][1] == baseline_matches[0][1]
+    with pytest.raises(LexicalError) as error:
+        build_lexical_generation(tmp_path, source_manifest, configuration=legacy)
+    assert error.value.category is LexicalFailureCategory.INVALID_REQUEST
+
+
 @pytest.mark.parametrize(
     ("page_size", "expected_error"),
     ((True, TypeError), (0, ValueError), (-1, ValueError), ("1", TypeError)),
@@ -517,7 +385,7 @@ def test_ranked_iteration_rejects_invalid_page_sizes(
     page_size: object,
     expected_error: type[Exception],
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     outcome = build_lexical_generation(tmp_path, source_manifest)
     request = LexicalQuery(
         RetrievalQuery(
@@ -537,13 +405,13 @@ def test_ranked_iteration_rejects_invalid_page_sizes(
 def test_pr4_query_executes_terms_phrase_and_identifier_modes_from_pinned_snapshot(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
     )
     try:
-        _seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(repository, source_manifest)
         published = build_and_publish_baseline_lexical_generation(
             repository,
             tmp_path / "indexes",
@@ -617,7 +485,7 @@ def test_pr4_query_executes_terms_phrase_and_identifier_modes_from_pinned_snapsh
 def test_pr5_filtered_query_profiles_real_snapshot_execution(
     tmp_path: Path,
 ) -> None:
-    source_manifest, first, second = _source_manifest()
+    source_manifest, first, second = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
@@ -634,7 +502,7 @@ def test_pr5_filtered_query_profiles_real_snapshot_execution(
         with repository.transaction() as transaction:
             transaction.add_corpus(CorpusMetadata(CORPUS_ID, "test corpus"))
             for chunk_set in (first, second):
-                document = _parsed_document(
+                document = parsed_document(
                     chunk_set.chunks[0].text,
                     document_id=chunk_set.document_id,
                     document_version_id=chunk_set.document_version_id,
@@ -666,7 +534,7 @@ def test_pr5_filtered_query_profiles_real_snapshot_execution(
                     )
                 )
         for chunk_set in (first, second):
-            document = _parsed_document(
+            document = parsed_document(
                 chunk_set.chunks[0].text,
                 document_id=chunk_set.document_id,
                 document_version_id=chunk_set.document_version_id,
@@ -748,7 +616,7 @@ def test_pr5_filtered_query_profiles_real_snapshot_execution(
 def test_pr4_query_profiles_success_with_unknown_candidate_count(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
@@ -761,7 +629,7 @@ def test_pr4_query_profiles_success_with_unknown_candidate_count(
         observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
     )
     try:
-        _seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(repository, source_manifest)
         build_and_publish_baseline_lexical_generation(
             repository,
             tmp_path / "indexes",
@@ -818,205 +686,10 @@ def test_pr4_query_profiles_success_with_unknown_candidate_count(
         repository.close()
 
 
-def test_pr4_query_returns_empty_completed_result_for_no_matches(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = _source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    try:
-        _seed_metadata_repository(repository, source_manifest)
-        build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            source_manifest,
-            expected_corpus_version=None,
-        )
-        result = execute_lexical_retrieval(
-            repository,
-            tmp_path / "indexes",
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "unmatchedterm",
-                    source_manifest.corpus_version,
-                    RetrievalLimit(3),
-                )
-            ),
-        )
-
-        assert result.status.value == "completed"
-        assert result.hits == ()
-        assert result.failures == ()
-    finally:
-        repository.close()
-
-
-def test_pr4_query_reopens_published_generation_after_repository_restart(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = _source_manifest()
-    database_path = tmp_path / "metadata.sqlite3"
-    index_dir = tmp_path / "indexes"
-    repository = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
-    _publish_query_fixture(repository, index_dir, source_manifest)
-    repository.close()
-
-    reopened = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
-    try:
-        result = execute_lexical_retrieval(
-            reopened,
-            index_dir,
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "alpha",
-                    source_manifest.corpus_version,
-                    RetrievalLimit(5),
-                )
-            ),
-        )
-
-        assert result.status.value == "completed"
-        assert len(result.hits) == 1
-        assert result.hits[0].candidate.content.startswith("alpha cites")
-    finally:
-        reopened.close()
-
-
-def test_pr4_query_fails_closed_when_referenced_generation_is_missing(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = _source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    try:
-        outcome = _publish_query_fixture(
-            repository, tmp_path / "indexes", source_manifest
-        )
-        generation_dir = (
-            tmp_path / "indexes" / "lexical" / _published_lexical_generation_id(outcome)
-        )
-        shutil.rmtree(generation_dir)
-
-        result = execute_lexical_retrieval(
-            repository,
-            tmp_path / "indexes",
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "alpha",
-                    source_manifest.corpus_version,
-                    RetrievalLimit(5),
-                )
-            ),
-        )
-
-        assert result.status.value == "failed"
-        assert result.hits == ()
-        assert result.failures[0].category.value == "channel_unavailable"
-    finally:
-        repository.close()
-
-
-def test_pr4_query_fails_closed_when_referenced_generation_is_corrupt(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = _source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    try:
-        outcome = _publish_query_fixture(
-            repository, tmp_path / "indexes", source_manifest
-        )
-        database = (
-            tmp_path
-            / "indexes"
-            / "lexical"
-            / _published_lexical_generation_id(outcome)
-            / "index.sqlite3"
-        )
-        with database.open("ab") as stream:
-            stream.write(b"corruption")
-
-        result = execute_lexical_retrieval(
-            repository,
-            tmp_path / "indexes",
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "alpha",
-                    source_manifest.corpus_version,
-                    RetrievalLimit(5),
-                )
-            ),
-        )
-
-        assert result.status.value == "failed"
-        assert result.hits == ()
-        assert result.failures[0].category.value == "channel_unavailable"
-        assert "corruption" not in repr(result)
-        assert str(tmp_path) not in repr(result)
-    finally:
-        repository.close()
-
-
-def test_pr4_query_rejects_generation_with_incompatible_reference_metadata(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = _source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    try:
-        outcome = _publish_query_fixture(
-            repository, tmp_path / "indexes", source_manifest
-        )
-        manifest_path = (
-            tmp_path
-            / "indexes"
-            / "lexical"
-            / _published_lexical_generation_id(outcome)
-            / "manifest.json"
-        )
-        with open_lexical_generation(
-            tmp_path / "indexes",
-            _published_lexical_generation_id(outcome),
-        ) as generation:
-            manifest = replace(generation.manifest, format_version="2.0.0")
-        manifest_path.write_bytes(serialise_lexical_manifest(manifest))
-
-        result = execute_lexical_retrieval(
-            repository,
-            tmp_path / "indexes",
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "alpha",
-                    source_manifest.corpus_version,
-                    RetrievalLimit(5),
-                )
-            ),
-        )
-
-        assert result.status.value == "failed"
-        assert result.hits == ()
-        assert result.failures[0].category.value == "invalid_channel_response"
-    finally:
-        repository.close()
-
-
 def test_pr4_query_rejects_foreign_generation_reference_before_opening_files(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     outcome = build_lexical_generation(tmp_path, source_manifest)
     reference = replace(
         LexicalGenerationParticipant(
@@ -1062,12 +735,12 @@ def test_pr4_query_rejects_foreign_generation_reference_before_opening_files(
 def test_pr4_query_preserves_historical_results_and_applies_update_removal(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     database_path = tmp_path / "metadata.sqlite3"
     index_dir = tmp_path / "indexes"
     repository = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
     try:
-        _publish_query_fixture(repository, index_dir, source_manifest)
+        publish_query_fixture(repository, index_dir, source_manifest)
         changed_version = CorpusVersionId.generate()
         changed_manifest = _prepare_changed_manifest(
             repository,
@@ -1147,7 +820,7 @@ def test_pr4_query_preserves_historical_results_and_applies_update_removal(
 def test_pr4_query_keeps_old_reader_queryable_during_new_publication(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
@@ -1156,7 +829,7 @@ def test_pr4_query_keeps_old_reader_queryable_during_new_publication(
     new_reader: EvidenceResult | None = None
     try:
         index_dir = tmp_path / "indexes"
-        _publish_query_fixture(repository, index_dir, source_manifest)
+        publish_query_fixture(repository, index_dir, source_manifest)
         with repository.open_corpus_snapshot(
             CORPUS_ID,
             source_manifest.corpus_version,
@@ -1216,7 +889,7 @@ def test_pr4_query_keeps_old_reader_queryable_during_new_publication(
 def test_pr4_query_isolates_two_corpora_with_overlapping_document_versions(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     shared_entry = next(
         entry
         for entry in source_manifest.entries
@@ -1224,7 +897,7 @@ def test_pr4_query_isolates_two_corpora_with_overlapping_document_versions(
     )
     unique_document_id = DocumentId.generate()
     unique_version_id = DocumentVersionId.generate()
-    _, unique_selection = _selection(
+    _, unique_selection = selection(
         "second corpus only",
         document_id=unique_document_id,
         document_version_id=unique_version_id,
@@ -1263,7 +936,7 @@ def test_pr4_query_isolates_two_corpora_with_overlapping_document_versions(
         apply_migrations=True,
     )
     try:
-        _publish_query_fixture(repository, tmp_path / "indexes", source_manifest)
+        publish_query_fixture(repository, tmp_path / "indexes", source_manifest)
         with repository.transaction() as transaction:
             transaction.add_document(DocumentIdentity(unique_document_id))
             transaction.add_document_version(
@@ -1273,7 +946,7 @@ def test_pr4_query_isolates_two_corpora_with_overlapping_document_versions(
                     ContentHash(HashAlgorithm.SHA256, "2" * 64),
                 )
             )
-        _seed_metadata_repository(repository, second_manifest, seed_catalogue=False)
+        seed_metadata_repository(repository, second_manifest, seed_catalogue=False)
         second = build_and_publish_baseline_lexical_generation(
             repository,
             tmp_path / "indexes",
@@ -1333,7 +1006,7 @@ def test_pr4_query_isolates_two_corpora_with_overlapping_document_versions(
 def test_pr4_query_profiles_unavailable_generation_without_payloads(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
@@ -1347,7 +1020,7 @@ def test_pr4_query_profiles_unavailable_generation_without_payloads(
     )
     marker = "private-lexical-query-marker"
     try:
-        _seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(repository, source_manifest)
         result = execute_lexical_retrieval(
             repository,
             tmp_path / "indexes",
@@ -1394,7 +1067,7 @@ def test_pr4_query_profiles_unavailable_generation_without_payloads(
 def test_pr4_query_keeps_payloads_out_of_observability_surfaces(
     tmp_path: Path,
 ) -> None:
-    source_manifest = _privacy_source_manifest()
+    source_manifest = privacy_source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
@@ -1411,7 +1084,7 @@ def test_pr4_query_keeps_payloads_out_of_observability_surfaces(
     identifier_marker = "10.1234/PRIVATE-7"
     raw_error_marker = "private lexical sqlite error marker"
     try:
-        outcome = _publish_query_fixture(
+        outcome = publish_query_fixture(
             repository,
             tmp_path / "indexes",
             source_manifest,
@@ -1448,7 +1121,7 @@ def test_pr4_query_keeps_payloads_out_of_observability_surfaces(
             tmp_path
             / "indexes"
             / "lexical"
-            / _published_lexical_generation_id(outcome)
+            / published_lexical_generation_id(outcome)
             / "index.sqlite3"
         )
         with database.open("ab") as stream:
@@ -1493,7 +1166,7 @@ def test_pr4_query_keeps_payloads_out_of_observability_surfaces(
 def test_lexical_build_profiles_success_and_reuse_with_shared_context(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     sink = _CollectingSink()
     clock_values = iter(range(0, 100_000_000, 10_000_000))
     profiling = ProfilingContext.create(
@@ -1558,7 +1231,7 @@ def test_lexical_build_profiles_success_and_reuse_with_shared_context(
 def test_lexical_build_profiles_generation_failure_without_payloads(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     sink = _CollectingSink()
     profiling = ProfilingContext.create(
         run_id="run-lexical-failure",
@@ -1587,7 +1260,7 @@ def test_lexical_build_profiles_generation_failure_without_payloads(
 def test_pr3_atomic_publication_profiles_lexical_index_and_publication(
     tmp_path: Path,
 ) -> None:
-    source_manifest, first, second = _source_manifest()
+    source_manifest, first, second = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
@@ -1600,7 +1273,7 @@ def test_pr3_atomic_publication_profiles_lexical_index_and_publication(
         observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
     )
     try:
-        _seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(repository, source_manifest)
         result = build_and_publish_baseline_lexical_generation(
             repository,
             tmp_path / "indexes",
@@ -1651,13 +1324,13 @@ def test_pr3_build_and_publish_uses_one_atomic_phase5_path(
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     index_dir = tmp_path / "indexes"
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         database_path,
         apply_migrations=True,
     )
     try:
-        _seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(repository, source_manifest)
         result = build_and_publish_baseline_lexical_generation(
             repository,
             index_dir,
@@ -1697,13 +1370,13 @@ def test_pr3_build_and_publish_uses_one_atomic_phase5_path(
 def test_pr3_build_and_publish_preserves_no_change_on_exact_parent_replay(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
     )
     try:
-        _seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(repository, source_manifest)
         first = build_and_publish_baseline_lexical_generation(
             repository,
             tmp_path / "indexes",
@@ -1738,13 +1411,13 @@ def test_pr3_failed_publication_keeps_active_version_and_leaves_orphan_unreachab
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     index_dir = tmp_path / "indexes"
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         database_path,
         apply_migrations=True,
     )
     try:
-        _seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(repository, source_manifest)
         first = build_and_publish_baseline_lexical_generation(
             repository,
             index_dir,
@@ -1816,13 +1489,13 @@ def test_pr3_failed_publication_keeps_active_version_and_leaves_orphan_unreachab
 def test_pr3_reader_snapshot_stays_pinned_while_new_version_commits(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3",
         apply_migrations=True,
     )
     try:
-        _seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(repository, source_manifest)
         build_and_publish_baseline_lexical_generation(
             repository,
             tmp_path / "indexes",
@@ -1831,7 +1504,7 @@ def test_pr3_reader_snapshot_stays_pinned_while_new_version_commits(
         )
 
         changed_version = DocumentVersionId.generate()
-        _, changed_selection = _selection(
+        _, changed_selection = selection(
             "changed lexical content",
             document_id=source_manifest.entries[0].membership.document_id,
             document_version_id=changed_version,
@@ -1897,7 +1570,7 @@ def test_pr3_reader_snapshot_stays_pinned_while_new_version_commits(
 def test_pr3_two_corpora_isolate_active_lexical_generations(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     second_manifest = _rebind_source_manifest(
         source_manifest,
         corpus_id=SECOND_CORPUS_ID,
@@ -1909,8 +1582,8 @@ def test_pr3_two_corpora_isolate_active_lexical_generations(
         apply_migrations=True,
     )
     try:
-        _seed_metadata_repository(repository, source_manifest)
-        _seed_metadata_repository(
+        seed_metadata_repository(repository, source_manifest)
+        seed_metadata_repository(
             repository,
             second_manifest,
             seed_catalogue=False,
@@ -1962,7 +1635,7 @@ def test_pr3_two_corpora_isolate_active_lexical_generations(
 def test_stor03_reference_and_validator_require_exact_reopenable_generation(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     outcome = build_lexical_generation(tmp_path, source_manifest)
     participant = LexicalGenerationParticipant(
         tmp_path,
@@ -1996,7 +1669,7 @@ def test_stor03_reference_and_validator_require_exact_reopenable_generation(
 def test_stor03_validator_rejects_checksum_corruption_without_disclosure(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     outcome = build_lexical_generation(tmp_path, source_manifest)
     participant = LexicalGenerationParticipant(tmp_path, outcome, source_manifest)
     validator = participant.build_validator(cast(ChunkSetReader, object()))
@@ -2017,7 +1690,7 @@ def test_stor03_validator_rejects_checksum_corruption_without_disclosure(
 def test_pr3_parent_selection_uses_expected_active_lexical_reference(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     parent = build_lexical_generation(tmp_path, source_manifest)
     parent_reference = replace(
         LexicalGenerationParticipant(
@@ -2070,7 +1743,7 @@ def test_pr3_parent_selection_uses_expected_active_lexical_reference(
 def test_pr3_parent_selection_rejects_missing_or_unexpected_active_reference(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     missing_manifest = CorpusVersionManifest(
         corpus_id=source_manifest.corpus_id,
         corpus_version=source_manifest.corpus_version,
@@ -2105,7 +1778,7 @@ def test_pr3_parent_selection_rejects_missing_or_unexpected_active_reference(
 def test_pr3_parent_selection_skips_parent_when_no_expected_version(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     repository = _FakeRepository(
         _FakeSnapshot(
             CorpusVersionManifest(
@@ -2131,8 +1804,8 @@ def test_pr3_parent_selection_skips_parent_when_no_expected_version(
 def test_zero_chunk_member_is_retained_and_exact_replay_reuses_database(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
-    empty_set, empty_selection = _selection("", empty=True)
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
+    empty_set, empty_selection = selection("", empty=True)
     entries = tuple(
         sorted(
             source_manifest.entries
@@ -2173,7 +1846,7 @@ def test_zero_chunk_member_is_retained_and_exact_replay_reuses_database(
 def test_corrupt_database_is_rejected_without_exposing_sqlite_details(
     tmp_path: Path,
 ) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     outcome = build_lexical_generation(tmp_path, source_manifest)
     database = tmp_path / "lexical" / outcome.manifest.generation_id / "index.sqlite3"
     with database.open("ab") as stream:
@@ -2188,7 +1861,7 @@ def test_corrupt_database_is_rejected_without_exposing_sqlite_details(
 
 
 def test_published_database_is_read_only(tmp_path: Path) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     outcome = build_lexical_generation(tmp_path, source_manifest)
     database = tmp_path / "lexical" / outcome.manifest.generation_id / "index.sqlite3"
     connection = sqlite3.connect(f"file:{database.absolute()}?mode=ro", uri=True)
@@ -2219,27 +1892,27 @@ def test_compatible_parent_diff_reuses_adds_replaces_and_removes_chunks(
     version_c = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000024")
     version_d = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000025")
 
-    unchanged, unchanged_selection = _selection(
+    unchanged, unchanged_selection = selection(
         "unchanged", document_id=document_a, document_version_id=version_a
     )
-    old, old_selection = _selection(
+    old, old_selection = selection(
         "old version", document_id=document_b, document_version_id=version_b_old
     )
-    removed, removed_selection = _selection(
+    removed, removed_selection = selection(
         "removed", document_id=document_c, document_version_id=version_c
     )
-    replacement, replacement_selection = _selection(
+    replacement, replacement_selection = selection(
         "new version", document_id=document_b, document_version_id=version_b_new
     )
-    inserted, inserted_selection = _selection(
+    inserted, inserted_selection = selection(
         "inserted", document_id=document_d, document_version_id=version_d
     )
     del unchanged, old, removed, replacement, inserted
 
-    parent_manifest = _manifest(
+    parent_manifest = manifest(
         (unchanged_selection, old_selection, removed_selection),
     )
-    child_manifest = _manifest(
+    child_manifest = manifest(
         (unchanged_selection, replacement_selection, inserted_selection),
         corpus_version=CorpusVersionId.from_str("00000000-0000-4000-8000-000000000099"),
     )
@@ -2275,12 +1948,12 @@ def test_compatible_parent_diff_reuses_adds_replaces_and_removes_chunks(
 
 
 def test_corrupt_expected_parent_is_not_silently_rebuilt(tmp_path: Path) -> None:
-    source_manifest, _, _ = _source_manifest()
+    source_manifest, _, _ = lexical_fixtures.source_manifest()
     parent = build_lexical_generation(tmp_path, source_manifest)
     database = tmp_path / "lexical" / parent.manifest.generation_id / "index.sqlite3"
     with database.open("ab") as stream:
         stream.write(b"corruption")
-    child_manifest = _manifest(
+    child_manifest = manifest(
         tuple(entry.selection for entry in source_manifest.entries),
         corpus_version=CorpusVersionId.from_str("00000000-0000-4000-8000-000000000099"),
     )
@@ -2303,22 +1976,22 @@ def test_parent_diff_reuses_unchanged_chunk_rows_inside_changed_member(
         "00000000-0000-4000-8000-000000000032"
     )
     policy = ChunkingPolicy(min_tokens=1, max_tokens=2)
-    _, parent_selection = _selection(
+    _, parent_selection = selection(
         "one two three four",
         document_id=document_id,
         document_version_id=document_version_id,
         policy=policy,
     )
-    _, child_selection = _selection(
+    _, child_selection = selection(
         "one two three five",
         document_id=document_id,
         document_version_id=document_version_id,
         policy=policy,
     )
-    parent = build_lexical_generation(tmp_path, _manifest((parent_selection,)))
+    parent = build_lexical_generation(tmp_path, manifest((parent_selection,)))
     child = build_lexical_generation(
         tmp_path,
-        _manifest(
+        manifest(
             (child_selection,),
             corpus_version=CorpusVersionId.from_str(
                 "00000000-0000-4000-8000-000000000099"

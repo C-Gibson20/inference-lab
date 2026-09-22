@@ -178,6 +178,8 @@ class SQLiteMetadataRepository:
         *,
         created_at_factory: CreatedAtFactory = utc_now,
         source_blob_store: ManagedSourceBlobStore | None = None,
+        database_path: Path | None = None,
+        source_dir: Path | None = None,
     ) -> None:
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("connection must be a sqlite3.Connection.")
@@ -191,10 +193,16 @@ class SQLiteMetadataRepository:
             raise TypeError(
                 "source_blob_store must be a ManagedSourceBlobStore or None."
             )
+        if database_path is not None and not isinstance(database_path, Path):
+            raise TypeError("database_path must be a Path or None.")
+        if source_dir is not None and not isinstance(source_dir, Path):
+            raise TypeError("source_dir must be a Path or None.")
         self._connection: sqlite3.Connection | None = connection
         self._migrations = migrations
         self._created_at_factory = created_at_factory
         self._source_blob_store = source_blob_store
+        self._database_path = database_path
+        self._source_dir = source_dir
         self._transaction_active = False
 
     @classmethod
@@ -211,17 +219,31 @@ class SQLiteMetadataRepository:
         source_reconciliation_max_entries: int = (
             DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES
         ),
+        reconcile_sources: bool = True,
     ) -> Self:
         """Open a validated repository under the explicit schema policy."""
+        if not isinstance(path, Path):
+            raise TypeError("path must be a Path.")
         if not callable(created_at_factory):
             raise TypeError("created_at_factory must be callable.")
         _validate_source_reconciliation_max_entries(
             source_reconciliation_max_entries,
             parameter_name="source_reconciliation_max_entries",
         )
+        if not isinstance(reconcile_sources, bool):
+            raise TypeError("reconcile_sources must be a boolean.")
         source_blob_store = (
             ManagedSourceBlobStore(source_dir) if source_dir is not None else None
         )
+        try:
+            resolved_database_path = path.expanduser().resolve(strict=False)
+            resolved_source_dir = (
+                source_dir.expanduser().resolve(strict=False)
+                if source_dir is not None
+                else None
+            )
+        except (OSError, RuntimeError):
+            raise RepositoryUnavailableError() from None
         connection = open_sqlite_database(
             path,
             apply_migrations=apply_migrations,
@@ -234,8 +256,10 @@ class SQLiteMetadataRepository:
             migrations,
             created_at_factory=created_at_factory,
             source_blob_store=source_blob_store,
+            database_path=resolved_database_path,
+            source_dir=resolved_source_dir,
         )
-        if source_blob_store is not None:
+        if source_blob_store is not None and reconcile_sources:
             try:
                 repository.reconcile_source_storage(
                     max_entries=source_reconciliation_max_entries
@@ -244,6 +268,20 @@ class SQLiteMetadataRepository:
                 close_preserving_primary(connection)
                 raise
         return repository
+
+    def open_worker_repository(self) -> Self:
+        """Open a validated worker connection without startup reconciliation."""
+        if self._connection is None:
+            raise RepositoryClosedError()
+        if self._database_path is None or self._source_dir is None:
+            raise RepositoryUnavailableError()
+        return type(self).open(
+            self._database_path,
+            migrations=self._migrations,
+            created_at_factory=self._created_at_factory,
+            source_dir=self._source_dir,
+            reconcile_sources=False,
+        )
 
     @property
     def is_closed(self) -> bool:

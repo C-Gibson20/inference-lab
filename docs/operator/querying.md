@@ -2,9 +2,10 @@
 
 ## Current status
 
-The local Python serving API supports corpus creation, incremental ingest, and
-lexical search. The `inference-lab` entry point remains a startup skeleton; the
-supported fresh-process query example is the script documented below.
+The local Python API is the supported initial surface for corpus creation,
+incremental ingest/resume, filtered lexical search, and typed failures. The
+`inference-lab` entry point remains a startup skeleton. The search-only script
+below is a convenience example, not an ingest or general filter CLI.
 
 Do not infer that an application startup message means that a corpus has been
 ingested or that queries are available.
@@ -27,19 +28,102 @@ and shared document storage must not make a document visible outside explicit
 membership. Cross-corpus comparison requires separate queries until a future
 federated-query contract is added.
 
-### Create and ingest through the local API
+### Copyable create → ingest → resume → filter workflow
 
-The minimal local setup is:
+Run these files from the directory containing the deployment's `config.toml`.
+The source file must be outside repository-managed `storage.source_dir`. Point
+`TOKENISER_DIR` at an existing local Transformers **fast** tokeniser directory;
+loading disables network access. `FakeChunkTokeniser` is reserved for tests.
 
+Save this as `create-corpus.py`:
+
+<!-- operator-create-example:start -->
 ```python
+import json
+import os
+import sys
+
+from inference_lab.logging.logging_config import configure_logging
+from inference_lab.serving import LocalServingFacade
+from inference_lab.settings import get_settings
+from inference_lab.storage import open_metadata_repository
+
+settings = get_settings()
+configure_logging(settings.logging, stream=sys.stderr)
+repository = open_metadata_repository(
+    settings.storage.metadata_db_path,
+    source_dir=settings.storage.source_dir,
+    apply_migrations=True,
+)
+try:
+    corpus = LocalServingFacade(repository, settings).create_corpus(
+        os.environ.get("CORPUS_NAME", "My local corpus")
+    )
+    print(json.dumps({"corpus_id": corpus.corpus_id.as_str()}))
+finally:
+    repository.close()
+```
+<!-- operator-create-example:end -->
+
+Save this as `ingest-and-search.py`:
+
+<!-- operator-ingest-example:start -->
+```python
+import json
+import os
+import sys
+from pathlib import Path
+
+from inference_lab.ingest import (
+    CURRENT_CHUNKER_VERSION,
+    CURRENT_PARSER_VERSION,
+    ChunkingPolicy,
+    DiscoveryInput,
+    DiscoveryInputKind,
+    DiscoveryRequest,
+    LocalFastChunkTokeniser,
+    derive_chunk_configuration_identity,
+)
+from inference_lab.logging.logging_config import configure_logging
+from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.retrieval import ExactFilter
 from inference_lab.serving import (
     LocalServingFacade,
     ServingIngestRequest,
+    ServingSearchRequest,
 )
 from inference_lab.settings import get_settings
 from inference_lab.storage import open_metadata_repository
 
 settings = get_settings()
+configure_logging(settings.logging, stream=sys.stderr)
+corpus_id = CorpusId.from_str(os.environ["CORPUS_ID"])
+proposed_version = CorpusVersionId.from_str(os.environ["PROPOSED_VERSION"])
+expected_text = os.environ.get("EXPECTED_VERSION")
+expected_version = (
+    None if expected_text is None else CorpusVersionId.from_str(expected_text)
+)
+tokeniser = LocalFastChunkTokeniser.from_directory(os.environ["TOKENISER_DIR"])
+policy = ChunkingPolicy()
+request = ServingIngestRequest(
+    corpus_id=corpus_id,
+    discovery_request=DiscoveryRequest(
+        corpus_id=corpus_id,
+        inputs=(
+            DiscoveryInput(Path(os.environ["SOURCE_FILE"]), DiscoveryInputKind.FILE),
+        ),
+    ),
+    proposed_corpus_version=proposed_version,
+    expected_corpus_version=expected_version,
+    configuration_identity=derive_chunk_configuration_identity(
+        parser_version=CURRENT_PARSER_VERSION,
+        chunker_version=CURRENT_CHUNKER_VERSION,
+        tokeniser_identity=tokeniser.identity,
+        policy=policy,
+    ),
+    chunking_policy=policy,
+    tokeniser=tokeniser,
+)
 repository = open_metadata_repository(
     settings.storage.metadata_db_path,
     source_dir=settings.storage.source_dir,
@@ -47,75 +131,97 @@ repository = open_metadata_repository(
 )
 try:
     facade = LocalServingFacade(repository, settings)
-    corpus = facade.create_corpus("My local corpus")
-    # Build a ServingIngestRequest with this corpus.corpus_id, a new
-    # proposed CorpusVersionId, the source discovery inputs, and the selected
-    # chunking/tokeniser configuration.
-    result = facade.ingest(request)
+    summary = facade.ingest(request)
+    print(
+        json.dumps(
+            {
+                "corpus_id": corpus_id.as_str(),
+                "proposed_version": proposed_version.as_str(),
+                "execution_status": summary.execution_status.value,
+                "publication_status": summary.publication_status.value,
+                "document_outcomes": len(summary.document_outcomes),
+                "failures": [failure.category.value for failure in summary.failures],
+            },
+            sort_keys=True,
+        )
+    )
+    if summary.publication_status.value != "not_published":
+        result = facade.search(
+            ServingSearchRequest(
+                corpus_id=corpus_id,
+                text=os.environ["QUERY"],
+                limit=10,
+                filter=ExactFilter(
+                    "document-type", os.environ.get("DOCUMENT_TYPE", "text/plain")
+                ),
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "resolved_version": result.corpus_version.as_str(),
+                    "hits": [
+                        {
+                            "document_id": hit.document_id.as_str(),
+                            "text": hit.text,
+                            "source_locations": [
+                                {
+                                    "source_span_id": location.source_span_id.as_str(),
+                                    "parsed_record_id": location.parsed_record_id.as_str(),
+                                    "start_offset": location.start_offset,
+                                    "end_offset": location.end_offset,
+                                }
+                                for location in hit.source_locations
+                            ],
+                        }
+                        for hit in result.hits
+                    ],
+                },
+                sort_keys=True,
+            )
+        )
 finally:
     repository.close()
 ```
+<!-- operator-ingest-example:end -->
 
-The complete request must include the owning `corpus_id`, a new proposed
-`CorpusVersionId`, the expected active version (`None` for the first update),
-the source discovery request, and the immutable parser, chunker, tokeniser,
-and policy identity. Reuse the same proposed version and request after a
-restart when the publication outcome is uncertain; an exact replay is a
-successful idempotent operation.
+Set the values explicitly. Generate a new proposed version with:
 
-### Search through the local API
-
-Construct a `ServingSearchRequest` with the corpus ID, query text, and a
-positive result limit. An optional owned `CorpusVersionId` selects an exact
-historical snapshot; omitting it selects the active version at snapshot open.
-The result includes the resolved corpus version, ranked passage text, and
-source locations with source span IDs, parsed record IDs, offsets, content
-origin, block coordinates, and optional page bounding boxes.
-
-After a restart, reopen the same repository and create a new facade before
-searching:
-
-```python
-from inference_lab.serving import LocalServingFacade
-from inference_lab.provenance import CorpusVersionId
-from inference_lab.serving import ServingSearchRequest
-from inference_lab.settings import get_settings
-from inference_lab.storage import open_metadata_repository
-
-settings = get_settings()
-repository = open_metadata_repository(
-    settings.storage.metadata_db_path,
-    source_dir=settings.storage.source_dir,
-    apply_migrations=True,
-)
-try:
-    facade = LocalServingFacade(repository, settings)
-    selected_corpus = facade.list_corpora()[0]
-
-    active_result = facade.search(
-        ServingSearchRequest(
-            corpus_id=selected_corpus.corpus_id,
-            text="the reported method",
-            limit=10,
-        )
-    )
-
-    historical_result = facade.search(
-        ServingSearchRequest(
-            corpus_id=selected_corpus.corpus_id,
-            corpus_version=CorpusVersionId.from_str("<owned-version-id>"),
-            text="the reported method",
-            limit=10,
-        )
-    )
-finally:
-    repository.close()
+```sh
+uv run python -c 'from inference_lab.provenance import CorpusVersionId; print(CorpusVersionId.generate())'
 ```
 
-Serving integrations must hold a context-managed corpus snapshot for the
-request so every metadata and index read uses one immutable manifest. See the
-[corpus-version runbook](corpus-versions.md) for snapshot lifetime and
-historical selection.
+```sh
+uv run python create-corpus.py
+export CORPUS_ID="paste-corpus-id-from-output"
+export SOURCE_FILE=/absolute/path/to/paper.txt
+export TOKENISER_DIR=/absolute/path/to/local-fast-tokeniser
+export PROPOSED_VERSION="paste-new-corpus-version-uuid"
+export QUERY="reported method"
+uv run python ingest-and-search.py
+```
+
+After a process restart, run `uv run python ingest-and-search.py` again with
+the **same** corpus ID, proposed version, source file, tokeniser artefacts,
+policy, and unset `EXPECTED_VERSION`. Exact committed replay reports zero
+document outcomes and does not rebuild the index. To start a *new* update,
+set `EXPECTED_VERSION` to the active `resolved_version`, generate a different
+`PROPOSED_VERSION`, and run the script again. An unchanged new proposal may
+return `no_change`, leaving the active version at the expected one. The first
+JSON line reports ingest; the second reports filtered hits, passage text, and
+source-linked locations. Operational logs go to stderr. Set
+`DOCUMENT_TYPE=application/pdf` to see a valid empty filter match for a text
+source. Unsupported fields such as `assignee` are rejected, not treated as
+missing values.
+
+`ServingSearchRequest` can also set `corpus_version` to an owned historical
+`CorpusVersionId`; otherwise it pins the active version at snapshot open. The
+API result includes source span IDs, parsed record IDs, offsets, content
+origin, block coordinates, and optional page layout. Serving integrations
+must keep the context-managed snapshot for the request; see the
+[corpus-version runbook](corpus-versions.md). Typed ingest/search errors expose
+bounded categories. A failed ingest summary has `not_published` status and
+request-level failure categories; do not search it as if it were active.
 
 ### Fresh-process query example
 
@@ -138,9 +244,10 @@ To query an exact historical version, add:
 The script writes a JSON result containing `corpus_id`, the resolved
 `corpus_version`, and `hits`. Each hit contains `record_id`, document IDs,
 rank, score, passage text, and `source_locations`, including offsets and any
-available page or layout metadata. The configured structured operational logs
-also use stdout, so this example is not a stable machine-readable CLI
-serialization contract. Invalid requests and bounded serving failures return
+available page or layout metadata. It writes only the result JSON to stdout
+and sends structured operational logs to stderr. It remains a search-only
+convenience script; use the Python API for filters and ingest. Invalid requests
+and bounded serving failures return
 exit code `2` with a category-only JSON error on stderr. Query text, paths,
 passages, and raw exception details are not written to operational logs.
 
@@ -163,7 +270,7 @@ the same pinned corpus snapshot as lexical retrieval.
 specified by the caller. `exists` and `missing` refer to the canonical value,
 not to text inferred from a passage. An unsupported field is rejected; it is
 not converted into a `missing` match. Dates and assignees are intentionally
-deferred and are not supported filter fields in this release.
+deferred to RET-11 and are not supported filter fields in this release.
 
 Invalid fields, operators, scalar types, or oversized filter trees fail before
 ranked execution. A valid filter that retains no candidates is a successful

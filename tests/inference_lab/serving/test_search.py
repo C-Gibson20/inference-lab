@@ -43,6 +43,7 @@ from inference_lab.settings import (
     StorageConfig,
 )
 from inference_lab.storage import (
+    ComponentGenerationState,
     ContentOrigin,
     MetadataRepository,
     StructuralBlockKind,
@@ -76,7 +77,19 @@ def _settings(tmp_path: Path) -> Settings:
 
 class _Snapshot:
     def __init__(self, corpus_version: CorpusVersionId) -> None:
+        self.corpus_id = CORPUS_ID
         self.version = SimpleNamespace(corpus_version=corpus_version)
+        self.manifest = SimpleNamespace(
+            component_generations=(
+                SimpleNamespace(
+                    component_kind=SimpleNamespace(as_str=lambda: "lexical-index"),
+                    state=ComponentGenerationState.READY,
+                    corpus_id=CORPUS_ID,
+                    corpus_version=corpus_version,
+                    generation_id="generation-1",
+                ),
+            )
+        )
         self.closed = False
 
     def __enter__(self) -> "_Snapshot":
@@ -142,6 +155,26 @@ class _CollectingSink:
         self.records.append(record)
 
 
+class _Generation:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __enter__(self) -> "_Generation":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.closed = True
+
+
+def _stub_generation(monkeypatch) -> _Generation:
+    generation = _Generation()
+    monkeypatch.setattr(
+        "inference_lab.serving.search.open_lexical_generation",
+        lambda *_args: generation,
+    )
+    return generation
+
+
 def _request(**kwargs: object) -> ServingSearchRequest:
     values = {
         "corpus_id": CORPUS_ID,
@@ -203,19 +236,22 @@ def test_active_search_returns_resolved_version_and_successful_empty_result(
         active=snapshot,
         corpora=(CorpusMetadata(CORPUS_ID, "Corpus A"),),
     )
+    generation = _stub_generation(monkeypatch)
 
     def execute(
         _repository,
         _index_dir,
         _corpus_id,
-        lexical_query,
+        retrieval_query,
         *,
+        mode,
         profiling,
         parent_stage_id,
         snapshot,
+        generation,
     ):
         assert snapshot is repository.active
-        return _empty_result(lexical_query.query)
+        return _empty_result(retrieval_query)
 
     monkeypatch.setattr(
         "inference_lab.serving.search.execute_lexical_retrieval", execute
@@ -230,6 +266,7 @@ def test_active_search_returns_resolved_version_and_successful_empty_result(
     assert result.hits == ()
     assert repository.open_active_count == 1
     assert snapshot.closed is True
+    assert generation.closed is True
 
 
 def test_search_converts_valid_original_passage_hit(
@@ -240,18 +277,21 @@ def test_search_converts_valid_original_passage_hit(
         active=snapshot,
         corpora=(CorpusMetadata(CORPUS_ID, "Corpus A"),),
     )
+    generation = _stub_generation(monkeypatch)
 
     def execute(
         _repository,
         _index_dir,
         _corpus_id,
-        lexical_query,
+        retrieval_query,
         *,
+        mode,
         profiling,
         parent_stage_id,
         snapshot,
+        generation,
     ):
-        return _hit_result(lexical_query.query)
+        return _hit_result(retrieval_query)
 
     monkeypatch.setattr(
         "inference_lab.serving.search.execute_lexical_retrieval", execute
@@ -289,6 +329,37 @@ def test_search_converts_valid_original_passage_hit(
     assert result.hits[0].document_version_id == DOCUMENT_VERSION_ID
     assert result.hits[0].score == 1.5
     assert result.hits[0].source_links[0].source_span_id == SOURCE_SPAN_ID
+    assert generation.closed is True
+
+
+def test_search_preserves_fail_closed_location_error(
+    monkeypatch, tmp_path: Path
+) -> None:
+    snapshot = _Snapshot(CORPUS_VERSION_ID)
+    repository = _Repository(
+        active=snapshot,
+        corpora=(CorpusMetadata(CORPUS_ID, "Corpus A"),),
+    )
+    generation = _stub_generation(monkeypatch)
+    monkeypatch.setattr(
+        "inference_lab.serving.search.execute_lexical_retrieval",
+        lambda _repository, _index_dir, _corpus_id, retrieval_query, **_kwargs: (
+            _hit_result(retrieval_query)
+        ),
+    )
+
+    def corrupt_location(*_args: object) -> None:
+        raise ServingSearchError(ServingSearchFailureCategory.CORRUPT_STATE)
+
+    monkeypatch.setattr(
+        "inference_lab.serving.search.resolve_source_locations", corrupt_location
+    )
+    with pytest.raises(ServingSearchError) as error:
+        ServingSearchRunner(
+            cast(MetadataRepository, repository), _settings(tmp_path)
+        ).search(_request())
+    assert error.value.category is ServingSearchFailureCategory.CORRUPT_STATE
+    assert generation.closed is True
 
 
 def test_search_distinguishes_missing_corpus_and_unpublished_corpus(
@@ -373,6 +444,7 @@ def test_search_profiles_serving_as_parent_of_lexical_retrieval(
         active=snapshot,
         corpora=(CorpusMetadata(CORPUS_ID, "Corpus A"),),
     )
+    _stub_generation(monkeypatch)
     sink = _CollectingSink()
     profiling = ProfilingContext.create(
         run_id="run-serving-search",
@@ -387,23 +459,25 @@ def test_search_profiles_serving_as_parent_of_lexical_retrieval(
         _repository,
         _index_dir,
         corpus_id,
-        lexical_query,
+        retrieval_query,
         *,
+        mode,
         profiling,
         parent_stage_id,
         snapshot,
+        generation,
     ):
         with profiling.observed_stage(
             stage="lexical_retrieval",
             stage_id=profiling.stage_id("lexical_retrieval", "request"),
             document_id=None,
             corpus_id=corpus_id.as_str(),
-            corpus_version=lexical_query.query.corpus_version.as_str(),
+            corpus_version=retrieval_query.corpus_version.as_str(),
             parent_stage_id=parent_stage_id,
             module="inference_lab.retrieval",
         ) as stage:
             stage.set_counts(records_emitted=0)
-        return _empty_result(lexical_query.query)
+        return _empty_result(retrieval_query)
 
     monkeypatch.setattr(
         "inference_lab.serving.search.execute_lexical_retrieval", execute

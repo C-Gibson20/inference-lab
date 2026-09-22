@@ -702,3 +702,12 @@ class MetadataRepository(MetadataReader, ChunkSetReader, Protocol):
     def close(self) -> None:
         """Release resources idempotently and reject subsequent operations."""
         ...
+
+
+@runtime_checkable
+class WorkerRepositoryOpener(Protocol):
+    """Optional capability for independent same-store worker connections."""
+
+    def open_worker_repository(self) -> Self:
+        """Open a connection owned by the calling worker thread."""
+        ...

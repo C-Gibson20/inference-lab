@@ -84,6 +84,7 @@ from inference_lab.storage.protocols import (
     MetadataRepository,
     MetadataTransaction,
     MetadataWriter,
+    WorkerRepositoryOpener,
 )
 from inference_lab.storage.snapshots import CorpusSnapshot
 from inference_lab.storage.source_locations import (
@@ -207,6 +208,7 @@ __all__ = [
     "StructuralBlock",
     "StructuralBlockKind",
     "TransitionBaselineManifestOutcome",
+    "WorkerRepositoryOpener",
     "WriteBaselineCheckpointOutcome",
     "WriteChunkSetOutcome",
     "build_parsed_representation_output_digest",
