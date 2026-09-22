@@ -75,6 +75,16 @@ unpublished, and `aborted` work is terminal. After restart, non-terminal work
 remains available for an explicit resume-or-abort decision; startup never
 publishes it automatically.
 
+For local serving ingest, retry the same request and proposed version only
+when the source snapshot and configuration are unchanged. A `started` parse or
+chunk stage can finish, a `completed` stage is reused only after its stored
+output is checked, and a `ready` proposal can continue publication. A `failed`
+document checkpoint is terminal for that proposed version: correct the source
+or configuration and start a new proposal against the current active version.
+An incompatible resume does not replace the active version. A no-change
+publication leaves the parent version active, even though its ingest manifest
+is committed.
+
 A storage conflict means the expected active version or immutable inputs no
 longer agree. Do not blind-retry it. A concurrency error means the bounded
 SQLite lock wait expired and the complete transaction may be retried under a

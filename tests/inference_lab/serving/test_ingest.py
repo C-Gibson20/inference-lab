@@ -5,10 +5,18 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from inference_lab.ingest import (
     CURRENT_CHUNKER_VERSION,
     CURRENT_PARSER_VERSION,
+    BaselineCheckpoint,
+    BaselineCheckpointStatus,
+    BaselineDocumentOutcomeKind,
+    BaselineStage,
+    BaselineStageDisposition,
     ChunkingPolicy,
     DiscoveryInput,
     DiscoveryInputKind,
@@ -22,9 +30,13 @@ from inference_lab.provenance import (
 )
 from inference_lab.serving import (
     LocalServingFacade,
+    ServingIngestError,
+    ServingIngestFailureCategory,
     ServingIngestRequest,
     ServingSearchRequest,
 )
+from inference_lab.serving.ingest_documents import ServingDocumentRunner
+from inference_lab.serving.ingest_publication import ServingPublicationCoordinator
 from inference_lab.settings import (
     ModelPaths,
     RuntimeConfig,
@@ -294,3 +306,465 @@ def test_ingest_is_corpus_scoped_and_replays_after_restart(tmp_path: Path) -> No
     assert fresh_beta["corpus_version"] == active_b.corpus_version.as_str()
     assert fresh_alpha["hits"]
     assert fresh_beta["hits"]
+
+
+@pytest.mark.parametrize(
+    ("interrupted_stage", "interrupted_status"),
+    (
+        (BaselineStage.PARSE, BaselineCheckpointStatus.STARTED),
+        (BaselineStage.PARSE, BaselineCheckpointStatus.COMPLETED),
+        (BaselineStage.CHUNK, BaselineCheckpointStatus.STARTED),
+        (BaselineStage.CHUNK, BaselineCheckpointStatus.COMPLETED),
+    ),
+)
+def test_ingest_resumes_each_durable_document_checkpoint_after_restart(
+    tmp_path: Path,
+    interrupted_stage: BaselineStage,
+    interrupted_status: BaselineCheckpointStatus,
+) -> None:
+    """A process interruption reuses completed work and finishes started work."""
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("resumable lexical evidence", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Resume corpus", corpus_id=corpus_id)
+        original = ServingDocumentRunner.write_checkpoint
+        interrupted = False
+
+        def interrupt_after_checkpoint(
+            runner: ServingDocumentRunner,
+            ingest_request: ServingIngestRequest,
+            checkpoint: BaselineCheckpoint,
+            *,
+            expected_status: BaselineCheckpointStatus | None = None,
+        ) -> None:
+            nonlocal interrupted
+            original(
+                runner,
+                ingest_request,
+                checkpoint,
+                expected_status=expected_status,
+            )
+            if (
+                not interrupted
+                and checkpoint.work_key.stage is interrupted_stage
+                and checkpoint.status is interrupted_status
+            ):
+                interrupted = True
+                raise KeyboardInterrupt
+
+        with patch.object(
+            ServingDocumentRunner,
+            "write_checkpoint",
+            interrupt_after_checkpoint,
+        ):
+            with pytest.raises(KeyboardInterrupt):
+                facade.ingest(request)
+        assert interrupted
+        assert repository.get_active_corpus_version(corpus_id) is None
+    finally:
+        repository.close()
+
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        facade = LocalServingFacade(reopened, settings)
+        summary = facade.ingest(request)
+        assert summary.publication_status.value == "committed", summary
+        assert len(summary.document_outcomes) == 1
+        outcome = summary.document_outcomes[0]
+        expected_parse = (
+            BaselineStageDisposition.COMPLETED
+            if interrupted_stage is BaselineStage.PARSE
+            and interrupted_status is BaselineCheckpointStatus.STARTED
+            else BaselineStageDisposition.REUSED
+        )
+        expected_chunk = (
+            BaselineStageDisposition.REUSED
+            if interrupted_stage is BaselineStage.CHUNK
+            and interrupted_status is BaselineCheckpointStatus.COMPLETED
+            else BaselineStageDisposition.COMPLETED
+        )
+        assert outcome.parse_disposition is expected_parse
+        assert outcome.chunk_disposition is expected_chunk
+        assert len(reopened.list_corpus_versions(corpus_id)) == 1
+        result = facade.search(
+            ServingSearchRequest(corpus_id=corpus_id, text="resumable", limit=5)
+        )
+        assert result.hits
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("interrupt_at", ("ready", "published"))
+def test_ingest_resumes_publication_after_restart(
+    tmp_path: Path,
+    interrupt_at: str,
+) -> None:
+    """Ready work and committed-but-unacknowledged work survive cold restart."""
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("publication resume evidence", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Publication corpus", corpus_id=corpus_id)
+        method = "build_and_publish" if interrupt_at == "ready" else "verify_published"
+        with patch.object(
+            ServingPublicationCoordinator,
+            method,
+            side_effect=KeyboardInterrupt,
+        ):
+            with pytest.raises(KeyboardInterrupt):
+                facade.ingest(request)
+        assert (repository.get_active_corpus_version(corpus_id) is None) == (
+            interrupt_at == "ready"
+        )
+    finally:
+        repository.close()
+
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        summary = LocalServingFacade(reopened, settings).ingest(request)
+        assert summary.publication_status.value == "committed"
+        assert len(reopened.list_corpus_versions(corpus_id)) == 1
+    finally:
+        reopened.close()
+
+
+def test_no_change_committed_replay_uses_parent_version(tmp_path: Path) -> None:
+    """A no-change proposal remains replayable after its baseline manifest commits."""
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("unchanged source evidence", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    first = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("No-change corpus", corpus_id=corpus_id)
+        assert facade.ingest(first).publication_status.value == "committed"
+        unchanged = _request(
+            corpus_id,
+            (source,),
+            proposed=CorpusVersionId.generate(),
+            expected=first.proposed_corpus_version,
+        )
+        assert facade.ingest(unchanged).publication_status.value == "no_change"
+        assert len(repository.list_corpus_versions(corpus_id)) == 1
+    finally:
+        repository.close()
+
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        summary = LocalServingFacade(reopened, settings).ingest(unchanged)
+        assert summary.publication_status.value == "no_change"
+        assert len(reopened.list_corpus_versions(corpus_id)) == 1
+    finally:
+        reopened.close()
+
+
+def test_ready_resume_rejects_staged_membership_drift(tmp_path: Path) -> None:
+    """A READY proposal cannot publish a different staged document set."""
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("staged membership evidence", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Staged membership corpus", corpus_id=corpus_id)
+        with patch.object(
+            ServingPublicationCoordinator,
+            "build_and_publish",
+            side_effect=KeyboardInterrupt,
+        ):
+            with pytest.raises(KeyboardInterrupt):
+                facade.ingest(request)
+    finally:
+        repository.close()
+
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        facade = LocalServingFacade(reopened, settings)
+        with patch.object(
+            reopened,
+            "list_corpus_update_document_memberships",
+            return_value=(),
+        ):
+            with pytest.raises(ServingIngestError) as raised:
+                facade.ingest(request)
+        assert raised.value.category is ServingIngestFailureCategory.INCOMPATIBLE_RESUME
+        assert reopened.get_active_corpus_version(corpus_id) is None
+        assert facade.ingest(request).publication_status.value == "committed"
+    finally:
+        reopened.close()
+
+
+def test_changed_source_rejects_incompatible_resume(tmp_path: Path) -> None:
+    """New source bytes cannot reuse an unfinished proposal's identity."""
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("original content", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Changed source corpus", corpus_id=corpus_id)
+        with patch.object(
+            ServingPublicationCoordinator,
+            "build_and_publish",
+            side_effect=KeyboardInterrupt,
+        ):
+            with pytest.raises(KeyboardInterrupt):
+                facade.ingest(request)
+    finally:
+        repository.close()
+
+    source.write_text("changed content", encoding="utf-8")
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        with pytest.raises(ServingIngestError) as raised:
+            LocalServingFacade(reopened, settings).ingest(request)
+        assert raised.value.category is ServingIngestFailureCategory.INCOMPATIBLE_RESUME
+        assert reopened.get_active_corpus_version(corpus_id) is None
+    finally:
+        reopened.close()
+
+
+def test_changed_version_resumes_against_original_parent(tmp_path: Path) -> None:
+    """Rediscovery of an unfinished replacement keeps its replace semantics."""
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("original passage", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    first = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Replacement corpus", corpus_id=corpus_id)
+        assert facade.ingest(first).publication_status.value == "committed"
+        source.write_text("replacement passage", encoding="utf-8")
+        replacement = _request(
+            corpus_id,
+            (source,),
+            proposed=CorpusVersionId.generate(),
+            expected=first.proposed_corpus_version,
+        )
+        original = ServingDocumentRunner.write_checkpoint
+        interrupted = False
+
+        def interrupt_after_parse_started(
+            runner: ServingDocumentRunner,
+            ingest_request: ServingIngestRequest,
+            checkpoint: BaselineCheckpoint,
+            *,
+            expected_status: BaselineCheckpointStatus | None = None,
+        ) -> None:
+            nonlocal interrupted
+            original(
+                runner,
+                ingest_request,
+                checkpoint,
+                expected_status=expected_status,
+            )
+            if (
+                not interrupted
+                and checkpoint.work_key.stage is BaselineStage.PARSE
+                and checkpoint.status is BaselineCheckpointStatus.STARTED
+            ):
+                interrupted = True
+                raise KeyboardInterrupt
+
+        with patch.object(
+            ServingDocumentRunner,
+            "write_checkpoint",
+            interrupt_after_parse_started,
+        ):
+            with pytest.raises(KeyboardInterrupt):
+                facade.ingest(replacement)
+        assert interrupted
+        active = repository.get_active_corpus_version(corpus_id)
+        assert active is not None
+        assert active.corpus_version == first.proposed_corpus_version
+    finally:
+        repository.close()
+
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        summary = LocalServingFacade(reopened, settings).ingest(replacement)
+        assert summary.publication_status.value == "committed"
+        assert (
+            summary.document_outcomes[0].kind
+            is BaselineDocumentOutcomeKind.CHANGED_VERSION
+        )
+        assert (
+            summary.document_outcomes[0].parse_disposition
+            is BaselineStageDisposition.COMPLETED
+        )
+        active = reopened.get_active_corpus_version(corpus_id)
+        assert active is not None
+        assert active.corpus_version == replacement.proposed_corpus_version
+        assert len(reopened.list_corpus_versions(corpus_id)) == 2
+    finally:
+        reopened.close()
+
+
+def test_failed_checkpoint_is_terminal_for_same_proposal(tmp_path: Path) -> None:
+    """A failed stage does not silently retry under the same work key."""
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("retryable source", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Failed checkpoint corpus", corpus_id=corpus_id)
+        original = ServingDocumentRunner.write_checkpoint
+
+        def interrupt_after_failed_checkpoint(
+            runner: ServingDocumentRunner,
+            ingest_request: ServingIngestRequest,
+            checkpoint: BaselineCheckpoint,
+            *,
+            expected_status: BaselineCheckpointStatus | None = None,
+        ) -> None:
+            original(
+                runner,
+                ingest_request,
+                checkpoint,
+                expected_status=expected_status,
+            )
+            if checkpoint.status is BaselineCheckpointStatus.FAILED:
+                raise KeyboardInterrupt
+
+        with (
+            patch(
+                "inference_lab.serving.ingest_documents.execute_baseline_parse",
+                side_effect=RuntimeError("simulated parser failure"),
+            ),
+            patch.object(
+                ServingDocumentRunner,
+                "write_checkpoint",
+                interrupt_after_failed_checkpoint,
+            ),
+        ):
+            with pytest.raises(KeyboardInterrupt):
+                facade.ingest(request)
+    finally:
+        repository.close()
+
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        facade = LocalServingFacade(reopened, settings)
+        with patch(
+            "inference_lab.serving.ingest_documents.execute_baseline_parse",
+            side_effect=AssertionError("terminal checkpoint must not reparse"),
+        ):
+            summary = facade.ingest(request)
+        assert summary.document_outcomes[0].kind is BaselineDocumentOutcomeKind.FAILED
+        assert (
+            summary.document_outcomes[0].parse_disposition
+            is BaselineStageDisposition.FAILED
+        )
+        retry = _request(
+            corpus_id,
+            (source,),
+            proposed=CorpusVersionId.generate(),
+            expected=request.proposed_corpus_version,
+        )
+        assert facade.ingest(retry).publication_status.value == "committed"
+    finally:
+        reopened.close()
