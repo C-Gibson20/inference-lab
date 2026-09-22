@@ -868,6 +868,9 @@ class DuplicateDiagnostics:
     relevant_non_gold_duplicate_copy_count: int
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
         """Validate all diagnostic counts as non-negative integers."""
         for field_name in (
             "raw_hit_count",
@@ -926,6 +929,13 @@ class RetrievalCaseResult:
 
     def _validate(self) -> None:
         """Validate the terminal case-result state and safe references."""
+        self._validate_identity()
+        self._validate_safe_references()
+        self._validate_terminal_state()
+        self._validate_recall_diagnostics()
+
+    def _validate_identity(self) -> None:
+        """Validate case identity, selected corpus, and request metadata."""
         _require_case_id(self.case_id)
         _require_non_negative_integer(self.case_ordinal, "case_ordinal")
         if self.split not in {"train", "development", "held_out"}:
@@ -934,6 +944,9 @@ class RetrievalCaseResult:
         _require_type(self.corpus_version, CorpusVersionId, "corpus_version")
         _require_positive_integer(self.requested_limit, "requested_limit")
         _require_type(self.status, ResultStatus, "status")
+
+    def _validate_safe_references(self) -> None:
+        """Validate safe references and optional diagnostic value types."""
         hits = cast(
             tuple[SanitisedHitReference, ...],
             _require_tuple(self.hits, "hits"),
@@ -983,6 +996,11 @@ class RetrievalCaseResult:
             raise TypeError(
                 "duplicate_diagnostics must be a DuplicateDiagnostics or None."
             )
+
+    def _validate_terminal_state(self) -> None:
+        """Validate hit ranking, requested depth, and terminal status."""
+        hits = self.hits
+        failures = self.failures
         ranks = tuple(hit.rank for hit in hits)
         if ranks != tuple(range(1, len(hits) + 1)):
             raise RetrievalEvaluationContractError(
@@ -1004,6 +1022,11 @@ class RetrievalCaseResult:
             raise RetrievalEvaluationContractError(
                 "failed case results require failures and no hits."
             )
+
+    def _validate_recall_diagnostics(self) -> None:
+        """Validate recall cut-offs and match-rank ordering."""
+        passage_metrics = self.passage_recall
+        passage_match_ranks = self.passage_match_ranks
         if self.document_recall is not None and self.document_recall.cutoff != 10:
             raise RetrievalEvaluationContractError(
                 "document recall must use cutoff 10."
