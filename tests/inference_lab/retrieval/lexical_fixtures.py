@@ -43,6 +43,17 @@ CORPUS_VERSION_ID = CorpusVersionId.from_str("00000000-0000-4000-8000-0000000000
 SECOND_CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000003")
 
 
+def published_lexical_generation_id(outcome: CommitCorpusUpdateOutcome) -> str:
+    """Return the committed lexical generation identity from one outcome."""
+    lexical_generations = tuple(
+        generation
+        for generation in outcome.manifest.component_generations
+        if generation.component_kind.as_str() == "lexical-index"
+    )
+    assert len(lexical_generations) == 1
+    return lexical_generations[0].generation_id
+
+
 def parsed_document(
     text: str,
     *,
