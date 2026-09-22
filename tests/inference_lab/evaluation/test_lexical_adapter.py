@@ -16,7 +16,7 @@ from inference_lab.evaluation import (
 )
 from inference_lab.ingest import Chunk
 from inference_lab.profiling import ProfilingContext
-from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.provenance import CorpusId, CorpusVersionId, DocumentId
 from inference_lab.retrieval import LexicalMatchMode, RetrievalLimit
 from inference_lab.storage import open_metadata_repository
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
@@ -24,17 +24,17 @@ from tests.inference_lab.evaluation.fixtures import (  # noqa: TID252
     case_payload,
     write_dataset_fixture,
 )
-from tests.inference_lab.retrieval.test_lexical_store import (  # noqa: TID252
+from tests.inference_lab.retrieval.lexical_fixtures import (  # noqa: TID252
     CORPUS_ID,
     CORPUS_VERSION_ID,
-    _publish_query_fixture,
-    _source_manifest,
+    publish_query_fixture,
+    source_manifest,
 )
-from tests.inference_lab.serving.test_operator_workflow import (  # noqa: TID252
+from tests.inference_lab.serving.operator_fixtures import (  # noqa: TID252
     LOCAL_TOKENISER_FIXTURE,
-    _example,
-    _run_example,
-    _write_config,
+    example,
+    run_example,
+    write_config,
 )
 
 
@@ -52,12 +52,12 @@ def _case_for_chunk(case_id: str, question: str, chunk: Chunk) -> dict:
 
 def test_real_lexical_generation_scores_hit_and_empty_case(tmp_path: Path) -> None:
     """The adapter composes published storage, RET-02, and EVAL-03 scoring."""
-    source_manifest, first, second = _source_manifest()
+    lexical_manifest, first, second = source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3", apply_migrations=True
     )
     try:
-        _publish_query_fixture(repository, tmp_path / "indexes", source_manifest)
+        publish_query_fixture(repository, tmp_path / "indexes", lexical_manifest)
         dataset = load_dataset(
             write_dataset_fixture(
                 tmp_path,
@@ -121,12 +121,12 @@ def test_real_lexical_generation_scores_hit_and_empty_case(tmp_path: Path) -> No
 
 def test_adapter_rejects_foreign_scope_before_query(tmp_path: Path) -> None:
     """A caller cannot reuse the pinned adapter against a different corpus."""
-    source_manifest, first, _ = _source_manifest()
+    lexical_manifest, first, _ = source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3", apply_migrations=True
     )
     try:
-        _publish_query_fixture(repository, tmp_path / "indexes", source_manifest)
+        publish_query_fixture(repository, tmp_path / "indexes", lexical_manifest)
         adapter = LocalLexicalEvaluationAdapter(
             repository, tmp_path / "indexes", CORPUS_ID, CORPUS_VERSION_ID
         )
@@ -152,19 +152,19 @@ def test_adapter_rejects_foreign_scope_before_query(tmp_path: Path) -> None:
 
 def test_adapter_and_serving_facade_find_same_published_span(tmp_path: Path) -> None:
     """Fresh-process ingest and serving agree with EVAL-03 on one version."""
-    _write_config(tmp_path)
+    write_config(tmp_path)
     create_script = tmp_path / "create-corpus.py"
     ingest_script = tmp_path / "ingest-and-search.py"
-    create_script.write_text(_example("create"), encoding="utf-8")
-    ingest_script.write_text(_example("ingest"), encoding="utf-8")
+    create_script.write_text(example("create"), encoding="utf-8")
+    ingest_script.write_text(example("ingest"), encoding="utf-8")
     source = tmp_path / "paper.txt"
     source.write_text("alpha method " * 180, encoding="utf-8")
-    created, _ = _run_example(
+    created, _ = run_example(
         tmp_path, create_script, {"CORPUS_NAME": "Evaluation corpus"}
     )
     corpus_id = created[0]["corpus_id"]
     version = CORPUS_VERSION_ID.as_str()
-    served, _ = _run_example(
+    served, _ = run_example(
         tmp_path,
         ingest_script,
         {
@@ -192,9 +192,15 @@ def test_adapter_and_serving_facade_find_same_published_span(tmp_path: Path) -> 
         with repository.open_corpus_snapshot(
             selected_corpus, selected_version
         ) as snapshot:
-            case["evidence"][0]["document_version_id"] = (
-                snapshot.manifest.document_memberships[0].document_version_id.as_str()
+            matching_memberships = tuple(
+                membership
+                for membership in snapshot.manifest.document_memberships
+                if membership.document_id == DocumentId.from_str(hit["document_id"])
             )
+            assert len(matching_memberships) == 1
+            case["evidence"][0]["document_version_id"] = matching_memberships[
+                0
+            ].document_version_id.as_str()
         (tmp_path / "dataset").mkdir()
         dataset = load_dataset(
             write_dataset_fixture(
