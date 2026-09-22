@@ -515,6 +515,10 @@ class LexicalIndexBuildStatistics:
     database_reused: bool = False
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate bounded build counters and the reuse flag."""
         for field_name in (
             "members_processed",
             "chunks_processed",

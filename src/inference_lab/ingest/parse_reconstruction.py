@@ -24,50 +24,29 @@ from inference_lab.ingest.sources import (
 )
 from inference_lab.ingest.versioning import ParserVersion
 from inference_lab.provenance import SourceSpanId
+
+# isort: off
 from inference_lab.storage import (
     CollectionAvailability,
     ContentOrigin,
+    CoordinateOrigin as StorageCoordinateOrigin,
+    CoordinateUnit as StorageCoordinateUnit,
+    PageLayoutDescriptor as StoragePageLayoutDescriptor,
+    PageRotation as StoragePageRotation,
     ParsedRepresentation,
+    ParseFailureCategory as StorageParseFailureCategory,
     ParseFailureRecord,
+    ParseFailureSeverity as StorageParseFailureSeverity,
+    ParseFailureStage as StorageParseFailureStage,
+    ParseFailureUnitKind as StorageParseFailureUnitKind,
+    ParseOutcome as StorageParseOutcome,
+    ParseStatus as StorageParseStatus,
     ProducerIdentity,
     SourceLocation,
-)
-from inference_lab.storage import (
-    CoordinateOrigin as StorageCoordinateOrigin,
-)
-from inference_lab.storage import (
-    CoordinateUnit as StorageCoordinateUnit,
-)
-from inference_lab.storage import (
-    PageLayoutDescriptor as StoragePageLayoutDescriptor,
-)
-from inference_lab.storage import (
-    PageRotation as StoragePageRotation,
-)
-from inference_lab.storage import (
-    ParseFailureCategory as StorageParseFailureCategory,
-)
-from inference_lab.storage import (
-    ParseFailureSeverity as StorageParseFailureSeverity,
-)
-from inference_lab.storage import (
-    ParseFailureStage as StorageParseFailureStage,
-)
-from inference_lab.storage import (
-    ParseFailureUnitKind as StorageParseFailureUnitKind,
-)
-from inference_lab.storage import (
-    ParseOutcome as StorageParseOutcome,
-)
-from inference_lab.storage import (
-    ParseStatus as StorageParseStatus,
-)
-from inference_lab.storage import (
     StructuralBlock as StorageStructuralBlock,
-)
-from inference_lab.storage import (
     StructuralBlockKind as StorageStructuralBlockKind,
 )
+# isort: on
 
 ParseReconstructionErrorCategory = Literal[
     "invalid_outcome",
