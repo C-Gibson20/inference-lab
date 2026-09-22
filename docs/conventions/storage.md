@@ -33,6 +33,15 @@ explicit `apply_migrations` policy. Application integrations depend on the
 protocols exported by `inference_lab.storage`, not private SQLite modules or
 connections.
 
+Parallel document workers call `open_worker_repository()` from their own
+thread and close that repository before the task ends. Each worker connection
+targets the exact same validated database and managed-source store as its
+parent, without rerunning migrations or startup source reconciliation. Never
+share a repository connection across threads. Keep worker admission bounded
+by `ingest.max_concurrent_documents`; a transient SQLite lock failure may
+retry the complete idempotent stage attempt with a finite backoff, but must
+not turn an unfinished work key into a terminal document failure.
+
 All corpus-update writes occur inside `with repository.transaction() as
 transaction:`. Successful exit commits the entire metadata unit; exceptional
 exit rolls it back. Transactions are non-nestable and single-use. Do not hold

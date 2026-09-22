@@ -40,6 +40,7 @@ from inference_lab.storage import (
     ComponentKind,
     MetadataRepository,
     MetadataTransaction,
+    WorkerRepositoryOpener,
 )
 
 
@@ -47,7 +48,9 @@ class _ServingTransaction(MetadataTransaction, BaselineCheckpointWriter):
     """Combined transaction surface used by the serving ingest facade."""
 
 
-class _ServingRepository(MetadataRepository, BaselineCheckpointReader):
+class _ServingRepository(
+    MetadataRepository, BaselineCheckpointReader, WorkerRepositoryOpener
+):
     """Combined repository surface used by the serving ingest facade."""
 
     def transaction(self) -> _ServingTransaction:

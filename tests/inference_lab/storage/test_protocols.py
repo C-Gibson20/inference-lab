@@ -752,6 +752,7 @@ def test_public_storage_api_contains_only_contract_boundary() -> None:
         "StructuralBlock",
         "StructuralBlockKind",
         "TransitionBaselineManifestOutcome",
+        "WorkerRepositoryOpener",
         "WriteBaselineCheckpointOutcome",
         "WriteChunkSetOutcome",
         "TransitionBaselineManifestOutcome",

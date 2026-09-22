@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from threading import Barrier, Lock, get_ident
 from unittest.mock import patch
 
 import pytest
@@ -14,17 +15,27 @@ from inference_lab.ingest import (
     CURRENT_PARSER_VERSION,
     BaselineCheckpoint,
     BaselineCheckpointStatus,
+    BaselineDocumentOutcome,
     BaselineDocumentOutcomeKind,
+    BaselineParseRepository,
+    BaselineParseRequest,
+    BaselineParseResult,
+    BaselineProfilingContext,
     BaselineStage,
     BaselineStageDisposition,
     ChunkingPolicy,
+    DiscoveredSource,
     DiscoveryInput,
     DiscoveryInputKind,
     DiscoveryRequest,
     FakeChunkTokeniser,
+    ParserRegistry,
+    StableReadFileSystem,
+    execute_baseline_parse,
 )
 from inference_lab.ingest._chunk_identity import _configuration_identity_from_values
 from inference_lab.provenance import (
+    CorpusDocumentVersionMembership,
     CorpusId,
     CorpusVersionId,
 )
@@ -38,15 +49,25 @@ from inference_lab.serving import (
 from inference_lab.serving.ingest_documents import ServingDocumentRunner
 from inference_lab.serving.ingest_publication import ServingPublicationCoordinator
 from inference_lab.settings import (
+    IngestConfig,
     ModelPaths,
     RuntimeConfig,
     Settings,
     StorageConfig,
 )
-from inference_lab.storage import MetadataRepository, open_metadata_repository
+from inference_lab.storage import (
+    MetadataRepository,
+    StorageConcurrencyError,
+    WorkerRepositoryOpener,
+    open_metadata_repository,
+)
 
 
-def _settings(tmp_path: Path) -> Settings:
+def _settings(
+    tmp_path: Path,
+    *,
+    max_concurrent_documents: int = 1,
+) -> Settings:
     """Build isolated local settings for the facade acceptance test."""
     return Settings(
         models=ModelPaths(
@@ -60,6 +81,7 @@ def _settings(tmp_path: Path) -> Settings:
             metadata_db_path=tmp_path / "metadata.sqlite3",
             source_dir=tmp_path / "source-data",
         ),
+        ingest=IngestConfig(max_concurrent_documents=max_concurrent_documents),
     )
 
 
@@ -768,3 +790,239 @@ def test_failed_checkpoint_is_terminal_for_same_proposal(tmp_path: Path) -> None
         assert facade.ingest(retry).publication_status.value == "committed"
     finally:
         reopened.close()
+
+
+def test_parallel_ingest_owns_connections_and_isolates_corpora(tmp_path: Path) -> None:
+    """Two workers use separate repositories and preserve corpus visibility."""
+    settings = _settings(tmp_path, max_concurrent_documents=2)
+    shared = tmp_path / "shared.txt"
+    unique = tmp_path / "unique.txt"
+    shared.write_text("shared evidence", encoding="utf-8")
+    unique.write_text("unique evidence", encoding="utf-8")
+    first_id = CorpusId.generate()
+    second_id = CorpusId.generate()
+    first = _request(
+        first_id,
+        (shared, unique),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    second = _request(
+        second_id,
+        (shared,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("First parallel corpus", corpus_id=first_id)
+        facade.create_corpus("Second parallel corpus", corpus_id=second_id)
+        barrier = Barrier(2)
+        lock = Lock()
+        caller_thread = get_ident()
+        worker_repositories: list[MetadataRepository] = []
+        worker_threads: set[int] = set()
+        original = ServingDocumentRunner.process_source
+
+        def observe_worker(
+            runner: ServingDocumentRunner,
+            ingest_request: ServingIngestRequest,
+            source: DiscoveredSource,
+            profiling: BaselineProfilingContext,
+            parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
+        ) -> BaselineDocumentOutcome:
+            if ingest_request.corpus_id == first_id:
+                assert runner._repository is not repository
+                with lock:
+                    worker_repositories.append(runner._repository)
+                    worker_threads.add(get_ident())
+                assert get_ident() != caller_thread
+                barrier.wait(timeout=10)
+            return original(
+                runner,
+                ingest_request,
+                source,
+                profiling,
+                parent_memberships,
+            )
+
+        with patch.object(ServingDocumentRunner, "process_source", observe_worker):
+            first_summary = facade.ingest(first)
+        assert first_summary.publication_status.value == "committed"
+        assert len(first_summary.document_outcomes) == 2
+        assert all(
+            outcome.kind is not BaselineDocumentOutcomeKind.FAILED
+            for outcome in first_summary.document_outcomes
+        ), first_summary.document_outcomes
+        assert len(worker_threads) == 2
+        assert len({id(value) for value in worker_repositories}) == 2
+        assert all(value.is_closed for value in worker_repositories)
+        assert len(_membership_hashes(repository, first)) == 2
+
+        second_summary = facade.ingest(second)
+        assert second_summary.publication_status.value == "committed"
+        assert len(_membership_hashes(repository, second)) == 1
+        assert facade.search(
+            ServingSearchRequest(corpus_id=first_id, text="unique", limit=5)
+        ).hits
+        assert not facade.search(
+            ServingSearchRequest(corpus_id=second_id, text="unique", limit=5)
+        ).hits
+    finally:
+        repository.close()
+
+
+def test_parallel_ingest_resumes_mixed_document_outcomes(tmp_path: Path) -> None:
+    """Parallel parse failure and success survive READY restart together."""
+    settings = _settings(tmp_path, max_concurrent_documents=2)
+    good = tmp_path / "a-good.txt"
+    bad = tmp_path / "z-bad.txt"
+    good.write_text("surviving evidence", encoding="utf-8")
+    bad.write_text("failed evidence", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (good, bad),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Mixed parallel corpus", corpus_id=corpus_id)
+        original_parse = execute_baseline_parse
+
+        def fail_one_parse(
+            repository: BaselineParseRepository,
+            parse_request: BaselineParseRequest,
+            *,
+            settings: Settings,
+            parser_registry: ParserRegistry,
+            filesystem: StableReadFileSystem | None,
+            profiling: BaselineProfilingContext,
+        ) -> BaselineParseResult:
+            if parse_request.source.ordinal == 1:
+                raise RuntimeError("simulated parse failure")
+            return original_parse(
+                repository,
+                parse_request,
+                settings=settings,
+                parser_registry=parser_registry,
+                filesystem=filesystem,
+                profiling=profiling,
+            )
+
+        with (
+            patch(
+                "inference_lab.serving.ingest_documents.execute_baseline_parse",
+                fail_one_parse,
+            ),
+            patch.object(
+                ServingPublicationCoordinator,
+                "build_and_publish",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with pytest.raises(KeyboardInterrupt):
+                facade.ingest(request)
+        assert repository.get_active_corpus_version(corpus_id) is None
+    finally:
+        repository.close()
+
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        facade = LocalServingFacade(reopened, settings)
+        summary = facade.ingest(request)
+        assert summary.publication_status.value == "committed"
+        assert summary.execution_status.value == "completed_with_failures"
+        assert len(summary.document_outcomes) == 2
+        assert (
+            summary.document_outcomes[0].kind is not BaselineDocumentOutcomeKind.FAILED
+        )
+        assert (
+            summary.document_outcomes[0].parse_disposition
+            is BaselineStageDisposition.REUSED
+        )
+        assert summary.document_outcomes[1].kind is BaselineDocumentOutcomeKind.FAILED
+        assert (
+            summary.document_outcomes[1].parse_disposition
+            is BaselineStageDisposition.FAILED
+        )
+        assert len(_membership_hashes(reopened, request)) == 1
+        assert facade.search(
+            ServingSearchRequest(corpus_id=corpus_id, text="surviving", limit=5)
+        ).hits
+        assert not facade.search(
+            ServingSearchRequest(corpus_id=corpus_id, text="failed", limit=5)
+        ).hits
+    finally:
+        reopened.close()
+
+
+def test_parallel_contention_exhaustion_leaves_proposal_resumable(
+    tmp_path: Path,
+) -> None:
+    """Exhausted lock retries do not terminally fail the document work key."""
+    settings = _settings(tmp_path, max_concurrent_documents=2)
+    source = tmp_path / "source.txt"
+    source.write_text("retry after contention", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Contention corpus", corpus_id=corpus_id)
+        worker_repositories: list[MetadataRepository] = []
+        assert isinstance(repository, WorkerRepositoryOpener)
+        original_open = repository.open_worker_repository
+
+        def record_worker_open() -> MetadataRepository:
+            worker = original_open()
+            worker_repositories.append(worker)
+            return worker
+
+        with (
+            patch.object(
+                repository,
+                "open_worker_repository",
+                side_effect=record_worker_open,
+            ),
+            patch(
+                "inference_lab.serving.ingest_documents.execute_baseline_parse",
+                side_effect=StorageConcurrencyError,
+            ) as parse,
+        ):
+            summary = facade.ingest(request)
+        assert parse.call_count == 4
+        assert len(worker_repositories) == 1
+        assert worker_repositories[0].is_closed
+        assert summary.execution_status.value == "failed"
+        assert summary.publication_status.value == "not_published"
+        assert len(summary.failures) == 1
+        assert summary.failures[0].retryable
+        assert summary.failures[0].stage is BaselineStage.PARSE_PERSISTENCE
+        assert repository.get_active_corpus_version(corpus_id) is None
+        assert facade.ingest(request).publication_status.value == "committed"
+    finally:
+        repository.close()

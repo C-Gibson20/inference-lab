@@ -1,7 +1,9 @@
 """Tests for metadata repository construction."""
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -10,9 +12,12 @@ from inference_lab.settings import StorageConfig
 from inference_lab.storage import (
     MetadataRepository,
     MigrationRequiredError,
+    RepositoryClosedError,
     RepositoryUnavailableError,
+    WorkerRepositoryOpener,
     open_metadata_repository,
 )
+from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 _CORPUS = CorpusMetadata(
     CorpusId("b779bb09-f656-41c7-bc19-df4b6a04bcfd"),
@@ -48,6 +53,44 @@ def test_factory_opens_configured_repository_across_restart(tmp_path: Path) -> N
         assert second.get_corpus(_CORPUS.corpus_id) == _CORPUS
     finally:
         second.close()
+
+
+def test_worker_repository_owns_connection_without_reconciliation(
+    tmp_path: Path,
+) -> None:
+    """Worker opens on its own thread without repeating startup cleanup."""
+    database = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "source-data"
+    parent = open_metadata_repository(
+        database,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    assert isinstance(parent, WorkerRepositoryOpener)
+    child_corpus = CorpusMetadata(CorpusId.generate(), "Worker-owned corpus")
+    try:
+
+        def work() -> bool:
+            child = parent.open_worker_repository()
+            try:
+                with child.transaction() as transaction:
+                    transaction.add_corpus(child_corpus)
+                return child.get_corpus(child_corpus.corpus_id) == child_corpus
+            finally:
+                child.close()
+
+        with patch.object(
+            SQLiteMetadataRepository,
+            "reconcile_source_storage",
+            side_effect=AssertionError("worker must not run startup reconciliation"),
+        ):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                assert executor.submit(work).result()
+        assert parent.get_corpus(child_corpus.corpus_id) == child_corpus
+    finally:
+        parent.close()
+    with pytest.raises(RepositoryClosedError):
+        parent.open_worker_repository()
 
 
 def test_factory_requires_explicit_schema_update_permission(tmp_path: Path) -> None:
