@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 from inference_lab.ingest import (
@@ -45,6 +46,47 @@ from inference_lab.storage import (
     StorageConcurrencyError,
     StorageConflictError,
     WorkerRepositoryOpener,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _IngestFailureContext:
+    """Keep a workflow boundary's reporting stage and fallback category together."""
+
+    stage: BaselineStage
+    fallback_category: BaselineFailureCategory
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.stage, BaselineStage):
+            raise TypeError("stage must be a BaselineStage.")
+        if not isinstance(self.fallback_category, BaselineFailureCategory):
+            raise TypeError("fallback_category must be a BaselineFailureCategory.")
+
+    @property
+    def contention_category(self) -> BaselineFailureCategory:
+        """Classify storage contention by the active workflow stage."""
+        if self.stage is BaselineStage.PUBLICATION:
+            return BaselineFailureCategory.PUBLICATION_CONCURRENCY
+        return BaselineFailureCategory.STORAGE_UNAVAILABLE
+
+
+_DISCOVERY_FAILURE = _IngestFailureContext(
+    BaselineStage.DISCOVERY, BaselineFailureCategory.DISCOVERY_FAILED
+)
+_MANIFEST_FAILURE = _IngestFailureContext(
+    BaselineStage.PUBLICATION, BaselineFailureCategory.PUBLICATION_CONFLICT
+)
+_PARENT_MEMBERSHIP_FAILURE = _IngestFailureContext(
+    BaselineStage.MEMBERSHIP, BaselineFailureCategory.STORAGE_UNAVAILABLE
+)
+_DOCUMENT_FAILURE = _IngestFailureContext(
+    BaselineStage.PARSE, BaselineFailureCategory.PARSE_FAILED
+)
+_MEMBERSHIP_FAILURE = _IngestFailureContext(
+    BaselineStage.MEMBERSHIP, BaselineFailureCategory.MEMBERSHIP_CONFLICT
+)
+_GENERATION_FAILURE = _IngestFailureContext(
+    BaselineStage.PUBLICATION, BaselineFailureCategory.GENERATION_BUILD_FAILED
 )
 
 
@@ -171,8 +213,7 @@ class LocalServingFacade:
         """Run the durable workflow under one observed serving request."""
         if self._repository.get_corpus(request.corpus_id) is None:
             raise ServingIngestError(ServingIngestFailureCategory.CORPUS_NOT_FOUND)
-        phase = BaselineStage.DISCOVERY
-        fallback_category = BaselineFailureCategory.DISCOVERY_FAILED
+        failure_context = _DISCOVERY_FAILURE
         replay_committed = False
         try:
             discovery = discover_sources(
@@ -182,8 +223,7 @@ class LocalServingFacade:
                 profiling=profiling,
                 parent_stage_id=parent_stage_id,
             )
-            phase = BaselineStage.PUBLICATION
-            fallback_category = BaselineFailureCategory.PUBLICATION_CONFLICT
+            failure_context = _MANIFEST_FAILURE
             existing = self._publication.ensure_manifest(request, discovery)
             if existing.state is BaselineManifestState.COMMITTED:
                 replay_committed = True
@@ -209,11 +249,9 @@ class LocalServingFacade:
                     stage=BaselineStage.DISCOVERY,
                 )
 
-            phase = BaselineStage.MEMBERSHIP
-            fallback_category = BaselineFailureCategory.STORAGE_UNAVAILABLE
+            failure_context = _PARENT_MEMBERSHIP_FAILURE
             parent_memberships = self._publication.parent_memberships(request)
-            phase = BaselineStage.PARSE
-            fallback_category = BaselineFailureCategory.PARSE_FAILED
+            failure_context = _DOCUMENT_FAILURE
             outcomes = self._documents.execute(
                 request,
                 discovery,
@@ -221,8 +259,7 @@ class LocalServingFacade:
                 parent_memberships,
                 parent_stage_id=parent_stage_id,
             )
-            phase = BaselineStage.MEMBERSHIP
-            fallback_category = BaselineFailureCategory.MEMBERSHIP_CONFLICT
+            failure_context = _MEMBERSHIP_FAILURE
             membership_plan = plan_baseline_membership(
                 request.corpus_id,
                 parent_memberships,
@@ -250,8 +287,7 @@ class LocalServingFacade:
                 )
             else:
                 self._publication.verify_ready_memberships(request, membership_plan)
-            phase = BaselineStage.PUBLICATION
-            fallback_category = BaselineFailureCategory.GENERATION_BUILD_FAILED
+            failure_context = _GENERATION_FAILURE
             publication = self._publication.build_and_publish(
                 request,
                 chunk_manifest,
@@ -274,12 +310,8 @@ class LocalServingFacade:
                 raise
             return self._publication.failed_summary(
                 request,
-                (
-                    BaselineFailureCategory.PUBLICATION_CONCURRENCY
-                    if phase is BaselineStage.PUBLICATION
-                    else BaselineFailureCategory.STORAGE_UNAVAILABLE
-                ),
-                stage=phase,
+                failure_context.contention_category,
+                stage=failure_context.stage,
                 retryable=True,
             )
         except Exception:
@@ -287,8 +319,8 @@ class LocalServingFacade:
                 raise
             return self._publication.failed_summary(
                 request,
-                fallback_category,
-                stage=phase,
+                failure_context.fallback_category,
+                stage=failure_context.stage,
             )
 
         publication_status = publication

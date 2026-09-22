@@ -268,7 +268,32 @@ def test_ingest_profiles_returned_discovery_failure(tmp_path: Path) -> None:
             BaselineFailureCategory.DISCOVERY_FAILED,
         ),
         (
+            "inference_lab.serving.ingest_publication.ServingPublicationCoordinator.ensure_manifest",
+            BaselineStage.PUBLICATION,
+            BaselineFailureCategory.PUBLICATION_CONFLICT,
+        ),
+        (
+            "inference_lab.serving.ingest_publication.ServingPublicationCoordinator.parent_memberships",
+            BaselineStage.MEMBERSHIP,
+            BaselineFailureCategory.STORAGE_UNAVAILABLE,
+        ),
+        (
+            "inference_lab.serving.ingest_documents.ServingDocumentRunner.execute",
+            BaselineStage.PARSE,
+            BaselineFailureCategory.PARSE_FAILED,
+        ),
+        (
             "inference_lab.serving.ingest.plan_baseline_membership",
+            BaselineStage.MEMBERSHIP,
+            BaselineFailureCategory.MEMBERSHIP_CONFLICT,
+        ),
+        (
+            "inference_lab.serving.ingest_publication.ServingPublicationCoordinator.chunk_manifest_entries",
+            BaselineStage.MEMBERSHIP,
+            BaselineFailureCategory.MEMBERSHIP_CONFLICT,
+        ),
+        (
+            "inference_lab.serving.ingest_publication.ServingPublicationCoordinator.prepare_publication",
             BaselineStage.MEMBERSHIP,
             BaselineFailureCategory.MEMBERSHIP_CONFLICT,
         ),
@@ -325,6 +350,74 @@ def test_ingest_unexpected_failure_keeps_its_phase(
         repository.close()
 
 
+@pytest.mark.parametrize(
+    ("target", "stage", "category"),
+    [
+        (
+            "inference_lab.serving.ingest_discovery.inventory_local_sources",
+            BaselineStage.DISCOVERY,
+            BaselineFailureCategory.STORAGE_UNAVAILABLE,
+        ),
+        (
+            "inference_lab.serving.ingest_publication.ServingPublicationCoordinator.ensure_manifest",
+            BaselineStage.PUBLICATION,
+            BaselineFailureCategory.PUBLICATION_CONCURRENCY,
+        ),
+        (
+            "inference_lab.serving.ingest_publication.ServingPublicationCoordinator.parent_memberships",
+            BaselineStage.MEMBERSHIP,
+            BaselineFailureCategory.STORAGE_UNAVAILABLE,
+        ),
+        (
+            "inference_lab.serving.ingest_documents.ServingDocumentRunner.execute",
+            BaselineStage.PARSE,
+            BaselineFailureCategory.STORAGE_UNAVAILABLE,
+        ),
+        (
+            "inference_lab.serving.ingest.plan_baseline_membership",
+            BaselineStage.MEMBERSHIP,
+            BaselineFailureCategory.STORAGE_UNAVAILABLE,
+        ),
+        (
+            "inference_lab.serving.ingest_publication.build_lexical_generation_for_corpus_update",
+            BaselineStage.PUBLICATION,
+            BaselineFailureCategory.PUBLICATION_CONCURRENCY,
+        ),
+    ],
+)
+def test_ingest_contention_keeps_its_phase_and_retryability(
+    tmp_path: Path,
+    target: str,
+    stage: BaselineStage,
+    category: BaselineFailureCategory,
+) -> None:
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("source content", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Corpus", corpus_id=corpus_id)
+        with patch(target, side_effect=StorageConcurrencyError()):
+            summary = facade.ingest(request)
+        assert summary.failures[0].stage is stage
+        assert summary.failures[0].category is category
+        assert summary.failures[0].retryable
+    finally:
+        repository.close()
+
+
 def test_ingest_preserves_primary_exception_when_failure_emission_fails(
     tmp_path: Path,
 ) -> None:
@@ -366,8 +459,12 @@ def test_ingest_preserves_primary_exception_when_failure_emission_fails(
         repository.close()
 
 
+@pytest.mark.parametrize(
+    "error", [RuntimeError("verification unavailable"), StorageConcurrencyError()]
+)
 def test_committed_replay_verification_error_is_not_returned_as_unpublished(
     tmp_path: Path,
+    error: Exception,
 ) -> None:
     settings = _settings(tmp_path)
     source = tmp_path / "source.txt"
@@ -391,9 +488,9 @@ def test_committed_replay_verification_error_is_not_returned_as_unpublished(
         with patch.object(
             ServingPublicationCoordinator,
             "verify_published",
-            side_effect=RuntimeError("verification unavailable"),
+            side_effect=error,
         ):
-            with pytest.raises(RuntimeError, match="verification unavailable"):
+            with pytest.raises(type(error)):
                 facade.ingest(request, profiling=_profiling(_CollectingSink()))
         assert repository.get_active_corpus_version(corpus_id) is not None
     finally:
