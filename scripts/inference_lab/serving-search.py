@@ -123,7 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         settings = get_settings()
-        configure_logging(settings.logging)
+        configure_logging(settings.logging, stream=sys.stderr)
         repository = open_metadata_repository(
             settings.storage.metadata_db_path,
             source_dir=settings.storage.source_dir,

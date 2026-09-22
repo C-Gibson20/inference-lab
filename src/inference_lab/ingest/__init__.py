@@ -1,6 +1,7 @@
 """Document ingestion contracts and pipeline stages."""
 
 from inference_lab.ingest._chunk_builder import build_chunk_set, build_chunking_outcome
+from inference_lab.ingest._chunk_identity import derive_chunk_configuration_identity
 from inference_lab.ingest._chunk_records import (
     CHUNK_PAYLOAD_SCHEMA_VERSION,
     Chunk,
@@ -493,6 +494,7 @@ __all__ = [
     "classify_source_candidate",
     "classify_source_inventory",
     "decode_source",
+    "derive_chunk_configuration_identity",
     "deserialise_chunk",
     "deserialise_chunk_set",
     "deserialise_chunk_set_selection",

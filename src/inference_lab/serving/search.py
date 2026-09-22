@@ -208,7 +208,7 @@ class ServingSearchRunner:
             module="inference_lab.serving",
             failure_mapper=map_serving_search_failure,
         ) as stage:
-            retrieval_query = request.lexical_query(selected_version)
+            retrieval_query = request.retrieval_query(selected_version)
             try:
                 reference = _lexical_reference(snapshot)
                 # One full integrity check belongs to the serving request;
@@ -221,6 +221,7 @@ class ServingSearchRunner:
                         self._settings.storage.index_dir,
                         request.corpus_id,
                         retrieval_query,
+                        mode=request.mode,
                         profiling=profiling,
                         parent_stage_id=stage_id,
                         snapshot=snapshot,
