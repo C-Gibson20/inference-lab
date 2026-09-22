@@ -144,16 +144,24 @@ class ServingDocumentRunner:
         discovery: DiscoveryResult,
         profiling: BaselineProfilingContext,
         parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
+        *,
+        parent_stage_id: str | None = None,
     ) -> tuple[BaselineDocumentOutcome, ...]:
         """Create and execute bounded document tasks for one discovery result."""
-        tasks = self.tasks(request, discovery, profiling, parent_memberships)
+        tasks = self.tasks(
+            request,
+            discovery,
+            profiling,
+            parent_memberships,
+            parent_stage_id=parent_stage_id,
+        )
         return execute_baseline_documents(
             tasks,
             settings=self._settings,
             corpus_id=request.corpus_id,
             proposed_corpus_version=request.proposed_corpus_version,
             profiling=profiling,
-            parent_stage_id=None,
+            parent_stage_id=parent_stage_id,
         )
 
     def tasks(
@@ -162,6 +170,8 @@ class ServingDocumentRunner:
         discovery: DiscoveryResult,
         profiling: BaselineProfilingContext,
         parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
+        *,
+        parent_stage_id: str | None = None,
     ) -> tuple[BaselineDocumentTask, ...]:
         """Build stable document tasks for sources and discovery failures."""
         by_ordinal = {source.ordinal: source for source in discovery.sources}
@@ -203,10 +213,18 @@ class ServingDocumentRunner:
                 assert source is not None
                 if self._settings.ingest.max_concurrent_documents > 1:
                     return self.process_source_on_worker(
-                        request, source, profiling, parent_memberships
+                        request,
+                        source,
+                        profiling,
+                        parent_memberships,
+                        parent_stage_id=parent_stage_id,
                     )
                 return self.process_source(
-                    request, source, profiling, parent_memberships
+                    request,
+                    source,
+                    profiling,
+                    parent_memberships,
+                    parent_stage_id=parent_stage_id,
                 )
 
             tasks.append(
@@ -224,6 +242,8 @@ class ServingDocumentRunner:
         source: DiscoveredSource,
         profiling: BaselineProfilingContext,
         parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
+        *,
+        parent_stage_id: str | None = None,
     ) -> BaselineDocumentOutcome:
         """Own a validated repository only for this document worker's lifetime."""
         repository = _retry_repository_operation(
@@ -233,7 +253,11 @@ class ServingDocumentRunner:
         runner = ServingDocumentRunner(repository, self._settings)
         try:
             outcome = runner.process_source(
-                request, source, profiling, parent_memberships
+                request,
+                source,
+                profiling,
+                parent_memberships,
+                parent_stage_id=parent_stage_id,
             )
         except BaseException:
             try:
@@ -250,6 +274,8 @@ class ServingDocumentRunner:
         source: DiscoveredSource,
         profiling: BaselineProfilingContext,
         parent_memberships: tuple[CorpusDocumentVersionMembership, ...],
+        *,
+        parent_stage_id: str | None = None,
     ) -> BaselineDocumentOutcome:
         """Parse, persist, chunk, and checkpoint one discovered source."""
         resolved = source.identity_outcome
@@ -335,6 +361,7 @@ class ServingDocumentRunner:
                     parser_registry=request.parser_registry,
                     filesystem=request.source_filesystem,
                     profiling=profiling,
+                    parent_stage_id=parent_stage_id,
                 )
             )
         except Exception as error:
@@ -452,6 +479,7 @@ class ServingDocumentRunner:
                         chunker_version=request.chunker_version,
                     ),
                     profiling=profiling,
+                    parent_stage_id=parent_stage_id,
                 )
             )
         except Exception as error:

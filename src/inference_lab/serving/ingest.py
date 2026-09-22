@@ -18,7 +18,10 @@ from inference_lab.ingest import (
     DiscoveryStatus,
     plan_baseline_membership,
 )
-from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
+from inference_lab.ingest.baseline_profiling import (
+    BaselineProfilingContext,
+    map_baseline_result_failure,
+)
 from inference_lab.profiling import ProfilingContext
 from inference_lab.provenance import CorpusId, CorpusMetadata
 from inference_lab.serving.ingest_contracts import (
@@ -105,47 +108,127 @@ class LocalServingFacade:
         """Ingest one local source scope and publish lexical state."""
         if not isinstance(request, ServingIngestRequest):
             raise TypeError("request must be a ServingIngestRequest.")
-        if self._repository.get_corpus(request.corpus_id) is None:
-            raise ServingIngestError(ServingIngestFailureCategory.CORPUS_NOT_FOUND)
+        if profiling is not None and not isinstance(
+            profiling, BaselineProfilingContext
+        ):
+            raise TypeError("profiling must be a BaselineProfilingContext or None.")
         selected_profiling = (
             profiling if profiling is not None else BaselineProfilingContext.create()
         )
-        discovery = discover_sources(self._repository, self._settings, request)
-        existing = self._publication.ensure_manifest(request, discovery)
-        if existing.state is BaselineManifestState.COMMITTED:
-            publication_status = self._publication.committed_publication_status(request)
-            self._publication.verify_published(
-                request,
-                publication_status,
+        stage_id = selected_profiling.stage_id("serving", "ingest-request")
+        summary: BaselineIngestSummary | None = None
+        with selected_profiling.observed_stage(
+            stage="serving",
+            stage_id=stage_id,
+            document_id=None,
+            corpus_id=request.corpus_id.as_str(),
+            corpus_version=request.proposed_corpus_version.as_str(),
+            parent_stage_id=None,
+            module="inference_lab.serving",
+        ) as stage:
+            summary = self._ingest(request, selected_profiling, stage_id)
+            stage.set_counts(
+                items_processed=len(summary.document_outcomes),
+                records_emitted=(
+                    0
+                    if summary.publication_status
+                    is BaselinePublicationStatus.NOT_PUBLISHED
+                    else 1
+                ),
             )
-            return BaselineIngestSummary(
-                corpus_id=request.corpus_id,
-                proposed_corpus_version=request.proposed_corpus_version,
-                expected_corpus_version=request.expected_corpus_version,
-                execution_status=BaselineExecutionStatus.COMPLETED,
-                publication_status=publication_status,
-            )
-        if existing.state is BaselineManifestState.ABORTED:
-            raise ServingIngestError(ServingIngestFailureCategory.INCOMPATIBLE_RESUME)
-        if discovery.status is DiscoveryStatus.FAILED and not discovery.sources:
-            return self._publication.failed_summary(
-                request,
-                BaselineFailureCategory.DISCOVERY_FAILED,
-            )
+            if summary.execution_status in {
+                BaselineExecutionStatus.FAILED,
+                BaselineExecutionStatus.COMPLETED_WITH_FAILURES,
+            }:
+                failure = (
+                    summary.failures[0]
+                    if summary.failures
+                    else next(
+                        outcome.failures[0]
+                        for outcome in summary.document_outcomes
+                        if outcome.failures
+                    )
+                )
+                stage.mark_failure(
+                    map_baseline_result_failure(
+                        failure,
+                        partial=(
+                            summary.execution_status
+                            is BaselineExecutionStatus.COMPLETED_WITH_FAILURES
+                        ),
+                    )
+                )
+        if summary is None:
+            raise RuntimeError("serving profiling stage did not run")
+        return summary
 
+    def _ingest(
+        self,
+        request: ServingIngestRequest,
+        profiling: BaselineProfilingContext,
+        parent_stage_id: str,
+    ) -> BaselineIngestSummary:
+        """Run the durable workflow under one observed serving request."""
+        if self._repository.get_corpus(request.corpus_id) is None:
+            raise ServingIngestError(ServingIngestFailureCategory.CORPUS_NOT_FOUND)
+        phase = BaselineStage.DISCOVERY
+        fallback_category = BaselineFailureCategory.DISCOVERY_FAILED
+        replay_committed = False
         try:
+            discovery = discover_sources(
+                self._repository,
+                self._settings,
+                request,
+                profiling=profiling,
+                parent_stage_id=parent_stage_id,
+            )
+            phase = BaselineStage.PUBLICATION
+            fallback_category = BaselineFailureCategory.PUBLICATION_CONFLICT
+            existing = self._publication.ensure_manifest(request, discovery)
+            if existing.state is BaselineManifestState.COMMITTED:
+                replay_committed = True
+                publication_status = self._publication.committed_publication_status(
+                    request
+                )
+                self._publication.verify_published(request, publication_status)
+                return BaselineIngestSummary(
+                    corpus_id=request.corpus_id,
+                    proposed_corpus_version=request.proposed_corpus_version,
+                    expected_corpus_version=request.expected_corpus_version,
+                    execution_status=BaselineExecutionStatus.COMPLETED,
+                    publication_status=publication_status,
+                )
+            if existing.state is BaselineManifestState.ABORTED:
+                raise ServingIngestError(
+                    ServingIngestFailureCategory.INCOMPATIBLE_RESUME
+                )
+            if discovery.status is DiscoveryStatus.FAILED and not discovery.sources:
+                return self._publication.failed_summary(
+                    request,
+                    BaselineFailureCategory.DISCOVERY_FAILED,
+                    stage=BaselineStage.DISCOVERY,
+                )
+
+            phase = BaselineStage.MEMBERSHIP
+            fallback_category = BaselineFailureCategory.STORAGE_UNAVAILABLE
             parent_memberships = self._publication.parent_memberships(request)
+            phase = BaselineStage.PARSE
+            fallback_category = BaselineFailureCategory.PARSE_FAILED
             outcomes = self._documents.execute(
                 request,
                 discovery,
-                selected_profiling,
+                profiling,
                 parent_memberships,
+                parent_stage_id=parent_stage_id,
             )
+            phase = BaselineStage.MEMBERSHIP
+            fallback_category = BaselineFailureCategory.MEMBERSHIP_CONFLICT
             membership_plan = plan_baseline_membership(
                 request.corpus_id,
                 parent_memberships,
                 outcomes,
-                profiling=selected_profiling,
+                profiling=profiling,
+                parent_stage_id=parent_stage_id,
             )
             entries = self._publication.chunk_manifest_entries(
                 request,
@@ -162,14 +245,18 @@ class LocalServingFacade:
                 self._publication.prepare_publication(
                     request,
                     membership_plan,
-                    selected_profiling,
+                    profiling,
+                    parent_stage_id=parent_stage_id,
                 )
             else:
                 self._publication.verify_ready_memberships(request, membership_plan)
+            phase = BaselineStage.PUBLICATION
+            fallback_category = BaselineFailureCategory.GENERATION_BUILD_FAILED
             publication = self._publication.build_and_publish(
                 request,
                 chunk_manifest,
-                selected_profiling,
+                profiling,
+                parent_stage_id=parent_stage_id,
             )
         except (StorageConflictError, ServingIngestError):
             raise
@@ -183,15 +270,25 @@ class LocalServingFacade:
                 failures=(error.failure,),
             )
         except StorageConcurrencyError:
+            if replay_committed:
+                raise
             return self._publication.failed_summary(
                 request,
-                BaselineFailureCategory.PUBLICATION_CONCURRENCY,
+                (
+                    BaselineFailureCategory.PUBLICATION_CONCURRENCY
+                    if phase is BaselineStage.PUBLICATION
+                    else BaselineFailureCategory.STORAGE_UNAVAILABLE
+                ),
+                stage=phase,
                 retryable=True,
             )
         except Exception:
+            if replay_committed:
+                raise
             return self._publication.failed_summary(
                 request,
-                BaselineFailureCategory.GENERATION_BUILD_FAILED,
+                fallback_category,
+                stage=phase,
             )
 
         publication_status = publication

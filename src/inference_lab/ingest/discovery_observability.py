@@ -134,6 +134,7 @@ def observe_discovery(
     clock: Callable[[], int] = time.monotonic_ns,
     profiling: BaselineProfilingContext | None = None,
     profiling_identity: str = "request",
+    parent_stage_id: str | None = None,
 ) -> Iterator[_DiscoveryLifecycle]:
     """Bind and observe one discovery operation until its result is complete."""
     if not isinstance(request, DiscoveryRequest):
@@ -146,6 +147,8 @@ def observe_discovery(
         raise TypeError("profiling must be a BaselineProfilingContext or None.")
     if not isinstance(profiling_identity, str) or not profiling_identity:
         raise ValueError("profiling_identity must be a non-empty string.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
 
     policy = CURRENT_DISCOVERY_POLICY.with_classifier_identity(
         classifier_name=classifier.classifier_name,
@@ -166,7 +169,7 @@ def observe_discovery(
             document_id=None,
             corpus_id=request.corpus_id.as_str(),
             corpus_version=None,
-            parent_stage_id=None,
+            parent_stage_id=parent_stage_id,
         ) as profiling_stage:
             lifecycle = _DiscoveryLifecycle(
                 request,
