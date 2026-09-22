@@ -7,6 +7,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from threading import Barrier, Lock, get_ident
+from time import perf_counter_ns
 from unittest.mock import patch
 
 import pytest
@@ -40,12 +41,18 @@ from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
 )
-from inference_lab.retrieval import LexicalIndexConfiguration
+from inference_lab.retrieval import LexicalIndexConfiguration, open_lexical_generation
+from inference_lab.retrieval.lexical_store_reader import (
+    _sha256_file,
+    _validate_database,
+)
 from inference_lab.serving import (
     LocalServingFacade,
     ServingIngestError,
     ServingIngestFailureCategory,
     ServingIngestRequest,
+    ServingSearchError,
+    ServingSearchFailureCategory,
     ServingSearchRequest,
 )
 from inference_lab.serving.ingest_documents import ServingDocumentRunner
@@ -331,6 +338,120 @@ def test_ingest_is_corpus_scoped_and_replays_after_restart(tmp_path: Path) -> No
     assert fresh_beta["corpus_version"] == active_b.corpus_version.as_str()
     assert fresh_alpha["hits"]
     assert fresh_beta["hits"]
+
+
+def test_multi_hit_search_validates_one_generation_per_request(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    sources = tuple(tmp_path / f"source-{index}.txt" for index in range(3))
+    for index, source in enumerate(sources):
+        source.write_text(f"shared-needle evidence {index}", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        sources,
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Search lifecycle corpus", corpus_id=corpus_id)
+        assert facade.ingest(request).publication_status.value == "committed"
+    finally:
+        repository.close()
+
+    reopened = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+    )
+    try:
+        facade = LocalServingFacade(reopened, settings)
+        search = ServingSearchRequest(
+            corpus_id=corpus_id, text="shared-needle", limit=5
+        )
+        with (
+            patch(
+                "inference_lab.serving.search.open_lexical_generation",
+                wraps=open_lexical_generation,
+            ) as opened,
+            patch(
+                "inference_lab.retrieval.lexical_retrieval.open_lexical_generation",
+                side_effect=AssertionError("retrieval must borrow the handle"),
+            ),
+            patch(
+                "inference_lab.retrieval.lexical_store_reader._sha256_file",
+                wraps=_sha256_file,
+            ) as checksums,
+            patch(
+                "inference_lab.retrieval.lexical_store_reader._validate_database",
+                wraps=_validate_database,
+            ) as validations,
+        ):
+            start = perf_counter_ns()
+            first = facade.search(search)
+            first_ms = (perf_counter_ns() - start) / 1_000_000
+            start = perf_counter_ns()
+            repeat = facade.search(search)
+            repeat_ms = (perf_counter_ns() - start) / 1_000_000
+        assert len(first.hits) == len(repeat.hits) == 3
+        assert tuple(hit.record_id for hit in first.hits) == tuple(
+            hit.record_id for hit in repeat.hits
+        )
+        assert opened.call_count == checksums.call_count == validations.call_count == 2
+        print(f"first_search_ms={first_ms:.3f} repeat_search_ms={repeat_ms:.3f}")
+    finally:
+        reopened.close()
+
+
+def test_search_rejects_corrupt_lexical_database(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    source = tmp_path / "source.txt"
+    source.write_text("checksum-sensitive evidence", encoding="utf-8")
+    corpus_id = CorpusId.generate()
+    request = _request(
+        corpus_id,
+        (source,),
+        proposed=CorpusVersionId.generate(),
+        expected=None,
+    )
+    repository = open_metadata_repository(
+        settings.storage.metadata_db_path,
+        source_dir=settings.storage.source_dir,
+        apply_migrations=True,
+    )
+    try:
+        facade = LocalServingFacade(repository, settings)
+        facade.create_corpus("Corrupt lexical corpus", corpus_id=corpus_id)
+        assert facade.ingest(request).publication_status.value == "committed"
+        lexical_generation_id = ""
+        with repository.open_active_corpus_snapshot(corpus_id) as snapshot:
+            lexical_generation_id = next(
+                ref.generation_id
+                for ref in snapshot.manifest.component_generations
+                if ref.component_kind.as_str() == "lexical-index"
+            )
+        database = (
+            settings.storage.index_dir
+            / "lexical"
+            / lexical_generation_id
+            / "index.sqlite3"
+        )
+        database.write_bytes(database.read_bytes() + b"tampered")
+        with pytest.raises(ServingSearchError) as error:
+            facade.search(
+                ServingSearchRequest(
+                    corpus_id=corpus_id, text="checksum-sensitive", limit=5
+                )
+            )
+        assert error.value.category is ServingSearchFailureCategory.CORRUPT_STATE
+    finally:
+        repository.close()
 
 
 @pytest.mark.parametrize(

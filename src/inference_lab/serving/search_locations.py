@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from inference_lab.provenance import RecordId
 from inference_lab.retrieval import (
     EvidenceSource,
     LexicalError,
-    open_lexical_generation,
 )
 from inference_lab.retrieval.lexical_store_models import (
     LexicalIndexedChunk,
     LexicalSourceLink,
 )
+from inference_lab.retrieval.lexical_store_reader import LexicalGeneration
 from inference_lab.serving.search_contracts import (
     ServingSearchError,
     ServingSearchFailureCategory,
@@ -28,31 +26,30 @@ from inference_lab.storage import (
 
 def resolve_source_locations(
     snapshot: CorpusSnapshot,
-    index_dir: Path,
+    generation: LexicalGeneration,
     record_id: RecordId,
     candidate_content: str,
     sources: tuple[EvidenceSource, ...],
 ) -> tuple[ServingSearchSourceLocation, ...]:
-    """Resolve one hit's exact clipped ranges from its pinned generation."""
+    """Resolve one hit's clipped ranges through the borrowed generation."""
     try:
         reference = _lexical_reference(snapshot)
-        with open_lexical_generation(index_dir, reference.generation_id) as generation:
-            _validate_generation_manifest(generation.manifest, reference)
-            chunk = generation.get_chunk(record_id)
-            if chunk is None:
-                raise _invalid_location()
-            _validate_chunk(chunk, record_id, candidate_content, sources)
-            links_by_span = {link.source_span_id: link for link in chunk.source_links}
-            if len(links_by_span) != len(chunk.source_links):
-                raise _invalid_location()
-            return tuple(
-                _resolve_one(
-                    snapshot,
-                    links_by_span[source.source_span_id],
-                    source,
-                )
-                for source in sources
+        _validate_generation_manifest(generation.manifest, reference)
+        chunk = generation.get_chunk(record_id)
+        if chunk is None:
+            raise _invalid_location()
+        _validate_chunk(chunk, record_id, candidate_content, sources)
+        links_by_span = {link.source_span_id: link for link in chunk.source_links}
+        if len(links_by_span) != len(chunk.source_links):
+            raise _invalid_location()
+        return tuple(
+            _resolve_one(
+                snapshot,
+                links_by_span[source.source_span_id],
+                source,
             )
+            for source in sources
+        )
     except ServingSearchError:
         raise
     except LexicalError as error:

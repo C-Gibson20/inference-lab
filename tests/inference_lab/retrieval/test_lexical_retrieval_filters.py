@@ -114,6 +114,7 @@ class _GenerationContext(_RankedGeneration):
         generation_id: str,
     ) -> None:
         super().__init__(matches)
+        self.closed = False
         self.manifest = SimpleNamespace(
             corpus_id=CORPUS_ID,
             corpus_version=CORPUS_VERSION_ID,
@@ -133,6 +134,7 @@ class _GenerationContext(_RankedGeneration):
         return self
 
     def __exit__(self, *_: object) -> None:
+        self.closed = True
         return None
 
     def search(self, request: LexicalQuery):
@@ -328,7 +330,7 @@ def test_execute_retrieval_borrows_supplied_snapshot_without_reopening_or_closin
     monkeypatch.setattr(
         lexical_retrieval,
         "open_lexical_generation",
-        lambda *_: generation,
+        lambda *_: pytest.fail("the borrowed generation must be used"),
     )
 
     class _RepositoryThatMustNotOpen:
@@ -341,11 +343,39 @@ def test_execute_retrieval_borrows_supplied_snapshot_without_reopening_or_closin
         CORPUS_ID,
         _query(filter_expression=None),
         snapshot=cast(CorpusSnapshot, snapshot),
+        generation=cast(LexicalGeneration, generation),
     )
 
     assert result.status is ResultStatus.COMPLETED
     assert len(result.hits) == 1
     assert snapshot.closed is False
+    assert generation.closed is False
+
+
+def test_borrowed_foreign_generation_fails_closed_without_closing_it(
+    monkeypatch,
+) -> None:
+    generation = _GenerationContext(((_candidate(1), 1.0),), "other-generation")
+    snapshot = _SnapshotContext("generation-1")
+    monkeypatch.setattr(
+        lexical_retrieval,
+        "open_lexical_generation",
+        lambda *_: pytest.fail("a borrowed generation must not reopen"),
+    )
+
+    result = lexical_retrieval.execute_lexical_retrieval(
+        cast(MetadataRepository, _Repository(snapshot)),
+        Path("indexes"),
+        CORPUS_ID,
+        _query(filter_expression=None),
+        snapshot=cast(CorpusSnapshot, snapshot),
+        generation=cast(LexicalGeneration, generation),
+    )
+
+    assert result.status is ResultStatus.FAILED
+    assert result.hits == ()
+    assert result.failures[0].category.value == "invalid_channel_response"
+    assert generation.closed is False
 
 
 def test_filtered_execution_profiles_exact_metadata_counts_and_parentage(

@@ -1,6 +1,5 @@
 """Tests for fail-closed source-location reconstruction."""
 
-from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -14,7 +13,7 @@ from inference_lab.provenance import (
     RecordId,
     SourceSpanId,
 )
-from inference_lab.retrieval import EvidenceSource
+from inference_lab.retrieval import EvidenceSource, LexicalGeneration
 from inference_lab.retrieval.lexical_store_models import (
     LexicalIndexedChunk,
     LexicalSourceLink,
@@ -146,16 +145,12 @@ def _chunk() -> LexicalIndexedChunk:
     )
 
 
-def test_resolve_source_locations_returns_clipped_unicode_offsets(monkeypatch) -> None:
+def test_resolve_source_locations_returns_clipped_unicode_offsets() -> None:
     generation = _Generation(_chunk())
-    monkeypatch.setattr(
-        "inference_lab.serving.search_locations.open_lexical_generation",
-        lambda _index_dir, _generation_id: generation,
-    )
 
     locations = resolve_source_locations(
         cast(CorpusSnapshot, _Snapshot()),
-        Path("indexes"),
+        cast(LexicalGeneration, generation),
         RECORD_ID,
         "alpha passage",
         (EvidenceSource(DOCUMENT_ID, DOCUMENT_VERSION_ID, SOURCE_SPAN_ID),),
@@ -168,19 +163,13 @@ def test_resolve_source_locations_returns_clipped_unicode_offsets(monkeypatch) -
     assert locations[0].block_kind is StructuralBlockKind.PARAGRAPH
 
 
-def test_resolve_source_locations_fails_closed_when_span_is_unreachable(
-    monkeypatch,
-) -> None:
+def test_resolve_source_locations_fails_closed_when_span_is_unreachable() -> None:
     generation = _Generation(_chunk())
-    monkeypatch.setattr(
-        "inference_lab.serving.search_locations.open_lexical_generation",
-        lambda _index_dir, _generation_id: generation,
-    )
 
     with pytest.raises(ServingSearchError) as error:
         resolve_source_locations(
             cast(CorpusSnapshot, _Snapshot(missing_span=True)),
-            Path("indexes"),
+            cast(LexicalGeneration, generation),
             RECORD_ID,
             "alpha passage",
             (EvidenceSource(DOCUMENT_ID, DOCUMENT_VERSION_ID, SOURCE_SPAN_ID),),
