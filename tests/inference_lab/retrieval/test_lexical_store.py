@@ -508,6 +508,67 @@ def test_ranked_iteration_pages_past_request_limit_before_final_limiting(
     assert ranked[:1] == direct
 
 
+def test_configured_content_weight_changes_bm25_score(tmp_path: Path) -> None:
+    """The sole indexed content weight must affect the executed FTS5 rank."""
+    source_manifest, _, _ = _source_manifest()
+    baseline = build_lexical_generation(tmp_path, source_manifest)
+    weighted = build_lexical_generation(
+        tmp_path,
+        source_manifest,
+        configuration=LexicalIndexConfiguration(column_weights=(2.0,)),
+    )
+    request = LexicalQuery(
+        RetrievalQuery("alpha", source_manifest.corpus_version, RetrievalLimit(5))
+    )
+    with open_lexical_generation(
+        tmp_path, baseline.manifest.generation_id
+    ) as baseline_generation:
+        baseline_matches = baseline_generation.search(request)
+    with open_lexical_generation(
+        tmp_path, weighted.manifest.generation_id
+    ) as weighted_generation:
+        weighted_matches = weighted_generation.search(request)
+
+    assert len(baseline_matches) == len(weighted_matches) == 1
+    assert baseline_matches[0][0].record_id == weighted_matches[0][0].record_id
+    assert weighted_matches[0][1] > baseline_matches[0][1]
+
+    # Simulate a previously published v1 generation: its advertised knobs
+    # were ignored, so opening it must retain the original unweighted score.
+    legacy = LexicalIndexConfiguration(
+        engine_revision="sqlite-fts5-baseline",
+        bm25_k1=1.5,
+        bm25_b=0.5,
+        column_weights=(1.0, 2.0),
+        score_label="sqlite_fts5_negated_bm25_v1",
+    )
+    generation_dir = tmp_path / "lexical" / weighted.manifest.generation_id
+    database = generation_dir / "index.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE generation_metadata SET value = ? WHERE key = ?",
+            (legacy.configuration_identity.digest, "configuration_digest"),
+        )
+    legacy_manifest = replace(
+        weighted.manifest,
+        configuration=legacy,
+        configuration_digest=legacy.configuration_identity.digest,
+        database_checksum=hashlib.sha256(database.read_bytes()).hexdigest(),
+        contract_version="1.0.0",
+    )
+    (generation_dir / "manifest.json").write_bytes(
+        serialise_lexical_manifest(legacy_manifest)
+    )
+    with open_lexical_generation(
+        tmp_path, legacy_manifest.generation_id
+    ) as legacy_generation:
+        legacy_matches = legacy_generation.search(request)
+    assert legacy_matches[0][1] == baseline_matches[0][1]
+    with pytest.raises(LexicalError) as error:
+        build_lexical_generation(tmp_path, source_manifest, configuration=legacy)
+    assert error.value.category is LexicalFailureCategory.INVALID_REQUEST
+
+
 @pytest.mark.parametrize(
     ("page_size", "expected_error"),
     ((True, TypeError), (0, ValueError), (-1, ValueError), ("1", TypeError)),

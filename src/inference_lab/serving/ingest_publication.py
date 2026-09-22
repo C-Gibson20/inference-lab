@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from inference_lab.ingest import (
     BaselineChunkGenerationEntry,
     BaselineChunkGenerationManifest,
@@ -30,6 +32,14 @@ from inference_lab.provenance import CorpusDocumentVersionMembership
 from inference_lab.retrieval import (
     LexicalGenerationParticipant,
     build_lexical_generation_for_corpus_update,
+    derive_lexical_generation_id,
+    open_lexical_generation,
+)
+from inference_lab.retrieval.lexical import (
+    LEXICAL_COMPONENT_KIND,
+    LEXICAL_CONTRACT_VERSION,
+    LEXICAL_FORMAT_VERSION,
+    LEXICAL_IMPLEMENTATION,
 )
 from inference_lab.serving.ingest_contracts import (
     _BASELINE_REQUIRED_COMPONENT_KINDS,
@@ -47,8 +57,13 @@ from inference_lab.serving.ingest_helpers import (
 from inference_lab.settings import Settings
 from inference_lab.storage import (
     BaselineManifestRecordState,
+    ComponentGenerationReference,
+    ComponentGenerationState,
     ComponentKind,
     CorpusUpdateState,
+    CorpusVersionManifest,
+    NoCorpusChangeOutcome,
+    StorageConcurrencyError,
 )
 
 
@@ -223,7 +238,12 @@ class ServingPublicationCoordinator:
         self,
         request: ServingIngestRequest,
     ) -> BaselinePublicationStatus:
-        """Distinguish a committed version from an unchanged terminal proposal."""
+        """Distinguish a committed version from either unchanged terminal path.
+
+        A sealed storage no-change has a manifest digest; the pre-build fast
+        path aborts before staging component generations and has none. Both
+        atomically commit the baseline ingest manifest for replay.
+        """
         update = self._repository.get_corpus_update(
             request.corpus_id,
             request.proposed_corpus_version,
@@ -234,7 +254,6 @@ class ServingPublicationCoordinator:
             return BaselinePublicationStatus.COMMITTED
         if (
             update.state is CorpusUpdateState.ABORTED
-            and update.manifest_digest is not None
             and request.expected_corpus_version is not None
         ):
             return BaselinePublicationStatus.NO_CHANGE
@@ -245,8 +264,40 @@ class ServingPublicationCoordinator:
         request: ServingIngestRequest,
         chunk_manifest: BaselineChunkGenerationManifest,
         profiling: BaselineProfilingContext,
-    ) -> BaselinePublicationOutcome:
+    ) -> BaselinePublicationStatus:
         """Build immutable lexical data, then atomically publish both components."""
+        if self._is_unchanged_parent(request, chunk_manifest):
+            # No generation is required: the committed parent already represents
+            # this exact membership, chunk selection, and lexical configuration.
+            with self._repository.transaction() as transaction:
+                update = transaction.begin_corpus_update(
+                    request.corpus_id,
+                    request.proposed_corpus_version,
+                    expected_corpus_version=request.expected_corpus_version,
+                    required_component_kinds=_BASELINE_REQUIRED_COMPONENT_KINDS,
+                ).update
+                active = transaction.get_active_corpus_version(request.corpus_id)
+                staged = transaction.list_corpus_update_document_memberships(
+                    request.corpus_id, request.proposed_corpus_version
+                )
+                if (
+                    active is None
+                    or active.corpus_version != request.expected_corpus_version
+                    or update.state is not CorpusUpdateState.PREPARING
+                    or staged
+                    != tuple(entry.membership for entry in chunk_manifest.entries)
+                ):
+                    raise StorageConcurrencyError()
+                transaction.abort_corpus_update(
+                    request.corpus_id, request.proposed_corpus_version
+                )
+                transaction.transition_baseline_manifest(
+                    request.corpus_id,
+                    request.proposed_corpus_version,
+                    expected_state=BaselineManifestRecordState.READY,
+                    next_state=BaselineManifestRecordState.COMMITTED,
+                )
+            return BaselinePublicationStatus.NO_CHANGE
         build = build_lexical_generation_for_corpus_update(
             self._settings.storage.index_dir,
             chunk_manifest,
@@ -283,7 +334,82 @@ class ServingPublicationCoordinator:
             )
         if result is None:
             raise RuntimeError("baseline publication returned no outcome")
-        return result
+        return (
+            BaselinePublicationStatus.NO_CHANGE
+            if isinstance(result, NoCorpusChangeOutcome)
+            else BaselinePublicationStatus.COMMITTED
+        )
+
+    def _is_unchanged_parent(
+        self,
+        request: ServingIngestRequest,
+        chunk_manifest: BaselineChunkGenerationManifest,
+    ) -> bool:
+        """Check exact parent semantics without creating a candidate generation."""
+        if request.expected_corpus_version is None:
+            return False
+        with self._repository.open_active_corpus_snapshot(
+            request.corpus_id
+        ) as snapshot:
+            if snapshot.version.corpus_version != request.expected_corpus_version:
+                raise StorageConcurrencyError()
+            parent = snapshot.manifest
+            if not parent.has_required_components(_BASELINE_REQUIRED_COMPONENT_KINDS):
+                return False
+            proposed_lexical = ComponentGenerationReference(
+                component_kind=ComponentKind(LEXICAL_COMPONENT_KIND),
+                generation_id=derive_lexical_generation_id(
+                    request.corpus_id,
+                    request.proposed_corpus_version,
+                    request.lexical_configuration,
+                    chunk_manifest.source_manifest_digest,
+                ),
+                implementation=LEXICAL_IMPLEMENTATION,
+                format_version=LEXICAL_FORMAT_VERSION,
+                contract_version=LEXICAL_CONTRACT_VERSION,
+                configuration_digest=(
+                    request.lexical_configuration.configuration_identity.digest
+                ),
+                source_manifest_digest=chunk_manifest.source_manifest_digest,
+                corpus_id=request.corpus_id,
+                corpus_version=request.proposed_corpus_version,
+                state=ComponentGenerationState.READY,
+            )
+            proposed = CorpusVersionManifest(
+                corpus_id=request.corpus_id,
+                corpus_version=request.proposed_corpus_version,
+                document_memberships=tuple(
+                    entry.membership for entry in chunk_manifest.entries
+                ),
+                component_generations=(
+                    replace(
+                        chunk_manifest.component_generation(),
+                        state=ComponentGenerationState.READY,
+                    ),
+                    proposed_lexical,
+                ),
+            )
+            if not parent.has_same_semantic_state(proposed):
+                return False
+            lexical = next(
+                ref
+                for ref in parent.component_generations
+                if ref.component_kind == proposed_lexical.component_kind
+            )
+            with open_lexical_generation(
+                self._settings.storage.index_dir, lexical.generation_id
+            ) as generation:
+                manifest = generation.manifest
+                if (
+                    manifest.corpus_id != request.corpus_id
+                    or manifest.corpus_version != request.expected_corpus_version
+                    or manifest.configuration_digest != lexical.configuration_digest
+                    or manifest.source_manifest_digest != lexical.source_manifest_digest
+                    or manifest.contract_version != lexical.contract_version
+                    or manifest.format_version != lexical.format_version
+                ):
+                    return False
+        return True
 
     def verify_published(
         self,

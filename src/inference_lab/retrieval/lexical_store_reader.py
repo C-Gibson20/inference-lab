@@ -15,6 +15,7 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 from inference_lab.retrieval.lexical import (
+    LEXICAL_CONTRACT_VERSION,
     LexicalError,
     LexicalFailureCategory,
     LexicalIndexManifest,
@@ -281,7 +282,7 @@ class LexicalGeneration:
             rows = self._connection.execute(
                 """
                 WITH ranked AS (
-                    SELECT c.record_id, bm25(chunk_fts) AS engine_score
+                    SELECT c.record_id, bm25(chunk_fts, 0.0, ?) AS engine_score
                     FROM chunk_fts
                     JOIN chunks AS c ON c.record_id = chunk_fts.record_id
                     WHERE chunk_fts MATCH ?
@@ -299,7 +300,16 @@ class LexicalGeneration:
                 ORDER BY ranked.engine_score, c.record_id,
                          s.block_ordinal, s.source_span_id
                 """,
-                (engine_query, limit, offset),
+                (
+                    (
+                        1.0
+                        if self.manifest.contract_version == "1.0.0"
+                        else self.manifest.configuration.column_weights[0]
+                    ),
+                    engine_query,
+                    limit,
+                    offset,
+                ),
             ).fetchall()
             score_by_record = {
                 str(row["record_id"]): expose_bm25_score(
@@ -362,6 +372,8 @@ def _validate_database(
     connection: sqlite3.Connection,
     manifest: LexicalIndexManifest,
 ) -> None:
+    if manifest.contract_version not in {"1.0.0", LEXICAL_CONTRACT_VERSION}:
+        raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)
     row = connection.execute("PRAGMA integrity_check").fetchone()
     if row is None or row[0] != "ok":
         raise LexicalError(LexicalFailureCategory.CORRUPT_GENERATION)
