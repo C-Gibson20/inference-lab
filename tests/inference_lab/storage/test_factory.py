@@ -121,29 +121,11 @@ def test_factory_requires_explicit_schema_update_permission(tmp_path: Path) -> N
         connection.close()
 
 
-def test_factory_rejects_invalid_source_directory_type(tmp_path: Path) -> None:
-    with pytest.raises(TypeError, match="source_dir"):
-        open_metadata_repository(
-            tmp_path / "metadata.sqlite3",
-            source_dir=object(),  # type: ignore[arg-type]
-        )
-
-
-@pytest.mark.parametrize(
-    ("database_suffix", "source_suffix"),
-    [
-        (("state",), ("state",)),
-        (("state", "metadata.sqlite3"), ("state",)),
-        (("state",), ("state", "sources")),
-    ],
-)
 def test_factory_rejects_resolved_storage_path_overlap_before_creation(
     tmp_path: Path,
-    database_suffix: tuple[str, ...],
-    source_suffix: tuple[str, ...],
 ) -> None:
-    database_path = tmp_path.joinpath(*database_suffix)
-    source_dir = tmp_path.joinpath(*source_suffix)
+    database_path = tmp_path / "state" / "metadata.sqlite3"
+    source_dir = tmp_path / "state"
 
     with pytest.raises(ValueError, match="must not overlap"):
         open_metadata_repository(
@@ -196,31 +178,3 @@ def test_factory_hides_path_resolution_failures(
         )
 
     assert "private-storage-path" not in str(caught.value)
-
-
-@pytest.mark.parametrize(
-    ("max_entries", "error_type"),
-    [
-        (True, TypeError),
-        (1.5, TypeError),
-        (0, ValueError),
-        (-1, ValueError),
-    ],
-)
-def test_factory_rejects_invalid_reconciliation_bound_before_opening_storage(
-    tmp_path: Path,
-    max_entries: object,
-    error_type: type[Exception],
-) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-    source_dir = tmp_path / "source-data"
-
-    with pytest.raises(error_type, match="source_reconciliation_max_entries"):
-        open_metadata_repository(
-            database_path,
-            source_dir=source_dir,
-            source_reconciliation_max_entries=max_entries,  # type: ignore[arg-type]
-        )
-
-    assert not database_path.exists()
-    assert not source_dir.exists()

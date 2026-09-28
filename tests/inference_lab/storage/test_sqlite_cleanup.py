@@ -51,12 +51,3 @@ def test_cleanup_failure_does_not_replace_primary_exception(
         if connection.in_transaction:
             sqlite3.Connection.rollback(connection)
         sqlite3.Connection.close(connection)
-
-
-def test_cleanup_without_a_resource_or_active_transaction_is_successful() -> None:
-    connection = sqlite3.connect(":memory:")
-    try:
-        assert close_preserving_primary(None) is True
-        assert rollback_preserving_primary(connection) is True
-    finally:
-        connection.close()

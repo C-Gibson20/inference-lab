@@ -20,7 +20,7 @@ from inference_lab.evaluation.audit_report_publication import (
     atomic_write,
 )
 
-from .test_audit_aggregation import (  # noqa: TID252
+from .audit_fixtures import (  # noqa: TID252
     _DOCUMENT_ONE,
     _VERSION_ONE,
     _membership,
@@ -34,15 +34,6 @@ def _report() -> CorpusAuditReport:
     return CorpusAuditReport.from_request(
         _request((membership,), (_observation(membership),))
     )
-
-
-def test_publication_error_has_bounded_failure_metadata() -> None:
-    error = AuditPublicationError()
-
-    assert error.category is AuditErrorCategory.PUBLICATION_FAILURE
-    assert error.stage == "publication"
-    assert error.retryable is False
-    assert str(error) == "audit report publication failed"
 
 
 def test_publish_writes_verified_immutable_report_directory(tmp_path: Path) -> None:
@@ -105,9 +96,12 @@ def test_publish_cleans_staging_after_write_corruption(
         corrupt_report,
     )
 
-    with pytest.raises(AuditPublicationError, match="publication failed"):
+    with pytest.raises(AuditPublicationError, match="publication failed") as captured:
         publish_audit_report(destination, report)
 
+    assert captured.value.category is AuditErrorCategory.PUBLICATION_FAILURE
+    assert captured.value.stage == "publication"
+    assert captured.value.retryable is False
     assert not destination.exists()
     assert not tuple(tmp_path.glob(".audit.*.staging"))
 

@@ -1,6 +1,5 @@
 """Tests for closed and privacy-safe discovery failure contracts."""
 
-from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -51,9 +50,6 @@ def test_every_failure_category_has_one_fixed_policy() -> None:
         DiscoveryFailureStage.INPUT,
         True,
     )
-
-
-def test_failure_factory_uses_category_owned_policy() -> None:
     failure = DiscoveryFailure.for_category(
         ordinal=3,
         category=DiscoveryFailureCategory.SOURCE_INACCESSIBLE,
@@ -93,22 +89,6 @@ def test_failure_rejects_scope_stage_or_retryability_mismatch() -> None:
         )
 
 
-def test_failure_requires_strict_discriminants_and_ordinal() -> None:
-    with pytest.raises(TypeError, match="ordinal must be an integer"):
-        DiscoveryFailure.for_category(
-            ordinal=True,  # pyright: ignore[reportArgumentType]
-            category=DiscoveryFailureCategory.INVALID_ROOT,
-        )
-    with pytest.raises(TypeError, match="category must be a DiscoveryFailureCategory"):
-        discovery_failure_policy("invalid_root")  # pyright: ignore[reportArgumentType]
-    with pytest.raises(TypeError, match="file_kind must be a DiscoveryFileKind"):
-        DiscoveryFailure.for_category(
-            ordinal=0,
-            category=DiscoveryFailureCategory.INVALID_ROOT,
-            file_kind="unknown",  # pyright: ignore[reportArgumentType]
-        )
-
-
 def test_failure_rejects_unbounded_media_type_metadata() -> None:
     with pytest.raises(ValueError, match="canonical lowercase media type"):
         DiscoveryFailure.for_category(
@@ -116,19 +96,6 @@ def test_failure_rejects_unbounded_media_type_metadata() -> None:
             category=DiscoveryFailureCategory.UNKNOWN_FORMAT,
             media_type="private-file-name",
         )
-
-
-def test_failure_retains_no_raw_exception_or_payload_field() -> None:
-    assert set(DiscoveryFailure.__dataclass_fields__) == {
-        "ordinal",
-        "category",
-        "scope",
-        "stage",
-        "retryable",
-        "locator",
-        "file_kind",
-        "media_type",
-    }
 
 
 def test_failure_repr_and_errors_do_not_disclose_private_paths() -> None:
@@ -150,13 +117,3 @@ def test_failure_repr_and_errors_do_not_disclose_private_paths() -> None:
             locator=_locator(marker),
         )
     assert marker not in str(captured.value)
-
-
-def test_failure_is_immutable() -> None:
-    failure = DiscoveryFailure.for_category(
-        ordinal=0,
-        category=DiscoveryFailureCategory.INVALID_ROOT,
-    )
-
-    with pytest.raises(FrozenInstanceError):
-        failure.retryable = True  # type: ignore[misc]

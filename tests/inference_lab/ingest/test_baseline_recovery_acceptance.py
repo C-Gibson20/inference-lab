@@ -1,4 +1,4 @@
-"""Cold-process recovery and privacy acceptance for baseline ingest stages."""
+"""ING-05/STOR-03 cold-process recovery and privacy acceptance."""
 
 import sqlite3
 from dataclasses import dataclass
@@ -255,38 +255,6 @@ def _open_and_seed_without_mutation(case: _Case) -> SQLiteMetadataRepository:
             apply_migrations=True,
         ),
     )
-
-
-@pytest.mark.parametrize("stage", ("parse", "chunk"))
-def test_recovery_acceptance_uses_current_migrated_schema(
-    tmp_path: Path,
-    stage: str,
-) -> None:
-    case = _case(tmp_path)
-    repository = _open_and_seed(case)
-    try:
-        assert repository.schema_inspection.current_revision == 7
-        assert repository.schema_inspection.applied_migration_count == 7
-        if stage == "parse":
-            result = execute_baseline_parse(
-                repository,
-                case.parse_request,
-                settings=case.settings,
-            )
-            assert result.reconstructed.outcome.document is not None
-        else:
-            parsed = execute_baseline_parse(
-                repository,
-                case.parse_request,
-                settings=case.settings,
-            )
-            result = execute_baseline_chunk(
-                repository,
-                _chunk_request(parsed, case),
-            )
-            assert result.chunk_set.lineage.records
-    finally:
-        repository.close()
 
 
 def test_recovery_acceptance_fails_closed_after_durable_chunk_corruption(

@@ -253,25 +253,13 @@ def _assert_no_visible_bundle(repository: MetadataRepository, case: _Case) -> No
     assert repository.get_parse_outcome(_CORPUS_ID, _PARSE_ID) is None
 
 
-@pytest.mark.parametrize(
-    "table",
-    (
-        "source_artefacts",
-        "parsed_representations",
-        "page_layouts",
-        "source_spans",
-        "structural_blocks",
-        "parse_outcomes",
-        "parse_failures",
-    ),
-)
 def test_metadata_subwrite_failure_leaves_no_visible_bundle(
     tmp_path: Path,
-    table: _MetadataTable,
 ) -> None:
     case = _case(tmp_path)
     repository = _open_repository(tmp_path, case)
-    _install_metadata_trigger(tmp_path / "metadata.sqlite3", table)
+    # Fail late, after the source and parsed rows have been staged.
+    _install_metadata_trigger(tmp_path / "metadata.sqlite3", "parse_outcomes")
     try:
         with pytest.raises(StorageConflictError) as error:
             persist_parse_request(

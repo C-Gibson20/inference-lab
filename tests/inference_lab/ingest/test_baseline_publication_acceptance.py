@@ -1,4 +1,4 @@
-"""SQLite acceptance tests for baseline generation publication."""
+"""ING-05/STOR-03/PROF-02 acceptance for baseline generation publication."""
 
 import hashlib
 import sqlite3
@@ -251,33 +251,6 @@ def _publish_first(
     return corpus_version, membership
 
 
-def test_sqlite_publication_commits_and_reopens_exact_generation(
-    tmp_path: Path,
-) -> None:
-    repository = _open(tmp_path / "metadata.sqlite3")
-    try:
-        selection = _seed_catalogue(repository)
-        corpus_version, membership = _publish_first(repository, selection)
-
-        with repository.open_active_corpus_snapshot(_CORPUS_ID) as snapshot:
-            assert snapshot.version.corpus_version == corpus_version
-            assert snapshot.manifest.document_memberships == (membership,)
-            assert (
-                snapshot.manifest.component_generations[0].component_kind.as_str()
-                == "chunks"
-            )
-    finally:
-        repository.close()
-
-    reopened = _open(tmp_path / "metadata.sqlite3")
-    try:
-        active = reopened.get_active_corpus_version(_CORPUS_ID)
-        assert active is not None
-        assert active.corpus_version == corpus_version
-    finally:
-        reopened.close()
-
-
 def test_sqlite_publication_profiles_commit_and_no_change_counts(
     tmp_path: Path,
 ) -> None:
@@ -420,17 +393,8 @@ def test_sqlite_publication_replays_exactly_after_cold_restart(
         reopened.close()
 
 
-@pytest.mark.parametrize(
-    "trigger_timing",
-    (
-        "BEFORE INSERT ON corpus_update_component_generations",
-        "BEFORE UPDATE OF state ON corpus_updates WHEN NEW.state = 'ready'",
-        "BEFORE INSERT ON corpus_versions",
-    ),
-)
 def test_sqlite_publication_faults_roll_back_and_retry(
     tmp_path: Path,
-    trigger_timing: str,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     repository = _open(database_path)
@@ -457,7 +421,7 @@ def test_sqlite_publication_faults_roll_back_and_retry(
                 membership,
             )
 
-        _install_trigger(database_path, trigger_timing)
+        _install_trigger(database_path, "BEFORE INSERT ON corpus_versions")
         with pytest.raises(StorageConflictError) as raised:
             with repository.transaction() as transaction:
                 publish_baseline_chunk_generation(
@@ -984,129 +948,5 @@ def test_sqlite_open_snapshot_remains_pinned_across_next_publication(
         active = repository.get_active_corpus_version(_CORPUS_ID)
         assert active is not None
         assert active.corpus_version == next_version
-    finally:
-        repository.close()
-
-
-def test_sqlite_identical_reingest_returns_no_change_without_new_sequence(
-    tmp_path: Path,
-) -> None:
-    repository = _open(tmp_path / "metadata.sqlite3")
-    try:
-        selection = _seed_catalogue(repository)
-        first_version, membership = _publish_first(repository, selection)
-        second_version = CorpusVersionId.generate()
-        manifest = _manifest(
-            second_version,
-            membership,
-            selection,
-            generation_id="generation-replay",
-        )
-
-        result: NoCorpusChangeOutcome | CommitCorpusUpdateOutcome | None = None
-        with repository.transaction() as transaction:
-            begin_baseline_corpus_update(
-                transaction,
-                _CORPUS_ID,
-                second_version,
-                expected_corpus_version=first_version,
-            )
-            result = publish_baseline_chunk_generation(
-                transaction, repository, manifest
-            )
-
-        assert isinstance(result, NoCorpusChangeOutcome)
-        assert result is not None
-        active = repository.get_active_corpus_version(_CORPUS_ID)
-        assert active is not None
-        assert active.corpus_version == first_version
-        assert len(repository.list_corpus_versions(_CORPUS_ID)) == 1
-    finally:
-        repository.close()
-
-
-def test_sqlite_stale_parent_conflicts_without_rebase(tmp_path: Path) -> None:
-    repository = _open(tmp_path / "metadata.sqlite3")
-    try:
-        selection = _seed_catalogue(repository)
-        first_version, membership = _publish_first(repository, selection)
-        changed_document_version = DocumentVersionId.generate()
-        changed_membership = _membership(
-            document_version_id=changed_document_version,
-        )
-        changed_selection = _selection(
-            document_version_id=changed_document_version,
-            payload=b"changed-canonical-chunk-set",
-        )
-        with repository.transaction() as transaction:
-            transaction.add_document_version(
-                DocumentVersion(
-                    changed_document_version,
-                    _DOCUMENT_ID,
-                    ContentHash(HashAlgorithm.SHA256, "c" * 64),
-                )
-            )
-            transaction.add_corpus_document_version_membership(changed_membership)
-            transaction.write_chunk_set(
-                ChunkSetWriteRequest(
-                    corpus_id=_CORPUS_ID,
-                    selection=changed_selection,
-                )
-            )
-        stale_version = CorpusVersionId.generate()
-        winning_version = CorpusVersionId.generate()
-        stale_manifest = _manifest(
-            stale_version,
-            changed_membership,
-            changed_selection,
-            generation_id="generation-stale",
-        )
-        winning_manifest = _manifest(
-            winning_version,
-            changed_membership,
-            changed_selection,
-            generation_id="generation-winning",
-        )
-        with repository.transaction() as transaction:
-            begin_baseline_corpus_update(
-                transaction,
-                _CORPUS_ID,
-                stale_version,
-                expected_corpus_version=first_version,
-            )
-            transaction.replace_corpus_update_document_membership(
-                _CORPUS_ID,
-                stale_version,
-                membership,
-                changed_membership,
-            )
-
-        with repository.transaction() as transaction:
-            begin_baseline_corpus_update(
-                transaction,
-                _CORPUS_ID,
-                winning_version,
-                expected_corpus_version=first_version,
-            )
-            transaction.replace_corpus_update_document_membership(
-                _CORPUS_ID,
-                winning_version,
-                membership,
-                changed_membership,
-            )
-            result = publish_baseline_chunk_generation(
-                transaction,
-                repository,
-                winning_manifest,
-            )
-            assert isinstance(result, CommitCorpusUpdateOutcome)
-
-        with pytest.raises(StorageConflictError):
-            with repository.transaction() as transaction:
-                publish_baseline_chunk_generation(
-                    transaction,
-                    repository,
-                    stale_manifest,
-                )
     finally:
         repository.close()

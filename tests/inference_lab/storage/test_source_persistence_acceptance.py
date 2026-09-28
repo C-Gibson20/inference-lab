@@ -1,4 +1,4 @@
-"""End-to-end acceptance tests for restart-safe source persistence."""
+"""STOR-01/STOR-02/ING-03 end-to-end source-persistence acceptance."""
 
 import hashlib
 import json

@@ -1,4 +1,4 @@
-"""SQLite integration coverage for replay, conflict, and supersession."""
+"""ING-03/STOR-02 SQLite acceptance for replay, conflict, and supersession."""
 
 import hashlib
 from contextlib import contextmanager

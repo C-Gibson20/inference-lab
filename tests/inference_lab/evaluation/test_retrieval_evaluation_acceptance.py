@@ -1,4 +1,4 @@
-"""End-to-end acceptance tests for reproducible retrieval evaluation."""
+"""EVAL-03 end-to-end acceptance for reproducible retrieval evaluation."""
 
 import json
 from pathlib import Path

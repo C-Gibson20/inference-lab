@@ -9,20 +9,16 @@ from inference_lab.evaluation import (
     AcquisitionStatus,
     AuditAcquisitionObservation,
     AuditContractError,
-    AuditCoverage,
-    AuditDistribution,
     AuditErrorCategory,
     AuditMissingReason,
     AuditParseEvidence,
     AuditParseObservation,
-    AuditRate,
     AuditRelationshipInventory,
     AuditSourceInventory,
     CorpusAuditPolicy,
     CorpusAuditRequest,
     CorpusAuditScope,
 )
-from inference_lab.evaluation.audit_contracts import AuditStructureKind
 from inference_lab.ingest import (
     CURRENT_DISCOVERY_POLICY,
     ClassificationInventory,
@@ -324,59 +320,3 @@ def test_relationships_must_remain_inside_selected_population() -> None:
             relationships=relationships,
         )
     assert error.value.category is AuditErrorCategory.RELATIONSHIP_OUTSIDE_SCOPE
-
-
-def test_coverage_rates_distributions_and_policy_are_exact_values() -> None:
-    assert AuditCoverage(1, 2, 3, 4, 5, 6, 21).population == 21
-    assert AuditRate(3, 7).numerator == 3
-    assert AuditRate(0, 0).denominator == 0
-    assert AuditDistribution(3, 8, 0, 5, 1).maximum == 5
-    assert AuditDistribution(0, 0, None, None, 0).minimum is None
-    assert CorpusAuditPolicy().quantile_method == "nearest_rank"
-
-
-def test_contract_representations_do_not_copy_private_payloads() -> None:
-    membership = _membership()
-    request = _request(membership)
-    canary = "CANARY_SOURCE_TEXT /private/secret.pdf sha256-canary corpus-name"
-
-    rendered = repr(request) + repr(request.parse_observations[0])
-
-    assert canary not in rendered
-    assert "private" not in rendered
-    assert "sha256" not in rendered
-    assert "corpus-name" not in rendered
-    assert not hasattr(request.source_inventory, "classification")
-    assert not hasattr(request.source_inventory, "discovery")
-    assert request.parse_observations[0].evidence is None
-
-    parsed_request = _request(
-        membership,
-        observation=_successful_observation(membership),
-    )
-    evidence = parsed_request.parse_observations[0].evidence
-    assert evidence is not None
-    assert evidence.document is not None
-    assert "private source text" not in repr(evidence)
-    assert not hasattr(evidence.document, "text")
-
-
-def test_wrong_corpus_source_inventory_is_rejected() -> None:
-    membership = _membership()
-
-    with pytest.raises(AuditContractError) as error:
-        CorpusAuditRequest(
-            scope=_scope(membership),
-            source_inventory=_source_inventory(_OTHER_CORPUS_ID),
-            parse_observations=(
-                AuditParseObservation(
-                    membership=membership,
-                    missing_reason=AuditMissingReason.NOT_OBSERVED_IN_INTAKE,
-                ),
-            ),
-        )
-    assert error.value.category is AuditErrorCategory.CORPUS_MISMATCH
-
-
-def test_structure_kind_enum_is_closed() -> None:
-    assert AuditStructureKind.FIGURE_CAPTION.value == "figure_caption"

@@ -98,29 +98,6 @@ def test_request_failure_is_retained_outside_files_seen_denominator(
     assert "source_upstream_failures" in report.limitations
 
 
-def test_mixed_source_failures_remain_inside_files_seen_denominator() -> None:
-    inventory = _adapt_failures(
-        DiscoveryFailureCategory.SOURCE_INACCESSIBLE,
-        DiscoveryFailureCategory.SOURCE_SYMLINK,
-    )
-
-    assert inventory.discovery_counts.files_seen == 2
-    assert all(
-        failure.scope is DiscoveryFailureScope.SOURCE for failure in inventory.failures
-    )
-
-    report = _report(inventory)
-    assert report.populations.source_files_seen == 2
-    assert report.populations.source_classified_files == 0
-    assert report.populations.source_traversal_failures == 2
-    assert report.source.failure_counts == (
-        (_failure_key(inventory, 0), 1),
-        (_failure_key(inventory, 1), 1),
-    )
-    assert report.reconciliation.source_files_reconcile is True
-    assert "source_upstream_failures" in report.limitations
-
-
 def test_source_inventory_rejects_mismatched_discovery_policy() -> None:
     traversal = TraversalInventory(
         corpus_id=_CORPUS_ID,

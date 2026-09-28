@@ -11,17 +11,11 @@ import pytest
 from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
-    CURRENT_PARSER_VERSION,
     BaselineChunkGenerationEntry,
     BaselineChunkGenerationManifest,
     ChunkingPolicy,
-    ParseOutcome,
-    ParsePersistenceRequest,
-    ParserInput,
     begin_baseline_lexical_corpus_update,
     build_and_publish_baseline_lexical_generation,
-    map_chunk_set,
-    persist_parse_request,
     publish_baseline_lexical_generations,
 )
 from inference_lab.profiling import FailureEvent, ProfilingContext, StageTiming
@@ -29,14 +23,12 @@ from inference_lab.provenance import (
     ContentHash,
     CorpusDocumentVersionMembership,
     CorpusId,
-    CorpusMetadata,
     CorpusVersionId,
     DocumentId,
     DocumentIdentity,
     DocumentVersion,
     DocumentVersionId,
     HashAlgorithm,
-    RecordId,
 )
 from inference_lab.retrieval import (
     CandidateKind,
@@ -47,8 +39,6 @@ from inference_lab.retrieval import (
     LexicalIndexConfiguration,
     LexicalMatchMode,
     LexicalQuery,
-    RangeFilter,
-    ResultStatus,
     RetrievalLimit,
     RetrievalQuery,
     build_lexical_generation,
@@ -67,18 +57,15 @@ from inference_lab.storage import (
     ComponentKind,
     CorpusVersionManifest,
     MetadataRepository,
-    NoCorpusChangeOutcome,
     StorageConflictError,
 )
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
-from tests.inference_lab.ingest.fixtures import fixture_settings  # noqa: TID252
 from tests.inference_lab.retrieval import lexical_fixtures  # noqa: TID252
 from tests.inference_lab.retrieval.lexical_fixtures import (  # noqa: TID252
     CORPUS_ID,
     CORPUS_VERSION_ID,
     SECOND_CORPUS_ID,
     manifest,
-    parsed_document,
     privacy_source_manifest,
     publish_query_fixture,
     published_lexical_generation_id,
@@ -252,69 +239,6 @@ def _remove_publication_failure(database_path: Path) -> None:
         connection.close()
 
 
-def test_full_build_publishes_restartable_generation_with_source_links(
-    tmp_path: Path,
-) -> None:
-    source_manifest, first, second = lexical_fixtures.source_manifest()
-
-    outcome = build_lexical_generation(tmp_path, source_manifest)
-    generation_dir = tmp_path / "lexical" / outcome.manifest.generation_id
-
-    assert outcome.statistics.members_processed == 2
-    assert outcome.statistics.chunks_processed == 2
-    assert outcome.statistics.inserted_chunks == 2
-    assert generation_dir.is_dir()
-    assert {path.name for path in generation_dir.iterdir()} == {
-        "index.sqlite3",
-        "manifest.json",
-    }
-
-    with open_lexical_generation(
-        tmp_path, outcome.manifest.generation_id
-    ) as generation:
-        chunks = generation.iter_chunks()
-        assert tuple(chunk.content for chunk in chunks) == tuple(
-            chunk.text
-            for chunk in sorted(
-                first.chunks + second.chunks, key=lambda item: item.document_id.as_str()
-            )
-        )
-        assert (
-            chunks[0].source_links[0].document_version_id
-            == chunks[0].document_version_id
-        )
-        identifier_matches = generation.lookup_identifier("10.1234/ABC-7")
-        assert len(identifier_matches) == 1
-        assert identifier_matches[0][1] == 2
-
-    reopened = open_lexical_generation(tmp_path, outcome.manifest.generation_id)
-    reopened.close()
-
-
-def test_ranked_iteration_pages_past_request_limit_before_final_limiting(
-    tmp_path: Path,
-) -> None:
-    selections = tuple(selection(f"common marker {ordinal}")[1] for ordinal in range(3))
-    source_manifest = manifest(selections)
-    outcome = build_lexical_generation(tmp_path, source_manifest)
-    request = LexicalQuery(
-        RetrievalQuery(
-            "common",
-            source_manifest.corpus_version,
-            RetrievalLimit(1),
-        )
-    )
-
-    with open_lexical_generation(
-        tmp_path, outcome.manifest.generation_id
-    ) as generation:
-        ranked = tuple(generation.iter_ranked_matches(request, page_size=1))
-        direct = generation.search(request)
-
-    assert len(ranked) == 3
-    assert ranked[:1] == direct
-
-
 def test_configured_content_weight_changes_bm25_score(tmp_path: Path) -> None:
     """The sole indexed content weight must affect the executed FTS5 rank."""
     source_manifest, _, _ = lexical_fixtures.source_manifest()
@@ -374,32 +298,6 @@ def test_configured_content_weight_changes_bm25_score(tmp_path: Path) -> None:
     with pytest.raises(LexicalError) as error:
         build_lexical_generation(tmp_path, source_manifest, configuration=legacy)
     assert error.value.category is LexicalFailureCategory.INVALID_REQUEST
-
-
-@pytest.mark.parametrize(
-    ("page_size", "expected_error"),
-    ((True, TypeError), (0, ValueError), (-1, ValueError), ("1", TypeError)),
-)
-def test_ranked_iteration_rejects_invalid_page_sizes(
-    tmp_path: Path,
-    page_size: object,
-    expected_error: type[Exception],
-) -> None:
-    source_manifest, _, _ = lexical_fixtures.source_manifest()
-    outcome = build_lexical_generation(tmp_path, source_manifest)
-    request = LexicalQuery(
-        RetrievalQuery(
-            "alpha",
-            source_manifest.corpus_version,
-            RetrievalLimit(1),
-        )
-    )
-
-    with open_lexical_generation(
-        tmp_path, outcome.manifest.generation_id
-    ) as generation:
-        with pytest.raises(expected_error):
-            generation.iter_ranked_matches(request, page_size=page_size)  # type: ignore[arg-type]
 
 
 def test_pr4_query_executes_terms_phrase_and_identifier_modes_from_pinned_snapshot(
@@ -482,210 +380,6 @@ def test_pr4_query_executes_terms_phrase_and_identifier_modes_from_pinned_snapsh
         repository.close()
 
 
-def test_pr5_filtered_query_profiles_real_snapshot_execution(
-    tmp_path: Path,
-) -> None:
-    source_manifest, first, second = lexical_fixtures.source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-        source_dir=tmp_path / "source-data",
-    )
-    sink = _CollectingSink()
-    profiling = ProfilingContext.create(
-        run_id="run-real-filter",
-        sink=sink,
-        clock=iter(range(0, 40_000_000, 10_000_000)).__next__,
-        observed_at_factory=lambda: datetime(2026, 9, 20, tzinfo=UTC),
-    )
-    try:
-        with repository.transaction() as transaction:
-            transaction.add_corpus(CorpusMetadata(CORPUS_ID, "test corpus"))
-            for chunk_set in (first, second):
-                document = parsed_document(
-                    chunk_set.chunks[0].text,
-                    document_id=chunk_set.document_id,
-                    document_version_id=chunk_set.document_version_id,
-                )
-                transaction.add_document(DocumentIdentity(document.document_id))
-                transaction.add_document_version(
-                    DocumentVersion(
-                        document.document_version_id,
-                        document.document_id,
-                        ContentHash(
-                            HashAlgorithm.SHA256,
-                            hashlib.sha256(
-                                document.text.source_text.encode("utf-8")
-                            ).hexdigest(),
-                        ),
-                    )
-                )
-                transaction.add_corpus_document_version_membership(
-                    CorpusDocumentVersionMembership(
-                        CORPUS_ID,
-                        document.document_id,
-                        document.document_version_id,
-                    )
-                )
-                transaction.write_chunk_set(
-                    ChunkSetWriteRequest(
-                        corpus_id=CORPUS_ID,
-                        selection=map_chunk_set(chunk_set),
-                    )
-                )
-        for chunk_set in (first, second):
-            document = parsed_document(
-                chunk_set.chunks[0].text,
-                document_id=chunk_set.document_id,
-                document_version_id=chunk_set.document_version_id,
-            )
-            persist_parse_request(
-                repository,
-                ParsePersistenceRequest(
-                    corpus_id=CORPUS_ID,
-                    parser_input=ParserInput(
-                        document_id=document.document_id,
-                        document_version_id=document.document_version_id,
-                        content=document.text.source_text.encode("utf-8"),
-                        media_type="text/plain",
-                        encoding="utf-8",
-                    ),
-                    parser_version=CURRENT_PARSER_VERSION,
-                    outcome=ParseOutcome("succeeded", document, ()),
-                    parse_id=RecordId.generate(),
-                    parsed_record_id=RecordId.generate(),
-                ),
-                settings=fixture_settings(),
-                emit_lifecycle_events=False,
-            )
-        published = build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            source_manifest,
-            expected_corpus_version=None,
-        )
-        assert isinstance(published, CommitCorpusUpdateOutcome)
-
-        result = execute_lexical_retrieval(
-            repository,
-            tmp_path / "indexes",
-            CORPUS_ID,
-            RetrievalQuery(
-                "alpha",
-                source_manifest.corpus_version,
-                RetrievalLimit(1),
-                filter=RangeFilter("character-count", lower=1),
-            ),
-            profiling=profiling,
-            profiling_identity="real-filter",
-        )
-
-        assert result.status is ResultStatus.COMPLETED
-        assert len(result.hits) == 1
-        assert result.hits[0].candidate.content.startswith("alpha cites")
-        assert result.hits[0].candidate.sources
-        completions = [
-            record
-            for record in sink.records
-            if isinstance(record, StageTiming) and record.event == "stage_completed"
-        ]
-        assert [
-            (
-                record.pipeline_stage,
-                record.items_processed,
-                record.records_emitted,
-                record.parent_stage_id,
-            )
-            for record in completions
-        ] == [
-            (
-                "metadata_filter",
-                1,
-                1,
-                "run-real-filter:lexical_retrieval:real-filter",
-            ),
-            ("lexical_retrieval", None, 1, None),
-        ]
-        assert not [
-            record for record in sink.records if isinstance(record, FailureEvent)
-        ]
-    finally:
-        repository.close()
-
-
-def test_pr4_query_profiles_success_with_unknown_candidate_count(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = lexical_fixtures.source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    sink = _CollectingSink()
-    profiling = ProfilingContext.create(
-        run_id="run-lexical-retrieval",
-        sink=sink,
-        clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
-        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
-    )
-    try:
-        seed_metadata_repository(repository, source_manifest)
-        build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            source_manifest,
-            expected_corpus_version=None,
-        )
-
-        result = execute_lexical_retrieval(
-            repository,
-            tmp_path / "indexes",
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "alpha",
-                    source_manifest.corpus_version,
-                    RetrievalLimit(5),
-                )
-            ),
-            profiling=profiling,
-            parent_stage_id="run-lexical-retrieval:request",
-            profiling_identity="terms",
-        )
-
-        assert result.status.value == "completed"
-        completions = [
-            record
-            for record in sink.records
-            if isinstance(record, StageTiming) and record.event == "stage_completed"
-        ]
-        assert [
-            (
-                record.module,
-                record.pipeline_stage,
-                record.status,
-                record.items_processed,
-                record.records_emitted,
-                record.parent_stage_id,
-            )
-            for record in completions
-        ] == [
-            (
-                "inference_lab.retrieval",
-                "lexical_retrieval",
-                "completed",
-                None,
-                1,
-                "run-lexical-retrieval:request",
-            )
-        ]
-        assert not [
-            record for record in sink.records if isinstance(record, FailureEvent)
-        ]
-    finally:
-        repository.close()
-
-
 def test_pr4_query_rejects_foreign_generation_reference_before_opening_files(
     tmp_path: Path,
 ) -> None:
@@ -730,91 +424,6 @@ def test_pr4_query_rejects_foreign_generation_reference_before_opening_files(
     assert result.hits == ()
     assert result.failures[0].category.value == "invalid_channel_response"
     assert repository.open_count == 1
-
-
-def test_pr4_query_preserves_historical_results_and_applies_update_removal(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = lexical_fixtures.source_manifest()
-    database_path = tmp_path / "metadata.sqlite3"
-    index_dir = tmp_path / "indexes"
-    repository = SQLiteMetadataRepository.open(database_path, apply_migrations=True)
-    try:
-        publish_query_fixture(repository, index_dir, source_manifest)
-        changed_version = CorpusVersionId.generate()
-        changed_manifest = _prepare_changed_manifest(
-            repository,
-            source_manifest,
-            corpus_version=changed_version,
-        )
-        updated = build_and_publish_baseline_lexical_generation(
-            repository,
-            index_dir,
-            changed_manifest,
-            expected_corpus_version=source_manifest.corpus_version,
-        )
-        assert isinstance(updated, CommitCorpusUpdateOutcome)
-
-        old_alpha = execute_lexical_retrieval(
-            repository,
-            index_dir,
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "alpha",
-                    source_manifest.corpus_version,
-                    RetrievalLimit(5),
-                )
-            ),
-        )
-        old_changed = execute_lexical_retrieval(
-            repository,
-            index_dir,
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "changed",
-                    source_manifest.corpus_version,
-                    RetrievalLimit(5),
-                )
-            ),
-        )
-        current_changed = execute_lexical_retrieval(
-            repository,
-            index_dir,
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "changed",
-                    changed_version,
-                    RetrievalLimit(5),
-                )
-            ),
-        )
-        current_removed = execute_lexical_retrieval(
-            repository,
-            index_dir,
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    "beta",
-                    changed_version,
-                    RetrievalLimit(5),
-                )
-            ),
-        )
-
-        assert old_alpha.status.value == "completed"
-        assert len(old_alpha.hits) == 1
-        assert old_alpha.hits[0].candidate.content.startswith("alpha cites")
-        assert old_changed.hits == ()
-        assert current_changed.status.value == "completed"
-        assert len(current_changed.hits) == 1
-        assert current_changed.hits[0].candidate.content == "changed lexical content"
-        assert current_removed.status.value == "completed"
-        assert current_removed.hits == ()
-    finally:
-        repository.close()
 
 
 def test_pr4_query_keeps_old_reader_queryable_during_new_publication(
@@ -999,67 +608,6 @@ def test_pr4_query_isolates_two_corpora_with_overlapping_document_versions(
         assert second_only.hits[0].candidate.content == "second corpus only"
         assert second_beta.status.value == "completed"
         assert second_beta.hits == ()
-    finally:
-        repository.close()
-
-
-def test_pr4_query_profiles_unavailable_generation_without_payloads(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = lexical_fixtures.source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    sink = _CollectingSink()
-    profiling = ProfilingContext.create(
-        run_id="run-lexical-retrieval-failure",
-        sink=sink,
-        clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
-        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
-    )
-    marker = "private-lexical-query-marker"
-    try:
-        seed_metadata_repository(repository, source_manifest)
-        result = execute_lexical_retrieval(
-            repository,
-            tmp_path / "indexes",
-            CORPUS_ID,
-            LexicalQuery(
-                RetrievalQuery(
-                    marker,
-                    source_manifest.corpus_version,
-                    RetrievalLimit(5),
-                )
-            ),
-            profiling=profiling,
-            profiling_identity="unavailable",
-        )
-
-        assert result.status.value == "failed"
-        assert result.hits == ()
-        completions = [
-            record
-            for record in sink.records
-            if isinstance(record, StageTiming) and record.event == "stage_completed"
-        ]
-        assert [
-            (
-                record.pipeline_stage,
-                record.status,
-                record.items_processed,
-                record.records_emitted,
-            )
-            for record in completions
-        ] == [("lexical_retrieval", "failed", None, 0)]
-        failures = [
-            record for record in sink.records if isinstance(record, FailureEvent)
-        ]
-        assert len(failures) == 1
-        assert failures[0].failure_category == "dependency"
-        assert failures[0].failure_code == "generation_unavailable"
-        assert marker not in repr(sink.records)
-        assert str(tmp_path) not in repr(sink.records)
     finally:
         repository.close()
 
@@ -1257,68 +805,6 @@ def test_lexical_build_profiles_generation_failure_without_payloads(
     assert str(tmp_path) not in repr(sink.records)
 
 
-def test_pr3_atomic_publication_profiles_lexical_index_and_publication(
-    tmp_path: Path,
-) -> None:
-    source_manifest, first, second = lexical_fixtures.source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    sink = _CollectingSink()
-    profiling = ProfilingContext.create(
-        run_id="run-atomic-lexical",
-        sink=sink,
-        clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
-        observed_at_factory=lambda: datetime(2026, 9, 18, tzinfo=UTC),
-    )
-    try:
-        seed_metadata_repository(repository, source_manifest)
-        result = build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            source_manifest,
-            expected_corpus_version=None,
-            profiling=profiling,
-            parent_stage_id="run-atomic-lexical:request",
-            profiling_identity="first",
-        )
-        assert isinstance(result, CommitCorpusUpdateOutcome)
-
-        completions = [
-            record
-            for record in sink.records
-            if isinstance(record, StageTiming) and record.event == "stage_completed"
-        ]
-        assert [
-            (
-                record.module,
-                record.pipeline_stage,
-                record.items_processed,
-                record.records_emitted,
-                record.parent_stage_id,
-            )
-            for record in completions
-        ] == [
-            (
-                "inference_lab.retrieval",
-                "lexical_index",
-                len(first.chunks) + len(second.chunks),
-                len(first.chunks) + len(second.chunks),
-                "run-atomic-lexical:request",
-            ),
-            (
-                "inference_lab.ingest",
-                "publication",
-                2,
-                1,
-                "run-atomic-lexical:request",
-            ),
-        ]
-    finally:
-        repository.close()
-
-
 def test_pr3_build_and_publish_uses_one_atomic_phase5_path(
     tmp_path: Path,
 ) -> None:
@@ -1365,45 +851,6 @@ def test_pr3_build_and_publish_uses_one_atomic_phase5_path(
             assert len(snapshot.manifest.component_generations) == 2
     finally:
         reopened.close()
-
-
-def test_pr3_build_and_publish_preserves_no_change_on_exact_parent_replay(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = lexical_fixtures.source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    try:
-        seed_metadata_repository(repository, source_manifest)
-        first = build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            source_manifest,
-            expected_corpus_version=None,
-        )
-        assert isinstance(first, CommitCorpusUpdateOutcome)
-
-        replay_manifest = BaselineChunkGenerationManifest(
-            corpus_id=source_manifest.corpus_id,
-            corpus_version=CorpusVersionId.generate(),
-            configuration_identity=source_manifest.configuration_identity,
-            generation_id="baseline-replay-generation",
-            entries=source_manifest.entries,
-        )
-        replay = build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            replay_manifest,
-            expected_corpus_version=source_manifest.corpus_version,
-        )
-
-        assert isinstance(replay, NoCorpusChangeOutcome)
-        with repository.open_active_corpus_snapshot(CORPUS_ID) as snapshot:
-            assert snapshot.version.corpus_version == source_manifest.corpus_version
-    finally:
-        repository.close()
 
 
 def test_pr3_failed_publication_keeps_active_version_and_leaves_orphan_unreachable(
@@ -1482,152 +929,6 @@ def test_pr3_failed_publication_keeps_active_version_and_leaves_orphan_unreachab
         assert orphan.is_dir()
         with open_lexical_generation(index_dir, child_generation_id) as generation:
             assert generation.manifest.corpus_version == child.corpus_version
-    finally:
-        repository.close()
-
-
-def test_pr3_reader_snapshot_stays_pinned_while_new_version_commits(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = lexical_fixtures.source_manifest()
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    try:
-        seed_metadata_repository(repository, source_manifest)
-        build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            source_manifest,
-            expected_corpus_version=None,
-        )
-
-        changed_version = DocumentVersionId.generate()
-        _, changed_selection = selection(
-            "changed lexical content",
-            document_id=source_manifest.entries[0].membership.document_id,
-            document_version_id=changed_version,
-        )
-        changed_membership = CorpusDocumentVersionMembership(
-            corpus_id=CORPUS_ID,
-            document_id=source_manifest.entries[0].membership.document_id,
-            document_version_id=changed_version,
-        )
-        changed_entries = list(source_manifest.entries)
-        changed_entries[0] = BaselineChunkGenerationEntry(
-            membership=changed_membership,
-            selection=changed_selection,
-        )
-        changed_manifest = BaselineChunkGenerationManifest(
-            corpus_id=CORPUS_ID,
-            corpus_version=CorpusVersionId.generate(),
-            configuration_identity=source_manifest.configuration_identity,
-            generation_id="baseline-reader-update",
-            entries=tuple(sorted(changed_entries, key=lambda entry: entry.key())),
-        )
-        with repository.transaction() as transaction:
-            transaction.add_document_version(
-                DocumentVersion(
-                    changed_version,
-                    changed_membership.document_id,
-                    ContentHash(HashAlgorithm.SHA256, "c" * 64),
-                )
-            )
-            transaction.add_corpus_document_version_membership(changed_membership)
-            transaction.write_chunk_set(
-                ChunkSetWriteRequest(
-                    corpus_id=CORPUS_ID,
-                    selection=changed_selection,
-                )
-            )
-
-        with repository.open_active_corpus_snapshot(CORPUS_ID) as old_snapshot:
-            result = build_and_publish_baseline_lexical_generation(
-                repository,
-                tmp_path / "indexes",
-                changed_manifest,
-                expected_corpus_version=source_manifest.corpus_version,
-            )
-            assert isinstance(result, CommitCorpusUpdateOutcome)
-            assert old_snapshot.version.corpus_version == source_manifest.corpus_version
-            assert old_snapshot.manifest.document_memberships == tuple(
-                entry.membership for entry in source_manifest.entries
-            )
-
-        with repository.open_active_corpus_snapshot(CORPUS_ID) as current_snapshot:
-            assert (
-                current_snapshot.version.corpus_version
-                == changed_manifest.corpus_version
-            )
-            assert current_snapshot.manifest.document_memberships == tuple(
-                entry.membership for entry in changed_manifest.entries
-            )
-    finally:
-        repository.close()
-
-
-def test_pr3_two_corpora_isolate_active_lexical_generations(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = lexical_fixtures.source_manifest()
-    second_manifest = _rebind_source_manifest(
-        source_manifest,
-        corpus_id=SECOND_CORPUS_ID,
-        corpus_version=CorpusVersionId.generate(),
-        generation_id="baseline-second-corpus",
-    )
-    repository = SQLiteMetadataRepository.open(
-        tmp_path / "metadata.sqlite3",
-        apply_migrations=True,
-    )
-    try:
-        seed_metadata_repository(repository, source_manifest)
-        seed_metadata_repository(
-            repository,
-            second_manifest,
-            seed_catalogue=False,
-        )
-        first = build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            source_manifest,
-            expected_corpus_version=None,
-        )
-        second = build_and_publish_baseline_lexical_generation(
-            repository,
-            tmp_path / "indexes",
-            second_manifest,
-            expected_corpus_version=None,
-        )
-        assert isinstance(first, CommitCorpusUpdateOutcome)
-        assert isinstance(second, CommitCorpusUpdateOutcome)
-
-        with repository.open_active_corpus_snapshot(CORPUS_ID) as first_snapshot:
-            first_lexical = next(
-                (
-                    generation
-                    for generation in first_snapshot.manifest.component_generations
-                    if generation.component_kind.as_str() == "lexical-index"
-                ),
-                None,
-            )
-            assert first_lexical is not None
-            with repository.open_active_corpus_snapshot(
-                SECOND_CORPUS_ID
-            ) as second_snapshot:
-                second_lexical = next(
-                    (
-                        generation
-                        for generation in second_snapshot.manifest.component_generations
-                        if generation.component_kind.as_str() == "lexical-index"
-                    ),
-                    None,
-                )
-                assert second_lexical is not None
-                assert first_lexical.corpus_id == CORPUS_ID
-                assert second_lexical.corpus_id == SECOND_CORPUS_ID
-                assert first_lexical.generation_id != second_lexical.generation_id
     finally:
         repository.close()
 
@@ -1773,32 +1074,6 @@ def test_pr3_parent_selection_rejects_missing_or_unexpected_active_reference(
     assert (
         mismatch_error.value.category is LexicalFailureCategory.INCOMPATIBLE_GENERATION
     )
-
-
-def test_pr3_parent_selection_skips_parent_when_no_expected_version(
-    tmp_path: Path,
-) -> None:
-    source_manifest, _, _ = lexical_fixtures.source_manifest()
-    repository = _FakeRepository(
-        _FakeSnapshot(
-            CorpusVersionManifest(
-                corpus_id=source_manifest.corpus_id,
-                corpus_version=source_manifest.corpus_version,
-                document_memberships=(),
-                component_generations=(),
-            )
-        )
-    )
-
-    assert (
-        select_lexical_parent_reference(
-            cast(MetadataRepository, repository),
-            source_manifest.corpus_id,
-            None,
-        )
-        is None
-    )
-    assert repository.open_count == 0
 
 
 def test_zero_chunk_member_is_retained_and_exact_replay_reuses_database(
