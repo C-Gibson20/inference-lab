@@ -72,10 +72,7 @@ def _snapshot(
     *,
     missing: tuple[ExpectedMemoryContribution, ...] = (),
 ) -> MemorySnapshot:
-    expected = tuple(
-        _expected(item)
-        for item in records
-    ) + missing
+    expected = tuple(_expected(item) for item in records) + missing
     return MemorySnapshot(
         observed_at=_OBSERVED_AT,
         collector=_COLLECTOR,

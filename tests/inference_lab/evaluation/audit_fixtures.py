@@ -3,9 +3,9 @@
 from inference_lab.evaluation import (
     CURRENT_PARSER_CAPABILITY_PROFILE,
     AuditAcquisitionObservation,
+    AuditParsedDocumentFacts,
     AuditParseEvidence,
     AuditParseObservation,
-    AuditParsedDocumentFacts,
     AuditRelationshipInventory,
     AuditSourceInventory,
     AuditStructureCount,

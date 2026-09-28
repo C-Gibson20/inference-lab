@@ -57,7 +57,10 @@ def test_ret03_registry_accepts_predicates_for_every_supported_field() -> None:
         assert validate_metadata_filter(ExistsFilter(name)).node_count == 1
         assert validate_metadata_filter(MissingFilter(name)).node_count == 1
         if type(value) is int:
-            assert validate_metadata_filter(RangeFilter(name, value, value)).node_count == 1
+            assert (
+                validate_metadata_filter(RangeFilter(name, value, value)).node_count
+                == 1
+            )
 
     language = CURRENT_METADATA_FILTER_REGISTRY.descriptor("language")
     assert language is not None
@@ -95,9 +98,7 @@ def test_ret03_predicates_and_boolean_combinations_match_real_field_values() -> 
         )
     )
     assert evaluate_metadata_filter(combined, values)
-    assert evaluate_metadata_filter(
-        RangeFilter("source-byte-count", 100, None), values
-    )
+    assert evaluate_metadata_filter(RangeFilter("source-byte-count", 100, None), values)
     assert not evaluate_metadata_filter(
         RangeFilter("page-count", 2, 4, lower_inclusive=False), values
     )

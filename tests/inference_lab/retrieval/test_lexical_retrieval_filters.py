@@ -24,7 +24,6 @@ from inference_lab.provenance import (
 )
 from inference_lab.retrieval import (
     CandidateKind,
-    EvidenceResult,
     ExactFilter,
     InvalidMetadataFilterError,
     LexicalIndexedChunk,

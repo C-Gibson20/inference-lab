@@ -31,18 +31,18 @@ SETUP_HOOKS = REPO_ROOT / "scripts" / "setup-hooks.sh"
 def _config_text(root: Path) -> str:
     return f"""
         [models]
-        embedder_path = "{root / 'models/embedder'}"
-        reranker_path = "{root / 'models/reranker'}"
-        generator_path = "{root / 'models/generator'}"
+        embedder_path = "{root / "models/embedder"}"
+        reranker_path = "{root / "models/reranker"}"
+        generator_path = "{root / "models/generator"}"
 
         [runtime]
         vram_budget_gb = 24
         max_context_tokens = 8192
 
         [storage]
-        index_dir = "{root / 'state/indexes'}"
-        metadata_db_path = "{root / 'state/metadata.sqlite3'}"
-        source_dir = "{root / 'state/source-data'}"
+        index_dir = "{root / "state/indexes"}"
+        metadata_db_path = "{root / "state/metadata.sqlite3"}"
+        source_dir = "{root / "state/source-data"}"
 
         [logging]
         level = "DEBUG"
@@ -137,9 +137,7 @@ def test_configuration_rejects_missing_invalid_unknown_and_overlapping_values(
     cases.append(("non-positive runtime limit", invalid_runtime))
 
     non_local_model = copy.deepcopy(valid)
-    non_local_model["models"]["generator_path"] = (
-        "https://example.test/model"
-    )  # type: ignore[index]
+    non_local_model["models"]["generator_path"] = "https://example.test/model"  # type: ignore[index]
     cases.append(("non-local model path", non_local_model))
 
     overlapping_paths = copy.deepcopy(valid)

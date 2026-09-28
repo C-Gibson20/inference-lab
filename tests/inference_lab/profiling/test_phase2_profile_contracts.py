@@ -126,9 +126,12 @@ def test_resource_records_keep_units_statuses_and_time_boundaries_strict() -> No
         "thermal": "celsius",
     }
     for category, unit in expected_units.items():
-        assert ResourceMeasurement(  # type: ignore[arg-type]
-            category=category, value=1
-        ).unit == unit
+        assert (
+            ResourceMeasurement(  # type: ignore[arg-type]
+                category=category, value=1
+            ).unit
+            == unit
+        )
 
     unavailable = ResourceMeasurement(
         category="power", value=None, status="unavailable", observed_at=NOW

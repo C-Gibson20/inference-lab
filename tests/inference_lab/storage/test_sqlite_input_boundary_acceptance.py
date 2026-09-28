@@ -6,13 +6,12 @@ from typing import cast
 import pytest
 
 from inference_lab.provenance import CorpusId, CorpusMetadata
+from tests.inference_lab.storage.fixtures import open_repository
 from tests.inference_lab.storage.input_failure_fixtures import (
     _CORPUS,
     _CORPUS_ID,
     _invalid,
 )
-
-from .fixtures import open_repository
 
 
 def test_bad_repository_read_rolls_back_prior_transaction_writes(

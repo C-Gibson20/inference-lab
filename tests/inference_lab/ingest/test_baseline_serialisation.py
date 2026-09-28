@@ -17,12 +17,8 @@ from inference_lab.provenance import CorpusId, CorpusVersionId
 def test_failed_ingest_summary_serialises_deterministically_without_payloads() -> None:
     summary = BaselineIngestSummary(
         corpus_id=CorpusId("11111111-1111-4111-8111-111111111111"),
-        proposed_corpus_version=CorpusVersionId(
-            "33333333-3333-4333-8333-333333333333"
-        ),
-        expected_corpus_version=CorpusVersionId(
-            "44444444-4444-4444-8444-444444444444"
-        ),
+        proposed_corpus_version=CorpusVersionId("33333333-3333-4333-8333-333333333333"),
+        expected_corpus_version=CorpusVersionId("44444444-4444-4444-8444-444444444444"),
         execution_status=BaselineExecutionStatus.FAILED,
         publication_status=BaselinePublicationStatus.NOT_PUBLISHED,
         failures=(

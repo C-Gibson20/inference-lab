@@ -1,7 +1,5 @@
 """Tests for complete derived-record lineage graph validation."""
 
-from dataclasses import FrozenInstanceError
-
 import pytest
 
 from inference_lab.provenance.derived import (
@@ -14,7 +12,6 @@ from inference_lab.provenance.identifiers import (
     SourceSpanId,
 )
 from inference_lab.provenance.lineage import (
-    LineageEdge,
     LineageInputs,
 )
 from inference_lab.provenance.validation import (

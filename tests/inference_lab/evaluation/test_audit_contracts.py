@@ -15,7 +15,6 @@ from inference_lab.evaluation import (
     AuditParseObservation,
     AuditRelationshipInventory,
     AuditSourceInventory,
-    CorpusAuditPolicy,
     CorpusAuditRequest,
     CorpusAuditScope,
 )

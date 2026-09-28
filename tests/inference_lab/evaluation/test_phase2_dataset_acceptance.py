@@ -18,7 +18,12 @@ from inference_lab.evaluation import (
     validate_final_benchmark,
     write_dataset,
 )
-from .fixtures import CORPUS_ID, CORPUS_VERSION, benchmark_cases, case_payload
+from tests.inference_lab.evaluation.fixtures import (
+    CORPUS_ID,
+    CORPUS_VERSION,
+    benchmark_cases,
+    case_payload,
+)
 
 
 def _manifest(cases: tuple[EvaluationCase, ...]) -> DatasetManifest:
@@ -121,6 +126,7 @@ def test_publication_rejects_cross_split_evidence_leakage_and_cleans_staging(
     assert not (tmp_path / "leaked").exists()
 
     destination = tmp_path / "failed"
+
     def fail_write(_path: Path, _content: bytes) -> None:
         raise OSError("private path details")
 

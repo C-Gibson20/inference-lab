@@ -24,9 +24,7 @@ def test_case_validation_errors_suppress_sensitive_payloads(tmp_path: Path) -> N
     sensitive_question = "Confidential compound codename AURORA"
     invalid_case = case_payload()
     invalid_case["question"] = sensitive_question
-    invalid_case["expected_answer"]["claims"][0]["evidence_ids"] = (
-        "evidence-missing",
-    )
+    invalid_case["expected_answer"]["claims"][0]["evidence_ids"] = ("evidence-missing",)
     manifest_path = write_dataset_fixture(tmp_path, cases=[invalid_case])
 
     with pytest.raises(ValueError, match="Invalid evaluation case") as caught:

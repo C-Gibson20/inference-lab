@@ -39,9 +39,7 @@ from .source_fixtures import (  # noqa: TID252
     OCR_PRODUCER,
     PARSED_RECORD_ID,
     PARSER,
-    SECOND_SPAN_ID,
     SOURCE_HASH,
-    SOURCE_TEXT,
     parsed_representation,
 )
 
