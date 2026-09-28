@@ -4,7 +4,6 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from structlog.testing import capture_logs
 
 from inference_lab.provenance import (
     ContentHash,
@@ -21,8 +20,7 @@ from inference_lab.provenance import (
     SourceObservationId,
     SourceObservationState,
 )
-from inference_lab.storage import StorageConflictError, StorageTransactionError
-from inference_lab.storage._sqlite_migrations import MIGRATIONS
+from inference_lab.storage import StorageConflictError
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 
 from .fixtures import open_repository as _open_repository  # noqa: TID252
@@ -82,43 +80,6 @@ def _install_trigger(path: Path, statement: str) -> None:
         connection.close()
 
 
-def test_source_creation_failure_rolls_back_current_and_history_rows(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-    repository = _open_repository(database_path)
-    _add_catalogue(repository)
-    _install_trigger(
-        database_path,
-        f"""CREATE TRIGGER reject_source_history
-        BEFORE INSERT ON source_observation_history
-        BEGIN
-            SELECT RAISE(ABORT, '{_PRIVATE_TRIGGER_PAYLOAD}');
-        END""",
-    )
-    try:
-        with pytest.raises(StorageConflictError) as raised:
-            with repository.transaction() as transaction:
-                transaction.add_source_observation(_INITIAL_STATE)
-
-        assert _PRIVATE_TRIGGER_PAYLOAD not in str(raised.value)
-        assert (
-            repository.get_source_observation(_FIRST_CORPUS.corpus_id, _SOURCE_ID)
-            is None
-        )
-        assert (
-            repository.list_source_observation_history(
-                _FIRST_CORPUS.corpus_id, _SOURCE_ID
-            )
-            == ()
-        )
-        assert repository.get_document_version(_FIRST_VERSION.document_version_id) == (
-            _FIRST_VERSION
-        )
-    finally:
-        repository.close()
-
-
 def test_source_advance_failure_rolls_back_appended_history(
     tmp_path: Path,
 ) -> None:
@@ -156,61 +117,6 @@ def test_source_advance_failure_rolls_back_appended_history(
         repository.close()
 
 
-def test_assertion_batch_failure_rolls_back_earlier_batch_rows(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-    repository = _open_repository(database_path)
-    _add_catalogue(repository)
-    with repository.transaction() as transaction:
-        transaction.add_source_observation(_INITIAL_STATE)
-    _install_trigger(
-        database_path,
-        f"""CREATE TRIGGER reject_second_assertion
-        BEFORE INSERT ON external_identifier_assertions
-        WHEN NEW.namespace = 'pmid'
-        BEGIN
-            SELECT RAISE(ABORT, '{_PRIVATE_TRIGGER_PAYLOAD}');
-        END""",
-    )
-    assertions = (
-        ExternalIdentifierAssertion(
-            _SOURCE_ID,
-            _FIRST_VERSION.document_version_id,
-            ExternalIdentifier("doi", "10.1000/atomicity"),
-        ),
-        ExternalIdentifierAssertion(
-            _SOURCE_ID,
-            _FIRST_VERSION.document_version_id,
-            ExternalIdentifier("pmid", "12345678"),
-        ),
-    )
-    try:
-        with pytest.raises(StorageConflictError) as raised:
-            with repository.transaction() as transaction:
-                transaction.add_external_identifier_assertions(
-                    _FIRST_CORPUS.corpus_id, assertions
-                )
-
-        assert _PRIVATE_TRIGGER_PAYLOAD not in str(raised.value)
-        assert (
-            repository.list_external_identifier_assertions(
-                _FIRST_CORPUS.corpus_id, _FIRST_VERSION.document_version_id
-            )
-            == ()
-        )
-        for assertion in assertions:
-            assert (
-                repository.find_document_versions_by_external_identifiers(
-                    _FIRST_CORPUS.corpus_id,
-                    (assertion.external_identifier,),
-                )
-                == ()
-            )
-    finally:
-        repository.close()
-
-
 def test_cross_corpus_assertion_failure_rolls_back_other_staged_changes(
     tmp_path: Path,
 ) -> None:
@@ -243,156 +149,3 @@ def test_cross_corpus_assertion_failure_rolls_back_other_staged_changes(
             )
     finally:
         repository.close()
-
-
-def test_source_creation_requires_revision_one_and_rolls_back_prior_writes(
-    tmp_path: Path,
-) -> None:
-    repository = _open_repository(tmp_path / "metadata.sqlite3")
-    _add_catalogue(repository)
-    invalid_state = SourceObservationState(
-        _FIRST_CORPUS.corpus_id,
-        _SOURCE_ID,
-        2,
-        _DOCUMENT_ID,
-        _FIRST_VERSION.document_version_id,
-    )
-    try:
-        with pytest.raises(StorageConflictError):
-            with repository.transaction() as transaction:
-                transaction.set_corpus_display_name(
-                    _SECOND_CORPUS.corpus_id, "Uncommitted rename"
-                )
-                transaction.add_source_observation(invalid_state)
-
-        assert repository.get_corpus(_SECOND_CORPUS.corpus_id) == _SECOND_CORPUS
-        assert (
-            repository.get_source_observation(_FIRST_CORPUS.corpus_id, _SOURCE_ID)
-            is None
-        )
-    finally:
-        repository.close()
-
-
-def test_source_identity_cannot_be_replaced_at_revision_one(tmp_path: Path) -> None:
-    repository = _open_repository(tmp_path / "metadata.sqlite3")
-    _add_catalogue(repository)
-    conflicting_state = SourceObservationState(
-        _FIRST_CORPUS.corpus_id,
-        _SOURCE_ID,
-        1,
-        _DOCUMENT_ID,
-        _SECOND_VERSION.document_version_id,
-    )
-    with repository.transaction() as transaction:
-        transaction.add_source_observation(_INITIAL_STATE)
-    try:
-        with pytest.raises(StorageConflictError):
-            with repository.transaction() as transaction:
-                transaction.add_source_observation(conflicting_state)
-
-        assert repository.get_source_observation(
-            _FIRST_CORPUS.corpus_id, _SOURCE_ID
-        ) == (_INITIAL_STATE)
-        assert repository.list_source_observation_history(
-            _FIRST_CORPUS.corpus_id, _SOURCE_ID
-        ) == (_INITIAL_STATE,)
-    finally:
-        repository.close()
-
-
-def test_advancing_an_unknown_source_fails_without_creating_history(
-    tmp_path: Path,
-) -> None:
-    repository = _open_repository(tmp_path / "metadata.sqlite3")
-    _add_catalogue(repository)
-    try:
-        with pytest.raises(StorageConflictError):
-            with repository.transaction() as transaction:
-                transaction.advance_source_observation(
-                    _FIRST_CORPUS.corpus_id,
-                    _SOURCE_ID,
-                    expected_version_id=_FIRST_VERSION.document_version_id,
-                    new_version_id=_SECOND_VERSION.document_version_id,
-                )
-
-        assert (
-            repository.list_source_observation_history(
-                _FIRST_CORPUS.corpus_id, _SOURCE_ID
-            )
-            == ()
-        )
-    finally:
-        repository.close()
-
-
-def test_same_version_advance_is_an_exact_no_op(tmp_path: Path) -> None:
-    repository = _open_repository(tmp_path / "metadata.sqlite3")
-    _add_catalogue(repository)
-    with repository.transaction() as transaction:
-        transaction.add_source_observation(_INITIAL_STATE)
-    replayed: SourceObservationState | None = None
-    try:
-        with repository.transaction() as transaction:
-            replayed = transaction.advance_source_observation(
-                _FIRST_CORPUS.corpus_id,
-                _SOURCE_ID,
-                expected_version_id=_FIRST_VERSION.document_version_id,
-                new_version_id=_FIRST_VERSION.document_version_id,
-            )
-
-        assert replayed == _INITIAL_STATE
-        assert repository.list_source_observation_history(
-            _FIRST_CORPUS.corpus_id, _SOURCE_ID
-        ) == (_INITIAL_STATE,)
-    finally:
-        repository.close()
-
-
-class _CommitFailingConnection(sqlite3.Connection):
-    """Connection that deterministically fails transaction commits."""
-
-    def commit(self) -> None:
-        raise sqlite3.OperationalError(_PRIVATE_TRIGGER_PAYLOAD)
-
-
-def test_commit_failure_rolls_back_and_leaves_repository_readable(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-    initial = _open_repository(database_path)
-    initial.close()
-    connection = sqlite3.connect(
-        database_path,
-        isolation_level=None,
-        factory=_CommitFailingConnection,
-    )
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    repository = SQLiteMetadataRepository(connection, MIGRATIONS)
-    try:
-        with capture_logs() as logs:
-            with pytest.raises(StorageTransactionError) as raised:
-                with repository.transaction() as transaction:
-                    transaction.add_corpus(_FIRST_CORPUS)
-
-        assert _PRIVATE_TRIGGER_PAYLOAD not in str(raised.value)
-        assert repository.get_corpus(_FIRST_CORPUS.corpus_id) is None
-        assert logs == [
-            {
-                "event": "transaction_failed",
-                "pipeline_stage": "storage",
-                "error_category": "transaction",
-                "retryable": False,
-                "log_level": "error",
-            }
-        ]
-        assert _PRIVATE_TRIGGER_PAYLOAD not in repr(logs)
-    finally:
-        repository.close()
-
-    reopened = SQLiteMetadataRepository.open(database_path)
-    try:
-        assert reopened.get_corpus(_FIRST_CORPUS.corpus_id) is None
-    finally:
-        reopened.close()

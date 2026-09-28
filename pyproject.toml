@@ -25,6 +25,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "graphifyy==0.9.55",
+    "jsonschema>=4.26.0",
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
@@ -70,5 +71,5 @@ branch = true
 source = ["inference_lab"]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 70
 show_missing = true

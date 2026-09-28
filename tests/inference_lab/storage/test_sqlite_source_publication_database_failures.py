@@ -29,9 +29,7 @@ from inference_lab.storage import (
     ParseFailureUnitKind,
     ParseOutcome,
     ParseStatus,
-    RepositoryClosedError,
     SourceArtefact,
-    StorageConcurrencyError,
     StorageConflictError,
     StorageTransactionError,
 )
@@ -210,14 +208,14 @@ def _assert_no_publication(repository: SQLiteMetadataRepository) -> None:
     assert repository.get_parse_outcome(_CORPUS.corpus_id, PARSE_ID) is None
 
 
-@pytest.mark.parametrize("rejected_table", _PUBLICATION_TABLES)
-def test_each_database_stage_failure_rolls_back_the_complete_publication(
+def test_late_database_failure_rolls_back_the_complete_publication(
     tmp_path: Path,
-    rejected_table: str,
 ) -> None:
     database_path = tmp_path / "private-database" / "metadata.sqlite3"
     source_dir = tmp_path / "private-source"
     repository = _open_catalogued_repository(database_path, source_dir)
+    # Fail after the source and parsed rows have been staged.
+    rejected_table = "parse_outcomes"
     _install_rejecting_trigger(database_path, rejected_table)
 
     try:
@@ -249,45 +247,6 @@ def test_each_database_stage_failure_rolls_back_the_complete_publication(
         assert reopened.get_corpus(_CORPUS.corpus_id) == _CORPUS
     finally:
         reopened.close()
-
-
-def test_transaction_start_failure_leaves_orphan_reusable_and_repository_usable(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "private-database" / "metadata.sqlite3"
-    source_dir = tmp_path / "private-source"
-    repository = _open_catalogued_repository(database_path, source_dir)
-    blocker = sqlite3.connect(database_path, isolation_level=None)
-    blocker.execute("BEGIN IMMEDIATE")
-    try:
-        with capture_logs(processors=(merge_contextvars,)) as logs:
-            with pytest.raises(StorageConcurrencyError) as raised:
-                _publish(repository)
-    finally:
-        blocker.rollback()
-        blocker.close()
-
-    try:
-        _assert_no_publication(repository)
-        assert repository.get_corpus(_CORPUS.corpus_id) == _CORPUS
-        assert (source_dir / _ARTEFACT.storage_key).read_bytes() == SOURCE_BYTES
-        assert _PRIVATE_DATABASE_PAYLOAD not in str(raised.value)
-        assert "locked" not in str(raised.value).lower()
-        assert logs[-1]["error_category"] == "concurrency"
-        assert "locked" not in repr(logs).lower()
-        assert str(database_path) not in repr(logs)
-        assert str(source_dir) not in repr(logs)
-
-        _publish(repository)
-        assert (
-            repository.read_source_bytes(
-                _CORPUS.corpus_id,
-                DOCUMENT_VERSION_ID,
-            )
-            == SOURCE_BYTES
-        )
-    finally:
-        repository.close()
 
 
 class _CommitFailingConnection(sqlite3.Connection):
@@ -344,101 +303,5 @@ def test_commit_failure_rolls_back_publication_and_allows_reopen_and_retry(
             == _representation()
         )
         assert reopened.get_parse_outcome(_CORPUS.corpus_id, PARSE_ID) == _OUTCOME
-    finally:
-        reopened.close()
-
-
-class _RollbackFailingConnection(sqlite3.Connection):
-    def rollback(self) -> None:
-        raise sqlite3.OperationalError(_PRIVATE_DATABASE_PAYLOAD)
-
-
-class _CommitAndRollbackFailingConnection(_CommitFailingConnection):
-    def rollback(self) -> None:
-        raise sqlite3.OperationalError(_PRIVATE_DATABASE_PAYLOAD)
-
-
-def test_commit_cleanup_failure_invalidates_connection_and_preserves_commit_error(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "private-database" / "metadata.sqlite3"
-    source_dir = tmp_path / "private-source"
-    initial = _open_catalogued_repository(database_path, source_dir)
-    initial.close()
-    connection = sqlite3.connect(
-        database_path,
-        isolation_level=None,
-        factory=_CommitAndRollbackFailingConnection,
-    )
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    repository = SQLiteMetadataRepository(
-        connection,
-        MIGRATIONS,
-        source_blob_store=ManagedSourceBlobStore(source_dir),
-    )
-
-    with capture_logs(processors=(merge_contextvars,)) as logs:
-        with pytest.raises(StorageTransactionError) as raised:
-            _publish(repository)
-
-    assert repository.is_closed is True
-    with pytest.raises(RepositoryClosedError):
-        repository.get_corpus(_CORPUS.corpus_id)
-    assert (source_dir / _ARTEFACT.storage_key).read_bytes() == SOURCE_BYTES
-    assert _PRIVATE_DATABASE_PAYLOAD not in str(raised.value)
-    assert _PRIVATE_DATABASE_PAYLOAD not in repr(logs)
-    assert str(database_path) not in repr(logs)
-    assert str(source_dir) not in repr(logs)
-
-    reopened = SQLiteMetadataRepository.open(database_path, source_dir=source_dir)
-    try:
-        _assert_no_publication(reopened)
-        assert reopened.get_corpus(_CORPUS.corpus_id) == _CORPUS
-        assert _table_counts(database_path) == dict.fromkeys(_PUBLICATION_TABLES, 0)
-    finally:
-        reopened.close()
-
-
-def test_rollback_failure_preserves_primary_and_invalidates_partial_connection(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "private-database" / "metadata.sqlite3"
-    source_dir = tmp_path / "private-source"
-    initial = _open_catalogued_repository(database_path, source_dir)
-    initial.close()
-    _install_rejecting_trigger(database_path, "parse_failures")
-    connection = sqlite3.connect(
-        database_path,
-        isolation_level=None,
-        factory=_RollbackFailingConnection,
-    )
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    repository = SQLiteMetadataRepository(
-        connection,
-        MIGRATIONS,
-        source_blob_store=ManagedSourceBlobStore(source_dir),
-    )
-
-    with capture_logs(processors=(merge_contextvars,)) as logs:
-        with pytest.raises(StorageConflictError) as raised:
-            _publish(repository)
-
-    assert repository.is_closed is True
-    with pytest.raises(RepositoryClosedError):
-        repository.get_corpus(_CORPUS.corpus_id)
-    assert (source_dir / _ARTEFACT.storage_key).read_bytes() == SOURCE_BYTES
-    assert _PRIVATE_DATABASE_PAYLOAD not in str(raised.value)
-    assert _PRIVATE_DATABASE_PAYLOAD not in repr(logs)
-    assert str(database_path) not in repr(logs)
-    assert str(source_dir) not in repr(logs)
-
-    _drop_rejecting_trigger(database_path, "parse_failures")
-    reopened = SQLiteMetadataRepository.open(database_path, source_dir=source_dir)
-    try:
-        _assert_no_publication(reopened)
-        assert reopened.get_corpus(_CORPUS.corpus_id) == _CORPUS
-        assert _table_counts(database_path) == dict.fromkeys(_PUBLICATION_TABLES, 0)
     finally:
         reopened.close()

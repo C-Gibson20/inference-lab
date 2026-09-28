@@ -13,7 +13,7 @@ from inference_lab.evaluation import (
     run_corpus_audit,
 )
 
-from .test_audit_aggregation import (  # noqa: TID252
+from .audit_fixtures import (  # noqa: TID252
     _DOCUMENT_ONE,
     _VERSION_ONE,
     _membership,

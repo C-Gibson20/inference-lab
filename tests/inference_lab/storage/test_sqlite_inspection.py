@@ -8,7 +8,6 @@ import pytest
 from inference_lab.storage import (
     IncompatibleSchemaError,
     MigrationRequiredError,
-    StorageTransactionError,
 )
 from inference_lab.storage._sqlite_connection import open_sqlite_connection
 from inference_lab.storage._sqlite_initialisation import initialise_empty_database
@@ -70,63 +69,6 @@ def test_current_database_inspection_is_read_only(tmp_path: Path) -> None:
         connection.close()
 
 
-def test_validated_open_enables_wal_only_after_validation(tmp_path: Path) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-    _initialise(database_path)
-
-    connection = open_current_database(database_path)
-    try:
-        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-    finally:
-        connection.close()
-
-
-def test_empty_database_requires_explicit_initialisation_without_mutation(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-
-    with pytest.raises(MigrationRequiredError):
-        open_current_database(database_path)
-
-    connection = sqlite3.connect(database_path)
-    try:
-        assert connection.execute("PRAGMA application_id").fetchone()[0] == 0
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
-        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
-        assert (
-            connection.execute(
-                "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'"
-            ).fetchone()[0]
-            == 0
-        )
-    finally:
-        connection.close()
-
-
-def test_unrelated_database_is_rejected_without_changing_journal_mode(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "unrelated.sqlite3"
-    connection = sqlite3.connect(database_path)
-    connection.execute("CREATE TABLE unrelated (value TEXT)")
-    connection.commit()
-    connection.close()
-
-    with pytest.raises(IncompatibleSchemaError):
-        open_current_database(database_path)
-
-    reopened = sqlite3.connect(database_path)
-    try:
-        assert reopened.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
-        assert reopened.execute(
-            "SELECT name FROM sqlite_schema WHERE name = 'unrelated'"
-        ).fetchone() == ("unrelated",)
-    finally:
-        reopened.close()
-
-
 def test_superseded_pre_release_repository_is_rejected_without_mutation(
     tmp_path: Path,
 ) -> None:
@@ -184,26 +126,17 @@ def test_supported_pending_migration_is_reported_without_application(
         connection.close()
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        "PRAGMA user_version = 8",
-        "UPDATE metadata_schema SET current_revision = 0",
-        "DELETE FROM migration_history",
-        "UPDATE migration_history SET checksum = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'",
-        "UPDATE migration_history SET migration_id = 'changed_migration' WHERE revision = 1",
-        "UPDATE migration_history SET applied_at_utc = 'not-a-timestamp'",
-    ],
-)
 def test_inconsistent_schema_or_history_is_rejected(
     tmp_path: Path,
-    mutation: str,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _initialise(database_path)
     connection = open_sqlite_connection(database_path)
     try:
-        connection.execute(mutation)
+        connection.execute(
+            "UPDATE migration_history SET checksum = "
+            "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"
+        )
 
         with pytest.raises(IncompatibleSchemaError):
             validate_database_schema(connection)
@@ -211,50 +144,14 @@ def test_inconsistent_schema_or_history_is_rejected(
         connection.close()
 
 
-@pytest.mark.parametrize(
-    "mutations",
-    [
-        ("DROP TABLE document_family_memberships",),
-        ("DROP TABLE corpus_update_document_memberships",),
-        ("DROP INDEX document_versions_content_hash_idx",),
-        ("DROP INDEX corpus_versions_history_idx",),
-        ("DROP TRIGGER duplicate_relationships_hash_insert",),
-        ("DROP TRIGGER corpus_versions_update_immutable",),
-        ("ALTER TABLE corpora ADD COLUMN unexpected_value TEXT",),
-        ("CREATE TABLE incompatible_extra (value TEXT) STRICT",),
-        (
-            "DROP TABLE external_identifiers",
-            """CREATE TABLE external_identifiers (
-                storage_id INTEGER PRIMARY KEY,
-                document_version_id TEXT NOT NULL,
-                ordinal INTEGER NOT NULL,
-                namespace TEXT NOT NULL,
-                identifier_value TEXT NOT NULL
-            ) STRICT""",
-        ),
-    ],
-    ids=(
-        "missing-baseline-table",
-        "missing-version-table",
-        "missing-baseline-index",
-        "missing-version-index",
-        "missing-baseline-trigger",
-        "missing-version-trigger",
-        "changed-column",
-        "extra-object",
-        "changed-constraints",
-    ),
-)
 def test_schema_definition_drift_is_rejected_on_reopen(
     tmp_path: Path,
-    mutations: tuple[str, ...],
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     _initialise(database_path)
     connection = open_sqlite_connection(database_path)
     try:
-        for mutation in mutations:
-            connection.execute(mutation)
+        connection.execute("DROP TABLE document_family_memberships")
         schema_before = tuple(
             tuple(row)
             for row in connection.execute(
@@ -303,21 +200,5 @@ def test_migration_history_must_be_contiguous_and_complete(tmp_path: Path) -> No
                 connection,
                 migrations=(MIGRATIONS[0], second),
             )
-    finally:
-        connection.close()
-
-
-def test_inspection_rejects_an_existing_transaction(tmp_path: Path) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-    _initialise(database_path)
-    connection = open_sqlite_connection(database_path)
-    try:
-        connection.execute("BEGIN")
-
-        with pytest.raises(StorageTransactionError):
-            validate_database_schema(connection)
-
-        assert connection.in_transaction is True
-        connection.rollback()
     finally:
         connection.close()

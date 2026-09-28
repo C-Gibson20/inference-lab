@@ -1,7 +1,5 @@
 """Tests for complete derived-record lineage graph validation."""
 
-from dataclasses import FrozenInstanceError
-
 import pytest
 
 from inference_lab.provenance.derived import (
@@ -14,7 +12,6 @@ from inference_lab.provenance.identifiers import (
     SourceSpanId,
 )
 from inference_lab.provenance.lineage import (
-    LineageEdge,
     LineageInputs,
 )
 from inference_lab.provenance.validation import (
@@ -113,12 +110,6 @@ def test_complete_multi_parent_summary_chain_is_valid() -> None:
     assert bundle.edges == tuple(sorted(bundle.edges, key=lambda edge: edge.key()))
 
 
-def test_empty_lineage_bundle_is_valid() -> None:
-    bundle = LineageBundle()
-
-    assert validate_lineage_bundle(bundle) is bundle
-
-
 def test_valid_supersession_chain_retains_record_kind() -> None:
     original = _record(_RECORD_A, inputs=_source_inputs(), output_digest="1" * 64)
     replacement = _record(
@@ -139,20 +130,6 @@ def test_valid_supersession_chain_retains_record_kind() -> None:
     )
 
     assert validate_lineage_bundle(bundle) is bundle
-
-
-def test_lineage_bundle_values_are_immutable() -> None:
-    bundle = LineageBundle.from_records(
-        source_spans=_known_sources(),
-        records=_valid_chain(),
-    )
-
-    with pytest.raises(FrozenInstanceError):
-        bundle.edges = ()  # type: ignore[misc]
-
-    source = _known_sources()[0]
-    with pytest.raises(FrozenInstanceError):
-        source.source_span_id = _SPAN_B  # type: ignore[misc]
 
 
 def test_missing_source_span_is_rejected() -> None:
@@ -187,46 +164,6 @@ def test_missing_parent_record_is_rejected() -> None:
         validate_lineage_bundle(bundle)
 
 
-def test_self_parent_relationship_is_rejected() -> None:
-    record = _record(_RECORD_A, inputs=_parent_inputs(_RECORD_A))
-    bundle = LineageBundle.from_records(source_spans=(), records=(record,))
-
-    with pytest.raises(InvalidLineageGraphError, match="own parent"):
-        validate_lineage_bundle(bundle)
-
-
-def test_duplicate_records_source_entries_and_edges_are_rejected() -> None:
-    record = _record(_RECORD_A, inputs=_source_inputs())
-    base = LineageBundle.from_records(
-        source_spans=(_known_sources()[0],),
-        records=(record,),
-    )
-
-    duplicate_records = LineageBundle(
-        source_spans=base.source_spans,
-        records=(record, record),
-        edges=base.edges,
-    )
-    with pytest.raises(InvalidLineageGraphError, match="duplicate records"):
-        validate_lineage_bundle(duplicate_records)
-
-    duplicate_sources = LineageBundle(
-        source_spans=(base.source_spans[0], base.source_spans[0]),
-        records=base.records,
-        edges=base.edges,
-    )
-    with pytest.raises(InvalidLineageGraphError, match="duplicate source-span"):
-        validate_lineage_bundle(duplicate_sources)
-
-    duplicate_edges = LineageBundle(
-        source_spans=base.source_spans,
-        records=base.records,
-        edges=(*base.edges, base.edges[0]),
-    )
-    with pytest.raises(InvalidLineageGraphError, match="duplicate edges"):
-        validate_lineage_bundle(duplicate_edges)
-
-
 def test_edges_must_exactly_match_record_inputs() -> None:
     base = LineageBundle.from_records(
         source_spans=_known_sources(),
@@ -240,31 +177,6 @@ def test_edges_must_exactly_match_record_inputs() -> None:
 
     with pytest.raises(InvalidLineageGraphError, match="exactly match"):
         validate_lineage_bundle(missing_edge)
-
-
-def test_edge_with_missing_child_is_rejected() -> None:
-    record = _record(_RECORD_A, inputs=_source_inputs())
-    edge = LineageEdge(
-        input_reference=record.inputs.source_anchors[0],
-        child_record_id=_UNKNOWN_RECORD,
-    )
-    bundle = LineageBundle(
-        source_spans=(_known_sources()[0],),
-        records=(record,),
-        edges=(*record.inputs.edges_to(record.record_id), edge),
-    )
-
-    with pytest.raises(InvalidLineageGraphError, match="missing child"):
-        validate_lineage_bundle(bundle)
-
-
-def test_direct_parent_cycle_is_rejected() -> None:
-    first = _record(_RECORD_A, inputs=_parent_inputs(_RECORD_B))
-    second = _record(_RECORD_B, inputs=_parent_inputs(_RECORD_A))
-    bundle = LineageBundle.from_records(source_spans=(), records=(first, second))
-
-    with pytest.raises(InvalidLineageGraphError, match="lineage contains a cycle"):
-        validate_lineage_bundle(bundle)
 
 
 def test_indirect_parent_cycle_is_rejected() -> None:

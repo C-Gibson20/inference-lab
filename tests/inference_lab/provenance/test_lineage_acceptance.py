@@ -6,6 +6,7 @@ from inference_lab.provenance import (
     DerivedRecordMetadata,
     DocumentVersionId,
     InvalidLineageReferenceError,
+    InvalidLineageSerialisationError,
     KnownSourceSpan,
     LineageBundle,
     LineageInputs,
@@ -120,6 +121,9 @@ def test_summary_chain_round_trips_to_original_source_evidence() -> None:
         "topic-summary",
         "corpus-summary",
     )
+
+    with pytest.raises(InvalidLineageSerialisationError):
+        deserialise_lineage_bundle(b'{"unknown":"field"}')
 
 
 def test_source_less_root_cannot_form_a_lineage_chain() -> None:

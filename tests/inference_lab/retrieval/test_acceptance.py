@@ -1,5 +1,7 @@
 """Acceptance tests for channel-neutral retrieval contracts."""
 
+from typing import cast
+
 import pytest
 from structlog.testing import capture_logs
 
@@ -12,13 +14,22 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 from inference_lab.retrieval import (
+    AllFilter,
+    AnyFilter,
     CandidateKind,
     ChannelScore,
     EvidenceHit,
     EvidenceResult,
     EvidenceSource,
+    ExactFilter,
+    ExistsFilter,
     FailureCategory,
     InvalidRetrievalContractError,
+    InvalidRetrievalResultError,
+    MissingFilter,
+    NotFilter,
+    OneOfFilter,
+    RangeFilter,
     ResultStatus,
     RetrievalCandidate,
     RetrievalChannel,
@@ -215,3 +226,101 @@ def test_failure_values_remain_typed_and_do_not_change_empty_result_semantics() 
     assert empty.status is ResultStatus.COMPLETED
     assert failed.status is ResultStatus.FAILED
     assert failed.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
+
+
+def test_ret01_query_candidate_and_score_boundaries_reject_invalid_values() -> None:
+    source = _source(31)
+    candidate = RetrievalCandidate(
+        RecordId.generate(), CandidateKind.ORIGINAL_PASSAGE, "passage", (source,)
+    )
+    version = CorpusVersionId.generate()
+
+    with pytest.raises(InvalidRetrievalContractError):
+        RetrievalQuery(" \n", version, RetrievalLimit(1))
+    with pytest.raises(TypeError):
+        RetrievalQuery("question", str(version), RetrievalLimit(1))  # type: ignore[arg-type]
+    with pytest.raises(InvalidRetrievalContractError):
+        RetrievalLimit(0)
+    with pytest.raises(InvalidRetrievalContractError):
+        RetrievalCandidate(
+            RecordId.generate(), CandidateKind.ORIGINAL_PASSAGE, " ", (source,)
+        )
+    with pytest.raises(TypeError):
+        EvidenceSource(
+            cast(DocumentId, source.document_version_id),
+            source.document_version_id,
+            source.source_span_id,
+        )  # type: ignore[arg-type]
+    with pytest.raises(InvalidRetrievalContractError):
+        ChannelScore(RetrievalChannel.LEXICAL, 1, float("nan"), "score")
+
+    lexical = ChannelScore(RetrievalChannel.LEXICAL, 1, 1.0, "bm25")
+    with pytest.raises(InvalidRetrievalContractError):
+        EvidenceHit(candidate, (lexical, lexical), 1)
+
+
+def test_ret01_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
+    version = CorpusVersionId.generate()
+    other_version = CorpusVersionId.generate()
+    first = RetrievalCandidate(
+        RecordId.generate(), CandidateKind.ORIGINAL_PASSAGE, "first", (_source(41),)
+    )
+    second = RetrievalCandidate(
+        RecordId.generate(), CandidateKind.ORIGINAL_PASSAGE, "second", (_source(42),)
+    )
+    first_hit = EvidenceHit(first, (ChannelScore(RetrievalChannel.LEXICAL, 1),), 1)
+    second_hit = EvidenceHit(second, (ChannelScore(RetrievalChannel.LEXICAL, 2),), 2)
+    query = RetrievalQuery("query", version, RetrievalLimit(2))
+
+    result = EvidenceResult.from_query(
+        query,
+        observed_corpus_version=other_version,
+        hits=(first_hit,),
+        status=ResultStatus.COMPLETED,
+        failures=(),
+    )
+    assert result.status is ResultStatus.FAILED
+    assert result.hits == ()
+    assert result.failures[0].category is FailureCategory.CORPUS_VERSION_MISMATCH
+
+    with pytest.raises(InvalidRetrievalResultError):
+        EvidenceResult(
+            version,
+            RetrievalLimit(2),
+            (second_hit, first_hit),
+            ResultStatus.COMPLETED,
+            (),
+        )
+    with pytest.raises(InvalidRetrievalResultError):
+        EvidenceResult.from_query(
+            RetrievalQuery("query", version, RetrievalLimit(1)),
+            observed_corpus_version=version,
+            hits=(first_hit, second_hit),
+            status=ResultStatus.COMPLETED,
+            failures=(),
+        )
+
+
+def test_ret01_query_serialisation_round_trips_nested_filter_shapes() -> None:
+    expression = AllFilter(
+        (
+            AnyFilter(
+                (
+                    ExactFilter("language", "en"),
+                    OneOfFilter("document-type", ("text/plain", "application/pdf")),
+                )
+            ),
+            NotFilter(MissingFilter("page-count")),
+            RangeFilter("token-count", 1, 100),
+            ExistsFilter("source-byte-count"),
+        )
+    )
+    query = RetrievalQuery(
+        "filtered query",
+        CorpusVersionId.generate(),
+        RetrievalLimit(5),
+        expression,
+    )
+
+    encoded = serialise_query(query)
+    assert deserialise_query(encoded) == query

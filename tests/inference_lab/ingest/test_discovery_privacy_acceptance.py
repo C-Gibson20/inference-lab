@@ -9,6 +9,7 @@ from inference_lab.ingest import (
     DiscoveryInput,
     DiscoveryInputKind,
     DiscoveryRequest,
+    DiscoveryStatus,
     IdentityApplicationResult,
     IdentityPersistenceUnit,
     UuidDiscoveryIdentityIdAllocator,
@@ -33,6 +34,10 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
     private_source = private_directory / "private-filename-marker.txt"
     private_bytes = b"private-content-marker\n"
     private_source.write_bytes(private_bytes)
+    unsupported_source = private_directory / "private-unsupported-marker.pdf"
+    unsupported_source.write_bytes(b"private-pdf-marker")
+    unknown_source = private_directory / "private-unknown-marker.bin"
+    unknown_source.write_bytes(b"private-binary-marker")
     private_identifier = ExternalIdentifier(
         "doi",
         "10.1000/private-identifier-marker",
@@ -47,6 +52,8 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
                 DiscoveryInputKind.FILE,
                 external_identifiers=(private_identifier,),
             ),
+            DiscoveryInput(unsupported_source, DiscoveryInputKind.FILE),
+            DiscoveryInput(unknown_source, DiscoveryInputKind.FILE),
         ),
     )
     repository = open_metadata_repository(
@@ -88,21 +95,27 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
     finally:
         repository.close()
 
+    assert result.status is DiscoveryStatus.PARTIAL
     assert len(result.sources) == 1
+    assert tuple(failure.ordinal for failure in result.failures) == (1, 2)
+    assert result.counts.files_seen == 3
+    assert result.counts.supported == 1
+    assert result.counts.unsupported == 2
+    assert result.counts.hashed == 1
+    assert result.counts.new == 1
+    assert result.counts.failed == 0
     assert isinstance(identity_results[0], IdentityApplicationResult)
     events = [
         record["event"]
         for record in logs
         if record["event"] not in {"stage_started", "stage_completed"}
     ]
-    assert events == [
-        "source_discovered",
-        "source_hashed",
-        "identity_resolution_completed",
-        "source_identity_assigned",
-        "transaction_completed",
-        "identity_persistence_completed",
-    ]
+    assert "source_discovered" in events
+    assert "source_hashed" in events
+    assert "identity_resolution_completed" in events
+    assert "source_identity_assigned" in events
+    assert "transaction_completed" in events
+    assert "identity_persistence_completed" in events
 
     payload = repr(logs)
     private_markers = (
@@ -111,6 +124,12 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
         str(private_source),
         private_bytes.decode().strip(),
         sha256(private_bytes).hexdigest(),
+        unsupported_source.name,
+        str(unsupported_source),
+        b"private-pdf-marker".decode(),
+        unknown_source.name,
+        str(unknown_source),
+        b"private-binary-marker".decode(),
         private_identifier.value,
         private_corpus_name,
         private_database.name,

@@ -1,54 +1,28 @@
-"""Focused tests for deterministic corpus-audit Markdown sections."""
+"""EVAL-02 rendered report acceptance."""
 
-from collections.abc import Callable
-
-import pytest
-
-from inference_lab.evaluation import CorpusAuditReport
-from inference_lab.evaluation.audit_report_rendering import (
-    _render_acquisition,
-    _render_identity,
-    _render_limitations,
-    _render_parsing,
-    _render_populations,
-    _render_reconciliation,
-    _render_relationships,
-    _render_source_intake,
-    _render_structure_and_provenance,
-    _render_tools_and_policies,
-)
+from inference_lab.evaluation import render_audit_report
 
 from .test_audit_report_publication import _report  # noqa: TID252
 
-SectionRenderer = Callable[[CorpusAuditReport], tuple[str, ...]]
 
+def test_public_report_contains_ordered_sections_and_owned_content() -> None:
+    rendered = render_audit_report(_report())
+    headings = (
+        "## Identity",
+        "## Tools and policies",
+        "## Populations",
+        "## Source intake",
+        "## Parsing and fields",
+        "## Acquisition status",
+        "## Relationships",
+        "## Structure and provenance",
+        "## Limitations",
+        "## Reconciliation",
+    )
 
-@pytest.mark.parametrize(
-    ("renderer", "heading", "content_marker"),
-    (
-        (_render_identity, "## Identity", "Report ID"),
-        (_render_tools_and_policies, "## Tools and policies", "audit policy"),
-        (_render_populations, "## Populations", "source files seen"),
-        (_render_source_intake, "## Source intake", "### Source failures"),
-        (_render_parsing, "## Parsing and fields", "### Field coverage"),
-        (_render_acquisition, "## Acquisition status", "known-only"),
-        (_render_relationships, "## Relationships", "duplicate edges"),
-        (
-            _render_structure_and_provenance,
-            "## Structure and provenance",
-            "source spans",
-        ),
-        (_render_limitations, "## Limitations", "acquisition_status_incomplete"),
-        (_render_reconciliation, "## Reconciliation", "section populations"),
-    ),
-)
-def test_section_renderer_has_stable_boundary_and_owned_content(
-    renderer: SectionRenderer,
-    heading: str,
-    content_marker: str,
-) -> None:
-    lines = renderer(_report())
-
-    assert lines[0] == heading
-    assert lines[-1] == ""
-    assert content_marker in "\n".join(lines)
+    positions = tuple(rendered.index(heading) for heading in headings)
+    assert positions == tuple(sorted(positions))
+    assert "Report ID" in rendered
+    assert "source files seen" in rendered
+    assert "known-only" in rendered
+    assert "acquisition_status_incomplete" in rendered

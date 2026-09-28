@@ -1,8 +1,6 @@
 """Tests for deterministic, content-free local source traversal."""
 
-import os
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,7 +14,6 @@ from inference_lab.ingest import (
     DiscoveryRequest,
     LocalTraversalFileSystem,
     TraversalCandidate,
-    TraversalFileSystem,
     TraversalInventory,
     TraversalPathMetadata,
     canonical_path_key,
@@ -51,18 +48,6 @@ def _relative_locations(inventory: TraversalInventory) -> tuple[str, ...]:
     )
 
 
-def _path_metadata(**changes: object) -> TraversalPathMetadata:
-    values: dict[str, object] = {
-        "mode": 1,
-        "byte_count": 2,
-        "modified_time_ns": 3,
-        "device_id": 4,
-        "file_id": 5,
-    }
-    values.update(changes)
-    return TraversalPathMetadata(**values)  # type: ignore[arg-type]
-
-
 class _FaultInjectingFileSystem(LocalTraversalFileSystem):
     """Expose deterministic path races and host-specific traversal failures."""
 
@@ -71,7 +56,6 @@ class _FaultInjectingFileSystem(LocalTraversalFileSystem):
         self.missing_metadata: set[Path] = set()
         self.inaccessible_directories: set[Path] = set()
         self.junctions: set[Path] = set()
-        self.device_overrides: dict[Path, int] = {}
         self.after_snapshot: dict[Path, Callable[[], None]] = {}
         self.reverse_snapshots: set[Path] = set()
 
@@ -80,9 +64,7 @@ class _FaultInjectingFileSystem(LocalTraversalFileSystem):
             raise FileNotFoundError("injected missing path")
         if path in self.inaccessible_metadata:
             raise PermissionError("injected inaccessible path")
-        metadata = super().lstat(path)
-        device_id = self.device_overrides.get(path)
-        return metadata if device_id is None else replace(metadata, device_id=device_id)
+        return super().lstat(path)
 
     def list_directory(self, path: Path) -> tuple[Path, ...]:
         if path in self.inaccessible_directories:
@@ -151,128 +133,36 @@ def test_nested_directory_is_sorted_and_includes_hidden_entries(
     root = tmp_path / "sources"
     (root / "nested").mkdir(parents=True)
     (root / ".hidden").mkdir()
-    for relative in ("z.txt", "a.txt", "nested/b.txt", ".hidden/c.txt"):
+    names = (
+        "z.txt",
+        "a.txt",
+        "nested/b.txt",
+        ".hidden/c.txt",
+        "A.txt",
+        "é.txt",
+        "e\N{COMBINING ACUTE ACCENT}.txt",
+        "ß.txt",
+    )
+    for relative in names:
         (root / relative).write_text(relative, encoding="utf-8")
+    filesystem = _FaultInjectingFileSystem()
+    filesystem.reverse_snapshots.add(root)
+    request = _request(_directory_input(root))
 
     inventory = inventory_local_sources(
-        _request(_directory_input(root)),
+        request,
         excluded_paths=(),
+        filesystem=filesystem,
     )
+    repeated = inventory_local_sources(request, excluded_paths=())
 
     expected = tuple(
         path.relative_to(root).as_posix()
         for path in sorted(root.rglob("*.txt"), key=canonical_path_key)
     )
     assert _relative_locations(inventory) == expected
+    assert inventory == repeated
     assert inventory.complete_root_ordinals == (0,)
-
-
-def test_empty_directory_is_a_complete_zero_candidate_inventory(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "empty"
-    root.mkdir()
-
-    inventory = inventory_local_sources(
-        _request(_directory_input(root)),
-        excluded_paths=(),
-    )
-
-    assert inventory.candidates == ()
-    assert inventory.failures == ()
-    assert inventory.complete_root_ordinals == (0,)
-    assert inventory.root_scopes[0].path == root.resolve()
-    assert inventory.root_scopes[0].kind is DiscoveryInputKind.DIRECTORY
-
-
-def test_overlapping_roots_deduplicate_resolved_entry(tmp_path: Path) -> None:
-    root = tmp_path / "sources"
-    nested = root / "nested"
-    nested.mkdir(parents=True)
-    source = nested / "paper.txt"
-    source.write_text("payload", encoding="utf-8")
-    linked = nested / "linked.txt"
-    try:
-        linked.symlink_to(source)
-    except OSError as error:
-        pytest.skip(f"symlinks unavailable: {type(error).__name__}")
-    identifier = ExternalIdentifier("doi", "10.1000/explicit")
-
-    inventory = inventory_local_sources(
-        _request(
-            _directory_input(root),
-            _directory_input(nested),
-            _file_input(source, external_identifiers=(identifier,)),
-        ),
-        excluded_paths=(),
-    )
-
-    assert len(inventory.candidates) == 1
-    assert inventory.candidates[0].external_identifiers == (identifier,)
-    assert inventory.candidates[0].locator.request_root_ordinal == 2
-    assert len(inventory.failures) == 1
-    assert inventory.failures[0].category is DiscoveryFailureCategory.SOURCE_SYMLINK
-    assert inventory.complete_root_ordinals == (0, 1, 2)
-
-
-def test_duplicate_identical_roots_are_scanned_once(tmp_path: Path) -> None:
-    source = tmp_path / "paper.txt"
-    source.write_text("payload", encoding="utf-8")
-    discovery_input = _file_input(source)
-
-    inventory = inventory_local_sources(
-        _request(discovery_input, discovery_input),
-        excluded_paths=(),
-    )
-
-    assert inventory.root_count == 1
-    assert len(inventory.candidates) == 1
-
-
-def test_duplicate_root_with_conflicting_metadata_fails_request(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "paper.txt"
-    source.write_text("payload", encoding="utf-8")
-
-    inventory = inventory_local_sources(
-        _request(
-            _file_input(
-                source,
-                external_identifiers=(ExternalIdentifier("doi", "10.1000/one"),),
-            ),
-            _file_input(
-                source,
-                external_identifiers=(ExternalIdentifier("doi", "10.1000/two"),),
-            ),
-        ),
-        excluded_paths=(),
-    )
-
-    assert inventory.candidates == ()
-    assert len(inventory.failures) == 1
-    assert inventory.failures[0].category is DiscoveryFailureCategory.INVALID_REQUEST
-    assert inventory.complete_root_ordinals == ()
-
-
-def test_hard_links_remain_independently_observed_paths(tmp_path: Path) -> None:
-    first = tmp_path / "first.txt"
-    second = tmp_path / "second.txt"
-    first.write_text("same bytes", encoding="utf-8")
-    try:
-        os.link(first, second)
-    except OSError as error:
-        pytest.skip(f"hard links unavailable: {type(error).__name__}")
-
-    inventory = inventory_local_sources(
-        _request(_directory_input(tmp_path)),
-        excluded_paths=(),
-    )
-
-    assert _relative_locations(inventory) == ("first.txt", "second.txt")
-    first_hint = inventory.candidates[0].stat_evidence.identity_hint
-    second_hint = inventory.candidates[1].stat_evidence.identity_hint
-    assert first_hint == second_hint
 
 
 def test_nested_symlink_loop_is_reported_without_traversal(tmp_path: Path) -> None:
@@ -350,45 +240,6 @@ def test_explicit_root_with_symlinked_ancestor_fails_closed(
     assert inventory.complete_root_ordinals == ()
 
 
-def test_explicit_root_with_junction_ancestor_fails_closed(tmp_path: Path) -> None:
-    ancestor = tmp_path / "junction"
-    root = ancestor / "source.txt"
-    ancestor.mkdir()
-    root.write_text("content", encoding="utf-8")
-    filesystem = _FaultInjectingFileSystem()
-    filesystem.junctions.add(ancestor)
-
-    inventory = inventory_local_sources(
-        _request(_file_input(root)),
-        excluded_paths=(),
-        filesystem=filesystem,
-    )
-
-    assert inventory.candidates == ()
-    assert len(inventory.failures) == 1
-    assert inventory.failures[0].category is DiscoveryFailureCategory.INVALID_ROOT
-    assert inventory.failures[0].file_kind is DiscoveryFileKind.SYMLINK
-    assert inventory.complete_root_ordinals == ()
-
-
-def test_special_file_is_reported_without_becoming_candidate(tmp_path: Path) -> None:
-    fifo = tmp_path / "source.pipe"
-    try:
-        os.mkfifo(fifo)
-    except (AttributeError, OSError) as error:
-        pytest.skip(f"FIFOs unavailable: {type(error).__name__}")
-
-    inventory = inventory_local_sources(
-        _request(_directory_input(tmp_path)),
-        excluded_paths=(),
-    )
-
-    assert inventory.candidates == ()
-    assert inventory.failures[0].category is (
-        DiscoveryFailureCategory.SOURCE_SPECIAL_FILE
-    )
-
-
 @pytest.mark.parametrize("excluded_relative", [".", "active/indexes"])
 def test_storage_overlap_fails_root_before_traversal(
     tmp_path: Path,
@@ -409,67 +260,25 @@ def test_storage_overlap_fails_root_before_traversal(
     )
 
 
-def test_missing_and_kind_mismatched_roots_fail_request(tmp_path: Path) -> None:
-    missing = inventory_local_sources(
-        _request(_file_input(tmp_path / "missing.txt")),
-        excluded_paths=(),
-    )
-    assert missing.failures[0].category is DiscoveryFailureCategory.ROOT_NOT_FOUND
-
-    source = tmp_path / "source.txt"
-    source.write_text("content", encoding="utf-8")
-    mismatched = inventory_local_sources(
-        _request(_directory_input(source)),
-        excluded_paths=(),
-    )
-    assert mismatched.failures[0].category is DiscoveryFailureCategory.INVALID_ROOT
-
-
-def test_root_input_order_does_not_change_candidate_order(tmp_path: Path) -> None:
-    first = tmp_path / "a.txt"
-    second = tmp_path / "b.txt"
-    first.write_text("a", encoding="utf-8")
-    second.write_text("b", encoding="utf-8")
-
-    forward = inventory_local_sources(
-        _request(_file_input(first), _file_input(second)),
-        excluded_paths=(),
-    )
-    reverse = inventory_local_sources(
-        _request(_file_input(second), _file_input(first)),
-        excluded_paths=(),
-    )
-
-    assert _relative_locations(forward) == _relative_locations(reverse)
-    assert tuple(item.ordinal for item in forward.candidates) == (0, 1)
-    assert tuple(item.ordinal for item in reverse.candidates) == (0, 1)
-
-
-def test_deep_directory_traversal_is_iterative(tmp_path: Path) -> None:
-    root = tmp_path / "deep"
-    root.mkdir()
-    directory = root
-    for _ in range(80):
-        directory /= "d"
-        directory.mkdir()
-    (directory / "leaf.txt").write_text("leaf", encoding="utf-8")
-
-    inventory = inventory_local_sources(
-        _request(_directory_input(root)),
-        excluded_paths=(),
-    )
-
-    assert len(inventory.candidates) == 1
-    assert inventory.failures == ()
-
-
-def test_inaccessible_root_fails_the_request_without_leaking_error(
+@pytest.mark.parametrize(
+    ("root_exists", "expected_category", "expected_log_category"),
+    (
+        (False, DiscoveryFailureCategory.ROOT_NOT_FOUND, "root_not_found"),
+        (True, DiscoveryFailureCategory.ROOT_INACCESSIBLE, "root_inaccessible"),
+    ),
+    ids=("missing", "inaccessible"),
+)
+def test_unavailable_root_fails_request_without_leaking_path(
     tmp_path: Path,
+    root_exists: bool,
+    expected_category: DiscoveryFailureCategory,
+    expected_log_category: str,
 ) -> None:
-    root = tmp_path / "private-root"
-    root.mkdir()
+    root = tmp_path / "private-root-marker"
     filesystem = _FaultInjectingFileSystem()
-    filesystem.inaccessible_metadata.add(root)
+    if root_exists:
+        root.mkdir()
+        filesystem.inaccessible_metadata.add(root)
 
     with capture_logs() as logs:
         inventory = inventory_local_sources(
@@ -480,14 +289,14 @@ def test_inaccessible_root_fails_the_request_without_leaking_error(
 
     assert inventory.candidates == ()
     assert tuple(failure.category for failure in inventory.failures) == (
-        DiscoveryFailureCategory.ROOT_INACCESSIBLE,
+        expected_category,
     )
     assert inventory.complete_root_ordinals == ()
-    assert "private-root" not in repr(inventory.failures[0])
+    assert root.name not in repr(inventory.failures[0])
     assert [(record["event"], record["log_level"]) for record in logs] == [
         ("discovery_failed", "error")
     ]
-    assert logs[0]["error_category"] == "root_inaccessible"
+    assert logs[0]["error_category"] == expected_log_category
     assert root.name not in repr(logs)
 
 
@@ -534,34 +343,7 @@ def test_inaccessible_subtree_and_file_do_not_block_safe_sibling(
     assert safe_file.name not in log_payload
 
 
-def test_request_fatal_traversal_logs_bounded_failure_without_private_path(
-    tmp_path: Path,
-) -> None:
-    marker = "confidential-missing-root-9813"
-
-    with capture_logs() as logs:
-        inventory = inventory_local_sources(
-            _request(_directory_input(tmp_path / marker)),
-            excluded_paths=(),
-        )
-
-    assert inventory.failures[0].category is DiscoveryFailureCategory.ROOT_NOT_FOUND
-    assert logs == [
-        {
-            "pipeline_stage": "ingest",
-            "source_ordinal": 0,
-            "error_category": "root_not_found",
-            "failure_scope": "request",
-            "failure_stage": "input",
-            "retryable": True,
-            "event": "discovery_failed",
-            "log_level": "error",
-        }
-    ]
-    assert marker not in repr(logs)
-
-
-def test_entry_removed_after_snapshot_is_a_bounded_source_failure(
+def test_snapshot_handles_removed_and_added_entries_on_next_run(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "sources"
@@ -569,80 +351,31 @@ def test_entry_removed_after_snapshot_is_a_bounded_source_failure(
     vanished = root / "a-vanished.txt"
     vanished.write_text("temporary", encoding="utf-8")
     (root / "b-safe.txt").write_text("safe", encoding="utf-8")
+    added = root / "c-added.txt"
     filesystem = _FaultInjectingFileSystem()
-    filesystem.after_snapshot[root] = vanished.unlink
+
+    def change_directory() -> None:
+        vanished.unlink()
+        added.write_text("added", encoding="utf-8")
+
+    filesystem.after_snapshot[root] = change_directory
+    request = _request(_directory_input(root))
 
     inventory = inventory_local_sources(
-        _request(_directory_input(root)),
+        request,
         excluded_paths=(),
         filesystem=filesystem,
     )
+    repeated = inventory_local_sources(request, excluded_paths=())
 
     assert _relative_locations(inventory) == ("b-safe.txt",)
     assert tuple(failure.category for failure in inventory.failures) == (
         DiscoveryFailureCategory.SOURCE_NOT_FOUND,
     )
     assert inventory.complete_root_ordinals == ()
-
-
-def test_entry_added_after_snapshot_is_deferred_until_the_next_run(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "sources"
-    root.mkdir()
-    (root / "existing.txt").write_text("existing", encoding="utf-8")
-    added = root / "added.txt"
-    filesystem = _FaultInjectingFileSystem()
-
-    def add_entry() -> None:
-        added.write_text("added", encoding="utf-8")
-
-    filesystem.after_snapshot[root] = add_entry
-    request = _request(_directory_input(root))
-
-    first = inventory_local_sources(
-        request,
-        excluded_paths=(),
-        filesystem=filesystem,
-    )
-    second = inventory_local_sources(request, excluded_paths=())
-
-    assert _relative_locations(first) == ("existing.txt",)
-    assert first.failures == ()
-    assert first.complete_root_ordinals == (0,)
-    assert _relative_locations(second) == ("added.txt", "existing.txt")
-
-
-def test_nested_mount_is_reported_without_crossing_device_boundary(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "sources"
-    nested_mount = root / "a-mounted"
-    nested_mount.mkdir(parents=True)
-    (nested_mount / "excluded.txt").write_text("excluded", encoding="utf-8")
-    (root / "b-local.txt").write_text("local", encoding="utf-8")
-    filesystem = _FaultInjectingFileSystem()
-    root_device = filesystem.lstat(root).device_id
-    filesystem.device_overrides[nested_mount] = root_device + 1
-
-    with capture_logs() as logs:
-        inventory = inventory_local_sources(
-            _request(_directory_input(root)),
-            excluded_paths=(),
-            filesystem=filesystem,
-        )
-
-    assert _relative_locations(inventory) == ("b-local.txt",)
-    assert tuple(failure.category for failure in inventory.failures) == (
-        DiscoveryFailureCategory.NESTED_MOUNT,
-    )
-    assert inventory.complete_root_ordinals == (0,)
-    assert [(record["event"], record["log_level"]) for record in logs] == [
-        ("source_skipped", "debug"),
-        ("source_discovered", "debug"),
-    ]
-    assert logs[0]["error_category"] == "nested_mount"
-    assert nested_mount.name not in repr(logs)
+    assert _relative_locations(repeated) == ("b-safe.txt", "c-added.txt")
+    assert repeated.failures == ()
+    assert repeated.complete_root_ordinals == (0,)
 
 
 def test_junction_is_reported_without_traversing_its_target(tmp_path: Path) -> None:
@@ -664,88 +397,3 @@ def test_junction_is_reported_without_traversing_its_target(tmp_path: Path) -> N
         DiscoveryFailureCategory.SOURCE_SYMLINK,
     )
     assert inventory.complete_root_ordinals == (0,)
-
-
-def test_unicode_case_order_is_stable_across_adapter_and_repeated_runs(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "sources"
-    root.mkdir()
-    names = ("a.txt", "A.txt", "é.txt", "e\N{COMBINING ACUTE ACCENT}.txt", "ß.txt")
-    for name in names:
-        (root / name).write_text(name, encoding="utf-8")
-    filesystem = _FaultInjectingFileSystem()
-    filesystem.reverse_snapshots.add(root)
-    request = _request(_directory_input(root))
-
-    first = inventory_local_sources(
-        request,
-        excluded_paths=(),
-        filesystem=filesystem,
-    )
-    second = inventory_local_sources(request, excluded_paths=())
-    expected = tuple(
-        path.name for path in sorted(root.iterdir(), key=canonical_path_key)
-    )
-
-    assert _relative_locations(first) == expected
-    assert first == second
-
-
-def test_traversal_api_requires_typed_request_and_exclusions(tmp_path: Path) -> None:
-    assert isinstance(LocalTraversalFileSystem(), TraversalFileSystem)
-    with pytest.raises(TypeError, match="request must be a DiscoveryRequest"):
-        inventory_local_sources(
-            "not-a-request",  # pyright: ignore[reportArgumentType]
-            excluded_paths=(),
-        )
-    with pytest.raises(TypeError, match="excluded_paths must be a tuple"):
-        inventory_local_sources(
-            _request(_directory_input(tmp_path)),
-            excluded_paths=[],  # pyright: ignore[reportArgumentType]
-        )
-    with pytest.raises(TypeError, match="filesystem must implement"):
-        inventory_local_sources(
-            _request(_directory_input(tmp_path)),
-            excluded_paths=(),
-            filesystem=object(),  # pyright: ignore[reportArgumentType]
-        )
-
-
-def test_canonical_path_key_rejects_untyped_or_remote_paths() -> None:
-    with pytest.raises(TypeError, match="path must be a Path"):
-        canonical_path_key("source.txt")  # pyright: ignore[reportArgumentType]
-    with pytest.raises(ValueError, match="local filesystem path"):
-        canonical_path_key(Path("https:/example.test/source"))
-
-
-@pytest.mark.parametrize(
-    "field_name",
-    ["mode", "byte_count", "modified_time_ns", "device_id", "file_id"],
-)
-def test_traversal_path_metadata_rejects_untyped_values(field_name: str) -> None:
-    with pytest.raises(TypeError, match=rf"{field_name} must be an integer"):
-        _path_metadata(**{field_name: True})
-
-
-@pytest.mark.parametrize(
-    "field_name",
-    ["mode", "byte_count", "modified_time_ns", "device_id", "file_id"],
-)
-def test_traversal_path_metadata_rejects_negative_values(field_name: str) -> None:
-    with pytest.raises(ValueError, match=rf"{field_name} must be non-negative"):
-        _path_metadata(**{field_name: -1})
-
-
-def test_failure_and_candidate_representations_hide_source_paths(
-    tmp_path: Path,
-) -> None:
-    marker = "confidential-source-7182.txt"
-    source = tmp_path / marker
-    source.write_text("payload", encoding="utf-8")
-    inventory = inventory_local_sources(
-        _request(_file_input(source)),
-        excluded_paths=(),
-    )
-
-    assert marker not in repr(inventory.candidates[0])

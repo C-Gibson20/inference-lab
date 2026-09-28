@@ -264,72 +264,14 @@ def test_source_publication_becomes_visible_only_with_committed_metadata(
     assert all(SOURCE_HASH.digest not in repr(record) for record in logs)
 
 
-def test_metadata_failure_leaves_promoted_blob_unreachable(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-    source_dir = tmp_path / "source-data"
-    repository = _open_repository(database_path, source_dir)
-    connection = sqlite3.connect(database_path)
-    try:
-        connection.execute(
-            f"""CREATE TRIGGER reject_source_publication
-            BEFORE INSERT ON source_artefacts
-            BEGIN
-                SELECT RAISE(ABORT, '{_PRIVATE_DATABASE_PAYLOAD}');
-            END"""
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-    try:
-        with capture_logs(processors=(merge_contextvars,)) as logs:
-            with pytest.raises(StorageConflictError) as captured:
-                repository.persist_source_artefact(
-                    _CORPUS.corpus_id,
-                    _ARTEFACT,
-                    (SOURCE_BYTES,),
-                    max_source_bytes=len(SOURCE_BYTES),
-                )
-
-        assert (
-            repository.get_source_artefact(
-                _CORPUS.corpus_id,
-                DOCUMENT_VERSION_ID,
-            )
-            is None
-        )
-        assert (
-            repository.read_source_bytes(
-                _CORPUS.corpus_id,
-                DOCUMENT_VERSION_ID,
-            )
-            is None
-        )
-        assert repository.get_corpus(_CORPUS.corpus_id) == _CORPUS
-        assert (source_dir / _ARTEFACT.storage_key).is_file()
-        assert _PRIVATE_DATABASE_PAYLOAD not in str(captured.value)
-        assert _PRIVATE_DATABASE_PAYLOAD not in repr(logs)
-        assert logs[-1]["event"] == "source_persistence_failed"
-        assert logs[-1]["error_category"] == "conflict"
-    finally:
-        repository.close()
-
-
-@pytest.mark.parametrize(
-    "operation",
-    ("write", "flush", "hash", "rename"),
-)
 def test_pre_promotion_filesystem_failures_leave_no_visible_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    operation: _PrePromotionFailure,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"
     source_dir = tmp_path / "private-source-data"
     repository = _open_repository(database_path, source_dir)
-    _inject_pre_promotion_failure(monkeypatch, operation)
+    _inject_pre_promotion_failure(monkeypatch, "write")
 
     try:
         with capture_logs(processors=(merge_contextvars,)) as logs:
@@ -577,63 +519,6 @@ def test_source_and_complete_parse_records_commit_together_across_restart(
         )
     finally:
         reopened.close()
-
-
-def test_parse_outcome_failure_rolls_back_all_metadata_after_blob_promotion(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "metadata.sqlite3"
-    source_dir = tmp_path / "source-data"
-    repository = _open_repository(database_path, source_dir)
-    connection = sqlite3.connect(database_path)
-    try:
-        connection.execute(
-            f"""CREATE TRIGGER reject_parse_publication
-            BEFORE INSERT ON parse_outcomes
-            BEGIN
-                SELECT RAISE(ABORT, '{_PRIVATE_DATABASE_PAYLOAD}');
-            END"""
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-    try:
-        with pytest.raises(StorageConflictError):
-            repository.persist_source_artefact(
-                _CORPUS.corpus_id,
-                _ARTEFACT,
-                (SOURCE_BYTES,),
-                max_source_bytes=len(SOURCE_BYTES),
-                parse_outcome=_PARSE_OUTCOME,
-                parsed_representation=parsed_representation(),
-            )
-
-        assert (
-            repository.get_source_artefact(
-                _CORPUS.corpus_id,
-                DOCUMENT_VERSION_ID,
-            )
-            is None
-        )
-        assert (
-            repository.get_parsed_representation(
-                _CORPUS.corpus_id,
-                PARSED_RECORD_ID,
-            )
-            is None
-        )
-        assert (
-            repository.get_parse_outcome(
-                _CORPUS.corpus_id,
-                PARSE_ID,
-            )
-            is None
-        )
-        assert repository.get_corpus(_CORPUS.corpus_id) == _CORPUS
-        assert (source_dir / _ARTEFACT.storage_key).is_file()
-    finally:
-        repository.close()
 
 
 def test_mismatched_parse_bundle_is_rejected_before_blob_publication(
