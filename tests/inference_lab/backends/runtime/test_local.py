@@ -29,7 +29,9 @@ from inference_lab.settings import LoggingConfig
 FIXTURE_DIR = Path("tests/fixtures/backends/runtime/local_mechanics")
 
 
-def test_local_backend_advertises_only_supported_capabilities_and_rejects_sampling() -> None:
+def test_local_backend_advertises_only_supported_capabilities_and_rejects_sampling() -> (
+    None
+):
     backend = LocalCausalBackend(FIXTURE_DIR)
     assert isinstance(backend, LifecycleBackend)
     assert isinstance(backend, GeneratorBackend)
@@ -87,9 +89,7 @@ def test_local_backend_enforces_context_and_output_limits() -> None:
 
     too_large = LocalCausalBackend(FIXTURE_DIR, context_limit_tokens=5)
     too_large.load()
-    request = GenerationRequest(
-        messages=(GenerationMessage("user", "hello world"),)
-    )
+    request = GenerationRequest(messages=(GenerationMessage("user", "hello world"),))
     with pytest.raises(BackendRequestError):
         too_large._prepare_generation(request)
     backend.close()
@@ -146,7 +146,9 @@ def test_local_backend_logs_remain_structured_and_payload_free() -> None:
     backend.load()
     request = GenerationRequest(
         messages=(
-            GenerationMessage("user", "private-prompt-marker /Users/private/prompt.txt"),
+            GenerationMessage(
+                "user", "private-prompt-marker /Users/private/prompt.txt"
+            ),
         ),
         options=GenerationOptions(maximum_output_tokens=2),
     )

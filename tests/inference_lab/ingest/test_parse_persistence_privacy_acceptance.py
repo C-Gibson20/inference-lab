@@ -178,14 +178,20 @@ def test_preflight_error_hides_changed_source_and_private_paths(
         _assert_private_values_absent(repr(logs), case)
         _assert_private_values_absent(repr(case.request), case)
         source = case.request.parser_input
-        assert repository.get_source_artefact(
-            _CORPUS_ID,
-            source.document_version_id,
-        ) is None
-        assert repository.list_parsed_representations(
-            _CORPUS_ID,
-            source.document_version_id,
-        ) == ()
+        assert (
+            repository.get_source_artefact(
+                _CORPUS_ID,
+                source.document_version_id,
+            )
+            is None
+        )
+        assert (
+            repository.list_parsed_representations(
+                _CORPUS_ID,
+                source.document_version_id,
+            )
+            == ()
+        )
         assert repository.get_parse_outcome(_CORPUS_ID, case.request.parse_id) is None
     finally:
         repository.close()

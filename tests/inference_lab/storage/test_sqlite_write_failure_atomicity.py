@@ -80,8 +80,6 @@ def _install_trigger(path: Path, statement: str) -> None:
         connection.close()
 
 
-
-
 def test_source_advance_failure_rolls_back_appended_history(
     tmp_path: Path,
 ) -> None:

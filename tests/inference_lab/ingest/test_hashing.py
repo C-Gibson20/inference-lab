@@ -20,7 +20,6 @@ from inference_lab.ingest import (
     LocalStableReadFileSystem,
     SourceClassification,
     SourceSupport,
-    StableReadFileSystem,
     TraversalCandidate,
     TraversalPathMetadata,
     VerifiedSourceSnapshot,

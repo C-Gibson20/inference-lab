@@ -15,6 +15,7 @@ from inference_lab.profiling import (
     FailureEvent,
     FailureMapping,
     ObservedStage,
+    ResourceCategory,
     ResourceMeasurement,
     StageTiming,
     emit_record,
@@ -118,7 +119,7 @@ def test_observed_stage_records_success_failure_cancellation_and_sink_policy() -
 
 
 def test_resource_records_keep_units_statuses_and_time_boundaries_strict() -> None:
-    expected_units = {
+    expected_units: dict[ResourceCategory, str] = {
         "model_weights": "bytes",
         "gpu_utilisation": "percent",
         "storage_throughput": "bytes_per_second",
@@ -126,9 +127,12 @@ def test_resource_records_keep_units_statuses_and_time_boundaries_strict() -> No
         "thermal": "celsius",
     }
     for category, unit in expected_units.items():
-        assert ResourceMeasurement(  # type: ignore[arg-type]
-            category=category, value=1
-        ).unit == unit
+        assert (
+            ResourceMeasurement(  # type: ignore[arg-type]
+                category=category, value=1
+            ).unit
+            == unit
+        )
 
     unavailable = ResourceMeasurement(
         category="power", value=None, status="unavailable", observed_at=NOW

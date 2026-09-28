@@ -10,11 +10,13 @@ from inference_lab.retrieval import (
     AnyFilter,
     ExactFilter,
     ExistsFilter,
+    FilterScalar,
     InvalidMetadataFilterError,
     MetadataFieldType,
     MetadataFilterErrorCategory,
     MetadataFilterOperator,
     MetadataMissingPolicy,
+    MetadataValues,
     MissingFilter,
     NotFilter,
     OneOfFilter,
@@ -57,7 +59,10 @@ def test_ret03_registry_accepts_predicates_for_every_supported_field() -> None:
         assert validate_metadata_filter(ExistsFilter(name)).node_count == 1
         assert validate_metadata_filter(MissingFilter(name)).node_count == 1
         if type(value) is int:
-            assert validate_metadata_filter(RangeFilter(name, value, value)).node_count == 1
+            assert (
+                validate_metadata_filter(RangeFilter(name, value, value)).node_count
+                == 1
+            )
 
     language = CURRENT_METADATA_FILTER_REGISTRY.descriptor("language")
     assert language is not None
@@ -66,7 +71,7 @@ def test_ret03_registry_accepts_predicates_for_every_supported_field() -> None:
 
 
 def test_ret03_predicates_and_boolean_combinations_match_real_field_values() -> None:
-    values: dict[str, object] = {
+    values: MetadataValues = {
         "character-count": 80,
         "document-type": "text/plain",
         "language": "en",
@@ -75,8 +80,10 @@ def test_ret03_predicates_and_boolean_combinations_match_real_field_values() -> 
         "token-count": 20,
     }
     for field, value in values.items():
-        assert evaluate_metadata_filter(ExactFilter(field, value), values)
-        assert evaluate_metadata_filter(OneOfFilter(field, (value,)), values)
+        assert value is not None
+        scalar: FilterScalar = value
+        assert evaluate_metadata_filter(ExactFilter(field, scalar), values)
+        assert evaluate_metadata_filter(OneOfFilter(field, (scalar,)), values)
         assert evaluate_metadata_filter(ExistsFilter(field), values)
         assert not evaluate_metadata_filter(MissingFilter(field), values)
         if type(value) is int:
@@ -95,9 +102,7 @@ def test_ret03_predicates_and_boolean_combinations_match_real_field_values() -> 
         )
     )
     assert evaluate_metadata_filter(combined, values)
-    assert evaluate_metadata_filter(
-        RangeFilter("source-byte-count", 100, None), values
-    )
+    assert evaluate_metadata_filter(RangeFilter("source-byte-count", 100, None), values)
     assert not evaluate_metadata_filter(
         RangeFilter("page-count", 2, 4, lower_inclusive=False), values
     )

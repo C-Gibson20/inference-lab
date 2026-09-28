@@ -173,9 +173,7 @@ def test_fake_failure_modes_keep_typed_errors_and_hide_payloads() -> None:
             backend.embed(EmbeddingRequest(input_texts=(secret,)))
     assert secret not in stream.getvalue()
     records = [json.loads(line) for line in stream.getvalue().splitlines()]
-    failures = [
-        item for item in records if item["event"] == "backend_operation_failed"
-    ]
+    failures = [item for item in records if item["event"] == "backend_operation_failed"]
     assert len(failures) == 3
     assert all(item["level"] == "error" for item in failures)
 
@@ -190,9 +188,7 @@ def test_partial_generation_survives_execution_failure_and_cancellation() -> Non
         )
     )
     failing.load()
-    request = GenerationRequest(
-        messages=(GenerationMessage(role="user", content="q"),)
-    )
+    request = GenerationRequest(messages=(GenerationMessage(role="user", content="q"),))
 
     async def read_partial() -> list[str | None]:
         output: list[str | None] = []

@@ -14,34 +14,23 @@ from inference_lab.ingest import (
     DiscoveryFailureCategory,
     DiscoveryFileKind,
     IdentityApplicationResult,
-    persist_discovered_source_identity,
 )
 from inference_lab.provenance import (
-    CorpusDocumentVersionMembership,
-    CorpusMetadata,
-    DocumentIdentity,
-    DocumentVersion,
     IdentityIdCollisionError,
-    SourceObservationState,
 )
 from inference_lab.storage import (
     RepositoryUnavailableError,
     StorageConcurrencyError,
     StorageConflictError,
 )
-from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from tests.inference_lab.ingest.identity_persistence_fixtures import (
     _CORPUS_ID,
     _FIRST_DOCUMENT_ID,
     _FIRST_VERSION_ID,
     _HASH,
-    _OTHER_HASH,
     _SECOND_DOCUMENT_ID,
-    _SECOND_SOURCE_ID,
     _SECOND_VERSION_ID,
-    _SOURCE_ID,
     _case,
-    _CollisionThenUniqueAllocator,
     _persist,
     _Repository,
     _resolved,

@@ -1,5 +1,7 @@
 """Acceptance tests for channel-neutral retrieval contracts."""
 
+from typing import cast
+
 import pytest
 from structlog.testing import capture_logs
 
@@ -245,7 +247,7 @@ def test_ret01_query_candidate_and_score_boundaries_reject_invalid_values() -> N
         )
     with pytest.raises(TypeError):
         EvidenceSource(
-            source.document_version_id,
+            cast(DocumentId, source.document_version_id),
             source.document_version_id,
             source.source_span_id,
         )  # type: ignore[arg-type]
