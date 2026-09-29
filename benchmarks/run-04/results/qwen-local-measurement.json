@@ -1,0 +1,83 @@
+{
+  "acceptance": {
+    "finite_vectors": true,
+    "output_dimensions": 1024,
+    "repeatability_iterations": 5,
+    "repeatability_tolerance": "rtol=1e-5, atol=1e-6",
+    "reversed_batch_order": "passed",
+    "vector_count_per_request": 8
+  },
+  "embedding_profile": {
+    "device_type": "cpu",
+    "document_prefix": "",
+    "inference_dtype": "float32",
+    "input_normalisation": "identity-v1",
+    "l2_normalised": false,
+    "max_input_tokens": 4096,
+    "over_limit_policy": "truncate_tail",
+    "pooling_strategy": "last-token-v1",
+    "profile_version": "1.0.0",
+    "query_prefix": "Instruct: Given a scientific literature search query, retrieve passages that answer the query\nQuery: ",
+    "tokenizer_id": "Qwen/Qwen3-Embedding-0.6B",
+    "tokenizer_revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+  },
+  "environment": {
+    "device_type": "cpu",
+    "inference_dtype": "float32",
+    "machine": "arm64",
+    "platform": "Darwin",
+    "platform_release": "27.0.0",
+    "processor": "arm",
+    "python_version": "3.13.12",
+    "torch_version": "2.8.0",
+    "transformers_version": "4.55.4"
+  },
+  "inference": {
+    "elapsed_ms_total": 3320.687292,
+    "embeddings_per_second": 12.045699122698363,
+    "input_tokens_per_second": 120.45699122698362,
+    "median_batch_duration_ms": 655.652042
+  },
+  "inputs": {
+    "backend_internal_batch_size": 2,
+    "input_count_per_batch": 8,
+    "input_tokens_total": 400,
+    "measured_iterations": 5,
+    "request_batch_size": 8,
+    "sha256": "0ee315cb67a85dac6d7acddd0ab6c7507ef0d48f86e79fae13f113613f4e3580",
+    "warmup_iterations": 2
+  },
+  "load": {
+    "cold_load_duration_ms": 1776.869125
+  },
+  "measured_at": "2026-09-29T22:48:59.286302+00:00",
+  "measurement_method": "time.perf_counter_ns; one cold local load, configured warmups, then sequential repeated batches",
+  "memory": [
+    {
+      "adapter_name": "pytorch",
+      "adapter_version": "2.8.0",
+      "calibration_revision": "unique-storage-nbytes-v1",
+      "category": "model_weights",
+      "component_id": "embedder",
+      "component_role": "embedder",
+      "device_id": "cpu",
+      "measurement_id": "model-weights-cpu",
+      "memory_space": "host",
+      "observed_at": "2026-09-29T22:48:53.937334+00:00",
+      "status": "measured",
+      "value_bytes": 2383106304
+    }
+  ],
+  "memory_limitations": [
+    "Only inspectable model tensor storage is measured.",
+    "Allocator reservation, process RSS, activations, and framework overhead are not measured."
+  ],
+  "model": {
+    "artifact_identity_verified": true,
+    "backend_name": "transformers-local",
+    "model_name": "Qwen/Qwen3-Embedding-0.6B",
+    "model_revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "output_dimensions": 1024
+  },
+  "report_schema_version": "1.0.0"
+}

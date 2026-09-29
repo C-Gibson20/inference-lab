@@ -60,5 +60,36 @@ dependency messages cannot leak paths or payloads.
 The development pilot measured 457 input tokens per second, a 1.6-second cold
 load, and 5.11 GB peak process RSS on an Apple Silicon CPU with batch size two
 and float32. These are local observations, not performance guarantees. The
-report does not establish GPU throughput or full allocator/activation memory;
-RUN-04's measurement increment will add the reproducible acceptance record.
+pilot does not establish GPU throughput or full allocator/activation memory.
+
+For a repeatable local load and throughput observation, use the pinned model
+directory and committed input fixture:
+
+```sh
+uv run python scripts/inference_lab/backends/benchmark_local_embedding.py \
+  --model-path /path/to/pinned/local/model \
+  --output benchmarks/run-04/results/qwen-local-measurement.json
+```
+
+The report records the verified model and tokenizer identity, vector profile,
+host/software metadata, request and internal batch sizes, cold load time, warm
+inference throughput, and input fixture digest. It contains aggregate counts,
+not input text or the local model path. The benchmark uses a non-corpus fixed
+input fixture to measure backend throughput; the separate candidate pilot
+contains the provisional corpus-sample comparison.
+
+`QwenEmbeddingBackend.measure_memory()` implements RUN-03's optional memory
+accounting capability. It reports unique model tensor storage as an embedder
+measurement. The current calibration does not measure allocator reservation,
+process RSS, activation peaks, framework overhead, power, or thermal behaviour.
+The included report labels those limits rather than treating them as zero.
+
+The verified local measurement on 2026-09-29 recorded a 1,776.869 ms model
+load, 12.05 embeddings/s, and 120.46 input tokens/s using the eight-input fixed
+fixture, two warmups, five measured batches, and backend batch size two. The
+real backend returned eight finite 1,024-dimensional vectors, repeated within
+`rtol=1e-5, atol=1e-6`, and preserved order for reversed input. RUN-03 measured
+2,383,106,304 bytes of unique model tensor storage. These are local
+observations; the short fixed-input throughput is not comparable to the
+full-page candidate comparison. See the [machine-readable report](../../benchmarks/run-04/results/qwen-local-measurement.json)
+for the full environment, profile, and memory status.

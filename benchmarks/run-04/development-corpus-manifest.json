@@ -1,0 +1,55 @@
+{
+  "manifest_schema_version": "1.0.0",
+  "dataset_file": "development-cases-expanded.jsonl",
+  "dataset_sha256": "c494342b0178b0b1aaaba72d94633d2da6fa173fcfb8d4b22b4801e650049676",
+  "case_count": 28,
+  "passage_unit": "one-based physical PDF page",
+  "annotation_status": "28 cases independently reviewed; x05 and x27 wording revised",
+  "documents": [
+    {
+      "document_id": "49f353a6158a3ab8de0cee17f366078c35b3a745686518fad54eae8b88cce2d0",
+      "document_type": "research_article",
+      "title": "SARM1 base-exchange inhibitors induce SARM1 activation and neurodegeneration at low doses",
+      "page_count": 7,
+      "text_extractable_page_count": 7,
+      "pages_without_extracted_text": [],
+      "extracted_characters": 39418
+    },
+    {
+      "document_id": "6b2690cdafa60caa095ebb52e4e2eb7566d5554bd7c544de96c12c4276909190",
+      "document_type": "patent_application",
+      "title": "Covalent SARM1 inhibitors",
+      "page_count": 471,
+      "text_extractable_page_count": 468,
+      "pages_without_extracted_text": [363, 364, 365],
+      "extracted_characters": 947466
+    },
+    {
+      "document_id": "1f483b17372d6dbd6ec78d4b9299678b602f1e68d6f9ee850a016263ab589111",
+      "document_type": "research_article",
+      "title": "Selective inhibitors of SARM1 targeting an allosteric cysteine in the autoregulatory ARM domain",
+      "page_count": 12,
+      "text_extractable_page_count": 12,
+      "pages_without_extracted_text": [],
+      "extracted_characters": 70800
+    },
+    {
+      "document_id": "f0c7491ddedff86bc555145bc6d92297205599372fd556286d15f9d37e8f2669",
+      "document_type": "research_article",
+      "title": "Structure-Based Discovery of Imidazo[4,5-c]pyridine SARM1 Modulators Showing Paradoxical Activation",
+      "page_count": 16,
+      "text_extractable_page_count": 16,
+      "pages_without_extracted_text": [],
+      "extracted_characters": 78439
+    },
+    {
+      "document_id": "602e28e48a50b12f913d3bb6672559dd634f2fd617a26638878080a55c511334",
+      "document_type": "research_article",
+      "title": "The rise and fall of SARM1 base-exchange inhibitors",
+      "page_count": 18,
+      "text_extractable_page_count": 18,
+      "pages_without_extracted_text": [],
+      "extracted_characters": 116362
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "files": {
+    "config.json": "a26a7b684a3b6bea1c480cd3439a0a0fc75117020acd382b1ef3fcad20c1a59a",
+    "model.safetensors": "b402f24d0f3b4931b21a5b676cc71a8d43eda1463c416f20fd84ce759b33c25a",
+    "special_tokens_map.json": "fdd1575e8bd811652f3708f5d70495fd581ca5b59111e6edaa903e43783ce944",
+    "tokenizer.json": "ee49308e14ec27a3fe1e892977c3b1d9a6e22517856028a0596268a108d02c43",
+    "tokenizer_config.json": "cef0ef1a2eb959645790989063fb5ecbdcfae2b9688b9ac31c66320a70dec627"
+  },
+  "fixture_version": "1.0.0",
+  "revision": "fixture-36cc4619355d100a4b2bd6f4b8d43a0abbe2737cd5437bbe0eb945e37a186654",
+  "seed": 20260929,
+  "vocab_size": 36
+}
