@@ -1,4 +1,4 @@
-"""EVAL-01 acceptance paths for authored, published, and loaded datasets."""
+"""Acceptance tests for authored, published, and loaded evaluation datasets."""
 
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ from tests.inference_lab.evaluation.fixtures import (
 def _manifest(cases: tuple[EvaluationCase, ...]) -> DatasetManifest:
     return DatasetManifest.model_validate(
         {
-            "dataset_id": "phase2-acceptance",
+            "dataset_id": "dataset-acceptance",
             "dataset_version": "1.0.0",
-            "description": "Phase acceptance dataset",
+            "description": "Evaluation dataset acceptance fixture",
             "corpus_id": CORPUS_ID,
             "corpus_version": CORPUS_VERSION,
             "case_file": "cases.jsonl",

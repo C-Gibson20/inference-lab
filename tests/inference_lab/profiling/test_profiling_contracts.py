@@ -1,4 +1,4 @@
-"""PROF-01 phase journeys for deterministic, privacy-safe measurements."""
+"""Contracts for deterministic, privacy-safe profiling measurements."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""TOOL-01–05 and DOCS-01 phase journeys for tooling and operator setup."""
+"""Acceptance tests for tooling and operator setup."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ def _config_text(root: Path) -> str:
 
 
 @pytest.fixture(autouse=True)
-def isolated_phase1_environment(
+def isolated_tooling_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[None]:
@@ -221,7 +221,7 @@ def test_logging_policy_covers_renderers_context_privacy_and_reconfiguration() -
     json_stream = StringIO()
     config = LoggingConfig(level="INFO", format="json")
     configure_logging(config, stream=json_stream)
-    log = structlog.get_logger("phase1")
+    log = structlog.get_logger("tooling_acceptance")
     log.debug("suppressed_event")
     log.info("phase_completed", corpus_id="corpus-a", corpus_version="version-1")
     logging.getLogger("dependency").warning("dependency_degraded")
@@ -246,7 +246,7 @@ def test_logging_policy_covers_renderers_context_privacy_and_reconfiguration() -
         LoggingConfig(level="INFO", format="console"),
         stream=console_stream,
     )
-    structlog.get_logger("phase1").warning("dependency_degraded")
+    structlog.get_logger("tooling_acceptance").warning("dependency_degraded")
     assert "dependency_degraded" in console_stream.getvalue()
 
     tty_stream = Stream(is_tty=True)
@@ -254,7 +254,7 @@ def test_logging_policy_covers_renderers_context_privacy_and_reconfiguration() -
         LoggingConfig(level="INFO", format="auto"),
         stream=tty_stream,
     )
-    structlog.get_logger("phase1").info("automatic_console_record")
+    structlog.get_logger("tooling_acceptance").info("automatic_console_record")
     assert "automatic_console_record" in tty_stream.getvalue()
     assert not tty_stream.getvalue().lstrip().startswith("{")
 
@@ -263,13 +263,13 @@ def test_logging_policy_covers_renderers_context_privacy_and_reconfiguration() -
         LoggingConfig(level="INFO", format="auto"),
         stream=automatic_stream,
     )
-    structlog.get_logger("phase1").info("automatic_json_record")
+    structlog.get_logger("tooling_acceptance").info("automatic_json_record")
     assert json.loads(automatic_stream.getvalue())["event"] == "automatic_json_record"
 
     repeated_stream = StringIO()
     configure_logging(config, stream=repeated_stream)
     configure_logging(config, stream=repeated_stream)
-    structlog.get_logger("phase1").info("one_record")
+    structlog.get_logger("tooling_acceptance").info("one_record")
     records = [json.loads(line) for line in repeated_stream.getvalue().splitlines()]
     assert [item["event"] for item in records] == ["one_record"]
 

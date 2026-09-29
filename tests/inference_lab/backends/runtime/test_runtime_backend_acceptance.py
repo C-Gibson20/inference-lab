@@ -1,10 +1,11 @@
-"""RUN-01 phase acceptance for the public runtime boundary and deterministic fake."""
+"""Acceptance tests for the public runtime boundary and deterministic fake."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from io import StringIO
 
 import pytest
@@ -20,6 +21,7 @@ from inference_lab.backends.runtime import (
     BackendResourceError,
     EmbeddingBackend,
     EmbeddingOptions,
+    EmbeddingProfile,
     EmbeddingRequest,
     EmbeddingResult,
     FakeBackend,
@@ -47,6 +49,24 @@ def _collect(stream: AsyncIterator[GenerationEvent]) -> list[GenerationEvent]:
         return [item async for item in stream]
 
     return asyncio.run(collect())
+
+
+def _embedding_profile() -> EmbeddingProfile:
+    """Return a small path-free compatibility profile for contract tests."""
+    return EmbeddingProfile(
+        profile_version="1.0.0",
+        tokenizer_id="fixture/tokenizer",
+        tokenizer_revision="fixture-revision",
+        query_prefix="query: ",
+        document_prefix="passage: ",
+        pooling_strategy="masked-mean-v1",
+        input_normalisation="nfc-lf-v1",
+        max_input_tokens=128,
+        over_limit_policy="truncate_tail",
+        l2_normalised=False,
+        inference_dtype="float32",
+        device_type="cpu",
+    )
 
 
 def test_fake_backend_is_a_public_lifecycle_and_operation_boundary() -> None:
@@ -104,6 +124,16 @@ def test_fake_composes_embedding_reranking_and_bounded_generation() -> None:
     backend.load()
     embedded = backend.embed(EmbeddingRequest(input_texts=("one", "two")))
     assert embedded.vectors == ((0.0, 1.0, 2.0), (1.0, 2.0, 3.0))
+    assert embedded.embedding_profile.profile_version == "1.0.0"
+    assert embedded.embedding_profile.l2_normalised is False
+    normalised = backend.embed(
+        EmbeddingRequest(
+            input_texts=("one",),
+            options=EmbeddingOptions(dimensions=2, normalise=True),
+        )
+    )
+    assert normalised.model_metadata.embedding_dimensions == 2
+    assert normalised.embedding_profile.l2_normalised is True
     reranked = backend.rerank(
         RerankRequest(
             query="q",
@@ -231,8 +261,34 @@ def test_contract_values_reject_coercion_nonfinite_and_mismatched_shapes() -> No
         embedding_dimensions=2,
     )
     with pytest.raises(ValueError):
-        EmbeddingResult(vectors=((1.0,),), model_metadata=metadata)
+        EmbeddingResult(
+            vectors=((1.0,),),
+            model_metadata=metadata,
+            embedding_profile=_embedding_profile(),
+        )
+    with pytest.raises(ValueError, match="local path"):
+        replace(_embedding_profile(), tokenizer_id="/local/tokenizer")
+    with pytest.raises(ValueError, match="local path"):
+        replace(_embedding_profile(), tokenizer_revision="/local/revision")
     with pytest.raises(ValueError):
         ScoredCandidate(candidate_id="a", score=float("inf"), rank=1)
     with pytest.raises(ValueError):
         FakeBackendConfig(initial_delay_seconds=-0.1)
+
+
+def test_embedding_profile_validates_version_and_token_limit_policy() -> None:
+    profile = _embedding_profile()
+    assert profile.tokenizer_id == "fixture/tokenizer"
+    assert (
+        replace(profile, max_input_tokens=None, over_limit_policy=None).max_input_tokens
+        is None
+    )
+
+    with pytest.raises(ValueError, match="canonical semantic version"):
+        replace(profile, profile_version="1")
+    with pytest.raises(TypeError, match="max_input_tokens must be an integer"):
+        replace(profile, max_input_tokens=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="must be set together"):
+        replace(profile, max_input_tokens=None)
+    with pytest.raises(TypeError, match="over_limit_policy must be a string"):
+        replace(profile, over_limit_policy=1)  # type: ignore[arg-type]

@@ -1,4 +1,4 @@
-"""RET-03 acceptance for supported fields, predicates, and bounded validation."""
+"""Acceptance tests for supported metadata filter fields and predicates."""
 
 import pytest
 
