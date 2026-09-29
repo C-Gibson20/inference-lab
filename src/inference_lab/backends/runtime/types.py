@@ -8,6 +8,7 @@ from inference_lab.backends.runtime._validation import (
     validate_finite_number,
     validate_integer,
     validate_non_empty_string,
+    validate_semantic_version,
 )
 
 
@@ -41,10 +42,79 @@ class GenerationEventType(StrEnum):
 
 
 GenerationRole = Literal["system", "user", "assistant", "tool"]
+EmbeddingOverLimitPolicy = Literal["truncate_tail", "reject"]
 
 _GENERATION_ROLES: Final[frozenset[GenerationRole]] = frozenset(
     get_args(GenerationRole)
 )
+_EMBEDDING_OVER_LIMIT_POLICIES: Final[frozenset[EmbeddingOverLimitPolicy]] = frozenset(
+    get_args(EmbeddingOverLimitPolicy)
+)
+
+
+def _validate_path_free_identifier(value: str, field_name: str) -> None:
+    """Reject local paths where an immutable artefact identity is required."""
+    if (
+        value.startswith(("/", "\\", "~"))
+        or "://" in value
+        or (len(value) >= 3 and value[1] == ":" and value[2] in ("/", "\\"))
+    ):
+        raise ValueError(f"{field_name} must not be a local path")
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingProfile:
+    """Describe vector-affecting embedding behaviour without local paths."""
+
+    profile_version: str
+    tokenizer_id: str
+    tokenizer_revision: str
+    query_prefix: str
+    document_prefix: str
+    pooling_strategy: str
+    input_normalisation: str
+    max_input_tokens: int | None
+    over_limit_policy: EmbeddingOverLimitPolicy | None
+    l2_normalised: bool
+    inference_dtype: str
+    device_type: str
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the versioned vector-preparation identity."""
+        validate_semantic_version(self.profile_version, "profile_version")
+        for name, value in (
+            ("tokenizer_id", self.tokenizer_id),
+            ("tokenizer_revision", self.tokenizer_revision),
+            ("pooling_strategy", self.pooling_strategy),
+            ("input_normalisation", self.input_normalisation),
+            ("inference_dtype", self.inference_dtype),
+            ("device_type", self.device_type),
+        ):
+            validate_non_empty_string(value, name)
+        _validate_path_free_identifier(self.tokenizer_id, "tokenizer_id")
+        _validate_path_free_identifier(self.tokenizer_revision, "tokenizer_revision")
+        if not isinstance(self.query_prefix, str):
+            raise TypeError("query_prefix must be a string")
+        if not isinstance(self.document_prefix, str):
+            raise TypeError("document_prefix must be a string")
+        if self.max_input_tokens is not None:
+            validate_integer(self.max_input_tokens, "max_input_tokens")
+            if self.max_input_tokens <= 0:
+                raise ValueError("max_input_tokens must be positive")
+        if self.over_limit_policy is not None:
+            if not isinstance(self.over_limit_policy, str):
+                raise TypeError("over_limit_policy must be a string or None")
+            if self.over_limit_policy not in _EMBEDDING_OVER_LIMIT_POLICIES:
+                raise ValueError("unsupported embedding over-limit policy")
+        if (self.max_input_tokens is None) != (self.over_limit_policy is None):
+            raise ValueError(
+                "max_input_tokens and over_limit_policy must be set together"
+            )
+        if not isinstance(self.l2_normalised, bool):
+            raise TypeError("l2_normalised must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +242,7 @@ class EmbeddingResult:
 
     vectors: tuple[tuple[float, ...], ...]
     model_metadata: BackendMetadata
+    embedding_profile: EmbeddingProfile
     usage: EmbeddingUsage | None = None
 
     def __post_init__(self) -> None:
@@ -192,6 +263,8 @@ class EmbeddingResult:
             raise TypeError("model_metadata must be BackendMetadata")
         if BackendOperation.EMBED not in self.model_metadata.supported_operations:
             raise ValueError("embedding result metadata must advertise embed")
+        if not isinstance(self.embedding_profile, EmbeddingProfile):
+            raise TypeError("embedding_profile must be EmbeddingProfile")
         if self.usage is not None and not isinstance(self.usage, EmbeddingUsage):
             raise TypeError("usage must be EmbeddingUsage or None")
         dimensions = len(self.vectors[0])

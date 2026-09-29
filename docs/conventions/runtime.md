@@ -45,6 +45,14 @@ accepted as integers or measurements, numeric values must be finite, candidate
 identities are unique within one request or result, and rerank results use
 contiguous ranks in descending score order.
 
+Every `EmbeddingResult` carries a versioned, path-free `EmbeddingProfile`.
+Together with `model_metadata` and its output dimension, the profile records the
+tokeniser identity and revision, query and document prefixes, pooling strategy,
+input normalisation, token limit and over-limit policy, whether the returned
+vectors are L2-normalised, and inference dtype and device type. The profile
+describes the behaviour that produced these vectors; result metadata reflects
+request-specific dimensions and normalisation options.
+
 Wrong runtime types raise `TypeError`. Values of the correct type that violate
 the contract raise `ValueError`. Unsupported backend operations or request
 options raise `BackendRequestError`.

@@ -250,6 +250,11 @@ systems challenge: model residency, KV-cache use, batching, scheduling,
 quantisation, memory bandwidth, and thermal behaviour must be engineered
 carefully.
 
+Every embedding result must pair model identity and output dimensions with a
+versioned, path-free compatibility profile that identifies the tokeniser
+revision and all vector-affecting preprocessing and inference settings. Dense
+index consumers use this identity to detect incompatible vectors.
+
 The same generator may be used for ingest initially. This creates a known
 shared-resource risk: summarisation, extraction, and answering may bottleneck
 one another or expose different quality requirements. The first implementation
