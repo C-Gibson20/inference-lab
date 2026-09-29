@@ -24,7 +24,7 @@ from inference_lab.settings import Settings
 
 logger = structlog.get_logger(__name__)
 
-TextNativeFormat = Literal["text/plain"]
+TextNativeFormat = Literal["text/plain", "application/pdf"]
 ParserInputErrorCategory = Literal[
     "invalid_document_id",
     "invalid_document_version_id",
@@ -75,9 +75,9 @@ class ParserInput:
 
     document_id: DocumentId
     document_version_id: DocumentVersionId
-    content: bytes
+    content: bytes = field(repr=False)
     media_type: TextNativeFormat
-    encoding: str
+    encoding: str | None = None
 
     def __post_init__(self) -> None:
         self._validate()
@@ -90,16 +90,21 @@ class ParserInput:
             raise ParserInputError("invalid_document_version_id")
         if not isinstance(self.content, bytes):
             raise ParserInputError("non_bytes_content")
-        if self.media_type != "text/plain":
+        if self.media_type not in ("text/plain", "application/pdf"):
             raise ParserInputError("unsupported_media_type")
-        if not isinstance(self.encoding, str) or not self.encoding.strip():
-            raise ParserInputError("missing_encoding")
-        if not _is_text_encoding(self.encoding):
+        if self.media_type == "text/plain":
+            if not isinstance(self.encoding, str) or not self.encoding.strip():
+                raise ParserInputError("missing_encoding")
+            if not _is_text_encoding(self.encoding):
+                raise ParserInputError("invalid_encoding")
+        elif self.encoding is not None:
             raise ParserInputError("invalid_encoding")
 
 
 def decode_source(source: ParserInput) -> str:
     """Decode source bytes strictly into Unicode code-point text."""
+    if source.encoding is None:
+        raise ParserDecodeError("missing")
     try:
         return source.content.decode(source.encoding, errors="strict")
     except UnicodeDecodeError:

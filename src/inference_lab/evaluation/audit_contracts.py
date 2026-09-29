@@ -1226,11 +1226,7 @@ def _validate_audit_document_capabilities(
         raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
     if not profile.page_count and document.page_count is not None:
         raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
-    if profile.page_count and document.page_count is None:
-        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
     if not profile.page_text and document.page_character_counts is not None:
-        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
-    if profile.page_text and document.page_character_counts is None:
         raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
     if not profile.token_count and document.token_count is not None:
         raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
@@ -1247,6 +1243,5 @@ def _validate_audit_document_capabilities(
     if not observed_kinds <= profile.structure_kinds:
         raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
     available_kinds = {item.value for item in document.available_structure_kinds}
-    for kind in ("page", "section", "paragraph"):
-        if (kind in profile.structure_kinds) != (kind in available_kinds):
-            raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
+    if not available_kinds <= profile.structure_kinds:
+        raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)

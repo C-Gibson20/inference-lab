@@ -527,7 +527,7 @@ def test_mixed_capability_golden_matrix_has_exact_aggregate_totals() -> None:
     )
     coverage = dict(result.parse.field_coverage)
     assert _coverage_values(coverage["language"].coverage) == (2, 1, 1, 1, 1, 0, 6)
-    assert _coverage_values(coverage["page_count"].coverage) == (3, 0, 1, 1, 1, 0, 6)
+    assert _coverage_values(coverage["page_count"].coverage) == (3, 1, 0, 1, 1, 0, 6)
     assert _coverage_values(coverage["character_count"].coverage) == (
         4,
         0,
@@ -571,15 +571,15 @@ def test_mixed_capability_golden_matrix_has_exact_aggregate_totals() -> None:
     structures = {item.kind: item for item in result.structures}
     assert _coverage_values(structures[AuditStructureKind.PAGE].coverage.coverage) == (
         2,
-        1,
-        1,
+        2,
+        0,
         1,
         1,
         0,
         6,
     )
     assert structures[AuditStructureKind.PAGE].present_documents == 2
-    assert structures[AuditStructureKind.PAGE].absent_documents == 1
+    assert structures[AuditStructureKind.PAGE].absent_documents == 2
     assert structures[AuditStructureKind.TABLE].coverage.coverage.unavailable == 1
     assert structures[AuditStructureKind.TABLE].present_documents == 1
     assert structures[AuditStructureKind.PARAGRAPH].present_documents == 3
@@ -588,7 +588,7 @@ def test_mixed_capability_golden_matrix_has_exact_aggregate_totals() -> None:
     assert result.spans.page_number_count == 6
     assert result.spans.bounding_box_count == 1
     assert result.spans.document_coverage.coverage.observed == 4
-    assert _coverage_values(result.ocr.coverage.coverage) == (3, 0, 1, 1, 1, 0, 6)
+    assert _coverage_values(result.ocr.coverage.coverage) == (3, 1, 0, 1, 1, 0, 6)
     assert result.ocr.zero_text_page_count == 3
     assert result.ocr.page_character_summary.distribution == AuditDistribution(
         6, 70, 0, 40, 3

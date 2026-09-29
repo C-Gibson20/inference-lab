@@ -55,9 +55,11 @@ capability is added, its observations and producer identity must be versioned
 and the corpus must be audited again before relying on the stronger evidence.
 
 Source format support is classifier evidence, not file-signature proof. The
-current classifier is the versioned suffix-based `text-native-baseline` policy:
-`.txt` is supported text, `.pdf` is recognised but unsupported, and other or
-missing suffixes are unknown.
+current classifier is the versioned suffix-based `text-native-baseline` policy
+`2.0.0`: `.txt` is supported plain text, `.pdf` is supported for local text-layer
+extraction, and other or missing suffixes are unknown. PDF support does not
+imply OCR; scanned pages may have no extracted text until the Phase 8 OCR
+capability is added.
 
 Source byte summaries use safe classified byte counts and the versioned
 nearest-rank quantile rule. Empty known populations have `null` extrema and
@@ -69,15 +71,19 @@ recomputed with the RUN-02 tokeniser.
 
 Parser identity and parser capability identity are separate. Every parser
 version used in a request must have a registered `ParserCapabilityProfile`; an
-unknown profile rejects the request. A value or structure that a profile says
-the parser cannot observe also rejects the request.
+unknown profile rejects the request. A profile declares the upper bound of
+what the parser can observe across its supported inputs. A value or structure
+outside that profile rejects the request; a supported value may remain
+unavailable for a particular input format and is retained as such in the
+report.
 
-The current `text-native` profile (`capability-1.0.0`) can observe canonical
-character counts, paragraph blocks, text-native acquisition for successful
-`text/plain` input, and source spans. It cannot observe language, pages,
-tokens, scan status, layout boxes, sections, tables, figures, claims,
-examples, or references. Zero counts for those unsupported structures mean
-“unavailable”, not “none present”.
+The current `text-native` profile (`capability-2.0.0`) can observe canonical
+character counts, paragraph and page blocks, PDF page counts and geometry,
+text-native acquisition, and source spans. It cannot observe language, token
+counts, scan status, text bounding boxes, sections, tables, figures, claims,
+examples, or references. Page data can be unavailable for plain-text input;
+`None` remains distinct from an observed empty collection. Zero counts for
+unsupported structures mean “unavailable”, not “none present”.
 
 ## Report and identity
 

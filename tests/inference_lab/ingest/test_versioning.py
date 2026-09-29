@@ -12,7 +12,7 @@ from inference_lab.provenance import DocumentVersionId, SourceSpanId
 
 def test_parser_version_has_canonical_value_and_accepts_semver_metadata() -> None:
     assert CURRENT_PARSER_VERSION.value == (
-        "text-native/contract-3.0.0/normalisation-1.0.0"
+        "text-native/contract-4.0.0/normalisation-1.0.0"
     )
     version = ParserVersion(
         implementation="text-native",

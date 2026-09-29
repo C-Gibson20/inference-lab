@@ -48,13 +48,19 @@ them.
 
 ## Supported formats
 
-The baseline classifier is `text-native-baseline` version `1.0.0`:
+The baseline classifier is `text-native-baseline` version `2.0.0`:
 
 | Suffix | Media type | Outcome |
 | --- | --- | --- |
 | `.txt` | `text/plain` | Supported as UTF-8 by the `text-native` parser capability. |
-| `.pdf` | `application/pdf` | Recognised but unsupported; it is counted without receiving identity. |
+| `.pdf` | `application/pdf` | Supported for local text-layer extraction; scanned pages are not OCRed. |
 | Any other or missing suffix | `application/octet-stream` | Unknown; it is counted without receiving identity. |
+
+The parser uses the pinned local `pypdf` dependency to extract PDF text and
+page geometry from the supplied bytes. It does not open paths, contact a model
+registry, or use a network service. Password-protected and malformed PDFs fail
+without partial parser output. Scanned pages with no text layer are retained as
+empty page text; OCR is a later capability and is not silently attempted here.
 
 Classification is deliberately content-free. A misleading `.txt` suffix can
 pass discovery and hashing but still fail later parser validation. Adding a
