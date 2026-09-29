@@ -1,4 +1,4 @@
-"""RUN-01 phase acceptance for the public runtime boundary and deterministic fake."""
+"""Acceptance tests for the public runtime boundary and deterministic fake."""
 
 from __future__ import annotations
 

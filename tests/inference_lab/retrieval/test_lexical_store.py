@@ -805,7 +805,7 @@ def test_lexical_build_profiles_generation_failure_without_payloads(
     assert str(tmp_path) not in repr(sink.records)
 
 
-def test_pr3_build_and_publish_uses_one_atomic_phase5_path(
+def test_build_and_publish_uses_one_atomic_generation(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"

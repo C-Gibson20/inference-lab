@@ -1,4 +1,4 @@
-"""Phase-level contract for deterministic, payload-free ingest summaries."""
+"""Contract for deterministic, payload-free ingest summaries."""
 
 from inference_lab.ingest import (
     BaselineExecutionStatus,
