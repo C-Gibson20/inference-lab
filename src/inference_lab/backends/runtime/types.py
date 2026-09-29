@@ -42,6 +42,7 @@ class GenerationEventType(StrEnum):
 
 
 GenerationRole = Literal["system", "user", "assistant", "tool"]
+EmbeddingPurpose = Literal["query", "document"]
 EmbeddingOverLimitPolicy = Literal["truncate_tail", "reject"]
 
 _GENERATION_ROLES: Final[frozenset[GenerationRole]] = frozenset(
@@ -49,6 +50,9 @@ _GENERATION_ROLES: Final[frozenset[GenerationRole]] = frozenset(
 )
 _EMBEDDING_OVER_LIMIT_POLICIES: Final[frozenset[EmbeddingOverLimitPolicy]] = frozenset(
     get_args(EmbeddingOverLimitPolicy)
+)
+_EMBEDDING_PURPOSES: Final[frozenset[EmbeddingPurpose]] = frozenset(
+    get_args(EmbeddingPurpose)
 )
 
 
@@ -194,10 +198,11 @@ class EmbeddingOptions:
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingRequest:
-    """A batch of texts to embed in input order."""
+    """A batch of query or document texts to embed in input order."""
 
     input_texts: tuple[str, ...]
     options: EmbeddingOptions = field(default_factory=EmbeddingOptions)
+    purpose: EmbeddingPurpose = "document"
 
     def __post_init__(self) -> None:
         self._validate()
@@ -214,6 +219,10 @@ class EmbeddingRequest:
             raise ValueError("input_texts must not contain empty text")
         if not isinstance(self.options, EmbeddingOptions):
             raise TypeError("options must be EmbeddingOptions")
+        if not isinstance(self.purpose, str):
+            raise TypeError("purpose must be a string")
+        if self.purpose not in _EMBEDDING_PURPOSES:
+            raise ValueError("purpose must be 'query' or 'document'")
 
 
 @dataclass(frozen=True, slots=True)

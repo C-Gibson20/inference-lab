@@ -62,6 +62,7 @@ from inference_lab.backends.runtime.protocols import (
     LifecycleBackend,
     RerankerBackend,
 )
+from inference_lab.backends.runtime.qwen_embedding import QwenEmbeddingBackend
 from inference_lab.backends.runtime.streaming import validate_generation_stream
 from inference_lab.backends.runtime.types import (
     BackendCapability,
@@ -69,6 +70,7 @@ from inference_lab.backends.runtime.types import (
     BackendOperation,
     EmbeddingOptions,
     EmbeddingProfile,
+    EmbeddingPurpose,
     EmbeddingRequest,
     EmbeddingResult,
     EmbeddingUsage,
@@ -106,6 +108,7 @@ __all__ = [
     "EmbeddingBackend",
     "EmbeddingOptions",
     "EmbeddingProfile",
+    "EmbeddingPurpose",
     "EmbeddingRequest",
     "EmbeddingResult",
     "EmbeddingUsage",
@@ -137,6 +140,7 @@ __all__ = [
     "MemorySpace",
     "MemoryTotal",
     "PyTorchMemoryCalibrationAdapter",
+    "QwenEmbeddingBackend",
     "RerankCandidate",
     "RerankRequest",
     "RerankResult",
