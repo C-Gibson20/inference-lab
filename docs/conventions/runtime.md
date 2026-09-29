@@ -45,6 +45,14 @@ accepted as integers or measurements, numeric values must be finite, candidate
 identities are unique within one request or result, and rerank results use
 contiguous ranks in descending score order.
 
+Every `EmbeddingResult` carries a versioned, path-free `EmbeddingProfile`.
+Together with `model_metadata` and its output dimension, the profile records the
+tokeniser identity and revision, query and document prefixes, pooling strategy,
+input normalisation, token limit and over-limit policy, whether the returned
+vectors are L2-normalised, and inference dtype and device type. The profile
+describes the behaviour that produced these vectors; result metadata reflects
+request-specific dimensions and normalisation options.
+
 Wrong runtime types raise `TypeError`. Values of the correct type that violate
 the contract raise `ValueError`. Unsupported backend operations or request
 options raise `BackendRequestError`.
@@ -192,14 +200,36 @@ retryability. They must not include input text, candidate text, prompts,
 generated chunks, raw exception messages, model output, credentials, or
 sensitive paths.
 
+## RUN-04 local Qwen embedding backend
+
+`QwenEmbeddingBackend` implements the public `EmbeddingBackend` boundary using
+the pinned Qwen3-Embedding-0.6B snapshot. It loads only from an explicit local
+artefact directory, verifies the hashes of the model and tokeniser files it
+uses before and after loading, and sets `local_files_only=True` and
+`trust_remote_code=False`. It uses CPU float32 inference and internal batches
+of two. It advertises embedding, batching, and token usage.
+
+`EmbeddingRequest.purpose` selects the Qwen input style. Its default is
+`document`, which leaves passage text unprefixed; `query` prepends the
+scientific-literature retrieval instruction used in the development pilot.
+The compatibility profile records both prefixes, last-token pooling, identity
+text handling, the 4096-token limit and tail-truncation policy, normalisation,
+dtype, and device. Dimensions from 32 through 1024 are supported. Normalisation
+follows `EmbeddingOptions.normalise`.
+
+This initial backend choice is provisional: the development comparison uses a
+small, self-curated pilot and is not the held-out EVAL-04 result. See
+[`docs/runtime/qwen-embedding.md`](../runtime/qwen-embedding.md) for artefact
+setup and operating limits.
+
 ## Scope boundary
 
 The runtime contract layer includes the checked-in, CPU-only local mechanics
-fixture described above, but it does not yet include production model
-selection, real embedding or reranking integrations, cache lifecycle
-operations, scheduling, residency, or microbatching. Those capabilities build
-on these contracts without turning either the fake or mechanics fixture into a
-production model backend.
+fixture and the RUN-04 local embedding backend. It does not include real
+reranking integration, production cache lifecycle operations, scheduling,
+residency, or compatible-job microbatching. Those capabilities build on these
+contracts without turning the fake or mechanics fixture into a production
+model backend.
 
 ## Component memory accounting
 

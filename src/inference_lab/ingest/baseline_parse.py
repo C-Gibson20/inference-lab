@@ -321,14 +321,15 @@ def _build_parser_input(
 ) -> ParserInput:
     """Build parser input only after source bytes pass stable verification."""
     encoding = request.source.snapshot.encoding
-    if encoding is None:
+    media_type = request.source.snapshot.media_type
+    if media_type == "text/plain" and encoding is None:
         raise BaselineParseExecutionError(BaselineParseErrorCategory.PARSE_FAILED)
     try:
         return ParserInput(
             document_id=request.document_version.document_id,
             document_version_id=request.document_version.document_version_id,
             content=content,
-            media_type=cast(TextNativeFormat, request.source.snapshot.media_type),
+            media_type=cast(TextNativeFormat, media_type),
             encoding=encoding,
         )
     except (TypeError, ValueError) as error:

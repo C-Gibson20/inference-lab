@@ -103,17 +103,17 @@ class ParserCapabilityProfile:
 
 CURRENT_PARSER_CAPABILITY_PROFILE: Final = ParserCapabilityProfile(
     parser_version=CURRENT_PARSER_VERSION,
-    capability_version="1.0.0",
+    capability_version="2.0.0",
     language=False,
-    page_count=False,
-    page_text=False,
+    page_count=True,
+    page_text=True,
     character_count=True,
     token_count=False,
     acquisition_statuses=frozenset({"text_native"}),
-    layout=False,
+    layout=True,
     bounding_boxes=False,
     source_spans=True,
-    structure_kinds=frozenset({"paragraph"}),
+    structure_kinds=frozenset({"page", "paragraph"}),
 )
 
 PARSER_CAPABILITY_PROFILES: Final = MappingProxyType(
@@ -167,8 +167,5 @@ def validate_parsed_document_capabilities(
         "paragraph": document.paragraphs,
     }
     for kind, collection in collection_by_kind.items():
-        if kind in profile.structure_kinds:
-            if collection is None:
-                raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)
-        elif collection is not None:
+        if kind not in profile.structure_kinds and collection is not None:
             raise AuditContractError(AuditErrorCategory.UNSUPPORTED_OBSERVATION)

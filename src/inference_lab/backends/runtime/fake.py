@@ -23,6 +23,7 @@ from inference_lab.backends.runtime.types import (
     BackendCapability,
     BackendMetadata,
     BackendOperation,
+    EmbeddingProfile,
     EmbeddingRequest,
     EmbeddingResult,
     EmbeddingUsage,
@@ -288,6 +289,20 @@ class FakeBackend:
             model_metadata=replace(
                 self.metadata,
                 embedding_dimensions=output_dimensions,
+            ),
+            embedding_profile=EmbeddingProfile(
+                profile_version="1.0.0",
+                tokenizer_id="fake/whitespace-counter",
+                tokenizer_revision="1.0.0",
+                query_prefix="",
+                document_prefix="",
+                pooling_strategy="position-based-vector-v1",
+                input_normalisation="none",
+                max_input_tokens=None,
+                over_limit_policy=None,
+                l2_normalised=request.options.normalise,
+                inference_dtype="float64",
+                device_type="cpu",
             ),
             usage=EmbeddingUsage(
                 input_tokens=sum(

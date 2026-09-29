@@ -1,0 +1,91 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "[UNK]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "[PAD]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "[BOS]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 3,
+      "content": "[EOS]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "WhitespaceSplit"
+  },
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "WordLevel",
+    "vocab": {
+      "[UNK]": 0,
+      "[PAD]": 1,
+      "[BOS]": 2,
+      "[EOS]": 3,
+      "Instruct:": 4,
+      "Given": 5,
+      "a": 6,
+      "scientific": 7,
+      "literature": 8,
+      "search": 9,
+      "query,": 10,
+      "retrieve": 11,
+      "passages": 12,
+      "that": 13,
+      "answer": 14,
+      "the": 15,
+      "query": 16,
+      "Query:": 17,
+      "SARM1": 18,
+      "inhibition": 19,
+      "reduces": 20,
+      "neuroinflammation": 21,
+      "injury": 22,
+      "changes": 23,
+      "response": 24,
+      "alpha": 25,
+      "beta": 26,
+      "gamma": 27,
+      "delta": 28,
+      "epsilon": 29,
+      "zeta": 30,
+      "eta": 31,
+      "theta": 32,
+      "iota": 33,
+      "kappa": 34,
+      "lambda": 35
+    },
+    "unk_token": "[UNK]"
+  }
+}

@@ -1,4 +1,4 @@
-"""RUN-03 acceptance: account for component observations through a memory budget."""
+"""Acceptance tests for memory budget accounting across runtime components."""
 
 import json
 from datetime import UTC, datetime

@@ -1,4 +1,4 @@
-"""Phase 2 ING-01 failure records: document failures and omitted units."""
+"""Parser failure records for document failures and omitted units."""
 
 import pytest
 
