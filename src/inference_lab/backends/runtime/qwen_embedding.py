@@ -11,6 +11,10 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 
 from inference_lab._validation import is_local_path_shape
+from inference_lab.backends.runtime._memory_values import (
+    MemoryComponentRole,
+    MemoryMeasurement,
+)
 from inference_lab.backends.runtime.errors import (
     BackendClosedError,
     BackendError,
@@ -18,6 +22,9 @@ from inference_lab.backends.runtime.errors import (
     BackendNotReadyError,
     BackendRequestError,
     BackendResourceError,
+)
+from inference_lab.backends.runtime.memory_pytorch import (
+    PyTorchMemoryCalibrationAdapter,
 )
 from inference_lab.backends.runtime.types import (
     BackendCapability,
@@ -290,6 +297,19 @@ class QwenEmbeddingBackend:
             backend_name=self.metadata.backend_name,
             model_name=self.metadata.model_name,
             operation=BackendOperation.EMBED.value,
+        )
+
+    def measure_memory(self) -> tuple[MemoryMeasurement, ...]:
+        """Return inspectable model tensor memory for the optional RUN-03 contract."""
+        adapter = PyTorchMemoryCalibrationAdapter(
+            cast(torch.nn.Module | None, self._model),
+            component_id="embedder",
+            component_role=MemoryComponentRole.EMBEDDER,
+        )
+        return tuple(
+            measurement
+            for measurement in adapter.measure_memory()
+            if measurement.category == "model_weights"
         )
 
     def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
