@@ -6,10 +6,12 @@ import pytest
 
 from inference_lab.ingest import (
     CURRENT_DISCOVERY_POLICY,
+    CURRENT_SOURCE_CLASSIFIER,
     DirectorySnapshotPolicy,
     DiscoveredSource,
     DiscoveryInput,
     DiscoveryInputKind,
+    DiscoveryRequest,
     FamilyCandidate,
     FamilyEvidenceKind,
     FileIdentityHint,
@@ -23,6 +25,8 @@ from inference_lab.ingest import (
     StableReadPolicy,
     SymlinkPolicy,
     VerifiedSourceSnapshot,
+    classify_source_inventory,
+    inventory_local_sources,
 )
 from inference_lab.provenance import (
     ContentHash,
@@ -118,6 +122,7 @@ def _discovered_source() -> DiscoveredSource:
 def test_current_policy_pins_every_approved_baseline_behaviour() -> None:
     assert CURRENT_DISCOVERY_POLICY.policy_name == "local-source-discovery"
     assert CURRENT_DISCOVERY_POLICY.policy_version == "1.0.0"
+    assert CURRENT_DISCOVERY_POLICY.classifier_version == "2.0.0"
     assert CURRENT_DISCOVERY_POLICY.symlink_policy is SymlinkPolicy.EXCLUDE
     assert CURRENT_DISCOVERY_POLICY.nested_mount_policy is NestedMountPolicy.EXCLUDE
     assert CURRENT_DISCOVERY_POLICY.hidden_entry_policy is HiddenEntryPolicy.INCLUDE
@@ -129,6 +134,31 @@ def test_current_policy_pins_every_approved_baseline_behaviour() -> None:
         CURRENT_DISCOVERY_POLICY.stable_read_policy
         is StableReadPolicy.PRE_OPEN_POST_STAT
     )
+
+
+def test_current_classifier_admits_pdf_to_the_text_native_parser(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "source.pdf"
+    source_path.write_bytes(b"%PDF-1.4")
+    request = DiscoveryRequest(
+        corpus_id=CorpusId.generate(),
+        inputs=(DiscoveryInput(source_path, DiscoveryInputKind.FILE),),
+    )
+
+    traversal = inventory_local_sources(request, excluded_paths=())
+    classification = classify_source_inventory(
+        traversal,
+        registry=CURRENT_SOURCE_CLASSIFIER,
+    )
+
+    assert classification.failures == ()
+    assert len(classification.hashable_candidates) == 1
+    pdf_classification = classification.hashable_candidates[0].classification
+    assert pdf_classification.media_type == "application/pdf"
+    assert pdf_classification.support is SourceSupport.SUPPORTED
+    assert pdf_classification.parser_capability == "text-native"
+    assert pdf_classification.encoding is None
 
 
 @pytest.mark.parametrize("root", [Path("https:/example.test/source"), Path(" ")])

@@ -309,7 +309,8 @@ CURRENT_SOURCE_CLASSIFIER: Final = SourceClassifierRegistry(
             suffix=".pdf",
             classification=_classification(
                 media_type="application/pdf",
-                support=SourceSupport.RECOGNISED_UNSUPPORTED,
+                support=SourceSupport.SUPPORTED,
+                parser_capability="text-native",
             ),
         ),
         SourceClassifierRule(

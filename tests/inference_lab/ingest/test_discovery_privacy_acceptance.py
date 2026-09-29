@@ -34,8 +34,8 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
     private_source = private_directory / "private-filename-marker.txt"
     private_bytes = b"private-content-marker\n"
     private_source.write_bytes(private_bytes)
-    unsupported_source = private_directory / "private-unsupported-marker.pdf"
-    unsupported_source.write_bytes(b"private-pdf-marker")
+    unsupported_source = private_directory / "private-unsupported-marker.docx"
+    unsupported_source.write_bytes(b"private-docx-marker")
     unknown_source = private_directory / "private-unknown-marker.bin"
     unknown_source.write_bytes(b"private-binary-marker")
     private_identifier = ExternalIdentifier(
@@ -126,7 +126,7 @@ def test_discovery_logs_exclude_private_data_across_every_boundary(
         sha256(private_bytes).hexdigest(),
         unsupported_source.name,
         str(unsupported_source),
-        b"private-pdf-marker".decode(),
+        b"private-docx-marker".decode(),
         unknown_source.name,
         str(unknown_source),
         b"private-binary-marker".decode(),

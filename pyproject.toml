@@ -7,8 +7,10 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "fonttools==4.66.0",
     "pydantic>=2.11,<3",
     "pydantic-settings>=2.15.0",
+    "pypdf==6.19.0",
     "requests>=2.34.2",
     "structlog>=26.1.0",
     "torch==2.8.0",

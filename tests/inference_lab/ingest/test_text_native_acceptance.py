@@ -2,17 +2,21 @@
 
 import ast
 import inspect
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from pypdf import PdfReader, PdfWriter
 from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
     CURRENT_PARSER_VERSION,
     ParserInput,
+    ParserInputError,
     TextNativeParser,
     serialise_parsed_document,
 )
+from inference_lab.ingest.versioning import generate_source_span_id
 
 from .fixtures import (  # noqa: TID252
     FIXTURE_DOCUMENT_ID,
@@ -21,6 +25,87 @@ from .fixtures import (  # noqa: TID252
     fixture_settings,
     fixture_source,
 )
+
+
+def _pdf_bytes(*pages: str, rotations: tuple[int, ...] = ()) -> bytes:
+    """Build a minimal local PDF fixture without adding a PDF-writing dependency."""
+    page_count = len(pages)
+    page_object_ids = tuple(range(3, 3 + page_count))
+    font_object_id = 3 + page_count
+    stream_object_ids = tuple(
+        range(font_object_id + 1, font_object_id + 1 + page_count)
+    )
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        (
+            f"<< /Type /Pages /Kids [{' '.join(f'{item} 0 R' for item in page_object_ids)}] "
+            f"/Count {page_count} >>"
+        ).encode("ascii"),
+    ]
+    for index, (page_object_id, stream_object_id) in enumerate(
+        zip(page_object_ids, stream_object_ids, strict=True)
+    ):
+        rotation = rotations[index] if index < len(rotations) else 0
+        objects.append(
+            (
+                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                f"/Resources << /Font << /F1 {font_object_id} 0 R >> >> "
+                f"/Contents {stream_object_id} 0 R /Rotate {rotation} >>"
+            ).encode("ascii")
+        )
+    objects.append(
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+        b"/Encoding /WinAnsiEncoding >>"
+    )
+    for page in pages:
+        escaped = page.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        stream = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET\n".encode("ascii")
+        objects.append(
+            f"<< /Length {len(stream)} >>\nstream\n".encode("ascii")
+            + stream
+            + b"endstream"
+        )
+
+    result = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(result))
+        result.extend(f"{index} 0 obj\n".encode("ascii"))
+        result.extend(obj)
+        result.extend(b"\nendobj\n")
+    xref_offset = len(result)
+    result.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    result.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        result.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    result.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(result)
+
+
+def _encrypted_pdf_bytes() -> bytes:
+    """Return a generated encrypted PDF that must fail without a password."""
+    reader = PdfReader(BytesIO(_pdf_bytes("private text")), strict=True)
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.encrypt("fixture-password")
+    stream = BytesIO()
+    writer.write(stream)
+    return stream.getvalue()
+
+
+def _blank_pdf_bytes() -> bytes:
+    """Return a valid one-page PDF whose page has no content stream."""
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    stream = BytesIO()
+    writer.write(stream)
+    return stream.getvalue()
 
 
 def test_text_native_emits_exact_canonical_output_deterministically() -> None:
@@ -85,6 +170,150 @@ def test_text_native_normalises_source_and_accepts_empty_documents() -> None:
     assert empty.document is not None
     assert empty.document.blocks == ()
     assert empty.document.paragraphs == ()
+
+
+def test_text_native_extracts_pdf_pages_and_stable_source_spans() -> None:
+    source = ParserInput(
+        document_id=FIXTURE_DOCUMENT_ID,
+        document_version_id=FIXTURE_DOCUMENT_VERSION_ID,
+        content=_pdf_bytes("First PDF page", "Second PDF page", rotations=(0, 90)),
+        media_type="application/pdf",
+    )
+
+    first = TextNativeParser().parse(source, settings=fixture_settings())
+    second = TextNativeParser().parse(source, settings=fixture_settings())
+
+    assert first.status == "succeeded"
+    assert first.document is not None
+    document = first.document
+    assert document.parser_version == CURRENT_PARSER_VERSION
+    assert document.page_count == 2
+    assert document.pages is not None
+    assert len(document.pages) == 2
+    assert document.paragraphs is not None
+    assert len(document.paragraphs) == 2
+    assert document.page_layouts[0].page_width == 612
+    assert document.page_layouts[0].page_height == 792
+    assert document.page_layouts[1].rotation == 90
+    assert [page.source_span.page_number for page in document.pages] == [1, 2]
+    assert [block.source_span.page_number for block in document.paragraphs] == [1, 2]
+    assert "First PDF page" in document.pages[0].text
+    assert "Second PDF page" in document.pages[1].text
+    assert document.text.source_text.count("\n\n") >= 1
+    for ordinal, block in enumerate(document.blocks):
+        assert block.source_span.source_span_id == generate_source_span_id(
+            source.document_version_id,
+            parser_version=CURRENT_PARSER_VERSION,
+            ordinal=ordinal,
+            kind=block.kind,
+            start_offset=block.source_span.start_offset,
+            end_offset=block.source_span.end_offset,
+        )
+    assert second.document is not None
+    assert serialise_parsed_document(document) == serialise_parsed_document(
+        second.document
+    )
+
+
+def test_pdf_input_rejects_a_caller_selected_encoding() -> None:
+    with pytest.raises(ParserInputError, match="invalid_encoding"):
+        ParserInput(
+            document_id=FIXTURE_DOCUMENT_ID,
+            document_version_id=FIXTURE_DOCUMENT_VERSION_ID,
+            content=_pdf_bytes("Text"),
+            media_type="application/pdf",
+            encoding="utf-8",
+        )
+
+
+def test_text_native_preserves_empty_pdf_pages_without_claiming_ocr() -> None:
+    source = ParserInput(
+        document_id=FIXTURE_DOCUMENT_ID,
+        document_version_id=FIXTURE_DOCUMENT_VERSION_ID,
+        content=_pdf_bytes(""),
+        media_type="application/pdf",
+    )
+
+    outcome = TextNativeParser().parse(source, settings=fixture_settings())
+
+    assert outcome.status == "succeeded"
+    assert outcome.document is not None
+    assert outcome.document.page_count == 1
+    assert outcome.document.pages is not None
+    assert outcome.document.pages[0].text == ""
+    assert outcome.document.paragraphs == ()
+    assert outcome.document.token_count is None
+
+
+def test_text_native_accepts_pdf_pages_without_content_streams() -> None:
+    source = ParserInput(
+        document_id=FIXTURE_DOCUMENT_ID,
+        document_version_id=FIXTURE_DOCUMENT_VERSION_ID,
+        content=_blank_pdf_bytes(),
+        media_type="application/pdf",
+    )
+
+    outcome = TextNativeParser().parse(source, settings=fixture_settings())
+
+    assert outcome.status == "succeeded"
+    assert outcome.document is not None
+    assert outcome.document.page_count == 1
+    assert outcome.document.pages is not None
+    assert outcome.document.pages[0].text == ""
+    assert outcome.document.paragraphs == ()
+
+
+def test_text_native_rejects_malformed_pdf_without_exposing_source_bytes() -> None:
+    payload_marker = "private-pdf-payload-marker"
+    source = ParserInput(
+        document_id=FIXTURE_DOCUMENT_ID,
+        document_version_id=FIXTURE_DOCUMENT_VERSION_ID,
+        content=f"%PDF-1.4 {payload_marker}".encode(),
+        media_type="application/pdf",
+    )
+
+    with capture_logs() as logs:
+        outcome = TextNativeParser().parse(source, settings=fixture_settings())
+
+    assert outcome.status == "failed"
+    assert outcome.document is None
+    assert [failure.category for failure in outcome.failures] == ["malformed_source"]
+    assert payload_marker not in repr(source)
+    assert payload_marker not in repr(outcome)
+    assert payload_marker not in repr(logs)
+
+
+def test_text_native_fails_encrypted_and_oversized_pdfs_safely() -> None:
+    parser = TextNativeParser()
+    encrypted = ParserInput(
+        document_id=FIXTURE_DOCUMENT_ID,
+        document_version_id=FIXTURE_DOCUMENT_VERSION_ID,
+        content=_encrypted_pdf_bytes(),
+        media_type="application/pdf",
+    )
+    oversized = ParserInput(
+        document_id=FIXTURE_DOCUMENT_ID,
+        document_version_id=FIXTURE_DOCUMENT_VERSION_ID,
+        content=_pdf_bytes("Some text"),
+        media_type="application/pdf",
+    )
+
+    encrypted_outcome = parser.parse(encrypted, settings=fixture_settings())
+    oversized_outcome = parser.parse(
+        oversized,
+        settings=fixture_settings(max_source_bytes=1),
+    )
+
+    assert encrypted_outcome.status == "failed"
+    assert encrypted_outcome.document is None
+    assert [failure.category for failure in encrypted_outcome.failures] == [
+        "unsupported_format"
+    ]
+    assert oversized_outcome.status == "failed"
+    assert oversized_outcome.document is None
+    assert [failure.category for failure in oversized_outcome.failures] == [
+        "source_too_large"
+    ]
 
 
 @pytest.mark.parametrize(

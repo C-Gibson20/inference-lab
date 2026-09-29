@@ -1,8 +1,8 @@
 # Ingest parser contract and boundaries
 
-The current ingest parser is a deterministic text-native parsing baseline. It
-establishes the contract consumed by later ingest stages; it is not the complete
-document ingestion pipeline.
+The current ingest parser is a deterministic text-native parsing baseline for
+plain-text files and text-bearing PDFs. It establishes the contract consumed
+by later ingest stages; it is not the complete document ingestion pipeline.
 
 ## Parser contract
 
@@ -13,13 +13,29 @@ The parser accepts a `ParserInput` containing:
 - a stable `DocumentId`;
 - a stable `DocumentVersionId`;
 - source `bytes`;
-- media type `text/plain`;
-- a named text encoding supported by the Python codec registry.
+- media type `text/plain` or `application/pdf`; and
+- for plain text, a named encoding supported by the Python codec registry.
+  PDF input has no caller-selected text encoding; its embedded text layer is
+  extracted locally.
 
 Input validation occurs before decoding. Invalid identifiers, non-byte
-content, unsupported media types, missing encodings, and unknown encodings are
+content, unsupported media types, missing plain-text encodings, and unknown encodings are
 rejected with a named `ParserInputError` category. The parser does not accept
 paths or read files; callers own source acquisition and preservation.
+
+PDF parsing uses the pinned local `pypdf` dependency in strict mode. It extracts
+page text in layout mode and records each page's native point dimensions and
+rotation. Page and paragraph spans are offsets into parser-produced text, with a
+page number for navigation; the original PDF bytes remain the canonical source
+artefact. A PDF with no extractable text still records its pages and layouts
+with empty page text. This parser does not perform OCR, infer whether a page is
+scanned, or create text bounding boxes. Those behaviours remain with the
+selective OCR and layout work planned for Phase 8. The parser identity is
+`text-native/contract-4.0.0/normalisation-1.0.0`; the dependencies are pinned
+to `pypdf==6.19.0` (BSD-3-Clause) and `fonttools==4.66.0` in `pyproject.toml`
+and `uv.lock`. FontTools enables extraction from embedded CFF Type 1 fonts.
+Layout extraction can be incomplete for rotated text; the parser records page
+rotation but does not attach per-span transforms or bounding boxes.
 
 The source-size limit comes from `Settings.ingest.max_source_bytes`. It is
 measured in raw input bytes and checked before decoding. It must not be
@@ -45,7 +61,9 @@ are ordered by non-decreasing source start offset. `pages`, `sections`, and
 their corresponding block kind; a block of one of those kinds requires its
 typed collection to be available.
 
-`NormalisedText.source_text` is the strictly decoded source coordinate space.
+For plain text, `NormalisedText.source_text` is the strictly decoded source
+coordinate space. For PDFs, it is the extracted page text joined in page order
+with two newline characters between pages. In both cases,
 `NormalisedText.text` is produced by `normalise_source_text`: it is NFC-normalised
 text with CRLF and CR converted to LF. Whitespace is otherwise preserved. Empty
 input is a successful empty document; an unavailable structure is `None`, while
@@ -64,7 +82,8 @@ content. Indentation and other whitespace on content lines are preserved.
 Every emitted block has a `SourceSpan` linked to the input `DocumentVersionId`.
 Offsets are half-open Unicode code-point offsets into `source_text`:
 `[start_offset, end_offset)`. They are not byte offsets and are not offsets into
-normalised text.
+normalised text. PDF offsets address extracted text rather than the PDF's binary
+bytes; page numbers retain a direct route back to the original source page.
 
 Canonical document text must equal the defined normalisation of
 `source_text`. Each block's text must likewise equal the normalised source
@@ -134,7 +153,10 @@ to verify:
 - size-limit validation before decoding;
 - payload-free failure records and structured logs using a marker present in
   the actual malformed input; and
-- the text-native scope boundary: no model, OCR, or network imports.
+- plain-text and text-bearing PDF parsing, page order/layout, stable page and
+  paragraph spans, empty text-layer pages, malformed/encrypted PDF failures;
+  and
+- the parser scope boundary: no model, OCR, or network imports.
 
 The complete repository gate remains the lint, format, type-check, and test
 sequence in `AGENT.md`. The baseline does not accept paths, discover files,

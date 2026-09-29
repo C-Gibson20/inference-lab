@@ -43,7 +43,7 @@ class ParserVersion:
 
 CURRENT_PARSER_VERSION = ParserVersion(
     implementation="text-native",
-    contract_version="3.0.0",
+    contract_version="4.0.0",
     normalisation_version="1.0.0",
 )
 

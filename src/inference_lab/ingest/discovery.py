@@ -184,7 +184,7 @@ CURRENT_DISCOVERY_POLICY: Final = DiscoveryPolicy(
     directory_snapshot_policy=DirectorySnapshotPolicy.SORTED,
     stable_read_policy=StableReadPolicy.PRE_OPEN_POST_STAT,
     classifier_name="text-native-baseline",
-    classifier_version="1.0.0",
+    classifier_version="2.0.0",
 )
 
 

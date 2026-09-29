@@ -38,7 +38,7 @@ from .fixtures import fixture_settings, fixture_source  # noqa: TID252
 _CORPUS_ID = CorpusId("a0000000-0000-4000-8000-000000000001")
 _VARIANT_PARSER_VERSION = ParserVersion(
     implementation="text-native",
-    contract_version="4.0.0",
+    contract_version="4.1.0",
     normalisation_version="1.0.0",
 )
 
@@ -272,7 +272,7 @@ def test_new_parser_version_can_explicitly_supersede_an_older_representation(
             for representation in representations
             if representation.record_id == variant.parsed_record_id
         )
-        assert stored_variant.parser.contract_version == "4.0.0"
+        assert stored_variant.parser.contract_version == "4.1.0"
         assert stored_variant.supersedes_record_id == first.parsed_record_id
         assert (
             case.repository.get_parse_outcome(
