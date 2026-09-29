@@ -3,7 +3,7 @@
 import json
 import math
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from io import StringIO
 from pathlib import Path
 from typing import cast
@@ -16,6 +16,7 @@ from inference_lab.backends.runtime import (
     BackendExecutionError,
     BackendNotReadyError,
     BackendOperation,
+    BackendRequestError,
     EmbeddingBackend,
     EmbeddingOptions,
     EmbeddingRequest,
@@ -199,6 +200,53 @@ def test_local_fixture_rejects_corrupt_model_files_with_generic_errors(
         backend.load()
     assert str(corrupt_dir) not in str(caught.value)
     assert "changed" not in str(caught.value)
+
+
+def test_public_boundary_rejects_empty_and_whitespace_inputs(
+    local_embedding_backend: QwenEmbeddingBackend,
+) -> None:
+    with pytest.raises(ValueError):
+        EmbeddingRequest(input_texts=())
+    with pytest.raises(ValueError):
+        EmbeddingRequest(input_texts=("",))
+
+    local_embedding_backend.load()
+    with pytest.raises(BackendRequestError):
+        local_embedding_backend.embed(EmbeddingRequest(input_texts=(" \t ",)))
+
+
+def test_inference_failure_does_not_return_partial_vectors_or_expose_details(
+    monkeypatch: pytest.MonkeyPatch,
+    local_embedding_backend: QwenEmbeddingBackend,
+) -> None:
+    local_embedding_backend.load()
+    model = local_embedding_backend._model
+    assert model is not None
+    model_type = type(model)
+    original_call = cast(Callable[..., object], model_type.__call__)
+    call_count = 0
+
+    def fail_on_second_batch(instance: object, **inputs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("private model payload")
+        return original_call(instance, **inputs)
+
+    monkeypatch.setattr(model_type, "__call__", fail_on_second_batch)
+    stream = StringIO()
+    configure_logging(LoggingConfig(level="WARNING", format="json"), stream=stream)
+    private_text = "PRIVATE_ACCEPTANCE_INPUT"
+
+    with pytest.raises(BackendExecutionError) as caught:
+        local_embedding_backend.embed(
+            EmbeddingRequest(input_texts=(private_text, "alpha beta", "gamma delta"))
+        )
+
+    assert str(caught.value) == "The backend failed while executing the request."
+    assert private_text not in stream.getvalue()
+    assert "private model payload" not in stream.getvalue()
+    assert "private model payload" not in str(caught.value)
 
 
 def test_local_backend_advertises_batching_and_token_usage(

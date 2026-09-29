@@ -83,3 +83,13 @@ accounting capability. It reports unique model tensor storage as an embedder
 measurement. The current calibration does not measure allocator reservation,
 process RSS, activation peaks, framework overhead, power, or thermal behaviour.
 The included report labels those limits rather than treating them as zero.
+
+The verified local measurement on 2026-09-29 recorded a 1,776.869 ms model
+load, 12.05 embeddings/s, and 120.46 input tokens/s using the eight-input fixed
+fixture, two warmups, five measured batches, and backend batch size two. The
+real backend returned eight finite 1,024-dimensional vectors, repeated within
+`rtol=1e-5, atol=1e-6`, and preserved order for reversed input. RUN-03 measured
+2,383,106,304 bytes of unique model tensor storage. These are local
+observations; the short fixed-input throughput is not comparable to the
+full-page candidate comparison. See the [machine-readable report](../../benchmarks/run-04/results/qwen-local-measurement.json)
+for the full environment, profile, and memory status.

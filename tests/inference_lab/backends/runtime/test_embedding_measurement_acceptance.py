@@ -97,6 +97,13 @@ def test_benchmark_reports_pinned_memory_and_safe_repeatable_metadata(
     assert environment["inference_dtype"] == "float32"
     assert environment["device_type"] == "cpu"
     assert report["measurement_method"]
+    acceptance = report["acceptance"]
+    assert isinstance(acceptance, dict)
+    assert acceptance["vector_count_per_request"] == 8
+    assert acceptance["output_dimensions"] == 32
+    assert acceptance["finite_vectors"] is True
+    assert acceptance["repeatability_iterations"] == 2
+    assert acceptance["reversed_batch_order"] == "passed"
 
 
 def test_benchmark_rejects_invalid_iteration_counts() -> None:

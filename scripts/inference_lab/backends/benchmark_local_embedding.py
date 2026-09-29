@@ -110,12 +110,24 @@ def run_benchmark(
         total_input_tokens = 0
         output_dimensions: int | None = None
         embedding_profile: dict[str, object] | None = None
+        reference_vectors: torch.Tensor | None = None
         for _ in range(measured_iterations):
             started = time.perf_counter_ns()
             result = backend.embed(request)
             durations_ns.append(time.perf_counter_ns() - started)
+            if len(result.vectors) != len(texts):
+                raise RuntimeError("backend returned an invalid vector count")
             if result.usage is None:
                 raise RuntimeError("backend did not report input token usage")
+            if result.model_metadata.model_revision != backend.metadata.model_revision:
+                raise RuntimeError("backend returned mismatched model metadata")
+            vectors = torch.tensor(result.vectors, dtype=torch.float32)
+            if not torch.isfinite(vectors).all():
+                raise RuntimeError("backend returned non-finite vectors")
+            if reference_vectors is None:
+                reference_vectors = vectors
+            elif not torch.allclose(reference_vectors, vectors, rtol=1e-5, atol=1e-6):
+                raise RuntimeError("backend vectors were not repeatable")
             total_input_tokens += result.usage.input_tokens
             output_dimensions = result.model_metadata.embedding_dimensions
             profile = result.embedding_profile
@@ -134,6 +146,19 @@ def run_benchmark(
                 "device_type": profile.device_type,
             }
 
+        if reference_vectors is None or output_dimensions is None:
+            raise RuntimeError("backend returned no embedding vectors")
+        if reference_vectors.shape != (len(texts), output_dimensions):
+            raise RuntimeError("backend returned invalid vector dimensions")
+        reversed_result = backend.embed(
+            EmbeddingRequest(input_texts=tuple(reversed(texts)))
+        )
+        reversed_vectors = torch.tensor(reversed_result.vectors, dtype=torch.float32)
+        if not torch.allclose(
+            reference_vectors.flip(0), reversed_vectors, rtol=1e-5, atol=1e-6
+        ):
+            raise RuntimeError("backend did not preserve request order")
+
         elapsed_seconds = sum(durations_ns) / 1_000_000_000
         total_embeddings = len(texts) * measured_iterations
         return {
@@ -145,6 +170,14 @@ def run_benchmark(
                 "model_revision": backend.metadata.model_revision,
                 "artifact_identity_verified": True,
                 "output_dimensions": output_dimensions,
+            },
+            "acceptance": {
+                "vector_count_per_request": len(texts),
+                "output_dimensions": output_dimensions,
+                "finite_vectors": True,
+                "repeatability_iterations": measured_iterations,
+                "repeatability_tolerance": "rtol=1e-5, atol=1e-6",
+                "reversed_batch_order": "passed",
             },
             "embedding_profile": embedding_profile,
             "environment": {
