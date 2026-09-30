@@ -19,6 +19,7 @@ from inference_lab.retrieval.dense import (
     InvalidDenseContractError,
     rank_dense_entries,
 )
+from inference_lab.retrieval.dense_retrieval import execute_dense_retrieval
 from inference_lab.retrieval.dense_store import (
     DenseError,
     DenseFailureCategory,
@@ -253,6 +254,7 @@ __all__ = [
     "deserialise_query",
     "escape_fts5_literal",
     "evaluate_metadata_filter",
+    "execute_dense_retrieval",
     "execute_lexical_retrieval",
     "expose_bm25_score",
     "extract_identifiers",
