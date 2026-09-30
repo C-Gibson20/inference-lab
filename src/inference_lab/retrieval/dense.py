@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Protocol
@@ -18,7 +19,7 @@ from inference_lab.retrieval.query import RetrievalQuery
 from inference_lab.storage import ComponentKind
 
 DENSE_COMPONENT_KIND: Final[ComponentKind] = ComponentKind("dense-index")
-DENSE_IMPLEMENTATION: Final[str] = "dense-vector-index"
+DENSE_IMPLEMENTATION: Final[str] = "sqlite-flat"
 DENSE_FORMAT_VERSION: Final[str] = "1.0.0"
 DENSE_CONTRACT_VERSION: Final[str] = "1.0.0"
 DENSE_SCORE_LABEL: Final[str] = "cosine_similarity"
@@ -78,7 +79,7 @@ class DenseIndexConfiguration:
     """Versioned, path-free settings that affect index interpretation."""
 
     implementation: str = DENSE_IMPLEMENTATION
-    library_version: str = "stdlib"
+    library_version: str = field(default_factory=lambda: sqlite3.sqlite_version)
     format_version: str = DENSE_FORMAT_VERSION
     contract_version: str = DENSE_CONTRACT_VERSION
     distance_metric: DenseDistanceMetric = DenseDistanceMetric.COSINE
@@ -177,8 +178,14 @@ class DenseIndexCompatibility:
             },
             "model": {
                 "backend_name": self.model_metadata.backend_name,
+                "capabilities": [
+                    item.value for item in self.model_metadata.capabilities
+                ],
                 "model_name": self.model_metadata.model_name,
                 "model_revision": self.model_metadata.model_revision,
+                "supported_operations": [
+                    item.value for item in self.model_metadata.supported_operations
+                ],
             },
         }
 
