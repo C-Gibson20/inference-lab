@@ -63,6 +63,7 @@ from inference_lab.backends.runtime.protocols import (
     RerankerBackend,
 )
 from inference_lab.backends.runtime.qwen_embedding import QwenEmbeddingBackend
+from inference_lab.backends.runtime.reranker import LocalRerankerBackend
 from inference_lab.backends.runtime.streaming import validate_generation_stream
 from inference_lab.backends.runtime.types import (
     BackendCapability,
@@ -127,6 +128,7 @@ __all__ = [
     "GeneratorBackend",
     "LifecycleBackend",
     "LocalCausalBackend",
+    "LocalRerankerBackend",
     "MemoryAccountingAdapter",
     "MemoryAdapterIdentity",
     "MemoryBudget",
