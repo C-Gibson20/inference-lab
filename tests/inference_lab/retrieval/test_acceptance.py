@@ -212,6 +212,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "evaluate_metadata_filter",
         "escape_fts5_literal",
         "execute_lexical_retrieval",
+        "execute_dense_retrieval",
         "expose_bm25_score",
         "extract_identifiers",
         "identifier_score",
