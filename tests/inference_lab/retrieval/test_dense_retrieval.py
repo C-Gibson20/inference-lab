@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import sys
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -17,19 +20,35 @@ from inference_lab.backends.runtime import (
     EmbeddingRequest,
     EmbeddingResult,
 )
-from inference_lab.ingest import BaselineChunkGenerationManifest
+from inference_lab.ingest import (
+    CURRENT_PARSER_VERSION,
+    BaselineChunkGenerationManifest,
+    ParsePersistenceRequest,
+    ParserInput,
+    map_parse_persistence_request,
+)
+from inference_lab.ingest import (
+    ParseOutcome as IngestParseOutcome,
+)
+from inference_lab.profiling import FailureEvent, ProfilingContext, StageTiming
 from inference_lab.provenance import (
+    ContentHash,
+    CorpusDocumentVersionMembership,
     CorpusId,
+    CorpusMetadata,
     CorpusVersionId,
     DocumentId,
+    DocumentIdentity,
+    DocumentVersion,
     DocumentVersionId,
+    HashAlgorithm,
     RecordId,
 )
 from inference_lab.retrieval import (
     DenseIndexCompatibility,
     execute_dense_retrieval,
 )
-from inference_lab.retrieval.dense import DenseIndexEntry
+from inference_lab.retrieval.dense import DENSE_COMPONENT_KIND, DenseIndexEntry
 from inference_lab.retrieval.dense_store import (
     build_dense_generation,
     open_dense_generation,
@@ -39,12 +58,18 @@ from inference_lab.retrieval.query import RetrievalQuery
 from inference_lab.retrieval.results import FailureCategory, ResultStatus
 from inference_lab.retrieval.values import RetrievalLimit
 from inference_lab.storage import (
+    ChunkSetWriteRequest,
+    CommitCorpusUpdateOutcome,
     ComponentGenerationReference,
     ComponentGenerationState,
     MetadataRepository,
+    SourceArtefact,
+    build_source_blob_storage_key,
 )
+from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from tests.inference_lab.retrieval.lexical_fixtures import (
     CORPUS_ID,
+    parsed_document,
     selection,
 )
 from tests.inference_lab.retrieval.lexical_fixtures import (
@@ -61,6 +86,14 @@ _DOC_VERSION_IDS = tuple(
     DocumentVersionId.from_str(f"00000000-0000-4000-8000-{value:012d}")
     for value in (221, 222, 223)
 )
+
+
+class _ProfilingSink:
+    def __init__(self) -> None:
+        self.records: list[object] = []
+
+    def emit(self, record: object) -> None:
+        self.records.append(record)
 
 
 class _QueryEmbedder:
@@ -475,3 +508,240 @@ def test_dense_rejects_query_embedding_profile_mismatch(tmp_path: Path) -> None:
 
     assert result.status is ResultStatus.FAILED
     assert result.failures[0].category is FailureCategory.INVALID_CHANNEL_RESPONSE
+
+
+def test_RET_04_dense_retrieval_profiles_success_and_failure_without_payloads(
+    tmp_path: Path,
+) -> None:
+    repository, _, embedder, index_dir = _prepared_query(tmp_path)
+    sink = _ProfilingSink()
+    profiling = ProfilingContext.create(
+        run_id="dense-profile-run",
+        request_id="dense-profile-request",
+        sink=sink,
+        clock=lambda: 1_000_000,
+        observed_at_factory=lambda: datetime(2026, 9, 30, tzinfo=UTC),
+    )
+    secret_query = "private dense query marker"
+    query = RetrievalQuery(secret_query, _VERSION, RetrievalLimit(2))
+
+    result = execute_dense_retrieval(
+        cast(MetadataRepository, repository),
+        index_dir,
+        CORPUS_ID,
+        query,
+        embedder,
+        profiling=profiling,
+    )
+
+    timings = [record for record in sink.records if isinstance(record, StageTiming)]
+    assert result.status is ResultStatus.COMPLETED
+    assert [timing.event for timing in timings] == [
+        "stage_started",
+        "stage_completed",
+    ]
+    assert timings[-1].module == "inference_lab.retrieval"
+    assert timings[-1].pipeline_stage == "dense_retrieval"
+    assert timings[-1].corpus_id == CORPUS_ID.as_str()
+    assert timings[-1].corpus_version == _VERSION.as_str()
+    assert timings[-1].records_emitted == 2
+    assert secret_query not in repr(sink.records)
+
+    sink.records.clear()
+    embedder.fail = True
+    failed = execute_dense_retrieval(
+        cast(MetadataRepository, repository),
+        index_dir,
+        CORPUS_ID,
+        query,
+        embedder,
+        profiling=profiling,
+        profiling_identity="failed-request",
+    )
+    assert failed.status is ResultStatus.FAILED
+    assert any(isinstance(record, FailureEvent) for record in sink.records)
+    assert secret_query not in repr(sink.records)
+    assert "private query embedding marker" not in repr(sink.records)
+
+
+def test_RET_04_committed_dense_generation_reopens_and_corruption_fails_closed(
+    tmp_path: Path,
+) -> None:
+    text = "durable alpha passage"
+    document_id = _DOC_IDS[0]
+    document_version_id = _DOC_VERSION_IDS[0]
+    _, chunk_selection = selection(
+        text,
+        document_id=document_id,
+        document_version_id=document_version_id,
+    )
+    source_manifest = make_source_manifest((chunk_selection,), corpus_version=_VERSION)
+    source_bytes = text.encode("utf-8")
+    content_hash = ContentHash(
+        HashAlgorithm.SHA256, hashlib.sha256(source_bytes).hexdigest()
+    )
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "indexes"
+    repository = SQLiteMetadataRepository.open(
+        database_path,
+        source_dir=source_dir,
+        apply_migrations=True,
+    )
+    with repository.transaction() as transaction:
+        transaction.add_corpus(CorpusMetadata(CORPUS_ID, "dense restart corpus"))
+        transaction.add_document(DocumentIdentity(document_id))
+        transaction.add_document_version(
+            DocumentVersion(document_version_id, document_id, content_hash)
+        )
+        transaction.add_corpus_document_version_membership(
+            CorpusDocumentVersionMembership(
+                CORPUS_ID,
+                document_id,
+                document_version_id,
+            )
+        )
+        transaction.write_chunk_set(
+            ChunkSetWriteRequest(corpus_id=CORPUS_ID, selection=chunk_selection)
+        )
+    parsed = parsed_document(
+        text,
+        document_id=document_id,
+        document_version_id=document_version_id,
+    )
+    parse_request = ParsePersistenceRequest(
+        corpus_id=CORPUS_ID,
+        parser_input=ParserInput(
+            document_id,
+            document_version_id,
+            source_bytes,
+            "text/plain",
+            "utf-8",
+        ),
+        parser_version=CURRENT_PARSER_VERSION,
+        outcome=IngestParseOutcome("succeeded", parsed, ()),
+        parse_id=RecordId.generate(),
+        parsed_record_id=RecordId.generate(),
+    )
+    parse_records = map_parse_persistence_request(parse_request)
+    repository.persist_source_artefact(
+        CORPUS_ID,
+        SourceArtefact(
+            document_id=document_id,
+            document_version_id=document_version_id,
+            content_hash=content_hash,
+            byte_count=len(source_bytes),
+            media_type="text/plain",
+            storage_key=build_source_blob_storage_key(content_hash),
+        ),
+        (source_bytes,),
+        max_source_bytes=len(source_bytes),
+        parse_outcome=parse_records.outcome,
+        parsed_representation=parse_records.representation,
+    )
+
+    embedder = _QueryEmbedder()
+    compatibility = DenseIndexCompatibility(
+        model_metadata=embedder.metadata,
+        dimensions=3,
+        embedding_profile=embedder.profile,
+    )
+    outcome = build_dense_generation(
+        index_dir,
+        source_manifest,
+        embedder,
+        metadata_db_path=database_path,
+        source_dir=source_dir,
+        compatibility=compatibility,
+    )
+    from inference_lab.retrieval import DenseGenerationParticipant
+
+    participant = DenseGenerationParticipant(index_dir, outcome, source_manifest)
+    membership = source_manifest.entries[0].membership
+    committed: CommitCorpusUpdateOutcome | None = None
+    with repository.transaction() as transaction:
+        transaction.begin_corpus_update(
+            CORPUS_ID,
+            _VERSION,
+            expected_corpus_version=None,
+            required_component_kinds=(DENSE_COMPONENT_KIND,),
+        )
+        transaction.add_corpus_update_document_membership(
+            CORPUS_ID,
+            _VERSION,
+            membership,
+        )
+        transaction.register_corpus_update_component_generation(
+            CORPUS_ID,
+            _VERSION,
+            participant.component_generation(),
+            validator=participant.build_validator(repository),
+        )
+        transaction.seal_corpus_update(CORPUS_ID, _VERSION)
+        committed = transaction.commit_corpus_update(CORPUS_ID, _VERSION)
+    assert committed is not None
+    generation_id = committed.manifest.component_generations[0].generation_id
+    repository.close()
+
+    cold_query = """
+from pathlib import Path
+import sys
+
+from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.retrieval import execute_dense_retrieval
+from inference_lab.retrieval.query import RetrievalQuery
+from inference_lab.retrieval.values import RetrievalLimit
+from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
+from tests.inference_lab.retrieval.test_dense_retrieval import _QueryEmbedder
+
+database_path, source_dir, index_dir = map(Path, sys.argv[1:])
+repository = SQLiteMetadataRepository.open(database_path, source_dir=source_dir)
+result = execute_dense_retrieval(
+    repository,
+    index_dir,
+    CorpusId.from_str("00000000-0000-4000-8000-000000000001"),
+    RetrievalQuery(
+        "nearest",
+        CorpusVersionId.from_str("00000000-0000-4000-8000-000000000201"),
+        RetrievalLimit(3),
+    ),
+    _QueryEmbedder(),
+)
+assert result.status.value == "completed"
+assert tuple(hit.candidate.content for hit in result.hits) == ("durable alpha passage",)
+assert result.hits[0].candidate.sources[0].document_version_id.as_str() == (
+    "00000000-0000-4000-8000-000000000221"
+)
+repository.close()
+"""
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            cold_query,
+            str(database_path),
+            str(source_dir),
+            str(index_dir),
+        ],
+        check=True,
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+    )
+
+    reopened = SQLiteMetadataRepository.open(database_path, source_dir=source_dir)
+    query_embedder = _QueryEmbedder()
+    query = RetrievalQuery("nearest", _VERSION, RetrievalLimit(3))
+    database_file = index_dir / "dense" / generation_id / "vectors.sqlite3"
+    database_file.write_bytes(b"corrupt dense database")
+    corrupted = execute_dense_retrieval(
+        reopened,
+        index_dir,
+        CORPUS_ID,
+        query,
+        query_embedder,
+    )
+    assert corrupted.status is ResultStatus.FAILED
+    assert corrupted.hits == ()
+    assert corrupted.failures[0].category is FailureCategory.CHANNEL_UNAVAILABLE
+    reopened.close()
