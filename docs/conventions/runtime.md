@@ -222,14 +222,28 @@ small, self-curated pilot and is not the held-out EVAL-04 result. See
 [`docs/runtime/qwen-embedding.md`](../runtime/qwen-embedding.md) for artefact
 setup and operating limits.
 
+## RUN-05 local reranker backend
+
+`LocalRerankerBackend` implements `RerankerBackend` using the provisional,
+revision-pinned BGE-reranker-v2-m3 candidate. It loads only the exact, locally
+verified artefact inventory configured by `models.reranker_path`; it does not
+access a model registry or execute remote model code. It advertises reranking
+and batching only. The backend accepts at most 100 candidates, rejects queries
+over 256 tokens, preserves the query while tail-truncating candidate text to a
+512-token pair limit, and internally batches four pairs. Scores are finite raw
+classifier logits, ordered descending with `candidate_id` as the stable tie
+break. Preprocessing profile version `1.0.0`, resource limits, and the pilot's
+provisional status are documented in
+[`docs/runtime/local-reranker.md`](../runtime/local-reranker.md).
+
 ## Scope boundary
 
 The runtime contract layer includes the checked-in, CPU-only local mechanics
-fixture and the RUN-04 local embedding backend. It does not include real
-reranking integration, production cache lifecycle operations, scheduling,
-residency, or compatible-job microbatching. Those capabilities build on these
-contracts without turning the fake or mechanics fixture into a production
-model backend.
+fixture, RUN-04 local embedding backend, and RUN-05 local reranker backend.
+Production cache lifecycle operations, scheduling, residency, and
+compatible-job microbatching remain downstream work. Those capabilities build
+on these contracts without turning the fake or mechanics fixture into a
+production model backend.
 
 ## Component memory accounting
 
