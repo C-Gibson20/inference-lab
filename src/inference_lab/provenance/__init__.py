@@ -1,5 +1,9 @@
 """Stable identities and source-span lineage for corpus and derived records."""
 
+from inference_lab.provenance._deserialisation import (
+    deserialise_derived_record,
+    deserialise_lineage_bundle,
+)
 from inference_lab.provenance.derived import (
     DerivationFingerprint,
     DerivedRecordKind,
@@ -70,8 +74,6 @@ from inference_lab.provenance.resolver import (
     resolve_identity,
 )
 from inference_lab.provenance.serialisation import (
-    deserialise_derived_record,
-    deserialise_lineage_bundle,
     serialise_derived_record,
     serialise_lineage_bundle,
 )

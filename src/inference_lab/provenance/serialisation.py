@@ -1,10 +1,6 @@
 """Canonical JSON encoding for derived-record lineage contracts."""
 
 from inference_lab._json import JsonObject, canonical_json_bytes
-from inference_lab.provenance._deserialisation import (
-    deserialise_derived_record,
-    deserialise_lineage_bundle,
-)
 from inference_lab.provenance.derived import (
     DerivationFingerprint,
     DerivedRecordMetadata,
@@ -160,13 +156,3 @@ def serialise_derived_record(record: DerivedRecordMetadata) -> bytes:
 def serialise_lineage_bundle(bundle: LineageBundle) -> bytes:
     """Serialise one validated lineage bundle as canonical UTF-8 JSON."""
     return canonical_json_bytes(lineage_bundle_payload(bundle))
-
-
-__all__ = [
-    "derived_record_payload",
-    "deserialise_derived_record",
-    "deserialise_lineage_bundle",
-    "lineage_bundle_payload",
-    "serialise_derived_record",
-    "serialise_lineage_bundle",
-]
