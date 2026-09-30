@@ -6,7 +6,6 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
-from typing import Final
 
 from inference_lab.evaluation.cases import EvaluationCase
 from inference_lab.evaluation.retrieval_contracts import (
@@ -655,14 +654,3 @@ def aggregate_retrieval_case_results(
         passage=tuple(passage_metrics),
         duplicate_diagnostics=duplicate_diagnostics,
     )
-
-
-__all__: Final = [
-    "DocumentRelevanceTarget",
-    "PassageRelevanceTarget",
-    "RetrievalEvaluationScoringError",
-    "RetrievalRelevanceTargets",
-    "aggregate_retrieval_case_results",
-    "build_relevance_targets",
-    "score_retrieval_case",
-]

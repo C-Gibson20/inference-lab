@@ -529,24 +529,3 @@ def evaluate_metadata_filter(
         validation = validate_metadata_filter(expression, registry=registry)
     _validate_metadata_values(values, registry=registry)
     return _evaluate(validation.expression, values)
-
-
-__all__ = [
-    "CURRENT_METADATA_FILTER_REGISTRY",
-    "MAX_METADATA_FILTER_DEPTH",
-    "MAX_METADATA_FILTER_NODES",
-    "METADATA_FILTER_REGISTRY_VERSION",
-    "InvalidMetadataFilterError",
-    "MetadataCardinality",
-    "MetadataFieldDescriptor",
-    "MetadataFieldType",
-    "MetadataFilterErrorCategory",
-    "MetadataFilterOperator",
-    "MetadataFilterRegistry",
-    "MetadataFilterValidation",
-    "MetadataMissingPolicy",
-    "MetadataValue",
-    "MetadataValues",
-    "evaluate_metadata_filter",
-    "validate_metadata_filter",
-]
