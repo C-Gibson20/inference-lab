@@ -13,6 +13,7 @@ BaselineStage = Literal[
     "publication",
     "lexical_index",
     "lexical_retrieval",
+    "dense_retrieval",
     "metadata_filter",
     "serving",
 ]

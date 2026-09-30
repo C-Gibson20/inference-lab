@@ -12,6 +12,7 @@ from inference_lab.backends.runtime import (
     EmbeddingOptions,
     EmbeddingRequest,
 )
+from inference_lab.profiling import FailureMapping, ProfilingContext
 from inference_lab.provenance import CorpusId
 from inference_lab.retrieval.dense import (
     DENSE_COMPONENT_KIND,
@@ -94,7 +95,84 @@ def _map_dense_failure(error: DenseError) -> FailureCategory:
     return FailureCategory.CHANNEL_EXECUTION_FAILURE
 
 
+def _map_result_failure(result: EvidenceResult) -> FailureMapping | None:
+    """Map a bounded retrieval result to payload-free profiling diagnostics."""
+    if result.status is not ResultStatus.FAILED:
+        return None
+    category = result.failures[0].category if result.failures else None
+    if category is FailureCategory.CHANNEL_UNAVAILABLE:
+        return FailureMapping(
+            failure_category="dependency",
+            failure_code="generation_unavailable",
+        )
+    if category is FailureCategory.INVALID_CHANNEL_RESPONSE:
+        return FailureMapping(
+            failure_category="dependency",
+            failure_code="incompatible_generation",
+        )
+    return FailureMapping(
+        failure_category="internal",
+        failure_code="execution_failure",
+    )
+
+
 def execute_dense_retrieval(
+    repository: MetadataRepository,
+    index_dir: Path,
+    corpus_id: CorpusId,
+    query: RetrievalQuery,
+    embedder: EmbeddingBackend,
+    *,
+    profiling: ProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
+    snapshot: CorpusSnapshot | None = None,
+    generation: DenseGeneration | None = None,
+) -> EvidenceResult:
+    """Execute dense retrieval and emit payload-free stage measurements."""
+    if profiling is not None and not isinstance(profiling, ProfilingContext):
+        raise TypeError("profiling must be a ProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    if not isinstance(profiling_identity, str) or not profiling_identity:
+        raise ValueError("profiling_identity must be a non-empty string.")
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if not isinstance(query, RetrievalQuery):
+        raise TypeError("query must be a RetrievalQuery.")
+
+    selected_profiling = (
+        profiling if profiling is not None else ProfilingContext.create()
+    )
+    stage_id = selected_profiling.stage_id("dense_retrieval", profiling_identity)
+    result: EvidenceResult | None = None
+    with selected_profiling.observed_stage(
+        stage="dense_retrieval",
+        stage_id=stage_id,
+        document_id=None,
+        corpus_id=corpus_id.as_str(),
+        corpus_version=query.corpus_version.as_str(),
+        parent_stage_id=parent_stage_id,
+        module="inference_lab.retrieval",
+    ) as stage:
+        result = _execute_dense_retrieval(
+            repository,
+            index_dir,
+            corpus_id,
+            query,
+            embedder,
+            snapshot=snapshot,
+            generation=generation,
+        )
+        stage.set_counts(items_processed=None, records_emitted=len(result.hits))
+        failure = _map_result_failure(result)
+        if failure is not None:
+            stage.mark_failure(failure)
+    assert result is not None
+    return result
+
+
+def _execute_dense_retrieval(
     repository: MetadataRepository,
     index_dir: Path,
     corpus_id: CorpusId,
