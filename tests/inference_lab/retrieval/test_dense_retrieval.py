@@ -50,7 +50,10 @@ from inference_lab.retrieval import (
 )
 from inference_lab.retrieval.dense import DENSE_COMPONENT_KIND, DenseIndexEntry
 from inference_lab.retrieval.dense_store import (
+    DenseError,
+    DenseFailureCategory,
     build_dense_generation,
+    build_dense_generation_for_corpus_update,
     open_dense_generation,
 )
 from inference_lab.retrieval.filters import ExactFilter, MissingFilter
@@ -255,6 +258,10 @@ class _Repository:
         corpus_version: CorpusVersionId,
     ) -> _Snapshot:
         del corpus_id, corpus_version
+        return self.snapshot
+
+    def open_active_corpus_snapshot(self, corpus_id: CorpusId) -> _Snapshot:
+        del corpus_id
         return self.snapshot
 
 
@@ -745,3 +752,85 @@ repository.close()
     assert corrupted.hits == ()
     assert corrupted.failures[0].category is FailureCategory.CHANNEL_UNAVAILABLE
     reopened.close()
+
+
+def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new(
+    tmp_path: Path,
+) -> None:
+    repository, snapshot, active_embedder, index_dir = _prepared_query(
+        tmp_path,
+        ("alpha passage", "beta passage", "gamma passage"),
+    )
+    active_reference = snapshot.manifest.component_generations[0]
+    old_database = (
+        index_dir / "dense" / active_reference.generation_id / "vectors.sqlite3"
+    )
+    old_database_bytes = old_database.read_bytes()
+
+    _, selection_for_rebuild = selection(
+        "alpha passage",
+        document_id=_DOC_IDS[0],
+        document_version_id=_DOC_VERSION_IDS[0],
+    )
+    proposed_manifest = make_source_manifest(
+        (selection_for_rebuild,),
+        corpus_version=_VERSION_OTHER,
+    )
+    rebuilding_embedder = _QueryEmbedder()
+    rebuilding_embedder.metadata = replace(
+        rebuilding_embedder.metadata,
+        model_revision="r2",
+    )
+    rebuilding_embedder.output_metadata = rebuilding_embedder.metadata
+    compatibility = DenseIndexCompatibility(
+        model_metadata=rebuilding_embedder.metadata,
+        dimensions=3,
+        embedding_profile=rebuilding_embedder.profile,
+    )
+    build_arguments = {
+        "expected_corpus_version": _VERSION,
+        "metadata_db_path": tmp_path / "metadata.sqlite3",
+        "source_dir": tmp_path / "sources",
+        "compatibility": compatibility,
+    }
+    generation_ids_before = {
+        generation_path.name for generation_path in (index_dir / "dense").iterdir()
+    }
+    rebuilding_embedder.fail = True
+
+    with pytest.raises(DenseError) as failure:
+        build_dense_generation_for_corpus_update(
+            index_dir,
+            proposed_manifest,
+            rebuilding_embedder,
+            cast(MetadataRepository, repository),
+            **build_arguments,
+        )
+
+    assert failure.value.category is DenseFailureCategory.EMBEDDING_FAILURE
+    prior_result = _execute(repository, index_dir, active_embedder)
+    assert prior_result.status is ResultStatus.COMPLETED
+    assert repository.snapshot.version.corpus_version == _VERSION
+    assert prior_result.hits
+    assert old_database.read_bytes() == old_database_bytes
+    assert {
+        generation_path.name for generation_path in (index_dir / "dense").iterdir()
+    } == generation_ids_before
+
+    rebuilding_embedder.fail = False
+    rebuilt = build_dense_generation_for_corpus_update(
+        index_dir,
+        proposed_manifest,
+        rebuilding_embedder,
+        cast(MetadataRepository, repository),
+        **build_arguments,
+    )
+
+    assert rebuilt.manifest.generation_id != active_reference.generation_id
+    assert rebuilt.statistics.embedded_vectors == 1
+    assert rebuilt.statistics.reused_vectors == 0
+    assert old_database.read_bytes() == old_database_bytes
+    with open_dense_generation(index_dir, rebuilt.manifest.generation_id) as opened:
+        assert tuple(entry.candidate.content for entry in opened.iter_entries()) == (
+            "alpha passage",
+        )
