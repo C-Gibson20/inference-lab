@@ -51,6 +51,10 @@ def _config_text(root: Path) -> str:
         [ingest]
         max_source_bytes = 1048576
         max_concurrent_documents = 3
+
+        [retrieval]
+        evidence_count = 7
+        candidate_limit = 80
         """
 
 
@@ -67,6 +71,8 @@ def isolated_tooling_environment(
         "STORAGE__SOURCE_DIR",
         "LOGGING__LEVEL",
         "LOGGING__FORMAT",
+        "RETRIEVAL__EVIDENCE_COUNT",
+        "RETRIEVAL__CANDIDATE_LIMIT",
     ):
         monkeypatch.delenv(name, raising=False)
     get_settings.cache_clear()
@@ -93,21 +99,29 @@ def test_configuration_merges_toml_environment_and_explicit_overrides(
     assert configured.runtime.vram_budget_gb == 24
     assert configured.storage.metadata_db_path.name == "metadata.sqlite3"
     assert configured.ingest.max_concurrent_documents == 3
+    assert configured.retrieval.evidence_count == 7
+    assert configured.retrieval.candidate_limit == 80
 
     monkeypatch.setenv("RUNTIME__VRAM_BUDGET_GB", "12")
     monkeypatch.setenv("STORAGE__SOURCE_DIR", "/environment/source-data")
+    monkeypatch.setenv("RETRIEVAL__CANDIDATE_LIMIT", "40")
     get_settings.cache_clear()
     environment = get_settings()
     assert environment.runtime.vram_budget_gb == 12
     assert environment.storage.source_dir == Path("/environment/source-data")
+    assert environment.retrieval.candidate_limit == 40
+    assert environment.retrieval.evidence_count == 7
 
     explicit = Settings(  # pyright: ignore[reportCallIssue]
         runtime={"vram_budget_gb": 8},
         models={"generator_path": "/explicit/generator"},
+        retrieval={"evidence_count": 9},
     )
     assert explicit.runtime.vram_budget_gb == 8
     assert explicit.runtime.max_context_tokens == 8192
     assert explicit.models.generator_path == Path("/explicit/generator")
+    assert explicit.retrieval.evidence_count == 9
+    assert explicit.retrieval.candidate_limit == 40
 
     monkeypatch.setenv("RUNTIME__VRAM_BUDGET_GB", "16")
     assert get_settings().runtime.vram_budget_gb == 12
@@ -135,6 +149,18 @@ def test_configuration_rejects_missing_invalid_unknown_and_overlapping_values(
     invalid_runtime = copy.deepcopy(valid)
     invalid_runtime["runtime"]["vram_budget_gb"] = 0  # type: ignore[index]
     cases.append(("non-positive runtime limit", invalid_runtime))
+
+    invalid_evidence_count = copy.deepcopy(valid)
+    invalid_evidence_count["retrieval"]["evidence_count"] = 11  # type: ignore[index]
+    cases.append(("evidence count above RET-06 maximum", invalid_evidence_count))
+
+    invalid_candidate_limit = copy.deepcopy(valid)
+    invalid_candidate_limit["retrieval"]["candidate_limit"] = 101  # type: ignore[index]
+    cases.append(("reranker candidate limit above RUN-05 cap", invalid_candidate_limit))
+
+    boolean_candidate_limit = copy.deepcopy(valid)
+    boolean_candidate_limit["retrieval"]["candidate_limit"] = True  # type: ignore[index]
+    cases.append(("boolean reranker candidate limit", boolean_candidate_limit))
 
     non_local_model = copy.deepcopy(valid)
     non_local_model["models"]["generator_path"] = "https://example.test/model"  # type: ignore[index]

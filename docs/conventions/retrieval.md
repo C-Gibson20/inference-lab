@@ -96,6 +96,21 @@ Cross-corpus or federated retrieval is outside this contract and the first
 build. Comparing corpora requires separate queries and results; callers must
 not combine their hits into a result labelled as one corpus version.
 
+## RET-06 limits
+
+Reranking uses the typed `[retrieval]` settings owned by
+`inference_lab.settings.RetrievalConfig`:
+
+| Setting | Environment override | Default | Valid range |
+| --- | --- | --- | --- |
+| `retrieval.evidence_count` | `RETRIEVAL__EVIDENCE_COUNT` | `8` | `5` through `10` |
+| `retrieval.candidate_limit` | `RETRIEVAL__CANDIDATE_LIMIT` | `100` | `1` through the RUN-05 hard cap of `100` |
+
+The candidate limit bounds the pool presented to RUN-05. The selected evidence
+count is a separate downstream maximum; fewer passages may be returned when
+fewer eligible candidates exist. Neither setting changes the RET-01 wire
+schema or makes reranker scores evidence of claim support.
+
 ## Serialisation and privacy
 
 Queries and evidence results use retrieval schema version `2.0.0` and
