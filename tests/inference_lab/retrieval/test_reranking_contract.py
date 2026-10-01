@@ -28,6 +28,7 @@ from inference_lab.retrieval import (
     FailureCategory,
     InvalidRetrievalContractError,
     RerankCandidateLimit,
+    RerankingIdentity,
     RerankingRequest,
     ResultStatus,
     RetrievalCandidate,
@@ -191,6 +192,38 @@ def test_rerank_candidate_limit_accepts_values_within_backend_cap(value: int) ->
 def test_rerank_candidate_limit_rejects_values_above_backend_cap() -> None:
     with pytest.raises(InvalidRetrievalContractError):
         RerankCandidateLimit(101)
+
+
+def test_reranking_identity_is_stable_and_covers_run_configuration() -> None:
+    identity = RerankingIdentity(
+        backend_name="transformers-local",
+        model_name="BAAI/bge-reranker-v2-m3",
+        model_revision="revision-1",
+        preprocessing_profile_version="1.0.0",
+        evidence_count=8,
+        candidate_limit=100,
+    )
+    replay = RerankingIdentity(
+        backend_name="transformers-local",
+        model_name="BAAI/bge-reranker-v2-m3",
+        model_revision="revision-1",
+        preprocessing_profile_version="1.0.0",
+        evidence_count=8,
+        candidate_limit=100,
+    )
+    changed = RerankingIdentity(
+        backend_name="transformers-local",
+        model_name="BAAI/bge-reranker-v2-m3",
+        model_revision="revision-2",
+        preprocessing_profile_version="1.0.0",
+        evidence_count=8,
+        candidate_limit=100,
+    )
+
+    assert identity.digest == replay.digest
+    assert identity.digest != changed.digest
+    assert identity.deduplication_version == "1.0.0"
+    assert identity.policy_version == "1.0.0"
 
 
 def test_request_builder_applies_candidate_cap_and_preserves_candidate_payloads() -> (
@@ -435,6 +468,10 @@ def test_retryable_resource_failure_returns_degraded_fused_order() -> None:
         outcome.result.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
     )
     assert outcome.result.failures[0].retryable is True
+    assert outcome.identity.backend_name == "fake"
+    assert outcome.identity.model_revision == "test"
+    assert outcome.identity.preprocessing_profile_version == "1.0.0"
+    assert len(outcome.identity.digest) == 64
     assert tuple(hit.candidate for hit in outcome.result.hits) == tuple(
         hit.candidate for hit in fused.hits
     )
@@ -470,6 +507,17 @@ def test_malformed_backend_response_fails_closed() -> None:
     fused = _many_candidate_result(query, 2)
 
     class MalformedBackend:
+        @property
+        def metadata(self) -> BackendMetadata:
+            return BackendMetadata(
+                backend_name="fake",
+                model_name="fake-model",
+                model_revision="test",
+                preprocessing_profile_version="1.0.0",
+                supported_operations=(BackendOperation.RERANK,),
+                capabilities=(),
+            )
+
         def rerank(self, request: object) -> object:
             return object()
 
@@ -488,6 +536,17 @@ def test_corpus_version_mismatch_fails_closed_without_backend_call() -> None:
     fused = _many_candidate_result(_query(version=_version(2), limit=2), 2)
 
     class Backend:
+        @property
+        def metadata(self) -> BackendMetadata:
+            return BackendMetadata(
+                backend_name="fake",
+                model_name="fake-model",
+                model_revision="test",
+                preprocessing_profile_version="1.0.0",
+                supported_operations=(BackendOperation.RERANK,),
+                capabilities=(),
+            )
+
         def rerank(self, request: object) -> RerankResult:
             pytest.fail("mismatched corpus evidence must not reach the backend")
 

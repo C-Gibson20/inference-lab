@@ -181,6 +181,10 @@ def test_backend_loads_only_the_pinned_local_model_and_closes_idempotently(
     assert backend.metadata.supported_operations == (BackendOperation.RERANK,)
     assert backend.metadata.model_name == "BAAI/bge-reranker-v2-m3"
     assert backend.metadata.model_revision == reranker._MODEL_REVISION
+    assert (
+        backend.metadata.preprocessing_profile_version
+        == reranker._PREPROCESSING_PROFILE_VERSION
+    )
     assert backend.is_ready
     assert len(loaded_backend.calls) == 2
     for _, path, options in loaded_backend.calls:

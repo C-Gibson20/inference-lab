@@ -111,6 +111,13 @@ count is a separate downstream maximum; fewer passages may be returned when
 fewer eligible candidates exist. Neither setting changes the RET-01 wire
 schema or makes reranker scores evidence of claim support.
 
+Each RET-06 execution outcome carries a stable `RerankingIdentity` for
+evaluation and replay. It includes backend/model name and revision, the
+backend's semantic preprocessing profile version, both limits, and the RET-06
+policy and exact-deduplication versions. Its SHA-256 digest covers all of
+these fields. Identity values must not include deployment paths; raw scores,
+queries, passages, and prompts are not part of the identity.
+
 RET-06 exact deduplication policy `1.0.0` keys evidence by candidate kind and
 the complete set of `(document_version_id, source_span_id)` links. It retains
 the highest-ranked candidate for a repeated key and then makes result ranks

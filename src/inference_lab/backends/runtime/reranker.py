@@ -224,6 +224,7 @@ class LocalRerankerBackend:
             backend_name="transformers-local",
             model_name=_MODEL_NAME,
             model_revision=_MODEL_REVISION,
+            preprocessing_profile_version=_PREPROCESSING_PROFILE_VERSION,
             supported_operations=(BackendOperation.RERANK,),
             capabilities=(BackendCapability.BATCHING,),
         )

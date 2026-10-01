@@ -1,7 +1,12 @@
 """Validated request boundary for RET-06 evidence reranking."""
 
+from __future__ import annotations
+
+import hashlib
+import json
 from dataclasses import dataclass
 
+from inference_lab._validation import is_canonical_semantic_version
 from inference_lab.backends.runtime import (
     BackendClosedError,
     BackendError,
@@ -23,6 +28,7 @@ from inference_lab.retrieval.results import (
 
 MAX_RERANK_CANDIDATES = 100
 RERANK_DEDUPLICATION_VERSION = "1.0.0"
+RET06_POLICY_VERSION = "1.0.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,12 +131,93 @@ class RerankingOutcome:
 
     result: EvidenceResult
     degraded: bool
+    identity: RerankingIdentity
 
     def __post_init__(self) -> None:
         if not isinstance(self.result, EvidenceResult):
             raise TypeError("result must be an EvidenceResult.")
         if type(self.degraded) is not bool:
             raise TypeError("degraded must be a boolean.")
+        if not isinstance(self.identity, RerankingIdentity):
+            raise TypeError("identity must be a RerankingIdentity.")
+
+
+@dataclass(frozen=True, slots=True)
+class RerankingIdentity:
+    """Stable, path-free configuration identity for one RET-06 run."""
+
+    backend_name: str
+    model_name: str
+    model_revision: str
+    preprocessing_profile_version: str
+    evidence_count: int
+    candidate_limit: int
+    deduplication_version: str = RERANK_DEDUPLICATION_VERSION
+    policy_version: str = RET06_POLICY_VERSION
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("backend_name", self.backend_name),
+            ("model_name", self.model_name),
+            ("model_revision", self.model_revision),
+            ("preprocessing_profile_version", self.preprocessing_profile_version),
+            ("deduplication_version", self.deduplication_version),
+            ("policy_version", self.policy_version),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string.")
+        for name, value in (
+            ("backend_name", self.backend_name),
+            ("model_name", self.model_name),
+            ("model_revision", self.model_revision),
+        ):
+            if (
+                value.startswith(("/", "\\", "~"))
+                or "://" in value
+                or (len(value) >= 3 and value[1] == ":" and value[2] in ("/", "\\"))
+            ):
+                raise InvalidRetrievalContractError(
+                    f"{name} must not contain a deployment path."
+                )
+        for name, value in (
+            ("preprocessing_profile_version", self.preprocessing_profile_version),
+            ("deduplication_version", self.deduplication_version),
+            ("policy_version", self.policy_version),
+        ):
+            if not is_canonical_semantic_version(value):
+                raise InvalidRetrievalContractError(
+                    f"{name} must be a semantic version."
+                )
+        if type(self.evidence_count) is not int or not 5 <= self.evidence_count <= 10:
+            raise InvalidRetrievalContractError(
+                "identity evidence count must be between 5 and 10."
+            )
+        if (
+            type(self.candidate_limit) is not int
+            or not 1 <= self.candidate_limit <= MAX_RERANK_CANDIDATES
+        ):
+            raise InvalidRetrievalContractError(
+                "identity candidate limit must be between 1 and 100."
+            )
+
+    @property
+    def digest(self) -> str:
+        """Return a stable digest over every result-affecting RET-06 choice."""
+        encoded = json.dumps(
+            {
+                "backend_name": self.backend_name,
+                "candidate_limit": self.candidate_limit,
+                "deduplication_version": self.deduplication_version,
+                "evidence_count": self.evidence_count,
+                "model_name": self.model_name,
+                "model_revision": self.model_revision,
+                "policy_version": self.policy_version,
+                "preprocessing_profile_version": self.preprocessing_profile_version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
 
 def prepare_rerank_request(
@@ -353,6 +440,7 @@ def execute_reranking(
         raise TypeError("candidate_limit must be a RerankCandidateLimit.")
     if not callable(getattr(backend, "rerank", None)):
         raise TypeError("backend must implement the reranker contract.")
+    identity = _reranking_identity(backend, evidence_count, candidate_limit)
 
     if fused_result.corpus_version != query.corpus_version:
         return _failed_reranking_outcome(
@@ -361,6 +449,7 @@ def execute_reranking(
                 FailureCategory.CORPUS_VERSION_MISMATCH,
                 retryable=False,
             ),
+            identity=identity,
         )
     if fused_result.requested_limit != query.limit:
         return _failed_reranking_outcome(
@@ -369,9 +458,10 @@ def execute_reranking(
                 FailureCategory.INVALID_CHANNEL_RESPONSE,
                 retryable=False,
             ),
+            identity=identity,
         )
     if fused_result.status is ResultStatus.FAILED or not fused_result.hits:
-        return RerankingOutcome(fused_result, degraded=False)
+        return RerankingOutcome(fused_result, degraded=False, identity=identity)
 
     request = RerankingRequest(query, fused_result)
     try:
@@ -401,29 +491,55 @@ def execute_reranking(
                     (*fused_result.failures, failure),
                 ),
                 degraded=bool(fallback),
+                identity=identity,
             )
         return _failed_reranking_outcome(
             query,
             failure,
             prior_failures=fused_result.failures,
+            identity=identity,
         )
     except InvalidRetrievalContractError:
         return _failed_reranking_outcome(
             query,
             RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False),
             prior_failures=fused_result.failures,
+            identity=identity,
         )
     except Exception:
         return _failed_reranking_outcome(
             query,
             RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False),
             prior_failures=fused_result.failures,
+            identity=identity,
         )
 
     hits = rank_evidence_hits(scored)[: evidence_count.value]
     return RerankingOutcome(
         _result_with_outcome(query, hits, fused_result.failures),
         degraded=False,
+        identity=identity,
+    )
+
+
+def _reranking_identity(
+    backend: RerankerBackend,
+    evidence_count: EvidenceCount,
+    candidate_limit: RerankCandidateLimit,
+) -> RerankingIdentity:
+    """Capture backend and policy identity without exposing deployment paths."""
+    metadata = backend.metadata
+    if metadata.preprocessing_profile_version is None:
+        raise InvalidRetrievalContractError(
+            "reranker metadata must declare its preprocessing profile version."
+        )
+    return RerankingIdentity(
+        backend_name=metadata.backend_name,
+        model_name=metadata.model_name,
+        model_revision=metadata.model_revision,
+        preprocessing_profile_version=metadata.preprocessing_profile_version,
+        evidence_count=evidence_count.value,
+        candidate_limit=candidate_limit.value,
     )
 
 
@@ -454,10 +570,12 @@ def _failed_reranking_outcome(
     query: RetrievalQuery,
     failure: RetrievalFailure,
     *,
+    identity: RerankingIdentity,
     prior_failures: tuple[RetrievalFailure, ...] = (),
 ) -> RerankingOutcome:
     """Build a hit-free failure result without retaining private error data."""
     return RerankingOutcome(
         _result_with_outcome(query, (), (*prior_failures, failure)),
         degraded=False,
+        identity=identity,
     )
