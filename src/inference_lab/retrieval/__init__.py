@@ -139,6 +139,7 @@ from inference_lab.retrieval.metadata_filters import (
     validate_metadata_filter,
 )
 from inference_lab.retrieval.query import RetrievalQuery
+from inference_lab.retrieval.reranking import RerankingRequest
 from inference_lab.retrieval.results import (
     EvidenceResult,
     FailureCategory,
@@ -247,6 +248,7 @@ __all__ = [
     "NotFilter",
     "OneOfFilter",
     "RangeFilter",
+    "RerankingRequest",
     "ResultStatus",
     "RetrievalCandidate",
     "RetrievalChannel",
