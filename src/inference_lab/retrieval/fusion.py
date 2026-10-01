@@ -1,7 +1,7 @@
 """Deterministic rank fusion for channel-scoped retrieval results."""
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
 
 from inference_lab.provenance import RecordId
@@ -87,13 +87,15 @@ def fuse_evidence_results(
     channel_results: Mapping[RetrievalChannel, EvidenceResult],
     *,
     policy: FusionPolicy | None = None,
+    candidate_deduplication_key: Callable[[RetrievalCandidate], Hashable] | None = None,
 ) -> EvidenceResult:
     """Fuse lexical and dense result envelopes using weighted reciprocal ranks.
 
     Candidates sharing a ``RecordId`` are merged while retaining all distinct
     source links and one contribution from each channel. Explicit metadata
     predicates are applied by channel execution; they are not a ranked channel.
-    The query limit is applied only after fusion and stable ordering.
+    An optional stable key collapses duplicate evidence after ranking; the query
+    limit is applied after deduplication.
     """
     if not isinstance(query, RetrievalQuery):
         raise TypeError("query must be a RetrievalQuery.")
@@ -106,6 +108,10 @@ def fuse_evidence_results(
     selected_policy = FusionPolicy() if policy is None else policy
     if not isinstance(selected_policy, FusionPolicy):
         raise TypeError("policy must be a FusionPolicy or None.")
+    if candidate_deduplication_key is not None and not callable(
+        candidate_deduplication_key
+    ):
+        raise TypeError("candidate_deduplication_key must be callable or None.")
 
     results = _validate_channel_results(query, channel_results, selected_policy)
     mismatch = next(
@@ -140,10 +146,30 @@ def fuse_evidence_results(
                 entry.merge_candidate(hit.candidate)
             entry.add(channel, contribution, weight, selected_policy.rank_constant)
 
-    ordered = sorted(
+    ranked = sorted(
         candidates.values(),
         key=lambda item: (-item.fused_score, item.candidate.record_id.as_str()),
-    )[: query.limit.value]
+    )
+    ordered: list[_CandidateContribution] = []
+    seen_keys: set[Hashable] = set()
+    for item in ranked:
+        key = (
+            item.candidate.record_id
+            if candidate_deduplication_key is None
+            else candidate_deduplication_key(item.candidate)
+        )
+        try:
+            duplicate = key in seen_keys
+            seen_keys.add(key)
+        except TypeError:
+            raise InvalidRetrievalContractError(
+                "candidate deduplication keys must be hashable."
+            ) from None
+        if duplicate:
+            continue
+        ordered.append(item)
+        if len(ordered) == query.limit.value:
+            break
     hits = tuple(
         EvidenceHit(
             candidate=item.candidate,

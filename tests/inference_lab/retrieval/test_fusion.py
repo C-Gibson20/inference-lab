@@ -217,6 +217,36 @@ def test_query_limit_is_a_hard_maximum_after_fusion_ordering() -> None:
     assert fused.hits[0].candidate.record_id == _candidate(10, 1).record_id
 
 
+def test_optional_deduplication_runs_before_the_query_limit() -> None:
+    query = _query(limit=2)
+    lexical = _result(
+        RetrievalChannel.LEXICAL,
+        ((_candidate(20, 2), 1), (_candidate(10, 1), 2)),
+        limit=2,
+    )
+    dense = _result(
+        RetrievalChannel.DENSE,
+        ((_candidate(30, 3), 1), (_candidate(40, 4), 2)),
+        limit=2,
+    )
+    duplicate_group = {_candidate(20, 2).record_id, _candidate(30, 3).record_id}
+
+    fused = fuse_evidence_results(
+        query,
+        {RetrievalChannel.LEXICAL: lexical, RetrievalChannel.DENSE: dense},
+        candidate_deduplication_key=lambda candidate: (
+            "same-evidence"
+            if candidate.record_id in duplicate_group
+            else candidate.record_id
+        ),
+    )
+
+    assert tuple(hit.candidate.record_id for hit in fused.hits) == (
+        _candidate(20, 2).record_id,
+        _candidate(10, 1).record_id,
+    )
+
+
 def test_degraded_channel_returns_partial_or_failed_using_surviving_hits() -> None:
     query = _query()
     failure = RetrievalFailure(
