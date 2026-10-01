@@ -647,3 +647,127 @@ def test_corpus_version_mismatch_fails_closed_without_backend_call() -> None:
     assert (
         outcome.result.failures[0].category is FailureCategory.CORPUS_VERSION_MISMATCH
     )
+
+
+def test_execute_reranking_returns_repeatable_bounded_source_evidence() -> None:
+    query = _query(limit=6)
+    fused = _many_candidate_result(query, 6)
+    scored_ids = (
+        (fused.hits[0].candidate.record_id.as_str(), 0.8),
+        (fused.hits[1].candidate.record_id.as_str(), 0.9),
+        (fused.hits[2].candidate.record_id.as_str(), 0.9),
+        (fused.hits[3].candidate.record_id.as_str(), 0.1),
+    )
+    backend = FakeBackend(FakeBackendConfig(rerank_scores=scored_ids))
+    backend.load()
+
+    first = execute_reranking(
+        backend,
+        query,
+        fused,
+        corpus_id=_corpus_id(),
+        evidence_count=EvidenceCount(5),
+        candidate_limit=RerankCandidateLimit(4),
+    )
+    replay = execute_reranking(
+        backend,
+        query,
+        fused,
+        corpus_id=_corpus_id(),
+        evidence_count=EvidenceCount(5),
+        candidate_limit=RerankCandidateLimit(4),
+    )
+
+    expected_hits = (
+        fused.hits[1],
+        fused.hits[2],
+        fused.hits[0],
+        fused.hits[3],
+    )
+    assert first.result.status is ResultStatus.COMPLETED
+    assert first.result.requested_limit == query.limit
+    assert first.result.failures == ()
+    assert first.degraded is False
+    assert first.result == replay.result
+    assert first.identity == replay.identity
+    assert len(first.result.hits) == 4  # Pool is smaller than evidence minimum.
+    assert tuple(hit.rank for hit in first.result.hits) == (1, 2, 3, 4)
+    assert tuple(hit.candidate for hit in first.result.hits) == tuple(
+        hit.candidate for hit in expected_hits
+    )
+    assert tuple(hit.contributions for hit in first.result.hits) == tuple(
+        hit.contributions for hit in expected_hits
+    )
+    assert tuple(hit.candidate.sources for hit in first.result.hits) == tuple(
+        hit.candidate.sources for hit in expected_hits
+    )
+    backend.close()
+
+
+def test_execute_reranking_keeps_empty_results_completed_without_loading_backend() -> (
+    None
+):
+    query = _query(limit=3)
+    empty = _result(query, with_hit=False)
+    backend = FakeBackend()
+
+    outcome = execute_reranking(
+        backend,
+        query,
+        empty,
+        corpus_id=_corpus_id(),
+    )
+
+    assert backend.is_ready is False
+    assert outcome.result.status is ResultStatus.COMPLETED
+    assert outcome.result.hits == ()
+    assert outcome.result.failures == ()
+    assert outcome.degraded is False
+
+
+def test_execute_reranking_deduplicates_exact_source_evidence_by_rank() -> None:
+    query = _query(limit=2)
+    first = _many_candidate_result(query, 1).hits[0]
+    duplicate_candidate = RetrievalCandidate(
+        record_id=RecordId.from_str("00000000-0000-4000-8000-000000000099"),
+        kind=first.candidate.kind,
+        content=first.candidate.content,
+        sources=first.candidate.sources,
+    )
+    duplicate = EvidenceHit(
+        candidate=duplicate_candidate,
+        contributions=first.contributions,
+        rank=2,
+    )
+    fused = EvidenceResult(
+        corpus_version=query.corpus_version,
+        requested_limit=query.limit,
+        hits=(first, duplicate),
+        status=ResultStatus.COMPLETED,
+        failures=(),
+    )
+    backend = FakeBackend(
+        FakeBackendConfig(
+            rerank_scores=(
+                (first.candidate.record_id.as_str(), 0.1),
+                (duplicate_candidate.record_id.as_str(), 0.9),
+            )
+        )
+    )
+    backend.load()
+
+    outcome = execute_reranking(
+        backend,
+        query,
+        fused,
+        corpus_id=_corpus_id(),
+        candidate_limit=RerankCandidateLimit(2),
+    )
+
+    assert outcome.result.status is ResultStatus.COMPLETED
+    assert len(outcome.result.hits) == 1
+    assert outcome.result.hits[0].candidate is duplicate_candidate
+    assert outcome.result.hits[0].candidate.sources == first.candidate.sources
+    assert outcome.result.hits[0].contributions == first.contributions
+    assert outcome.result.hits[0].rank == 1
+    backend.close()
