@@ -117,6 +117,12 @@ the highest-ranked candidate for a repeated key and then makes result ranks
 contiguous. It does not collapse candidates because they share a document,
 family, or overlapping source ranges.
 
+Retryable RUN-05 availability and resource failures may return the bounded
+fused order as an `EvidenceResult` with `partial` status and a typed failure.
+The RET-06 execution outcome exposes `degraded=true` separately, leaving the
+RET-01 serialised result contract unchanged. Non-retryable backend failures,
+malformed responses, and corpus-version mismatches fail closed without hits.
+
 ## Serialisation and privacy
 
 Queries and evidence results use retrieval schema version `2.0.0` and

@@ -7,6 +7,7 @@ from inference_lab.backends.runtime import (
     BackendOperation,
     FakeBackend,
     FakeBackendConfig,
+    FakeFailureMode,
     RerankResult,
     ScoredCandidate,
 )
@@ -24,6 +25,7 @@ from inference_lab.retrieval import (
     EvidenceHit,
     EvidenceResult,
     EvidenceSource,
+    FailureCategory,
     InvalidRetrievalContractError,
     RerankCandidateLimit,
     RerankingRequest,
@@ -34,6 +36,7 @@ from inference_lab.retrieval import (
     RetrievalQuery,
     ScoredEvidence,
     deduplicate_evidence_hits,
+    execute_reranking,
     map_rerank_result,
     prepare_rerank_request,
     rank_evidence_hits,
@@ -405,3 +408,94 @@ def test_empty_fused_result_does_not_call_backend() -> None:
 
     assert prepared.backend_request is None
     assert scored == ()
+
+
+def test_retryable_resource_failure_returns_degraded_fused_order() -> None:
+    query = _query(limit=3)
+    fused = _many_candidate_result(query, 3)
+    backend = FakeBackend(
+        FakeBackendConfig(
+            failure_mode=FakeFailureMode.RESOURCE,
+            fail_operation=BackendOperation.RERANK,
+        )
+    )
+    backend.load()
+
+    outcome = execute_reranking(
+        backend,
+        query,
+        fused,
+        evidence_count=EvidenceCount(5),
+        candidate_limit=RerankCandidateLimit(3),
+    )
+
+    assert outcome.degraded is True
+    assert outcome.result.status is ResultStatus.PARTIAL
+    assert (
+        outcome.result.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
+    )
+    assert outcome.result.failures[0].retryable is True
+    assert tuple(hit.candidate for hit in outcome.result.hits) == tuple(
+        hit.candidate for hit in fused.hits
+    )
+    assert tuple(hit.rank for hit in outcome.result.hits) == (1, 2, 3)
+    backend.close()
+
+
+def test_non_retryable_backend_failure_fails_closed() -> None:
+    query = _query(limit=2)
+    fused = _many_candidate_result(query, 2)
+    backend = FakeBackend(
+        FakeBackendConfig(
+            failure_mode=FakeFailureMode.EXECUTION,
+            fail_operation=BackendOperation.RERANK,
+        )
+    )
+    backend.load()
+
+    outcome = execute_reranking(backend, query, fused)
+
+    assert outcome.degraded is False
+    assert outcome.result.status is ResultStatus.FAILED
+    assert outcome.result.hits == ()
+    assert (
+        outcome.result.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
+    )
+    assert outcome.result.failures[0].retryable is False
+    backend.close()
+
+
+def test_malformed_backend_response_fails_closed() -> None:
+    query = _query(limit=2)
+    fused = _many_candidate_result(query, 2)
+
+    class MalformedBackend:
+        def rerank(self, request: object) -> object:
+            return object()
+
+    outcome = execute_reranking(MalformedBackend(), query, fused)  # type: ignore[arg-type]
+
+    assert outcome.degraded is False
+    assert outcome.result.status is ResultStatus.FAILED
+    assert outcome.result.hits == ()
+    assert (
+        outcome.result.failures[0].category is FailureCategory.INVALID_CHANNEL_RESPONSE
+    )
+
+
+def test_corpus_version_mismatch_fails_closed_without_backend_call() -> None:
+    query = _query(version=_version(1), limit=2)
+    fused = _many_candidate_result(_query(version=_version(2), limit=2), 2)
+
+    class Backend:
+        def rerank(self, request: object) -> RerankResult:
+            pytest.fail("mismatched corpus evidence must not reach the backend")
+
+    outcome = execute_reranking(Backend(), query, fused)  # type: ignore[arg-type]
+
+    assert outcome.degraded is False
+    assert outcome.result.status is ResultStatus.FAILED
+    assert outcome.result.hits == ()
+    assert (
+        outcome.result.failures[0].category is FailureCategory.CORPUS_VERSION_MISMATCH
+    )

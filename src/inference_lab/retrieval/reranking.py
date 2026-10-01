@@ -3,6 +3,9 @@
 from dataclasses import dataclass
 
 from inference_lab.backends.runtime import (
+    BackendClosedError,
+    BackendError,
+    BackendNotReadyError,
     RerankCandidate,
     RerankerBackend,
     RerankRequest,
@@ -11,7 +14,12 @@ from inference_lab.backends.runtime import (
 from inference_lab.retrieval.errors import InvalidRetrievalContractError
 from inference_lab.retrieval.evidence import EvidenceHit
 from inference_lab.retrieval.query import RetrievalQuery
-from inference_lab.retrieval.results import EvidenceResult
+from inference_lab.retrieval.results import (
+    EvidenceResult,
+    FailureCategory,
+    ResultStatus,
+    RetrievalFailure,
+)
 
 MAX_RERANK_CANDIDATES = 100
 RERANK_DEDUPLICATION_VERSION = "1.0.0"
@@ -109,6 +117,20 @@ class ScoredEvidence:
 
     hit: EvidenceHit
     score: float
+
+
+@dataclass(frozen=True, slots=True)
+class RerankingOutcome:
+    """RET-01 result plus an explicit marker for fused-order degradation."""
+
+    result: EvidenceResult
+    degraded: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.result, EvidenceResult):
+            raise TypeError("result must be an EvidenceResult.")
+        if type(self.degraded) is not bool:
+            raise TypeError("degraded must be a boolean.")
 
 
 def prepare_rerank_request(
@@ -304,3 +326,138 @@ def rerank_evidence(
         return prepared, ()
     response = backend.rerank(prepared.backend_request)
     return prepared, map_rerank_result(prepared, response)
+
+
+def execute_reranking(
+    backend: RerankerBackend,
+    query: RetrievalQuery,
+    fused_result: EvidenceResult,
+    *,
+    evidence_count: EvidenceCount = EvidenceCount(),
+    candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
+) -> RerankingOutcome:
+    """Select evidence and convert backend failures to bounded outcomes.
+
+    Retryable backend failures may return the deterministic fused order as a
+    partial result. Invalid inputs, malformed responses, and non-retryable
+    failures return no hits. Error messages and candidate payloads never cross
+    into the result contract.
+    """
+    if not isinstance(query, RetrievalQuery):
+        raise TypeError("query must be a RetrievalQuery.")
+    if not isinstance(fused_result, EvidenceResult):
+        raise TypeError("fused_result must be an EvidenceResult.")
+    if not isinstance(evidence_count, EvidenceCount):
+        raise TypeError("evidence_count must be an EvidenceCount.")
+    if not isinstance(candidate_limit, RerankCandidateLimit):
+        raise TypeError("candidate_limit must be a RerankCandidateLimit.")
+    if not callable(getattr(backend, "rerank", None)):
+        raise TypeError("backend must implement the reranker contract.")
+
+    if fused_result.corpus_version != query.corpus_version:
+        return _failed_reranking_outcome(
+            query,
+            RetrievalFailure(
+                FailureCategory.CORPUS_VERSION_MISMATCH,
+                retryable=False,
+            ),
+        )
+    if fused_result.requested_limit != query.limit:
+        return _failed_reranking_outcome(
+            query,
+            RetrievalFailure(
+                FailureCategory.INVALID_CHANNEL_RESPONSE,
+                retryable=False,
+            ),
+        )
+    if fused_result.status is ResultStatus.FAILED or not fused_result.hits:
+        return RerankingOutcome(fused_result, degraded=False)
+
+    request = RerankingRequest(query, fused_result)
+    try:
+        _, scored = rerank_evidence(
+            backend,
+            request,
+            evidence_count=evidence_count,
+            candidate_limit=candidate_limit,
+        )
+    except BackendError as error:
+        failure = RetrievalFailure(
+            category=(
+                FailureCategory.CHANNEL_UNAVAILABLE
+                if isinstance(error, (BackendNotReadyError, BackendClosedError))
+                else FailureCategory.CHANNEL_EXECUTION_FAILURE
+            ),
+            retryable=error.retryable,
+        )
+        if error.retryable:
+            fallback = deduplicate_evidence_hits(fused_result.hits)[
+                : evidence_count.value
+            ]
+            return RerankingOutcome(
+                _result_with_outcome(
+                    query,
+                    fallback,
+                    (*fused_result.failures, failure),
+                ),
+                degraded=bool(fallback),
+            )
+        return _failed_reranking_outcome(
+            query,
+            failure,
+            prior_failures=fused_result.failures,
+        )
+    except InvalidRetrievalContractError:
+        return _failed_reranking_outcome(
+            query,
+            RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False),
+            prior_failures=fused_result.failures,
+        )
+    except Exception:
+        return _failed_reranking_outcome(
+            query,
+            RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False),
+            prior_failures=fused_result.failures,
+        )
+
+    hits = rank_evidence_hits(scored)[: evidence_count.value]
+    return RerankingOutcome(
+        _result_with_outcome(query, hits, fused_result.failures),
+        degraded=False,
+    )
+
+
+def _result_with_outcome(
+    query: RetrievalQuery,
+    hits: tuple[EvidenceHit, ...],
+    failures: tuple[RetrievalFailure, ...],
+) -> EvidenceResult:
+    """Construct a valid final RET-01 result with contiguous ranks."""
+    ranked_hits = tuple(
+        EvidenceHit(hit.candidate, hit.contributions, rank)
+        for rank, hit in enumerate(hits, start=1)
+    )
+    if failures:
+        status = ResultStatus.PARTIAL if ranked_hits else ResultStatus.FAILED
+    else:
+        status = ResultStatus.COMPLETED
+    return EvidenceResult(
+        corpus_version=query.corpus_version,
+        requested_limit=query.limit,
+        hits=ranked_hits,
+        status=status,
+        failures=failures,
+    )
+
+
+def _failed_reranking_outcome(
+    query: RetrievalQuery,
+    failure: RetrievalFailure,
+    *,
+    prior_failures: tuple[RetrievalFailure, ...] = (),
+) -> RerankingOutcome:
+    """Build a hit-free failure result without retaining private error data."""
+    return RerankingOutcome(
+        _result_with_outcome(query, (), (*prior_failures, failure)),
+        degraded=False,
+    )
