@@ -32,6 +32,8 @@ from inference_lab.retrieval import (
     RetrievalChannel,
     RetrievalLimit,
     RetrievalQuery,
+    ScoredEvidence,
+    deduplicate_evidence_hits,
     map_rerank_result,
     prepare_rerank_request,
     rank_evidence_hits,
@@ -314,6 +316,81 @@ def test_equal_scores_use_record_id_and_rebuild_contiguous_provenance_hits() -> 
     assert tuple(hit.candidate.sources[0].source_span_id for hit in ranked) == tuple(
         hit.candidate.sources[0].source_span_id for hit in original.hits
     )
+
+
+def test_deduplication_removes_only_same_kind_and_exact_source_spans() -> None:
+    query = _query(limit=4)
+    original = _many_candidate_result(query, 4)
+    first = original.hits[0]
+    same_span_candidate = RetrievalCandidate(
+        record_id=RecordId.from_str("00000000-0000-4000-8000-000000000099"),
+        kind=CandidateKind.ORIGINAL_PASSAGE,
+        content=first.candidate.content,
+        sources=first.candidate.sources,
+    )
+    same_span_different_kind = RetrievalCandidate(
+        record_id=RecordId.from_str("00000000-0000-4000-8000-000000000098"),
+        kind=CandidateKind.STRUCTURED_RECORD,
+        content="structured value from same span",
+        sources=first.candidate.sources,
+    )
+    ranked = (
+        first,
+        EvidenceHit(same_span_candidate, first.contributions, 2),
+        EvidenceHit(
+            original.hits[1].candidate,
+            original.hits[1].contributions,
+            3,
+        ),
+        EvidenceHit(same_span_different_kind, first.contributions, 4),
+    )
+
+    selected = deduplicate_evidence_hits(ranked)
+
+    assert tuple(hit.candidate.record_id for hit in selected) == (
+        first.candidate.record_id,
+        original.hits[1].candidate.record_id,
+        same_span_different_kind.record_id,
+    )
+    assert tuple(hit.rank for hit in selected) == (1, 2, 3)
+    assert selected[0].candidate.sources == first.candidate.sources
+    assert selected[1].candidate.sources == original.hits[1].candidate.sources
+
+
+def test_deduplication_rejects_non_contiguous_input_ranks() -> None:
+    query = _query(limit=1)
+    hit = _many_candidate_result(query, 1).hits[0]
+
+    with pytest.raises(InvalidRetrievalContractError):
+        deduplicate_evidence_hits((EvidenceHit(hit.candidate, hit.contributions, 2),))
+
+
+def test_ranking_pipeline_keeps_the_highest_scored_exact_duplicate() -> None:
+    query = _query(limit=3)
+    original = _many_candidate_result(query, 3)
+    first, second, _ = original.hits
+    duplicate = RetrievalCandidate(
+        record_id=RecordId.from_str("00000000-0000-4000-8000-000000000099"),
+        kind=first.candidate.kind,
+        content=first.candidate.content,
+        sources=first.candidate.sources,
+    )
+    scored = (
+        ScoredEvidence(first, 0.2),
+        ScoredEvidence(
+            EvidenceHit(duplicate, first.contributions, 2),
+            0.9,
+        ),
+        ScoredEvidence(second, 0.7),
+    )
+
+    selected = rank_evidence_hits(scored)
+
+    assert tuple(hit.candidate.record_id for hit in selected) == (
+        duplicate.record_id,
+        second.candidate.record_id,
+    )
+    assert tuple(hit.rank for hit in selected) == (1, 2)
 
 
 def test_empty_fused_result_does_not_call_backend() -> None:

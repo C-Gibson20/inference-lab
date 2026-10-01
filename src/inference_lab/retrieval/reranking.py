@@ -14,6 +14,7 @@ from inference_lab.retrieval.query import RetrievalQuery
 from inference_lab.retrieval.results import EvidenceResult
 
 MAX_RERANK_CANDIDATES = 100
+RERANK_DEDUPLICATION_VERSION = "1.0.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,13 +221,67 @@ def rank_evidence_hits(
         scored_evidence,
         key=lambda item: (-item.score, item.hit.candidate.record_id.as_str()),
     )
-    return tuple(
+    ranked_hits = tuple(
         EvidenceHit(
             candidate=item.hit.candidate,
             contributions=item.hit.contributions,
             rank=rank,
         )
         for rank, item in enumerate(ordered, start=1)
+    )
+    return deduplicate_evidence_hits(ranked_hits)
+
+
+def deduplicate_evidence_hits(
+    ranked_hits: tuple[EvidenceHit, ...],
+) -> tuple[EvidenceHit, ...]:
+    """Drop exact repeated source evidence, retaining the highest-ranked hit.
+
+    The key uses candidate kind and the complete ordered-independent set of
+    source-span identities with their owning document versions. Document- or
+    family-level similarity and span overlap do not make candidates duplicates.
+    """
+    if not isinstance(ranked_hits, tuple):
+        raise TypeError("ranked_hits must be a tuple.")
+    if any(not isinstance(hit, EvidenceHit) for hit in ranked_hits):
+        raise TypeError("ranked_hits must contain EvidenceHit values.")
+    ranks = tuple(hit.rank for hit in ranked_hits)
+    if ranks != tuple(range(1, len(ranked_hits) + 1)):
+        raise InvalidRetrievalContractError(
+            "ranked hits must have contiguous ranks matching tuple order."
+        )
+    record_ids = tuple(hit.candidate.record_id for hit in ranked_hits)
+    if len(record_ids) != len(set(record_ids)):
+        raise InvalidRetrievalContractError(
+            "ranked hits must have unique candidate identities."
+        )
+
+    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    selected: list[EvidenceHit] = []
+    for hit in ranked_hits:
+        key = (
+            hit.candidate.kind.value,
+            tuple(
+                sorted(
+                    (
+                        source.document_version_id.as_str(),
+                        source.source_span_id.as_str(),
+                    )
+                    for source in hit.candidate.sources
+                )
+            ),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(hit)
+    return tuple(
+        EvidenceHit(
+            candidate=hit.candidate,
+            contributions=hit.contributions,
+            rank=rank,
+        )
+        for rank, hit in enumerate(selected, start=1)
     )
 
 

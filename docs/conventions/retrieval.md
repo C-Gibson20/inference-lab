@@ -111,6 +111,12 @@ count is a separate downstream maximum; fewer passages may be returned when
 fewer eligible candidates exist. Neither setting changes the RET-01 wire
 schema or makes reranker scores evidence of claim support.
 
+RET-06 exact deduplication policy `1.0.0` keys evidence by candidate kind and
+the complete set of `(document_version_id, source_span_id)` links. It retains
+the highest-ranked candidate for a repeated key and then makes result ranks
+contiguous. It does not collapse candidates because they share a document,
+family, or overlapping source ranges.
+
 ## Serialisation and privacy
 
 Queries and evidence results use retrieval schema version `2.0.0` and
