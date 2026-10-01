@@ -118,6 +118,14 @@ policy and exact-deduplication versions. Its SHA-256 digest covers all of
 these fields. Identity values must not include deployment paths; raw scores,
 queries, passages, and prompts are not part of the identity.
 
+The `reranking_completed` structured event includes only bounded candidate and
+evidence counts, configured limits, result status, degraded state, a typed
+failure category when present, the stable identity fields and digest, and
+elapsed milliseconds. It excludes query and candidate text, source passages,
+raw scores, prompts, raw exception messages, credentials, and deployment
+paths. Completed runs log at `INFO`, degraded runs at `WARNING`, and failed
+runs at `ERROR`.
+
 RET-06 exact deduplication policy `1.0.0` keys evidence by candidate kind and
 the complete set of `(document_version_id, source_span_id)` links. It retains
 the highest-ranked candidate for a repeated key and then makes result ranks

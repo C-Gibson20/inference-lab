@@ -1,6 +1,7 @@
 """RET-06 query and fused-result boundary validation."""
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.backends.runtime import (
     BackendMetadata,
@@ -477,6 +478,77 @@ def test_retryable_resource_failure_returns_degraded_fused_order() -> None:
     )
     assert tuple(hit.rank for hit in outcome.result.hits) == (1, 2, 3)
     backend.close()
+
+
+def test_reranking_logs_bounded_identity_and_status_without_payload_text() -> None:
+    query = _query(limit=2)
+    fused = _many_candidate_result(query, 2)
+    backend = FakeBackend()
+    backend.load()
+
+    with capture_logs() as logs:
+        outcome = execute_reranking(backend, query, fused)
+
+    event = next(row for row in logs if row["event"] == "reranking_completed")
+    assert event["status"] == "completed"
+    assert event["degraded"] is False
+    assert event["failure_category"] is None
+    assert event["candidate_count"] == 2
+    assert event["submitted_candidate_count"] == 2
+    assert event["selected_evidence_count"] == 2
+    assert event["evidence_count_limit"] == 8
+    assert event["candidate_limit"] == 100
+    assert event["identity_digest"] == outcome.identity.digest
+    assert event["duration_ms"] >= 0
+    assert "question" not in str(logs)
+    assert "source passage" not in str(logs)
+
+
+def test_degraded_reranking_log_uses_warning_and_bounded_failure_category() -> None:
+    query = _query(limit=1)
+    fused = _many_candidate_result(query, 1)
+    backend = FakeBackend(
+        FakeBackendConfig(
+            failure_mode=FakeFailureMode.RESOURCE,
+            fail_operation=BackendOperation.RERANK,
+        )
+    )
+    backend.load()
+
+    with capture_logs() as logs:
+        outcome = execute_reranking(backend, query, fused)
+
+    event = next(row for row in logs if row["event"] == "reranking_completed")
+    assert outcome.degraded is True
+    assert event["log_level"] == "warning"
+    assert event["status"] == "partial"
+    assert event["failure_category"] == FailureCategory.CHANNEL_EXECUTION_FAILURE
+    assert event["candidate_count"] == 1
+    assert "question" not in str(logs)
+    assert "source passage" not in str(logs)
+
+
+def test_failed_reranking_log_uses_error_and_typed_failure_category() -> None:
+    query = _query(limit=1)
+    fused = _many_candidate_result(query, 1)
+    backend = FakeBackend(
+        FakeBackendConfig(
+            failure_mode=FakeFailureMode.EXECUTION,
+            fail_operation=BackendOperation.RERANK,
+        )
+    )
+    backend.load()
+
+    with capture_logs() as logs:
+        outcome = execute_reranking(backend, query, fused)
+
+    event = next(row for row in logs if row["event"] == "reranking_completed")
+    assert outcome.result.status is ResultStatus.FAILED
+    assert event["log_level"] == "error"
+    assert event["failure_category"] == FailureCategory.CHANNEL_EXECUTION_FAILURE
+    assert event["selected_evidence_count"] == 0
+    assert "question" not in str(logs)
+    assert "source passage" not in str(logs)
 
 
 def test_non_retryable_backend_failure_fails_closed() -> None:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
+
+import structlog
 
 from inference_lab._validation import is_canonical_semantic_version
 from inference_lab.backends.runtime import (
@@ -29,6 +32,7 @@ from inference_lab.retrieval.results import (
 MAX_RERANK_CANDIDATES = 100
 RERANK_DEDUPLICATION_VERSION = "1.0.0"
 RET06_POLICY_VERSION = "1.0.0"
+_LOGGER = structlog.get_logger("inference_lab.retrieval")
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,28 +444,53 @@ def execute_reranking(
         raise TypeError("candidate_limit must be a RerankCandidateLimit.")
     if not callable(getattr(backend, "rerank", None)):
         raise TypeError("backend must implement the reranker contract.")
+    started_at = time.perf_counter()
     identity = _reranking_identity(backend, evidence_count, candidate_limit)
 
+    def finish(
+        outcome: RerankingOutcome,
+        failure_category: FailureCategory | None = None,
+    ) -> RerankingOutcome:
+        return _log_reranking_outcome(
+            outcome,
+            candidate_count=len(fused_result.hits),
+            evidence_count=evidence_count,
+            candidate_limit=candidate_limit,
+            corpus_version=query.corpus_version.as_str(),
+            failure_category=failure_category,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
+
     if fused_result.corpus_version != query.corpus_version:
-        return _failed_reranking_outcome(
-            query,
-            RetrievalFailure(
-                FailureCategory.CORPUS_VERSION_MISMATCH,
-                retryable=False,
+        return finish(
+            _failed_reranking_outcome(
+                query,
+                RetrievalFailure(
+                    FailureCategory.CORPUS_VERSION_MISMATCH,
+                    retryable=False,
+                ),
+                identity=identity,
             ),
-            identity=identity,
+            FailureCategory.CORPUS_VERSION_MISMATCH,
         )
     if fused_result.requested_limit != query.limit:
-        return _failed_reranking_outcome(
-            query,
-            RetrievalFailure(
-                FailureCategory.INVALID_CHANNEL_RESPONSE,
-                retryable=False,
+        return finish(
+            _failed_reranking_outcome(
+                query,
+                RetrievalFailure(
+                    FailureCategory.INVALID_CHANNEL_RESPONSE,
+                    retryable=False,
+                ),
+                identity=identity,
             ),
-            identity=identity,
+            FailureCategory.INVALID_CHANNEL_RESPONSE,
         )
     if fused_result.status is ResultStatus.FAILED or not fused_result.hits:
-        return RerankingOutcome(fused_result, degraded=False, identity=identity)
+        category = fused_result.failures[-1].category if fused_result.failures else None
+        return finish(
+            RerankingOutcome(fused_result, degraded=False, identity=identity),
+            category,
+        )
 
     request = RerankingRequest(query, fused_result)
     try:
@@ -484,42 +513,102 @@ def execute_reranking(
             fallback = deduplicate_evidence_hits(fused_result.hits)[
                 : evidence_count.value
             ]
-            return RerankingOutcome(
-                _result_with_outcome(
-                    query,
-                    fallback,
-                    (*fused_result.failures, failure),
+            return finish(
+                RerankingOutcome(
+                    _result_with_outcome(
+                        query,
+                        fallback,
+                        (*fused_result.failures, failure),
+                    ),
+                    degraded=bool(fallback),
+                    identity=identity,
                 ),
-                degraded=bool(fallback),
-                identity=identity,
+                failure.category,
             )
-        return _failed_reranking_outcome(
-            query,
-            failure,
-            prior_failures=fused_result.failures,
-            identity=identity,
+        return finish(
+            _failed_reranking_outcome(
+                query,
+                failure,
+                prior_failures=fused_result.failures,
+                identity=identity,
+            ),
+            failure.category,
         )
     except InvalidRetrievalContractError:
-        return _failed_reranking_outcome(
-            query,
-            RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False),
-            prior_failures=fused_result.failures,
-            identity=identity,
+        return finish(
+            _failed_reranking_outcome(
+                query,
+                RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False),
+                prior_failures=fused_result.failures,
+                identity=identity,
+            ),
+            FailureCategory.INVALID_CHANNEL_RESPONSE,
         )
     except Exception:
-        return _failed_reranking_outcome(
-            query,
-            RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False),
-            prior_failures=fused_result.failures,
-            identity=identity,
+        return finish(
+            _failed_reranking_outcome(
+                query,
+                RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False),
+                prior_failures=fused_result.failures,
+                identity=identity,
+            ),
+            FailureCategory.CHANNEL_EXECUTION_FAILURE,
         )
 
     hits = rank_evidence_hits(scored)[: evidence_count.value]
-    return RerankingOutcome(
-        _result_with_outcome(query, hits, fused_result.failures),
-        degraded=False,
-        identity=identity,
+    return finish(
+        RerankingOutcome(
+            _result_with_outcome(query, hits, fused_result.failures),
+            degraded=False,
+            identity=identity,
+        )
     )
+
+
+def _log_reranking_outcome(
+    outcome: RerankingOutcome,
+    *,
+    candidate_count: int,
+    evidence_count: EvidenceCount,
+    candidate_limit: RerankCandidateLimit,
+    corpus_version: str,
+    failure_category: FailureCategory | None,
+    duration_ms: float,
+) -> RerankingOutcome:
+    """Emit allowlisted, bounded run diagnostics without payload data."""
+    identity = outcome.identity
+    log = (
+        _LOGGER.error
+        if outcome.result.status is ResultStatus.FAILED
+        else _LOGGER.warning
+        if outcome.degraded
+        else _LOGGER.info
+    )
+    log(
+        "reranking_completed",
+        module="inference_lab.retrieval",
+        pipeline_stage="retrieval_reranking",
+        corpus_version=corpus_version,
+        status=outcome.result.status.value,
+        degraded=outcome.degraded,
+        failure_category=(
+            failure_category.value if failure_category is not None else None
+        ),
+        candidate_count=min(candidate_count, MAX_RERANK_CANDIDATES),
+        submitted_candidate_count=min(candidate_count, candidate_limit.value),
+        selected_evidence_count=len(outcome.result.hits),
+        evidence_count_limit=evidence_count.value,
+        candidate_limit=candidate_limit.value,
+        backend_name=identity.backend_name,
+        model_name=identity.model_name,
+        model_revision=identity.model_revision,
+        preprocessing_profile_version=identity.preprocessing_profile_version,
+        deduplication_version=identity.deduplication_version,
+        policy_version=identity.policy_version,
+        identity_digest=identity.digest,
+        duration_ms=max(0.0, duration_ms),
+    )
+    return outcome
 
 
 def _reranking_identity(
