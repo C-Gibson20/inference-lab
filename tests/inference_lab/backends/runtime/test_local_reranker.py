@@ -38,16 +38,18 @@ from inference_lab.provenance import (
 from inference_lab.retrieval import (
     CandidateKind,
     ChannelScore,
-    EvidenceCount,
     EvidenceHit,
     EvidenceResult,
     EvidenceSource,
-    RerankCandidateLimit,
     ResultStatus,
     RetrievalCandidate,
     RetrievalChannel,
     RetrievalLimit,
     RetrievalQuery,
+)
+from inference_lab.retrieval.reranking import (
+    EvidenceCount,
+    RerankCandidateLimit,
     execute_reranking,
 )
 from inference_lab.settings import LoggingConfig
