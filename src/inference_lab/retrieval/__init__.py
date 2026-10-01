@@ -60,6 +60,11 @@ from inference_lab.retrieval.filters import (
     OneOfFilter,
     RangeFilter,
 )
+from inference_lab.retrieval.fusion import (
+    FUSION_POLICY_VERSION,
+    FusionPolicy,
+    fuse_evidence_results,
+)
 from inference_lab.retrieval.lexical import (
     LEXICAL_COMPONENT_KIND,
     LEXICAL_CONTRACT_VERSION,
@@ -156,6 +161,7 @@ __all__ = [
     "DENSE_FORMAT_VERSION",
     "DENSE_IMPLEMENTATION",
     "DENSE_SCORE_LABEL",
+    "FUSION_POLICY_VERSION",
     "LEXICAL_COMPONENT_KIND",
     "LEXICAL_CONTRACT_VERSION",
     "LEXICAL_FORMAT_VERSION",
@@ -198,6 +204,7 @@ __all__ = [
     "FailureCategory",
     "FilterExpression",
     "FilterScalar",
+    "FusionPolicy",
     "InvalidDenseContractError",
     "InvalidLexicalContractError",
     "InvalidLexicalSerialisationError",
@@ -258,6 +265,7 @@ __all__ = [
     "execute_lexical_retrieval",
     "expose_bm25_score",
     "extract_identifiers",
+    "fuse_evidence_results",
     "identifier_score",
     "lexical_order_key",
     "lexical_score_label",
