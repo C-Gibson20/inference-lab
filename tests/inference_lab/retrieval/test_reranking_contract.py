@@ -1,5 +1,7 @@
 """RET-06 query and fused-result boundary validation."""
 
+from typing import cast
+
 import pytest
 from structlog.testing import capture_logs
 
@@ -9,10 +11,12 @@ from inference_lab.backends.runtime import (
     FakeBackend,
     FakeBackendConfig,
     FakeFailureMode,
+    RerankerBackend,
     RerankResult,
     ScoredCandidate,
 )
 from inference_lab.provenance import (
+    CorpusId,
     CorpusVersionId,
     DocumentId,
     DocumentVersionId,
@@ -49,6 +53,11 @@ from inference_lab.retrieval import (
 def _version(number: int) -> CorpusVersionId:
     """Return one stable corpus version for a contract fixture."""
     return CorpusVersionId.from_str(f"00000000-0000-4000-8000-{number:012d}")
+
+
+def _corpus_id() -> CorpusId:
+    """Return one stable corpus identity for logging and execution fixtures."""
+    return CorpusId.from_str("00000000-0000-4000-8000-000000000001")
 
 
 def _query(*, version: CorpusVersionId | None = None, limit: int = 8) -> RetrievalQuery:
@@ -459,6 +468,7 @@ def test_retryable_resource_failure_returns_degraded_fused_order() -> None:
         backend,
         query,
         fused,
+        corpus_id=_corpus_id(),
         evidence_count=EvidenceCount(5),
         candidate_limit=RerankCandidateLimit(3),
     )
@@ -487,7 +497,7 @@ def test_reranking_logs_bounded_identity_and_status_without_payload_text() -> No
     backend.load()
 
     with capture_logs() as logs:
-        outcome = execute_reranking(backend, query, fused)
+        outcome = execute_reranking(backend, query, fused, corpus_id=_corpus_id())
 
     event = next(row for row in logs if row["event"] == "reranking_completed")
     assert event["status"] == "completed"
@@ -498,6 +508,8 @@ def test_reranking_logs_bounded_identity_and_status_without_payload_text() -> No
     assert event["selected_evidence_count"] == 2
     assert event["evidence_count_limit"] == 8
     assert event["candidate_limit"] == 100
+    assert event["corpus_id"] == _corpus_id().as_str()
+    assert event["corpus_version"] == query.corpus_version.as_str()
     assert event["identity_digest"] == outcome.identity.digest
     assert event["duration_ms"] >= 0
     assert "question" not in str(logs)
@@ -516,7 +528,7 @@ def test_degraded_reranking_log_uses_warning_and_bounded_failure_category() -> N
     backend.load()
 
     with capture_logs() as logs:
-        outcome = execute_reranking(backend, query, fused)
+        outcome = execute_reranking(backend, query, fused, corpus_id=_corpus_id())
 
     event = next(row for row in logs if row["event"] == "reranking_completed")
     assert outcome.degraded is True
@@ -540,7 +552,7 @@ def test_failed_reranking_log_uses_error_and_typed_failure_category() -> None:
     backend.load()
 
     with capture_logs() as logs:
-        outcome = execute_reranking(backend, query, fused)
+        outcome = execute_reranking(backend, query, fused, corpus_id=_corpus_id())
 
     event = next(row for row in logs if row["event"] == "reranking_completed")
     assert outcome.result.status is ResultStatus.FAILED
@@ -562,7 +574,7 @@ def test_non_retryable_backend_failure_fails_closed() -> None:
     )
     backend.load()
 
-    outcome = execute_reranking(backend, query, fused)
+    outcome = execute_reranking(backend, query, fused, corpus_id=_corpus_id())
 
     assert outcome.degraded is False
     assert outcome.result.status is ResultStatus.FAILED
@@ -593,7 +605,12 @@ def test_malformed_backend_response_fails_closed() -> None:
         def rerank(self, request: object) -> object:
             return object()
 
-    outcome = execute_reranking(MalformedBackend(), query, fused)  # type: ignore[arg-type]
+    outcome = execute_reranking(
+        cast(RerankerBackend, MalformedBackend()),
+        query,
+        fused,
+        corpus_id=_corpus_id(),
+    )
 
     assert outcome.degraded is False
     assert outcome.result.status is ResultStatus.FAILED
@@ -622,7 +639,7 @@ def test_corpus_version_mismatch_fails_closed_without_backend_call() -> None:
         def rerank(self, request: object) -> RerankResult:
             pytest.fail("mismatched corpus evidence must not reach the backend")
 
-    outcome = execute_reranking(Backend(), query, fused)  # type: ignore[arg-type]
+    outcome = execute_reranking(Backend(), query, fused, corpus_id=_corpus_id())  # type: ignore[arg-type]
 
     assert outcome.degraded is False
     assert outcome.result.status is ResultStatus.FAILED

@@ -19,6 +19,7 @@ from inference_lab.backends.runtime import (
     RerankRequest,
     RerankResult,
 )
+from inference_lab.provenance import CorpusId
 from inference_lab.retrieval.errors import InvalidRetrievalContractError
 from inference_lab.retrieval.evidence import EvidenceHit
 from inference_lab.retrieval.query import RetrievalQuery
@@ -424,11 +425,14 @@ def execute_reranking(
     query: RetrievalQuery,
     fused_result: EvidenceResult,
     *,
+    corpus_id: CorpusId,
     evidence_count: EvidenceCount = EvidenceCount(),
     candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
 ) -> RerankingOutcome:
     """Select evidence and convert backend failures to bounded outcomes.
 
+    The caller supplies the corpus identity selected with the pinned query so
+    the stage can emit consistent retrieval context without changing RET-01.
     Retryable backend failures may return the deterministic fused order as a
     partial result. Invalid inputs, malformed responses, and non-retryable
     failures return no hits. Error messages and candidate payloads never cross
@@ -438,6 +442,8 @@ def execute_reranking(
         raise TypeError("query must be a RetrievalQuery.")
     if not isinstance(fused_result, EvidenceResult):
         raise TypeError("fused_result must be an EvidenceResult.")
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
     if not isinstance(evidence_count, EvidenceCount):
         raise TypeError("evidence_count must be an EvidenceCount.")
     if not isinstance(candidate_limit, RerankCandidateLimit):
@@ -456,6 +462,7 @@ def execute_reranking(
             candidate_count=len(fused_result.hits),
             evidence_count=evidence_count,
             candidate_limit=candidate_limit,
+            corpus_id=corpus_id.as_str(),
             corpus_version=query.corpus_version.as_str(),
             failure_category=failure_category,
             duration_ms=(time.perf_counter() - started_at) * 1000,
@@ -571,6 +578,7 @@ def _log_reranking_outcome(
     candidate_count: int,
     evidence_count: EvidenceCount,
     candidate_limit: RerankCandidateLimit,
+    corpus_id: str,
     corpus_version: str,
     failure_category: FailureCategory | None,
     duration_ms: float,
@@ -588,6 +596,7 @@ def _log_reranking_outcome(
         "reranking_completed",
         module="inference_lab.retrieval",
         pipeline_stage="retrieval_reranking",
+        corpus_id=corpus_id,
         corpus_version=corpus_version,
         status=outcome.result.status.value,
         degraded=outcome.degraded,
