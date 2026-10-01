@@ -34,6 +34,7 @@ from inference_lab.retrieval import (
     RetrievalQuery,
     map_rerank_result,
     prepare_rerank_request,
+    rank_evidence_hits,
     rerank_evidence,
 )
 
@@ -273,6 +274,46 @@ def test_response_mapping_rejects_a_candidate_id_outside_the_pool() -> None:
 
     with pytest.raises(InvalidRetrievalContractError):
         map_rerank_result(prepared, response)
+
+
+def test_equal_scores_use_record_id_and_rebuild_contiguous_provenance_hits() -> None:
+    query = _query(limit=3)
+    original = _many_candidate_result(query, 3)
+    prepared = prepare_rerank_request(RerankingRequest(query, original))
+    assert prepared.backend_request is not None
+    response = RerankResult(
+        scored_candidates=tuple(
+            ScoredCandidate(candidate.candidate_id, 0.5, rank)
+            for rank, candidate in enumerate(
+                reversed(prepared.backend_request.candidates),
+                start=1,
+            )
+        ),
+        model_metadata=BackendMetadata(
+            backend_name="fixture",
+            model_name="fixture-reranker",
+            model_revision="1",
+            supported_operations=(BackendOperation.RERANK,),
+            capabilities=(),
+        ),
+    )
+
+    mapped = map_rerank_result(prepared, response)
+    ranked = rank_evidence_hits(mapped)
+
+    assert tuple(hit.candidate.record_id for hit in ranked) == tuple(
+        hit.candidate.record_id for hit in original.hits
+    )
+    assert tuple(hit.rank for hit in ranked) == (1, 2, 3)
+    assert tuple(hit.candidate for hit in ranked) == tuple(
+        hit.candidate for hit in original.hits
+    )
+    assert tuple(hit.contributions for hit in ranked) == tuple(
+        hit.contributions for hit in original.hits
+    )
+    assert tuple(hit.candidate.sources[0].source_span_id for hit in ranked) == tuple(
+        hit.candidate.sources[0].source_span_id for hit in original.hits
+    )
 
 
 def test_empty_fused_result_does_not_call_backend() -> None:

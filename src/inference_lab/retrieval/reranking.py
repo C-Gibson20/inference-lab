@@ -203,6 +203,33 @@ def map_rerank_result(
     )
 
 
+def rank_evidence_hits(
+    scored_evidence: tuple[ScoredEvidence, ...],
+) -> tuple[EvidenceHit, ...]:
+    """Return score-ordered evidence with deterministic ties and fresh ranks.
+
+    Scores affect ordering only. The returned hits are rebuilt from the
+    original candidates and channel contributions, so source provenance and
+    RET-05 diagnostics survive unchanged.
+    """
+    if not isinstance(scored_evidence, tuple):
+        raise TypeError("scored_evidence must be a tuple.")
+    if any(not isinstance(item, ScoredEvidence) for item in scored_evidence):
+        raise TypeError("scored_evidence must contain ScoredEvidence values.")
+    ordered = sorted(
+        scored_evidence,
+        key=lambda item: (-item.score, item.hit.candidate.record_id.as_str()),
+    )
+    return tuple(
+        EvidenceHit(
+            candidate=item.hit.candidate,
+            contributions=item.hit.contributions,
+            rank=rank,
+        )
+        for rank, item in enumerate(ordered, start=1)
+    )
+
+
 def rerank_evidence(
     backend: RerankerBackend,
     request: RerankingRequest,

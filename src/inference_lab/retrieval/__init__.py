@@ -148,6 +148,7 @@ from inference_lab.retrieval.reranking import (
     ScoredEvidence,
     map_rerank_result,
     prepare_rerank_request,
+    rank_evidence_hits,
     rerank_evidence,
 )
 from inference_lab.retrieval.results import (
@@ -297,6 +298,7 @@ __all__ = [
     "open_lexical_generation",
     "prepare_rerank_request",
     "rank_dense_entries",
+    "rank_evidence_hits",
     "rerank_evidence",
     "resolve_lexical_candidate_metadata",
     "select_dense_parent_reference",
