@@ -56,6 +56,7 @@ def _default_metadata() -> BackendMetadata:
         backend_name="fake",
         model_name="fake-model",
         model_revision="test",
+        preprocessing_profile_version="1.0.0",
         supported_operations=(
             BackendOperation.EMBED,
             BackendOperation.RERANK,

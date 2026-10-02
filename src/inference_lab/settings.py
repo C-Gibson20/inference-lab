@@ -99,6 +99,23 @@ class IngestConfig(BaseModel):
     max_concurrent_documents: int = Field(default=1, gt=0)
 
 
+class RetrievalConfig(BaseModel):
+    """Limits for reranking and selecting the downstream evidence set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_count: int = Field(default=8, ge=5, le=10)
+    candidate_limit: int = Field(default=100, ge=1, le=100)
+
+    @field_validator("evidence_count", "candidate_limit", mode="before")
+    @classmethod
+    def _reject_boolean_limits(cls, value: object) -> object:
+        """Keep booleans from being accepted as integer limits."""
+        if isinstance(value, bool):
+            raise ValueError("retrieval limits must be integers")
+        return value
+
+
 class Settings(BaseSettings):
     """Validated application settings loaded from explicit, environment, or TOML values."""
 
@@ -113,6 +130,7 @@ class Settings(BaseSettings):
     storage: StorageConfig
     logging: LoggingConfig = LoggingConfig()
     ingest: IngestConfig = IngestConfig()
+    retrieval: RetrievalConfig = RetrievalConfig()
 
     @classmethod
     def settings_customise_sources(

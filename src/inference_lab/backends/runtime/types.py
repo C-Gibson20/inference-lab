@@ -131,6 +131,7 @@ class BackendMetadata:
     supported_operations: tuple[BackendOperation, ...]
     capabilities: tuple[BackendCapability, ...]
     embedding_dimensions: int | None = None
+    preprocessing_profile_version: str | None = None
 
     def __post_init__(self) -> None:
         self._validate()
@@ -140,6 +141,11 @@ class BackendMetadata:
         validate_non_empty_string(self.backend_name, "backend_name")
         validate_non_empty_string(self.model_name, "model_name")
         validate_non_empty_string(self.model_revision, "model_revision")
+        if self.preprocessing_profile_version is not None:
+            validate_semantic_version(
+                self.preprocessing_profile_version,
+                "preprocessing_profile_version",
+            )
         if not isinstance(self.supported_operations, tuple):
             raise TypeError("supported_operations must be a tuple")
         if not self.supported_operations:

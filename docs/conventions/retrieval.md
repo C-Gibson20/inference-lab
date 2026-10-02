@@ -96,6 +96,49 @@ Cross-corpus or federated retrieval is outside this contract and the first
 build. Comparing corpora requires separate queries and results; callers must
 not combine their hits into a result labelled as one corpus version.
 
+## RET-06 limits
+
+Reranking uses the typed `[retrieval]` settings owned by
+`inference_lab.settings.RetrievalConfig`:
+
+| Setting | Environment override | Default | Valid range |
+| --- | --- | --- | --- |
+| `retrieval.evidence_count` | `RETRIEVAL__EVIDENCE_COUNT` | `8` | `5` through `10` |
+| `retrieval.candidate_limit` | `RETRIEVAL__CANDIDATE_LIMIT` | `100` | `1` through the RUN-05 hard cap of `100` |
+
+The candidate limit bounds the pool presented to RUN-05. The selected evidence
+count is a separate downstream maximum; fewer passages may be returned when
+fewer eligible candidates exist. Neither setting changes the RET-01 wire
+schema or makes reranker scores evidence of claim support.
+
+Each RET-06 execution outcome carries a stable `RerankingIdentity` for
+evaluation and replay. It includes backend/model name and revision, the
+backend's semantic preprocessing profile version, both limits, and the RET-06
+policy and exact-deduplication versions. Its SHA-256 digest covers all of
+these fields. Identity values must not include deployment paths; raw scores,
+queries, passages, and prompts are not part of the identity.
+
+The `reranking_completed` structured event includes the caller-supplied
+`corpus_id` and query-pinned `corpus_version`, bounded candidate and evidence
+counts, configured limits, result status, degraded state, a typed failure
+category when present, the stable identity fields and digest, and elapsed
+milliseconds. It excludes query and candidate text, source passages, raw
+scores, prompts, raw exception messages, credentials, and deployment paths.
+Completed runs log at `INFO`, degraded runs at `WARNING`, and failed runs at
+`ERROR`.
+
+RET-06 exact deduplication policy `1.0.0` keys evidence by candidate kind and
+the complete set of `(document_version_id, source_span_id)` links. It retains
+the highest-ranked candidate for a repeated key and then makes result ranks
+contiguous. It does not collapse candidates because they share a document,
+family, or overlapping source ranges.
+
+Retryable RUN-05 availability and resource failures may return the bounded
+fused order as an `EvidenceResult` with `partial` status and a typed failure.
+The RET-06 execution outcome exposes `degraded=true` separately, leaving the
+RET-01 serialised result contract unchanged. Non-retryable backend failures,
+malformed responses, and corpus-version mismatches fail closed without hits.
+
 ## Serialisation and privacy
 
 Queries and evidence results use retrieval schema version `2.0.0` and

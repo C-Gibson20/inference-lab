@@ -27,6 +27,31 @@ from inference_lab.backends.runtime import (
     reranker,
 )
 from inference_lab.logging.logging_config import configure_logging
+from inference_lab.provenance import (
+    CorpusId,
+    CorpusVersionId,
+    DocumentId,
+    DocumentVersionId,
+    RecordId,
+    SourceSpanId,
+)
+from inference_lab.retrieval import (
+    CandidateKind,
+    ChannelScore,
+    EvidenceHit,
+    EvidenceResult,
+    EvidenceSource,
+    ResultStatus,
+    RetrievalCandidate,
+    RetrievalChannel,
+    RetrievalLimit,
+    RetrievalQuery,
+)
+from inference_lab.retrieval.reranking import (
+    EvidenceCount,
+    RerankCandidateLimit,
+    execute_reranking,
+)
 from inference_lab.settings import LoggingConfig
 
 
@@ -181,6 +206,10 @@ def test_backend_loads_only_the_pinned_local_model_and_closes_idempotently(
     assert backend.metadata.supported_operations == (BackendOperation.RERANK,)
     assert backend.metadata.model_name == "BAAI/bge-reranker-v2-m3"
     assert backend.metadata.model_revision == reranker._MODEL_REVISION
+    assert (
+        backend.metadata.preprocessing_profile_version
+        == reranker._PREPROCESSING_PROFILE_VERSION
+    )
     assert backend.is_ready
     assert len(loaded_backend.calls) == 2
     for _, path, options in loaded_backend.calls:
@@ -232,6 +261,77 @@ def test_backend_orders_complete_scores_stably_batches_and_applies_top_k(
     all_results = loaded_backend.backend.rerank(_request(pairs, top_k=100))
     assert len(all_results.scored_candidates) == len(pairs)
     assert tuple(item.rank for item in all_results.scored_candidates) == (1, 2, 3, 4, 5)
+
+
+def test_local_backend_adapter_preserves_ret06_source_provenance(
+    loaded_backend: _LoadedBackend,
+) -> None:
+    corpus_id = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
+    corpus_version = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000002")
+    query = RetrievalQuery("query", corpus_version, RetrievalLimit(5))
+    candidates = {
+        letter: RetrievalCandidate(
+            record_id=RecordId.from_str(f"00000000-0000-4000-8000-{number:012d}"),
+            kind=CandidateKind.ORIGINAL_PASSAGE,
+            content=letter,
+            sources=(
+                EvidenceSource(
+                    document_id=DocumentId.from_str(
+                        f"00000000-0000-4000-8000-{number + 10:012d}"
+                    ),
+                    document_version_id=DocumentVersionId.from_str(
+                        f"00000000-0000-4000-8000-{number + 20:012d}"
+                    ),
+                    source_span_id=SourceSpanId.from_str(
+                        f"00000000-0000-4000-8000-{number + 30:012d}"
+                    ),
+                ),
+            ),
+        )
+        for letter, number in (("a", 100), ("b", 101), ("c", 102))
+    }
+    fused_hits = tuple(
+        EvidenceHit(
+            candidate=candidates[letter],
+            contributions=(ChannelScore(RetrievalChannel.LEXICAL, rank),),
+            rank=rank,
+        )
+        for rank, letter in enumerate(("a", "b", "c"), start=1)
+    )
+    fused_result = EvidenceResult(
+        corpus_version=corpus_version,
+        requested_limit=query.limit,
+        hits=fused_hits,
+        status=ResultStatus.COMPLETED,
+        failures=(),
+    )
+
+    outcome = execute_reranking(
+        loaded_backend.backend,
+        query,
+        fused_result,
+        corpus_id=corpus_id,
+        evidence_count=EvidenceCount(5),
+        candidate_limit=RerankCandidateLimit(3),
+    )
+
+    assert outcome.result.status is ResultStatus.COMPLETED
+    assert outcome.result.requested_limit == query.limit
+    assert tuple(hit.rank for hit in outcome.result.hits) == (1, 2, 3)
+    assert tuple(hit.candidate for hit in outcome.result.hits) == (
+        candidates["b"],
+        candidates["c"],
+        candidates["a"],
+    )
+    assert tuple(hit.contributions for hit in outcome.result.hits) == tuple(
+        next(hit.contributions for hit in fused_hits if hit.candidate is candidate)
+        for candidate in (candidates["b"], candidates["c"], candidates["a"])
+    )
+    assert tuple(hit.candidate.sources for hit in outcome.result.hits) == tuple(
+        candidates[letter].sources for letter in ("b", "c", "a")
+    )
+    assert outcome.identity.model_name == reranker._MODEL_NAME
+    assert outcome.identity.model_revision == reranker._MODEL_REVISION
 
 
 def test_backend_preserves_query_and_truncates_only_candidate_tail(

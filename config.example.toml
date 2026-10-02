@@ -20,3 +20,7 @@ format = "auto"
 
 [ingest]
 max_source_bytes = 52428800
+
+[retrieval]
+evidence_count = 8
+candidate_limit = 100
