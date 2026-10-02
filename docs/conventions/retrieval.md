@@ -58,6 +58,15 @@ link retains `DocumentId`, `DocumentVersionId`, and `SourceSpanId`. Original
 passages, structured records, and generated summaries remain distinguishable;
 kind, rank, and score never prove claim support.
 
+The lexical generation also retains the complete decoded-source interval for
+each indexed chunk, alongside each source link's clipped interval. Its SQLite
+format and lexical component contract versions identify this range-bearing
+layout. Consumers that need candidate-text offsets must derive them through the
+chunk's canonical source-boundary map and the parsed representation; they must
+not search for chunk text in source text to guess offsets. This interval is the
+source-range contract used by RET-07 to build exact mappings before shortening
+evidence.
+
 For baseline passage retrieval, ING-04 supplies the exact immutable chunk text,
 record identity, token count, and source-linked ranges. Retrieval indexes and
 filters those chunks within the selected corpus version; it does not rewrite
