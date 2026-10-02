@@ -99,6 +99,8 @@ def _candidate(
         ordinal=0,
         content="Café",
         token_count=1,
+        source_start=0,
+        source_end=5,
         source_links=source_links,
     )
 

@@ -17,7 +17,7 @@ from inference_lab.storage import ComponentKind
 LEXICAL_DIRECTORY_NAME: Final[str] = "lexical"
 LEXICAL_DATABASE_NAME: Final[str] = "index.sqlite3"
 LEXICAL_MANIFEST_NAME: Final[str] = "manifest.json"
-LEXICAL_DATABASE_USER_VERSION: Final[int] = 2
+LEXICAL_DATABASE_USER_VERSION: Final[int] = 3
 GENERATION_ID_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 LEXICAL_COMPONENT_KIND: Final[ComponentKind] = ComponentKind("lexical-index")
 
@@ -44,6 +44,8 @@ class LexicalIndexedChunk:
     ordinal: int
     content: str
     token_count: int
+    source_start: int
+    source_end: int
     source_links: tuple[LexicalSourceLink, ...]
 
 
@@ -67,6 +69,8 @@ class BuildChunk:
     ordinal: int
     content: str
     token_count: int
+    source_start: int
+    source_end: int
     source_links: tuple[LexicalSourceLink, ...]
     identifiers: tuple[tuple[str, int], ...]
 

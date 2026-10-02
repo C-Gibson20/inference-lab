@@ -24,8 +24,8 @@ from inference_lab.retrieval.query import RetrievalQuery
 
 LEXICAL_COMPONENT_KIND: Final[str] = "lexical-index"
 LEXICAL_IMPLEMENTATION: Final[str] = "sqlite-fts5"
-LEXICAL_FORMAT_VERSION: Final[str] = "1.0.0"
-LEXICAL_CONTRACT_VERSION: Final[str] = "1.1.0"
+LEXICAL_FORMAT_VERSION: Final[str] = "2.0.0"
+LEXICAL_CONTRACT_VERSION: Final[str] = "1.2.0"
 LEXICAL_ENGINE_REVISION: Final[str] = "sqlite-fts5-weighted-bm25"
 _LEGACY_ENGINE_REVISION: Final[str] = "sqlite-fts5-baseline"
 LEXICAL_MANIFEST_SCHEMA_VERSION: Final[str] = "1.0.0"
@@ -453,6 +453,7 @@ class LexicalIndexManifest:
             )
         expected_revision = {
             "1.0.0": _LEGACY_ENGINE_REVISION,
+            "1.1.0": LEXICAL_ENGINE_REVISION,
             LEXICAL_CONTRACT_VERSION: LEXICAL_ENGINE_REVISION,
         }.get(self.contract_version)
         if self.configuration.engine_revision != expected_revision:

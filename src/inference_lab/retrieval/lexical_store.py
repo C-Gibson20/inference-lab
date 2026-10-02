@@ -344,6 +344,8 @@ class LexicalGenerationValidator:
                         or actual.ordinal != expected.ordinal
                         or actual.content != expected.content
                         or actual.token_count != expected.token_count
+                        or actual.source_start != expected.source_start
+                        or actual.source_end != expected.source_end
                         or actual.source_links != expected.source_links
                     ):
                         return False

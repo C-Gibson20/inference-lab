@@ -100,12 +100,14 @@ class IngestConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
-    """Limits for reranking and selecting the downstream evidence set."""
+    """Limits and defaults for selecting and reducing downstream evidence."""
 
     model_config = ConfigDict(extra="forbid")
 
     evidence_count: int = Field(default=8, ge=5, le=10)
     candidate_limit: int = Field(default=100, ge=1, le=100)
+    evidence_token_budget: int = Field(default=4096, gt=0)
+    diversity_policy: Literal["none", "per_document"] = "none"
 
     @field_validator("evidence_count", "candidate_limit", mode="before")
     @classmethod
@@ -113,6 +115,14 @@ class RetrievalConfig(BaseModel):
         """Keep booleans from being accepted as integer limits."""
         if isinstance(value, bool):
             raise ValueError("retrieval limits must be integers")
+        return value
+
+    @field_validator("evidence_token_budget", mode="before")
+    @classmethod
+    def _reject_boolean_token_budget(cls, value: object) -> object:
+        """Keep booleans from being accepted as integer token budgets."""
+        if isinstance(value, bool):
+            raise ValueError("evidence token budget must be an integer")
         return value
 
 

@@ -202,6 +202,8 @@ def _candidate(ordinal: int) -> LexicalIndexedChunk:
         ordinal=0,
         content=f"candidate {ordinal}",
         token_count=2,
+        source_start=0,
+        source_end=10,
         source_links=(
             LexicalSourceLink(
                 source_span_id,

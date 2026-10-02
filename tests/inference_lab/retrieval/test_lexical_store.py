@@ -128,6 +128,28 @@ class _CollectingSink:
         self.records.append(record)
 
 
+def test_lexical_generation_preserves_chunk_source_range(tmp_path: Path) -> None:
+    """Persisted candidates retain the complete source interval after reopen."""
+    chunk_set, selected = selection("A source passage.")
+    expected = chunk_set.chunks[0]
+    source_manifest = manifest((selected,))
+    built = build_lexical_generation(tmp_path, source_manifest)
+
+    with open_lexical_generation(tmp_path, built.manifest.generation_id) as generation:
+        actual = generation.get_chunk(expected.record_id)
+        assert actual is not None
+        assert actual.source_start == expected.source_start
+        assert actual.source_end == expected.source_end
+        assert (
+            actual.source_links[0].source_start
+            == expected.source_references[0].source_start
+        )
+        assert (
+            actual.source_links[0].source_end
+            == expected.source_references[0].source_end
+        )
+
+
 def _prepare_changed_manifest(
     repository: SQLiteMetadataRepository,
     source_manifest: BaselineChunkGenerationManifest,

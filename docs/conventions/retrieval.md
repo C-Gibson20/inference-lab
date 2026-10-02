@@ -58,6 +58,15 @@ link retains `DocumentId`, `DocumentVersionId`, and `SourceSpanId`. Original
 passages, structured records, and generated summaries remain distinguishable;
 kind, rank, and score never prove claim support.
 
+The lexical generation also retains the complete decoded-source interval for
+each indexed chunk, alongside each source link's clipped interval. Its SQLite
+format and lexical component contract versions identify this range-bearing
+layout. Consumers that need candidate-text offsets must derive them through the
+chunk's canonical source-boundary map and the parsed representation; they must
+not search for chunk text in source text to guess offsets. This interval is the
+source-range contract used by RET-07 to build exact mappings before shortening
+evidence.
+
 For baseline passage retrieval, ING-04 supplies the exact immutable chunk text,
 record identity, token count, and source-linked ranges. Retrieval indexes and
 filters those chunks within the selected corpus version; it does not rewrite
@@ -138,6 +147,46 @@ fused order as an `EvidenceResult` with `partial` status and a typed failure.
 The RET-06 execution outcome exposes `degraded=true` separately, leaving the
 RET-01 serialised result contract unchanged. Non-retryable backend failures,
 malformed responses, and corpus-version mismatches fail closed without hits.
+
+## RET-07 evidence reduction
+
+`reduce_retrieval_evidence` accepts one RET-06 `EvidenceResult`, a pinned
+`CorpusSnapshot`, the matching immutable lexical generation, an explicit local
+offset-bearing tokeniser, and validated `RetrievalConfig`. It rejects a corpus
+or version mismatch before reading candidate source data. The default token
+ceiling is `retrieval.evidence_token_budget = 4096`; a request may supply a
+positive token-budget override. The default item ceiling is RET-06's configured
+`evidence_count` (at most eight by default), further capped by the request's
+result limit and an optional lower per-request item limit. The configured
+diversity policy defaults to `none`; `per_document` keeps the first
+(highest-ranked) candidate for a document and drops later candidates for that
+document. A request may override this policy for one call. Selection follows
+RET-06 order and never re-ranks evidence.
+
+This is an evidence-only ceiling, not a generator context size. SERV-02 must
+reserve prompt, user, history and template overhead from
+`runtime.max_context_tokens` and pass the smaller remaining
+headroom as the effective request budget. RET-07 counts the complete joined
+evidence text using the fixed `\n\n` separator after every selection or
+truncation.
+
+Before shortening a candidate, the adapter reopens its exact lexical chunk and
+parsed representation from the same snapshot, checks candidate identity and
+text, and derives text-to-source boundaries through ING-04's
+`CanonicalSourceBoundaryMap`. It does not search for matching substrings.
+Incomplete or unsafe maps do not prevent keeping a complete passage; if that
+passage needs truncation, the reducer drops it with a bounded source-map
+failure. Truncated items retain the original hit and exact clipped source
+ranges. The transient outcome carries its tokeniser, budget, separator,
+diversity and policy identity with a stable digest; it has no durable wire
+schema.
+
+The `evidence_reduction_completed` event records corpus context, status,
+bounded counts, tokeniser and policy identity, and elapsed time. Each
+`evidence_truncated` event is emitted at `WARNING` with the record identity and
+bounded mapping counts. Failed calls emit a typed `ERROR` event. None of these
+events includes candidate text, queries, prompts, token IDs, paths or raw
+exceptions.
 
 ## Serialisation and privacy
 

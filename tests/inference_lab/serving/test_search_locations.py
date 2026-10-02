@@ -132,6 +132,8 @@ def _chunk() -> LexicalIndexedChunk:
         ordinal=0,
         content="alpha passage",
         token_count=2,
+        source_start=0,
+        source_end=13,
         source_links=(
             LexicalSourceLink(
                 source_span_id=SOURCE_SPAN_ID,
