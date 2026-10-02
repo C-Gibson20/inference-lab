@@ -79,7 +79,13 @@ def parsed_document(
             start_offset=0,
             end_offset=len(text),
         )
-        blocks = (StructuralBlock(kind="paragraph", text=text, source_span=span),)
+        blocks = (
+            StructuralBlock(
+                kind="paragraph",
+                text=NormalisedText(source_text=text).text,
+                source_span=span,
+            ),
+        )
     return ParsedDocument(
         document_id=actual_document_id,
         document_version_id=actual_document_version_id,
@@ -91,7 +97,7 @@ def parsed_document(
         page_layouts=(),
         language=None,
         page_count=None,
-        character_count=len(text),
+        character_count=len(NormalisedText(source_text=text).text),
         token_count=None,
     )
 

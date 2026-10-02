@@ -26,6 +26,7 @@ from inference_lab.retrieval.reduction import (
     EvidenceReductionRequest,
     EvidenceTextSourceRange,
     EvidenceTokenisation,
+    EvidenceTokeniserError,
     EvidenceTokeniserIdentity,
     EvidenceTokenOffset,
     TextSourceBoundary,
@@ -222,6 +223,58 @@ def test_empty_result_is_a_valid_zero_token_reduction() -> None:
     assert outcome.input_count == 0
     assert outcome.dropped_count == 0
     assert outcome.token_count == 0
+
+
+def test_per_document_diversity_keeps_highest_ranked_candidate() -> None:
+    first = _hit(1, "highest ranked")
+    second = _hit(2, "later candidate")
+    second = replace(
+        second,
+        candidate=replace(second.candidate, sources=first.candidate.sources),
+    )
+    request = replace(
+        _request((first, second), token_budget=10),
+        diversity_policy="per_document",
+    )
+
+    outcome = reduce_evidence(request)
+
+    assert tuple(item.hit for item in outcome.items) == (first,)
+    assert outcome.decisions[-1] == EvidenceReductionDecision(
+        second.candidate.record_id,
+        EvidenceReductionAction.DROPPED_DIVERSITY,
+    )
+    assert outcome.dropped_count == 1
+    assert outcome.identity.diversity_policy == "per_document"
+    assert outcome.identity.digest == reduce_evidence(request).identity.digest
+
+
+def test_unavailable_or_invalid_tokeniser_fails_closed() -> None:
+    hit = _hit(1, "alpha beta gamma")
+
+    class _BrokenTokeniser:
+        identity = _WhitespaceTokeniser().identity
+
+        def __init__(self, *, invalid_offsets: bool) -> None:
+            self.invalid_offsets = invalid_offsets
+
+        def tokenise(self, text: str) -> EvidenceTokenisation:
+            if not self.invalid_offsets:
+                raise RuntimeError("private model path")
+            return EvidenceTokenisation((EvidenceTokenOffset(0, len(text) + 1),))
+
+        def count_tokens(self, text: str) -> int:
+            return 2 if self.invalid_offsets else 3
+
+    for tokeniser, category in (
+        (_BrokenTokeniser(invalid_offsets=False), "tokeniser_unavailable"),
+        (_BrokenTokeniser(invalid_offsets=True), "invalid_token_offsets"),
+    ):
+        request = replace(
+            _request((hit,), token_budget=1, mapped=(hit,)), tokeniser=tokeniser
+        )
+        with pytest.raises(EvidenceTokeniserError, match=category):
+            reduce_evidence(request)
 
 
 def test_request_rejects_a_result_from_another_corpus_version() -> None:
