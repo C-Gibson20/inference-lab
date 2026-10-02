@@ -26,6 +26,7 @@ The current sections are:
 | `[storage]` | Persistent index, metadata database, and managed source paths |
 | `[logging]` | Log level and output format |
 | `[ingest]` | Controls safety limits for batch ingestion |
+| `[retrieval]` | Reranking limits and evidence-reduction defaults |
 
 Run the application from the directory containing `config.toml`.
 
@@ -100,6 +101,16 @@ Required values are:
 - `storage.source_dir`
 
 `runtime.max_context_tokens` defaults to `8192`.
+`retrieval.evidence_token_budget` defaults to `4096` and must be positive. Its
+environment override is
+`RETRIEVAL__EVIDENCE_TOKEN_BUDGET`. The default matches the upstream evidence
+count of eight passages and ING-04's default chunk ceiling of 512 tokens each.
+`retrieval.diversity_policy` defaults to `"none"`; its environment override is
+`RETRIEVAL__DIVERSITY_POLICY`. The currently supported choices are `"none"`
+and `"per_document"`, which keeps only the highest-ranked candidate for each
+document. Both settings are caller-overridable for one reduction request.
+SERV-02 owns subtracting prompt and history overhead from
+`runtime.max_context_tokens` and passing the remaining headroom to RET-07.
 `ingest.max_source_bytes` defaults to `52428800` bytes and must be greater than
 zero. Source publication enforces this limit while streaming into managed
 staging; it must not buffer or publish an oversized source first.

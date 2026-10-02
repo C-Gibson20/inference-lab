@@ -159,6 +159,11 @@ from inference_lab.retrieval.reduction import (
     TextSourceBoundary,
     reduce_evidence,
 )
+from inference_lab.retrieval.reduction_adapter import (
+    EvidenceReductionExecutionError,
+    EvidenceReductionFailureCategory,
+    reduce_retrieval_evidence,
+)
 from inference_lab.retrieval.results import (
     EvidenceResult,
     FailureCategory,
@@ -226,7 +231,9 @@ __all__ = [
     "EvidenceHit",
     "EvidenceReductionAction",
     "EvidenceReductionDecision",
+    "EvidenceReductionExecutionError",
     "EvidenceReductionFailure",
+    "EvidenceReductionFailureCategory",
     "EvidenceReductionIdentity",
     "EvidenceReductionOutcome",
     "EvidenceReductionRequest",
@@ -316,6 +323,7 @@ __all__ = [
     "open_lexical_generation",
     "rank_dense_entries",
     "reduce_evidence",
+    "reduce_retrieval_evidence",
     "resolve_lexical_candidate_metadata",
     "select_dense_parent_reference",
     "select_lexical_parent_reference",

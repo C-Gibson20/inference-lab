@@ -24,3 +24,5 @@ max_source_bytes = 52428800
 [retrieval]
 evidence_count = 8
 candidate_limit = 100
+evidence_token_budget = 4096
+diversity_policy = "none"

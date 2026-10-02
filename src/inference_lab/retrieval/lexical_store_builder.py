@@ -95,6 +95,8 @@ def _prepare_entry_chunks(
             ordinal=chunk.ordinal,
             content=chunk.text,
             token_count=chunk.token_count,
+            source_start=chunk.source_start,
+            source_end=chunk.source_end,
             source_links=tuple(
                 LexicalSourceLink(
                     source_span_id=reference.source_span_id,
@@ -379,7 +381,8 @@ def _insert_chunks(
 ) -> None:
     connection.executemany(
         "INSERT INTO chunks(record_id, document_id, document_version_id, ordinal, "
-        "content, token_count) VALUES (?, ?, ?, ?, ?, ?)",
+        "content, token_count, source_start, source_end) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         tuple(
             (
                 chunk.record_id.as_str(),
@@ -388,6 +391,8 @@ def _insert_chunks(
                 chunk.ordinal,
                 chunk.content,
                 chunk.token_count,
+                chunk.source_start,
+                chunk.source_end,
             )
             for chunk in chunks
         ),
@@ -488,6 +493,8 @@ def _write_database(
                 ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
                 content TEXT NOT NULL,
                 token_count INTEGER NOT NULL CHECK (token_count > 0),
+                source_start INTEGER NOT NULL CHECK (source_start >= 0),
+                source_end INTEGER NOT NULL CHECK (source_end > source_start),
                 UNIQUE(document_id, ordinal)
             ) WITHOUT ROWID;
             CREATE TABLE source_links (
@@ -548,7 +555,8 @@ def _write_database(
         )
         connection.executemany(
             "INSERT INTO chunks(record_id, document_id, document_version_id, ordinal, "
-            "content, token_count) VALUES (?, ?, ?, ?, ?, ?)",
+            "content, token_count, source_start, source_end) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             tuple(
                 (
                     chunk.record_id.as_str(),
@@ -557,6 +565,8 @@ def _write_database(
                     chunk.ordinal,
                     chunk.content,
                     chunk.token_count,
+                    chunk.source_start,
+                    chunk.source_end,
                 )
                 for chunk in chunks
             ),

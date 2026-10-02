@@ -80,6 +80,8 @@ class LexicalGeneration:
                 """
                 SELECT c.record_id, c.document_id, c.document_version_id,
                        c.ordinal, c.content, c.token_count,
+                       c.source_start AS chunk_source_start,
+                       c.source_end AS chunk_source_end,
                        s.source_span_id, s.document_version_id AS source_version_id,
                        s.block_ordinal, s.block_kind, s.source_start, s.source_end
                 FROM chunks AS c
@@ -127,6 +129,8 @@ class LexicalGeneration:
                 """
                 SELECT c.record_id, c.document_id, c.document_version_id,
                        c.ordinal, c.content, c.token_count,
+                       c.source_start AS chunk_source_start,
+                       c.source_end AS chunk_source_end,
                        s.source_span_id, s.document_version_id AS source_version_id,
                        s.block_ordinal, s.block_kind, s.source_start, s.source_end
                 FROM chunks AS c
@@ -153,6 +157,8 @@ class LexicalGeneration:
                 """
                 SELECT c.record_id, c.document_id, c.document_version_id,
                        c.ordinal, c.content, c.token_count,
+                       c.source_start AS chunk_source_start,
+                       c.source_end AS chunk_source_end,
                        s.source_span_id, s.document_version_id AS source_version_id,
                        s.block_ordinal, s.block_kind, s.source_start, s.source_end,
                        i.occurrence_count
@@ -254,6 +260,8 @@ class LexicalGeneration:
                     )
                     SELECT c.record_id, c.document_id, c.document_version_id,
                            c.ordinal, c.content, c.token_count,
+                           c.source_start AS chunk_source_start,
+                           c.source_end AS chunk_source_end,
                            s.source_span_id, s.document_version_id AS source_version_id,
                            s.block_ordinal, s.block_kind, s.source_start, s.source_end,
                            ranked.occurrence_count
@@ -291,6 +299,8 @@ class LexicalGeneration:
                 )
                 SELECT c.record_id, c.document_id, c.document_version_id,
                        c.ordinal, c.content, c.token_count,
+                       c.source_start AS chunk_source_start,
+                       c.source_end AS chunk_source_end,
                        s.source_span_id, s.document_version_id AS source_version_id,
                        s.block_ordinal, s.block_kind, s.source_start, s.source_end,
                        ranked.engine_score
@@ -460,6 +470,8 @@ def _row_to_chunk(
         ordinal=row["ordinal"],
         content=row["content"],
         token_count=row["token_count"],
+        source_start=row["chunk_source_start"],
+        source_end=row["chunk_source_end"],
         source_links=links,
     )
 

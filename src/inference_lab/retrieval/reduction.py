@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
 from inference_lab.provenance import CorpusId, CorpusVersionId, RecordId
@@ -16,7 +18,11 @@ from inference_lab.retrieval.evidence import (
     EvidenceSource,
     RetrievalCandidate,
 )
-from inference_lab.retrieval.results import EvidenceResult
+from inference_lab.retrieval.results import (
+    EvidenceResult,
+    ResultStatus,
+    RetrievalFailure,
+)
 
 EVIDENCE_SEPARATOR = "\n\n"
 REDUCTION_POLICY_VERSION = "1.0.0"
@@ -50,7 +56,12 @@ class EvidenceTokeniserIdentity:
             raise TypeError("implementation must be a non-empty string.")
         if not isinstance(self.revision, str) or not self.revision:
             raise TypeError("revision must be a non-empty string.")
-        if any(char in self.implementation + self.revision for char in "\\/\x00"):
+        if any(
+            len(value) > 128
+            or any(char in value for char in "\\/\x00")
+            or any(ord(char) < 32 for char in value)
+            for value in (self.implementation, self.revision)
+        ):
             raise ValueError("tokeniser identity must be path-free.")
         if not isinstance(self.contract_version, str):
             raise TypeError("contract_version must be a string.")
@@ -62,6 +73,12 @@ class EvidenceTokeniserIdentity:
             not isinstance(option, tuple)
             or len(option) != 2
             or not all(isinstance(value, str) and value for value in option)
+            or any(
+                len(value) > 128
+                or any(char in value for char in "\\/\x00")
+                or any(ord(char) < 32 for char in value)
+                for value in option
+            )
             for option in self.options
         ):
             raise TypeError("options must contain non-empty string pairs.")
@@ -200,6 +217,7 @@ class EvidenceReductionAction(StrEnum):
     KEPT = "kept"
     TRUNCATED = "truncated"
     DROPPED_ITEM_LIMIT = "dropped_item_limit"
+    DROPPED_DIVERSITY = "dropped_diversity"
     DROPPED_BUDGET = "dropped_budget"
     FAILED_SOURCE_MAP = "failed_source_map"
 
@@ -277,6 +295,7 @@ class EvidenceReductionIdentity:
     tokeniser: EvidenceTokeniserIdentity
     token_budget: int
     item_budget: int
+    diversity_policy: Literal["none", "per_document"] = "none"
     separator: str = EVIDENCE_SEPARATOR
     policy_version: str = REDUCTION_POLICY_VERSION
     accounting_version: str = REDUCTION_ACCOUNTING_VERSION
@@ -302,6 +321,30 @@ class EvidenceReductionIdentity:
             self.policy_version
         ) or not is_canonical_semantic_version(self.accounting_version):
             raise ValueError("reduction versions must be semantic versions.")
+        if not isinstance(self.diversity_policy, str):
+            raise TypeError("diversity_policy must be a string.")
+        if self.diversity_policy not in {"none", "per_document"}:
+            raise ValueError("unsupported diversity policy.")
+
+    @property
+    def digest(self) -> str:
+        """Return a stable digest of every reduction-affecting identity field."""
+        payload = {
+            "accounting_version": self.accounting_version,
+            "diversity_policy": self.diversity_policy,
+            "item_budget": self.item_budget,
+            "policy_version": self.policy_version,
+            "separator": self.separator,
+            "token_budget": self.token_budget,
+            "tokeniser": {
+                "contract_version": self.tokeniser.contract_version,
+                "implementation": self.tokeniser.implementation,
+                "options": self.tokeniser.options,
+                "revision": self.tokeniser.revision,
+            },
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +358,7 @@ class EvidenceReductionRequest:
     token_budget: int
     item_budget: int
     source_ranges: Mapping[RecordId, tuple[EvidenceTextSourceRange, ...]]
+    diversity_policy: Literal["none", "per_document"] = "none"
 
     def __post_init__(self) -> None:
         self._validate()
@@ -341,6 +385,10 @@ class EvidenceReductionRequest:
             raise ValueError("item_budget must be a positive integer.")
         if self.item_budget > self.result.requested_limit.value:
             raise ValueError("item_budget must not exceed the retrieval result limit.")
+        if not isinstance(self.diversity_policy, str):
+            raise TypeError("diversity_policy must be a string.")
+        if self.diversity_policy not in {"none", "per_document"}:
+            raise ValueError("unsupported diversity policy.")
         if not isinstance(self.source_ranges, Mapping):
             raise TypeError("source_ranges must be a mapping.")
         for record_id, ranges in self.source_ranges.items():
@@ -366,6 +414,8 @@ class EvidenceReductionOutcome:
     input_count: int
     dropped_count: int
     token_count: int
+    source_status: ResultStatus
+    source_failures: tuple[RetrievalFailure, ...]
     identity: EvidenceReductionIdentity
     failures: tuple[EvidenceReductionFailure, ...]
 
@@ -390,6 +440,12 @@ class EvidenceReductionOutcome:
             not isinstance(item, EvidenceReductionFailure) for item in self.failures
         ):
             raise TypeError("failures must contain EvidenceReductionFailure values.")
+        if not isinstance(self.source_status, ResultStatus):
+            raise TypeError("source_status must be a ResultStatus.")
+        if not isinstance(self.source_failures, tuple) or any(
+            not isinstance(item, RetrievalFailure) for item in self.source_failures
+        ):
+            raise TypeError("source_failures must contain RetrievalFailure values.")
         for name in ("input_count", "dropped_count", "token_count"):
             value = getattr(self, name)
             if not is_strict_integer(value) or value < 0:
@@ -404,6 +460,7 @@ class EvidenceReductionOutcome:
             raise ValueError("every input hit must have one reduction decision.")
         dropped_actions = {
             EvidenceReductionAction.DROPPED_ITEM_LIMIT,
+            EvidenceReductionAction.DROPPED_DIVERSITY,
             EvidenceReductionAction.DROPPED_BUDGET,
             EvidenceReductionAction.FAILED_SOURCE_MAP,
         }
@@ -423,9 +480,23 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
     failures: list[EvidenceReductionFailure] = []
     items: list[ReducedEvidenceItem] = []
     decisions: list[EvidenceReductionDecision] = []
+    seen_documents: set[str] = set()
 
     for hit in considered:
         candidate = hit.candidate
+        document_ids = {source.document_id.as_str() for source in candidate.sources}
+        if request.diversity_policy == "per_document" and (
+            not document_ids or seen_documents.intersection(document_ids)
+        ):
+            dropped += 1
+            decisions.append(
+                EvidenceReductionDecision(
+                    candidate.record_id, EvidenceReductionAction.DROPPED_DIVERSITY
+                )
+            )
+            continue
+        if request.diversity_policy == "per_document":
+            seen_documents.update(document_ids)
         full_text = candidate.content
         if (
             _count_joined(
@@ -544,6 +615,7 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
         tokeniser=request.tokeniser.identity,
         token_budget=request.token_budget,
         item_budget=request.item_budget,
+        diversity_policy=request.diversity_policy,
     )
     return EvidenceReductionOutcome(
         corpus_id=request.corpus_id,
@@ -553,6 +625,8 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
         input_count=len(source_hits),
         dropped_count=dropped,
         token_count=final_count,
+        source_status=request.result.status,
+        source_failures=request.result.failures,
         identity=identity,
         failures=tuple(failures),
     )
@@ -595,7 +669,8 @@ def _valid_source_ranges(
         if item.source not in candidate.sources or item.text_start != cursor:
             return False
         cursor = item.text_end
-    return cursor == len(candidate.content)
+    mapped_sources = {item.source for item in ranges}
+    return cursor == len(candidate.content) and mapped_sources == set(candidate.sources)
 
 
 def _clip_source_ranges(

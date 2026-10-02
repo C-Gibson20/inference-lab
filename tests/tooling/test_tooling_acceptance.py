@@ -55,6 +55,8 @@ def _config_text(root: Path) -> str:
         [retrieval]
         evidence_count = 7
         candidate_limit = 80
+        evidence_token_budget = 3072
+        diversity_policy = "per_document"
         """
 
 
@@ -73,6 +75,8 @@ def isolated_tooling_environment(
         "LOGGING__FORMAT",
         "RETRIEVAL__EVIDENCE_COUNT",
         "RETRIEVAL__CANDIDATE_LIMIT",
+        "RETRIEVAL__EVIDENCE_TOKEN_BUDGET",
+        "RETRIEVAL__DIVERSITY_POLICY",
     ):
         monkeypatch.delenv(name, raising=False)
     get_settings.cache_clear()
@@ -101,16 +105,22 @@ def test_configuration_merges_toml_environment_and_explicit_overrides(
     assert configured.ingest.max_concurrent_documents == 3
     assert configured.retrieval.evidence_count == 7
     assert configured.retrieval.candidate_limit == 80
+    assert configured.retrieval.evidence_token_budget == 3072
+    assert configured.retrieval.diversity_policy == "per_document"
 
     monkeypatch.setenv("RUNTIME__VRAM_BUDGET_GB", "12")
     monkeypatch.setenv("STORAGE__SOURCE_DIR", "/environment/source-data")
     monkeypatch.setenv("RETRIEVAL__CANDIDATE_LIMIT", "40")
+    monkeypatch.setenv("RETRIEVAL__EVIDENCE_TOKEN_BUDGET", "2048")
+    monkeypatch.setenv("RETRIEVAL__DIVERSITY_POLICY", "none")
     get_settings.cache_clear()
     environment = get_settings()
     assert environment.runtime.vram_budget_gb == 12
     assert environment.storage.source_dir == Path("/environment/source-data")
     assert environment.retrieval.candidate_limit == 40
     assert environment.retrieval.evidence_count == 7
+    assert environment.retrieval.evidence_token_budget == 2048
+    assert environment.retrieval.diversity_policy == "none"
 
     explicit = Settings(  # pyright: ignore[reportCallIssue]
         runtime={"vram_budget_gb": 8},
@@ -122,6 +132,7 @@ def test_configuration_merges_toml_environment_and_explicit_overrides(
     assert explicit.models.generator_path == Path("/explicit/generator")
     assert explicit.retrieval.evidence_count == 9
     assert explicit.retrieval.candidate_limit == 40
+    assert explicit.retrieval.evidence_token_budget == 2048
 
     monkeypatch.setenv("RUNTIME__VRAM_BUDGET_GB", "16")
     assert get_settings().runtime.vram_budget_gb == 12
@@ -130,12 +141,16 @@ def test_configuration_merges_toml_environment_and_explicit_overrides(
 
     config_file = Path.cwd() / "config.toml"
     config_file.write_text(_config_text(Path.cwd()).split("[logging]")[0])
+    monkeypatch.delenv("RETRIEVAL__EVIDENCE_TOKEN_BUDGET", raising=False)
+    monkeypatch.delenv("RETRIEVAL__DIVERSITY_POLICY", raising=False)
     get_settings.cache_clear()
     defaults = get_settings()
     assert defaults.logging.level == "INFO"
     assert defaults.logging.format == "auto"
     assert defaults.ingest.max_source_bytes == 50 * 1024 * 1024
     assert defaults.ingest.max_concurrent_documents == 1
+    assert defaults.retrieval.evidence_token_budget == 4096
+    assert defaults.retrieval.diversity_policy == "none"
 
 
 def test_configuration_rejects_missing_invalid_unknown_and_overlapping_values(
@@ -161,6 +176,15 @@ def test_configuration_rejects_missing_invalid_unknown_and_overlapping_values(
     boolean_candidate_limit = copy.deepcopy(valid)
     boolean_candidate_limit["retrieval"]["candidate_limit"] = True  # type: ignore[index]
     cases.append(("boolean reranker candidate limit", boolean_candidate_limit))
+
+    for label, field, value in (
+        ("non-positive evidence token budget", "evidence_token_budget", 0),
+        ("boolean evidence token budget", "evidence_token_budget", True),
+        ("unsupported diversity policy", "diversity_policy", "by_family"),
+    ):
+        invalid_retrieval = copy.deepcopy(valid)
+        invalid_retrieval["retrieval"][field] = value  # type: ignore[index]
+        cases.append((label, invalid_retrieval))
 
     non_local_model = copy.deepcopy(valid)
     non_local_model["models"]["generator_path"] = "https://example.test/model"  # type: ignore[index]
