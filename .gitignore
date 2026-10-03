@@ -18,9 +18,7 @@ config.toml
 
 # Temporary planning files
 docs/plans/
-!docs/plans/
 docs/plans/*
-!docs/plans/test-suite-review.md
 
 # Virtual environments
 .venv
