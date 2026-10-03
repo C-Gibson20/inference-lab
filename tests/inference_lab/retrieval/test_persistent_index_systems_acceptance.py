@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.backends.runtime import (
     BackendMetadata,
@@ -48,6 +51,7 @@ from inference_lab.retrieval import (
     DENSE_COMPONENT_KIND,
     DenseGenerationParticipant,
     DenseIndexCompatibility,
+    EvidenceResult,
     LexicalGenerationParticipant,
     LexicalQuery,
     RetrievalLimit,
@@ -70,6 +74,7 @@ from inference_lab.storage import (
     MetadataTransaction,
     SourceArtefact,
     StorageConflictError,
+    WorkerRepositoryOpener,
     build_source_blob_storage_key,
     open_metadata_repository,
 )
@@ -91,6 +96,7 @@ _DOC_VERSION_A = DocumentVersionId.from_str("00000000-0000-4000-8000-00000000004
 _DOC_VERSION_B = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000043")
 _DOC_VERSION_STABLE = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000044")
 _DOC_VERSION_A2 = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000045")
+_DOC_VERSION_A3 = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000046")
 _DOCUMENTS = (
     (_DOC_SHARED, _DOC_VERSION_SHARED, "common assay terminology"),
     (_DOC_A, _DOC_VERSION_A, "orchid receptor evidence"),
@@ -945,4 +951,336 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
             == "orchid reformulated evidence"
         )
     finally:
+        repository.close()
+
+
+def test_pinned_readers_remain_coherent_during_publication(
+    tmp_path: Path,
+) -> None:
+    """Pinned readers stay on one version while active readers switch together."""
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "indexes"
+    _, embedder, _, _ = _publish_fixture(
+        database_path,
+        source_dir,
+        index_dir,
+    )
+    repository = open_metadata_repository(database_path, source_dir=source_dir)
+    assert isinstance(repository, WorkerRepositoryOpener)
+    canary_text = "orchid confidential evidence token aurora9"
+    ready_events = (Event(), Event(), Event())
+    published = Event()
+    reader_errors: list[BaseException] = []
+
+    def read_channels(
+        corpus_id: CorpusId,
+        term: str,
+        channels: tuple[str, ...],
+        ready_event: Event,
+    ) -> tuple[
+        CorpusVersionId,
+        tuple[CorpusDocumentVersionMembership, ...],
+        tuple[EvidenceResult, ...],
+        tuple[EvidenceResult, ...],
+    ]:
+        reader_repository = repository.open_worker_repository()
+        try:
+            with reader_repository.open_active_corpus_snapshot(corpus_id) as snapshot:
+                pinned_version = snapshot.version.corpus_version
+
+                def read(channel: str) -> EvidenceResult:
+                    query = RetrievalQuery(term, pinned_version, RetrievalLimit(1))
+                    if channel == "lexical":
+                        return execute_lexical_retrieval(
+                            reader_repository,
+                            index_dir,
+                            corpus_id,
+                            LexicalQuery(query),
+                            snapshot=snapshot,
+                        )
+                    return execute_dense_retrieval(
+                        reader_repository,
+                        index_dir,
+                        corpus_id,
+                        query,
+                        embedder,
+                        snapshot=snapshot,
+                    )
+
+                try:
+                    before = tuple(read(channel) for channel in channels)
+                finally:
+                    ready_event.set()
+                if not published.wait(timeout=30):
+                    raise TimeoutError("publication did not release pinned readers")
+                after = tuple(read(channel) for channel in channels)
+                return (
+                    pinned_version,
+                    snapshot.manifest.document_memberships,
+                    before,
+                    after,
+                )
+        finally:
+            reader_repository.close()
+        raise AssertionError("snapshot context exited without a reader result")
+
+    def run_reader(
+        corpus_id: CorpusId,
+        term: str,
+        channels: tuple[str, ...],
+        ready_event: Event,
+    ) -> tuple[
+        CorpusVersionId,
+        tuple[CorpusDocumentVersionMembership, ...],
+        tuple[EvidenceResult, ...],
+        tuple[EvidenceResult, ...],
+    ]:
+        try:
+            return read_channels(corpus_id, term, channels, ready_event)
+        except BaseException as error:
+            reader_errors.append(error)
+            ready_event.set()
+            raise
+
+    try:
+        with capture_logs() as logs:
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = (
+                    executor.submit(
+                        run_reader,
+                        _CORPUS_A,
+                        "orchid",
+                        ("lexical",),
+                        ready_events[0],
+                    ),
+                    executor.submit(
+                        run_reader,
+                        _CORPUS_A,
+                        "orchid",
+                        ("dense",),
+                        ready_events[1],
+                    ),
+                    executor.submit(
+                        run_reader,
+                        _CORPUS_B,
+                        "tulip",
+                        ("lexical", "dense"),
+                        ready_events[2],
+                    ),
+                )
+                for ready_event in ready_events:
+                    if not ready_event.wait(timeout=30):
+                        raise TimeoutError("pinned readers did not start")
+                if reader_errors:
+                    raise reader_errors[0]
+                for future in futures:
+                    if future.done():
+                        future.result()
+                try:
+                    replacement_selection = _make_selection(
+                        _CORPUS_A,
+                        _DOC_A,
+                        _DOC_VERSION_A3,
+                        canary_text,
+                    )
+                    _persist_a_catalogue_member(
+                        repository,
+                        document_id=_DOC_A,
+                        document_version_id=_DOC_VERSION_A3,
+                        text=canary_text,
+                        parse_records=_map_source_records(
+                            _CORPUS_A,
+                            _DOC_A,
+                            _DOC_VERSION_A3,
+                            canary_text,
+                        ),
+                        is_new_version=True,
+                    )
+                    shared_a = CorpusDocumentVersionMembership(
+                        _CORPUS_A,
+                        _DOC_SHARED,
+                        _DOC_VERSION_SHARED,
+                    )
+                    stable_a = CorpusDocumentVersionMembership(
+                        _CORPUS_A,
+                        _DOC_STABLE,
+                        _DOC_VERSION_STABLE,
+                    )
+                    source_manifest = _build_source_manifest(
+                        _CORPUS_A,
+                        _VERSION_A3,
+                        (
+                            (
+                                CorpusDocumentVersionMembership(
+                                    _CORPUS_A,
+                                    _DOC_A,
+                                    _DOC_VERSION_A3,
+                                ),
+                                replacement_selection,
+                            ),
+                            (
+                                shared_a,
+                                _make_selection(
+                                    _CORPUS_A,
+                                    _DOC_SHARED,
+                                    _DOC_VERSION_SHARED,
+                                    "common assay terminology",
+                                ),
+                            ),
+                            (
+                                stable_a,
+                                _make_selection(
+                                    _CORPUS_A,
+                                    _DOC_STABLE,
+                                    _DOC_VERSION_STABLE,
+                                    "stable control evidence",
+                                ),
+                            ),
+                        ),
+                    )
+                    compatibility = DenseIndexCompatibility(
+                        model_metadata=embedder.metadata,
+                        dimensions=3,
+                        embedding_profile=embedder.profile,
+                    )
+                    lexical_outcome = build_lexical_generation_for_corpus_update(
+                        index_dir,
+                        source_manifest,
+                        repository,
+                        expected_corpus_version=_VERSION_A,
+                    )
+                    dense_outcome = build_dense_generation_for_corpus_update(
+                        index_dir,
+                        source_manifest,
+                        embedder,
+                        repository,
+                        expected_corpus_version=_VERSION_A,
+                        metadata_db_path=database_path,
+                        source_dir=source_dir,
+                        compatibility=compatibility,
+                    )
+                    lexical = LexicalGenerationParticipant(
+                        index_dir,
+                        lexical_outcome,
+                        source_manifest,
+                    )
+                    dense = DenseGenerationParticipant(
+                        index_dir,
+                        dense_outcome,
+                        source_manifest,
+                    )
+                    committed: CommitCorpusUpdateOutcome | None = None
+                    with repository.transaction() as transaction:
+                        transaction.begin_corpus_update(
+                            _CORPUS_A,
+                            _VERSION_A3,
+                            expected_corpus_version=_VERSION_A,
+                            required_component_kinds=(
+                                ComponentKind("lexical-index"),
+                                DENSE_COMPONENT_KIND,
+                            ),
+                        )
+                        transaction.replace_corpus_update_document_membership(
+                            _CORPUS_A,
+                            _VERSION_A3,
+                            CorpusDocumentVersionMembership(
+                                _CORPUS_A,
+                                _DOC_A,
+                                _DOC_VERSION_A,
+                            ),
+                            CorpusDocumentVersionMembership(
+                                _CORPUS_A,
+                                _DOC_A,
+                                _DOC_VERSION_A3,
+                            ),
+                        )
+                        transaction.register_corpus_update_component_generation(
+                            _CORPUS_A,
+                            _VERSION_A3,
+                            lexical.component_generation(),
+                            validator=lexical.build_validator(repository),
+                        )
+                        transaction.register_corpus_update_component_generation(
+                            _CORPUS_A,
+                            _VERSION_A3,
+                            dense.component_generation(),
+                            validator=dense.build_validator(repository),
+                        )
+                        transaction.seal_corpus_update(_CORPUS_A, _VERSION_A3)
+                        committed = transaction.commit_corpus_update(
+                            _CORPUS_A,
+                            _VERSION_A3,
+                        )
+                    assert committed is not None
+                    assert committed.version.corpus_version == _VERSION_A3
+
+                    with repository.open_active_corpus_snapshot(
+                        _CORPUS_A
+                    ) as active_snapshot:
+                        assert active_snapshot.version.corpus_version == _VERSION_A3
+                        active_query = RetrievalQuery(
+                            "orchid",
+                            active_snapshot.version.corpus_version,
+                            RetrievalLimit(1),
+                        )
+                        active_lexical = execute_lexical_retrieval(
+                            repository,
+                            index_dir,
+                            _CORPUS_A,
+                            LexicalQuery(active_query),
+                            snapshot=active_snapshot,
+                        )
+                        active_dense = execute_dense_retrieval(
+                            repository,
+                            index_dir,
+                            _CORPUS_A,
+                            active_query,
+                            embedder,
+                            snapshot=active_snapshot,
+                        )
+                        for result in (active_lexical, active_dense):
+                            assert result.status.value == "completed"
+                            assert result.corpus_version == _VERSION_A3
+                            assert result.hits[0].candidate.content == canary_text
+                            assert (
+                                result.hits[0].candidate.sources[0].document_version_id
+                                == _DOC_VERSION_A3
+                            )
+                finally:
+                    published.set()
+
+                reader_results = tuple(future.result(timeout=30) for future in futures)
+            assert canary_text not in repr(logs)
+
+        expected_by_reader = (
+            (_VERSION_A, "orchid receptor evidence", _DOC_VERSION_A),
+            (_VERSION_A, "orchid receptor evidence", _DOC_VERSION_A),
+            (_VERSION_B, "tulip catalyst evidence", _DOC_VERSION_B),
+        )
+        for (pinned_version, memberships, before, after), expected in zip(
+            reader_results,
+            expected_by_reader,
+            strict=True,
+        ):
+            expected_version, expected_text, expected_document_version = expected
+            assert pinned_version == expected_version
+            expected_membership_versions = (
+                {_DOC_VERSION_SHARED, _DOC_VERSION_A, _DOC_VERSION_STABLE}
+                if expected_version == _VERSION_A
+                else {_DOC_VERSION_SHARED, _DOC_VERSION_B}
+            )
+            assert {
+                membership.document_version_id for membership in memberships
+            } == expected_membership_versions
+            for result in (*before, *after):
+                assert result.status.value == "completed"
+                assert result.corpus_version == expected_version
+                assert result.hits[0].candidate.content == expected_text
+                assert (
+                    result.hits[0].candidate.sources[0].document_version_id
+                    == expected_document_version
+                )
+    finally:
+        published.set()
         repository.close()
