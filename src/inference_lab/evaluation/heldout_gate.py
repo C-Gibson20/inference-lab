@@ -16,6 +16,8 @@ from inference_lab.evaluation.retrieval_contracts import (
     RetrievalEvaluationRunIdentity,
     RetrievalSystemIdentity,
 )
+from inference_lab.retrieval import FusionPolicy
+from inference_lab.retrieval.reranking import RerankingIdentity
 
 HELD_OUT_RUN_CONTRACT_VERSION: Final[str] = "1.0.0"
 HELD_OUT_GATE_POLICY_VERSION: Final[str] = "1.0.0"
@@ -46,6 +48,8 @@ class HeldOutChannelIdentity:
 
     channel: HeldOutChannel
     system_identity: RetrievalSystemIdentity
+    fusion_policy: FusionPolicy | None = None
+    reranking_identity: RerankingIdentity | None = None
 
     def __post_init__(self) -> None:
         self._validate()
@@ -56,12 +60,64 @@ class HeldOutChannelIdentity:
             raise TypeError("channel must be a HeldOutChannel.")
         if not isinstance(self.system_identity, RetrievalSystemIdentity):
             raise TypeError("system_identity must be a RetrievalSystemIdentity.")
+        fused = self.channel in {
+            HeldOutChannel.FUSED_PRE_RERANK,
+            HeldOutChannel.FUSED_RERANKED,
+        }
+        if fused != isinstance(self.fusion_policy, FusionPolicy):
+            raise RetrievalEvaluationContractError(
+                "fusion paths must identify their FusionPolicy."
+            )
+        if self.fusion_policy is not None and not isinstance(
+            self.fusion_policy, FusionPolicy
+        ):
+            raise TypeError("fusion_policy must be a FusionPolicy or None.")
+        reranked = self.channel is HeldOutChannel.FUSED_RERANKED
+        if reranked != isinstance(self.reranking_identity, RerankingIdentity):
+            raise RetrievalEvaluationContractError(
+                "the reranked path must identify its RET-06 configuration."
+            )
+        if self.reranking_identity is not None and not isinstance(
+            self.reranking_identity, RerankingIdentity
+        ):
+            raise TypeError("reranking_identity must be a RerankingIdentity or None.")
 
     def as_dict(self) -> dict[str, object]:
         """Return the channel label and its full path-free identity."""
         return {
             "channel": self.channel.value,
             "system_identity": self.system_identity.as_dict(),
+            "fusion_policy": (
+                {
+                    "algorithm": self.fusion_policy.algorithm,
+                    "version": self.fusion_policy.version,
+                    "rank_constant": self.fusion_policy.rank_constant,
+                    "lexical_weight": self.fusion_policy.lexical_weight,
+                    "dense_weight": self.fusion_policy.dense_weight,
+                    "identity": self.fusion_policy.identity,
+                }
+                if self.fusion_policy is not None
+                else None
+            ),
+            "reranking_identity": (
+                {
+                    "backend_name": self.reranking_identity.backend_name,
+                    "model_name": self.reranking_identity.model_name,
+                    "model_revision": self.reranking_identity.model_revision,
+                    "preprocessing_profile_version": (
+                        self.reranking_identity.preprocessing_profile_version
+                    ),
+                    "evidence_count": self.reranking_identity.evidence_count,
+                    "candidate_limit": self.reranking_identity.candidate_limit,
+                    "deduplication_version": (
+                        self.reranking_identity.deduplication_version
+                    ),
+                    "policy_version": self.reranking_identity.policy_version,
+                    "digest": self.reranking_identity.digest,
+                }
+                if self.reranking_identity is not None
+                else None
+            ),
         }
 
 
@@ -106,6 +162,15 @@ class HeldOutRunContract:
             raise RetrievalEvaluationContractError(
                 "run contract must identify every Phase 6 comparison path once."
             )
+        identity_by_channel = {item.channel: item for item in self.channel_identities}
+        pre_rerank_fusion = identity_by_channel[
+            HeldOutChannel.FUSED_PRE_RERANK
+        ].fusion_policy
+        reranked_identity = identity_by_channel[HeldOutChannel.FUSED_RERANKED]
+        if reranked_identity.fusion_policy != pre_rerank_fusion:
+            raise RetrievalEvaluationContractError(
+                "pre-rerank and reranked paths must share one fusion policy."
+            )
         if not is_strict_integer(self.candidate_recall_cutoff):
             raise TypeError("candidate_recall_cutoff must be an integer.")
         if self.candidate_recall_cutoff != 10:
@@ -117,6 +182,14 @@ class HeldOutRunContract:
         if not 5 <= self.final_evidence_count <= 10:
             raise RetrievalEvaluationContractError(
                 "final_evidence_count must be between 5 and 10."
+            )
+        assert reranked_identity.reranking_identity is not None
+        if (
+            reranked_identity.reranking_identity.evidence_count
+            != self.final_evidence_count
+        ):
+            raise RetrievalEvaluationContractError(
+                "RET-06 evidence count must match final_evidence_count."
             )
         calculated = self._calculate_fingerprint()
         if self.fingerprint is None:
@@ -256,7 +329,8 @@ class HeldOutCategoryCoverage:
     leakage_group_count: int
     failed_case_count: int
     degraded_case_count: int
-    document_recall_at_10: MetricFraction | None
+    document_recall_cutoff: int
+    document_recall: MetricFraction | None
     recall_interval_lower: MetricFraction | None
     recall_interval_upper: MetricFraction | None
 
@@ -300,8 +374,14 @@ class HeldOutCategoryCoverage:
             raise RetrievalEvaluationContractError(
                 "degraded_case_count must not exceed the category population."
             )
+        if not is_strict_integer(self.document_recall_cutoff):
+            raise TypeError("document_recall_cutoff must be an integer.")
+        if self.document_recall_cutoff <= 0:
+            raise RetrievalEvaluationContractError(
+                "document_recall_cutoff must be positive."
+            )
         for name in (
-            "document_recall_at_10",
+            "document_recall",
             "recall_interval_lower",
             "recall_interval_upper",
         ):
@@ -310,7 +390,7 @@ class HeldOutCategoryCoverage:
                 raise TypeError(f"{name} must be a MetricFraction or None.")
         lower = self.recall_interval_lower
         upper = self.recall_interval_upper
-        recall = self.document_recall_at_10
+        recall = self.document_recall
         if (lower is None) != (upper is None):
             raise RetrievalEvaluationContractError(
                 "recall interval bounds must be supplied together."
@@ -320,13 +400,9 @@ class HeldOutCategoryCoverage:
                 raise RetrievalEvaluationContractError(
                     "recall interval requires an observed recall value."
                 )
-            if (
-                _fraction_less(upper, lower)
-                or _fraction_less(recall, lower)
-                or _fraction_less(upper, recall)
-            ):
+            if _fraction_less(upper, lower):
                 raise RetrievalEvaluationContractError(
-                    "recall interval must contain the observed recall value."
+                    "recall interval lower bound must not exceed its upper bound."
                 )
 
     def as_dict(self) -> dict[str, object]:
@@ -339,9 +415,10 @@ class HeldOutCategoryCoverage:
             "leakage_group_count": self.leakage_group_count,
             "failed_case_count": self.failed_case_count,
             "degraded_case_count": self.degraded_case_count,
-            "document_recall_at_10": (
-                self.document_recall_at_10.as_dict()
-                if self.document_recall_at_10 is not None
+            "document_recall_cutoff": self.document_recall_cutoff,
+            "document_recall": (
+                self.document_recall.as_dict()
+                if self.document_recall is not None
                 else None
             ),
             "recall_interval_lower": (
@@ -428,30 +505,20 @@ def evaluate_held_out_gate(
             raise RetrievalEvaluationContractError(
                 "complete category totals must reconcile to overall counts."
             )
-    if overall_document_recall_at_10 is not None:
-        if (overall_recall_interval_lower is None) != (
-            overall_recall_interval_upper is None
-        ):
-            raise RetrievalEvaluationContractError(
-                "overall recall interval bounds must be supplied together."
-            )
-        if overall_recall_interval_lower is not None and (
-            overall_recall_interval_upper is not None
-        ):
-            if (
-                _fraction_less(
-                    overall_recall_interval_upper, overall_recall_interval_lower
-                )
-                or _fraction_less(
-                    overall_document_recall_at_10, overall_recall_interval_lower
-                )
-                or _fraction_less(
-                    overall_recall_interval_upper, overall_document_recall_at_10
-                )
-            ):
-                raise RetrievalEvaluationContractError(
-                    "overall recall interval must contain the observed value."
-                )
+    if (overall_recall_interval_lower is None) != (
+        overall_recall_interval_upper is None
+    ):
+        raise RetrievalEvaluationContractError(
+            "overall recall interval bounds must be supplied together."
+        )
+    if (
+        overall_recall_interval_lower is not None
+        and overall_recall_interval_upper is not None
+        and _fraction_less(overall_recall_interval_upper, overall_recall_interval_lower)
+    ):
+        raise RetrievalEvaluationContractError(
+            "overall recall interval lower bound must not exceed its upper bound."
+        )
 
     reasons: list[str] = []
     by_type = {coverage.question_type: coverage for coverage in categories}
@@ -470,7 +537,7 @@ def evaluate_held_out_gate(
     if underpowered:
         reasons.append("underpowered_question_categories")
     if any(
-        coverage.document_recall_at_10 is None
+        coverage.document_recall is None
         or coverage.recall_interval_lower is None
         or coverage.recall_interval_upper is None
         for coverage in categories

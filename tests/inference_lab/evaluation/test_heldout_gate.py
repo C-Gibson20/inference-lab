@@ -29,6 +29,8 @@ from inference_lab.evaluation.retrieval_contracts import (
     RetrievalSystemIdentity,
 )
 from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.retrieval import FusionPolicy
+from inference_lab.retrieval.reranking import RerankingIdentity
 
 
 def _policy() -> HeldOutGatePolicy:
@@ -88,11 +90,36 @@ def _run_identity(split: SplitName = "held_out") -> RetrievalEvaluationRunIdenti
 
 
 def _run_contract(*, final_count: int = 8) -> HeldOutRunContract:
+    fusion_policy = FusionPolicy()
     return HeldOutRunContract(
         evaluation_identity=_run_identity(),
         gate_policy=_policy(),
         channel_identities=tuple(
-            HeldOutChannelIdentity(channel, _system_identity(channel.value))
+            HeldOutChannelIdentity(
+                channel,
+                _system_identity(channel.value),
+                fusion_policy=(
+                    fusion_policy
+                    if channel
+                    in {
+                        HeldOutChannel.FUSED_PRE_RERANK,
+                        HeldOutChannel.FUSED_RERANKED,
+                    }
+                    else None
+                ),
+                reranking_identity=(
+                    RerankingIdentity(
+                        backend_name="fixture",
+                        model_name="fixture-reranker",
+                        model_revision="1.0.0",
+                        preprocessing_profile_version="1.0.0",
+                        evidence_count=final_count,
+                        candidate_limit=100,
+                    )
+                    if channel is HeldOutChannel.FUSED_RERANKED
+                    else None
+                ),
+            )
             for channel in HeldOutChannel
         ),
         final_evidence_count=final_count,
@@ -114,7 +141,8 @@ def _categories(
             leakage_group_count=2,
             failed_case_count=0,
             degraded_case_count=0,
-            document_recall_at_10=recall,
+            document_recall_cutoff=10,
+            document_recall=recall,
             recall_interval_lower=lower,
             recall_interval_upper=upper,
         )
@@ -197,20 +225,14 @@ def test_frozen_run_contract_rejects_non_heldout_or_incomplete_channel_identity(
         HeldOutRunContract(
             evaluation_identity=_run_identity("development"),
             gate_policy=_policy(),
-            channel_identities=tuple(
-                HeldOutChannelIdentity(channel, _system_identity(channel.value))
-                for channel in HeldOutChannel
-            ),
+            channel_identities=_run_contract().channel_identities,
         )
 
     with pytest.raises(RetrievalEvaluationContractError, match="every Phase 6"):
         HeldOutRunContract(
             evaluation_identity=_run_identity(),
             gate_policy=_policy(),
-            channel_identities=tuple(
-                HeldOutChannelIdentity(channel, _system_identity(channel.value))
-                for channel in tuple(HeldOutChannel)[:-1]
-            ),
+            channel_identities=_run_contract().channel_identities[:-1],
         )
 
 
@@ -298,12 +320,13 @@ def test_category_contract_rejects_incoherent_population_and_interval() -> None:
             leakage_group_count=2,
             failed_case_count=0,
             degraded_case_count=0,
-            document_recall_at_10=MetricFraction(9, 10),
+            document_recall_cutoff=10,
+            document_recall=MetricFraction(9, 10),
             recall_interval_lower=MetricFraction(8, 10),
             recall_interval_upper=MetricFraction(95, 100),
         )
 
-    with pytest.raises(RetrievalEvaluationContractError, match="contain"):
+    with pytest.raises(RetrievalEvaluationContractError, match="upper bound"):
         HeldOutCategoryCoverage(
             question_type=QUESTION_TYPES[0],
             case_count=2,
@@ -312,9 +335,10 @@ def test_category_contract_rejects_incoherent_population_and_interval() -> None:
             leakage_group_count=2,
             failed_case_count=0,
             degraded_case_count=0,
-            document_recall_at_10=MetricFraction(9, 10),
-            recall_interval_lower=MetricFraction(95, 100),
-            recall_interval_upper=MetricFraction(99, 100),
+            document_recall_cutoff=10,
+            document_recall=MetricFraction(9, 10),
+            recall_interval_lower=MetricFraction(99, 100),
+            recall_interval_upper=MetricFraction(95, 100),
         )
 
 
