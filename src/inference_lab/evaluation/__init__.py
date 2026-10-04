@@ -122,8 +122,10 @@ from inference_lab.evaluation.heldout_reporting import (
     serialise_held_out_baseline_report,
 )
 from inference_lab.evaluation.heldout_runner import (
+    HeldOutBaselineRunResult,
     HeldOutChannelRun,
     HeldOutChannelRunner,
+    run_and_publish_held_out_baseline,
     run_held_out_baseline,
 )
 from inference_lab.evaluation.lexical_adapter import (
@@ -312,6 +314,7 @@ __all__ = [
     "EvidenceReference",
     "ExpectedAnswer",
     "HeldOutBaselineReport",
+    "HeldOutBaselineRunResult",
     "HeldOutCaseObservation",
     "HeldOutCategoryCoverage",
     "HeldOutChannel",
@@ -402,6 +405,7 @@ __all__ = [
     "report_content_digest",
     "retrieval_result_digest",
     "run_and_publish_audit",
+    "run_and_publish_held_out_baseline",
     "run_corpus_audit",
     "run_held_out_baseline",
     "run_retrieval_evaluation",

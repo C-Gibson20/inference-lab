@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from inference_lab.evaluation.cases import EvaluationCase
@@ -12,12 +13,17 @@ from inference_lab.evaluation.heldout_gate import (
     HeldOutChannelIdentity,
     HeldOutRunContract,
 )
+from inference_lab.evaluation.heldout_publication import (
+    HeldOutReportManifest,
+    publish_heldout_baseline_report,
+)
 from inference_lab.evaluation.heldout_reporting import (
     HeldOutBaselineReport,
     HeldOutCaseObservation,
     HeldOutChannelCaseResult,
     build_held_out_baseline_report,
 )
+from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.retrieval_contracts import (
     RetrievalEvaluationContractError,
     RetrievalEvaluationRunIdentity,
@@ -65,6 +71,30 @@ class HeldOutChannelRunner(Protocol):
     def __call__(self, channel: HeldOutChannel) -> HeldOutChannelRun:
         """Run one channel using the frozen dataset and corpus snapshot."""
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class HeldOutBaselineRunResult:
+    """Aggregate report and manifest returned by the operator workflow."""
+
+    report: HeldOutBaselineReport
+    manifest: HeldOutReportManifest
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        if not isinstance(self.report, HeldOutBaselineReport):
+            raise TypeError("report must be a HeldOutBaselineReport.")
+        if not isinstance(self.manifest, HeldOutReportManifest):
+            raise TypeError("manifest must be a HeldOutReportManifest.")
+        if (
+            self.manifest.run_fingerprint != self.report.contract.fingerprint
+            or self.manifest.report_digest != self.report.digest
+        ):
+            raise RetrievalEvaluationContractError(
+                "publication manifest must identify the returned baseline report."
+            )
 
 
 def _channel_identities(
@@ -225,3 +255,36 @@ def run_held_out_baseline(
         observations,
         limitations=limitations,
     )
+
+
+def run_and_publish_held_out_baseline(
+    contract: HeldOutRunContract,
+    cases: tuple[EvaluationCase, ...],
+    run_channel: HeldOutChannelRunner,
+    destination: str | Path,
+    *,
+    limitations: tuple[str, ...] = (),
+) -> HeldOutBaselineRunResult:
+    """Run the frozen channels and atomically publish their aggregate report.
+
+    Validate the destination before executing any held-out query. The caller
+    owns the deployment-specific adapters and pinned corpus lifecycle.
+    """
+    if not isinstance(destination, (str, Path)):
+        raise TypeError("destination must be a string or Path.")
+    raw_destination = Path(destination).expanduser()
+    local_destination = validate_local_path(destination, field_name="destination")
+    if (
+        raw_destination.is_symlink()
+        or local_destination.exists()
+        or local_destination.is_symlink()
+    ):
+        raise FileExistsError("Held-out report destination already exists")
+    report = run_held_out_baseline(
+        contract,
+        cases,
+        run_channel,
+        limitations=limitations,
+    )
+    manifest = publish_heldout_baseline_report(local_destination, report)
+    return HeldOutBaselineRunResult(report=report, manifest=manifest)

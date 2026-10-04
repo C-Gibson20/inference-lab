@@ -1,9 +1,11 @@
 """Tests for immutable aggregate-only EVAL-04 report publication."""
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from inference_lab.evaluation import heldout_runner
 from inference_lab.evaluation.heldout_publication import (
     HeldOutPublicationMismatchError,
     compare_heldout_baseline_publication,
@@ -13,6 +15,7 @@ from inference_lab.evaluation.heldout_publication import (
     verify_heldout_baseline_publication,
 )
 from inference_lab.evaluation.heldout_reporting import build_held_out_baseline_report
+from inference_lab.evaluation.heldout_runner import HeldOutChannelRunner
 
 from .test_heldout_reporting import (  # noqa: TID252
     _contract,
@@ -69,3 +72,47 @@ def test_verification_rejects_tampered_artifact(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="checksum"):
         verify_heldout_baseline_publication(destination)
+
+
+def test_operator_workflow_runs_then_publishes(tmp_path: Path, monkeypatch) -> None:
+    report = _report()
+    calls: list[str] = []
+    runner = object()
+
+    def fake_run(*args, **kwargs):
+        calls.append("run")
+        return report
+
+    monkeypatch.setattr(heldout_runner, "run_held_out_baseline", fake_run)
+    destination = tmp_path / "workflow"
+    result = heldout_runner.run_and_publish_held_out_baseline(
+        report.contract,
+        (),
+        cast(HeldOutChannelRunner, runner),
+        destination,
+        limitations=("sample-only",),
+    )
+
+    assert calls == ["run"]
+    assert result.report == report
+    assert result.manifest.report_digest == report.digest
+    assert verify_heldout_baseline_publication(destination) == result.manifest
+
+
+def test_operator_workflow_rejects_destination_before_running(
+    tmp_path: Path, monkeypatch
+) -> None:
+    destination = tmp_path / "existing"
+    destination.mkdir()
+
+    def unexpected_run(*args, **kwargs):
+        pytest.fail("held-out retrieval must not start for an occupied destination")
+
+    monkeypatch.setattr(heldout_runner, "run_held_out_baseline", unexpected_run)
+    with pytest.raises(FileExistsError):
+        heldout_runner.run_and_publish_held_out_baseline(
+            _report().contract,
+            (),
+            cast(HeldOutChannelRunner, object()),
+            destination,
+        )
