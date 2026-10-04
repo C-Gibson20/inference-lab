@@ -23,6 +23,10 @@ from inference_lab.evaluation.heldout_reporting import (
     render_held_out_baseline_report,
     serialise_held_out_baseline_report,
 )
+from inference_lab.evaluation.heldout_runner import (
+    HeldOutChannelRun,
+    run_held_out_baseline,
+)
 from inference_lab.evaluation.retrieval_contracts import (
     DuplicateRelationshipSnapshot,
     MetricFraction,
@@ -32,7 +36,11 @@ from inference_lab.evaluation.retrieval_contracts import (
     RetrievalEvaluationRunIdentity,
     RetrievalSystemIdentity,
 )
-from inference_lab.evaluation.retrieval_scoring import score_retrieval_case
+from inference_lab.evaluation.retrieval_execution import RetrievalEvaluationRunResult
+from inference_lab.evaluation.retrieval_scoring import (
+    aggregate_retrieval_case_results,
+    score_retrieval_case,
+)
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -399,3 +407,112 @@ def test_report_preflight_rejects_case_order_or_corpus_version_mismatch() -> Non
     )
     with pytest.raises(RetrievalEvaluationContractError, match="frozen corpus version"):
         build_held_out_baseline_report(contract, (bad_observation, *observations[1:]))
+
+
+def test_runner_reuses_frozen_case_order_and_builds_all_channel_results() -> None:
+    observations = _observation_fixture(degrade_dense_case="case-003")
+    case_ids = tuple(item.case_id for item in observations)
+    contract = _contract(case_ids)
+    cases = tuple(
+        coverage_case(
+            index,
+            observation.question_type,
+            split="held_out",
+            abstention=observation.expected_abstention,
+        )
+        for index, observation in enumerate(observations, start=1)
+    )
+    identities = {
+        identity.channel: identity for identity in contract.channel_identities
+    }
+    channel_runs = {}
+    for channel in HeldOutChannel:
+        results = tuple(
+            observation.result_for(channel).result for observation in observations
+        )
+        run_identity = replace(
+            contract.evaluation_identity,
+            system_identity=identities[channel].system_identity,
+            run_fingerprint=None,
+        )
+        channel_runs[channel] = HeldOutChannelRun(
+            channel=channel,
+            result=RetrievalEvaluationRunResult(
+                identity=run_identity,
+                case_results=results,
+                aggregate=aggregate_retrieval_case_results(
+                    results, run_identity.policy
+                ),
+            ),
+            degraded_case_ids=tuple(
+                observation.case_id
+                for observation in observations
+                if observation.result_for(channel).degraded
+            ),
+        )
+
+    class FixtureChannelRunner:
+        def __init__(self) -> None:
+            self.called_channels: list[HeldOutChannel] = []
+
+        def system_identity(self, channel: HeldOutChannel) -> RetrievalSystemIdentity:
+            return identities[channel].system_identity
+
+        def __call__(self, channel: HeldOutChannel) -> HeldOutChannelRun:
+            self.called_channels.append(channel)
+            return channel_runs[channel]
+
+    run_channel = FixtureChannelRunner()
+
+    report = run_held_out_baseline(contract, cases, run_channel)
+
+    assert run_channel.called_channels == sorted(
+        HeldOutChannel, key=lambda item: item.value
+    )
+    assert report.case_count == len(cases)
+    assert report.outcome.value == "pass"
+    assert {
+        item.channel: item.degraded_case_count for item in report.channel_summaries
+    }[HeldOutChannel.DENSE_ONLY] == 1
+
+    wrong_scope = replace(
+        contract.evaluation_identity,
+        corpus_version=CorpusVersionId.from_str(_uuid(998)),
+        run_fingerprint=None,
+    )
+    wrong_contract = replace(
+        contract,
+        evaluation_identity=wrong_scope,
+        fingerprint=None,
+    )
+    with pytest.raises(RetrievalEvaluationContractError, match="frozen dataset"):
+        run_held_out_baseline(wrong_contract, cases, run_channel)
+
+
+def test_runner_rejects_split_or_scope_mismatch_before_report() -> None:
+    observations = _observation_fixture()
+    case_ids = tuple(item.case_id for item in observations)
+    contract = _contract(case_ids)
+    cases = tuple(
+        coverage_case(
+            index,
+            observation.question_type,
+            split="development" if index == 1 else "held_out",
+            abstention=observation.expected_abstention,
+        )
+        for index, observation in enumerate(observations, start=1)
+    )
+
+    class UnusedRunner:
+        def system_identity(self, channel: HeldOutChannel) -> RetrievalSystemIdentity:
+            return _system_identity(channel.value)
+
+        def __call__(self, channel: HeldOutChannel) -> HeldOutChannelRun:
+            pytest.fail(
+                f"invalid cases must be rejected before a {channel.value} channel run"
+            )
+
+    unused_runner = UnusedRunner()
+
+    with pytest.raises(RetrievalEvaluationContractError, match="held_out"):
+        run_held_out_baseline(contract, cases, unused_runner)

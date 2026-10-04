@@ -110,6 +110,11 @@ from inference_lab.evaluation.heldout_reporting import (
     render_held_out_baseline_report,
     serialise_held_out_baseline_report,
 )
+from inference_lab.evaluation.heldout_runner import (
+    HeldOutChannelRun,
+    HeldOutChannelRunner,
+    run_held_out_baseline,
+)
 from inference_lab.evaluation.lexical_adapter import (
     LocalLexicalEvaluationAdapter,
     lexical_relationship_snapshot,
@@ -301,6 +306,8 @@ __all__ = [
     "HeldOutChannel",
     "HeldOutChannelCaseResult",
     "HeldOutChannelIdentity",
+    "HeldOutChannelRun",
+    "HeldOutChannelRunner",
     "HeldOutChannelSummary",
     "HeldOutGateOutcome",
     "HeldOutGatePolicy",
@@ -378,6 +385,7 @@ __all__ = [
     "retrieval_result_digest",
     "run_and_publish_audit",
     "run_corpus_audit",
+    "run_held_out_baseline",
     "run_retrieval_evaluation",
     "score_retrieval_case",
     "serialise_audit_report",
