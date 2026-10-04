@@ -10,6 +10,9 @@ development-data evidence for Qwen3-Embedding-0.6B and BGE-M3. The
 broader set whose page labels received an independent second-pass review; see
 the [expanded candidate comparison](run-04/expanded-candidate-comparison.md)
 for results and the audit for remaining limitations.
+[Provisional retrieval baseline](evaluation/placeholder-baseline.md) records
+the sample's current development scores as a starting reference; it is not the
+final EVAL-04 held-out gate.
 [local measurement procedure](run-04/measurement-report-template.md) records
 repeatable load and throughput observations for the pinned Qwen adapter using
 fixed, non-corpus text inputs. It also captures the RUN-03 tensor-memory
