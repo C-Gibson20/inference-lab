@@ -6,10 +6,16 @@ from __future__ import annotations
 import json
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Protocol
 
 from inference_lab._validation import paths_overlap
+from inference_lab.backends.runtime import (
+    EmbeddingBackend,
+    EmbeddingProfile,
+    QwenEmbeddingBackend,
+)
 from inference_lab.ingest import (
     CURRENT_CHUNKER_VERSION,
     CURRENT_PARSER_VERSION,
@@ -22,9 +28,19 @@ from inference_lab.ingest import (
 )
 from inference_lab.logging.logging_config import configure_logging
 from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.retrieval import DenseIndexCompatibility
 from inference_lab.serving import LocalServingFacade, ServingIngestRequest
 from inference_lab.settings import get_settings
 from inference_lab.storage import open_metadata_repository
+
+
+class DenseEmbeddingBackend(EmbeddingBackend, Protocol):
+    """An embedding backend with a profile suitable for indexed vectors."""
+
+    @property
+    def output_profile(self) -> EmbeddingProfile:
+        """Return the fixed profile attached to emitted vectors."""
+        ...
 
 
 def _required_path(name: str) -> Path:
@@ -38,7 +54,20 @@ def _required_path(name: str) -> Path:
     return path
 
 
-def _run() -> dict[str, object]:
+def _include_dense_index() -> bool:
+    """Read the explicit opt-in for local dense index publication."""
+    value = os.environ.get("EVALUATION_CORPUS_INCLUDE_DENSE", "false").lower()
+    if value not in {"true", "false"}:
+        raise ValueError
+    return value == "true"
+
+
+def _run(
+    *,
+    embedding_backend_factory: Callable[
+        [Path], DenseEmbeddingBackend
+    ] = QwenEmbeddingBackend,
+) -> dict[str, object]:
     """Ingest the explicit source directory as one immutable corpus version."""
     settings = get_settings()
     configure_logging(settings.logging, stream=sys.stderr)
@@ -70,12 +99,34 @@ def _run() -> dict[str, object]:
         raise ValueError
 
     tokeniser = LocalFastChunkTokeniser.from_directory(tokeniser_directory)
+    dense_embedder = None
+    dense_compatibility = None
+    if _include_dense_index():
+        dense_embedder = embedding_backend_factory(settings.models.embedder_path)
+        try:
+            dense_embedder.load()
+            dimensions = dense_embedder.metadata.embedding_dimensions
+            if dimensions is None:
+                raise ValueError
+            dense_compatibility = DenseIndexCompatibility(
+                model_metadata=dense_embedder.metadata,
+                dimensions=dimensions,
+                embedding_profile=dense_embedder.output_profile,
+            )
+        except Exception:
+            dense_embedder.close()
+            raise
     policy = ChunkingPolicy()
-    repository = open_metadata_repository(
-        settings.storage.metadata_db_path,
-        source_dir=settings.storage.source_dir,
-        apply_migrations=True,
-    )
+    try:
+        repository = open_metadata_repository(
+            settings.storage.metadata_db_path,
+            source_dir=settings.storage.source_dir,
+            apply_migrations=True,
+        )
+    except Exception:
+        if dense_embedder is not None:
+            dense_embedder.close()
+        raise
     try:
         facade = LocalServingFacade(repository, settings)
         if repository.get_corpus(corpus_id) is None:
@@ -102,8 +153,22 @@ def _run() -> dict[str, object]:
             ),
             chunking_policy=policy,
             tokeniser=tokeniser,
+            dense_embedder=dense_embedder,
+            dense_compatibility=dense_compatibility,
         )
         summary = facade.ingest(request)
+        component_generation_ids: list[dict[str, str]] = []
+        if summary.publication_status.value in {"committed", "no_change"}:
+            with repository.open_corpus_snapshot(
+                corpus_id, proposed_version
+            ) as snapshot:
+                component_generation_ids = [
+                    {
+                        "component_kind": reference.component_kind.as_str(),
+                        "generation_id": reference.generation_id,
+                    }
+                    for reference in snapshot.manifest.component_generations
+                ]
         return {
             "corpus_id": corpus_id.as_str(),
             "proposed_version": proposed_version.as_str(),
@@ -118,8 +183,11 @@ def _run() -> dict[str, object]:
                     for failure in outcome.failures
                 }
             ),
+            "component_generation_ids": component_generation_ids,
         }
     finally:
+        if dense_embedder is not None:
+            dense_embedder.close()
         repository.close()
 
 

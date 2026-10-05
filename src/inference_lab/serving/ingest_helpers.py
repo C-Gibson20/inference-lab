@@ -113,6 +113,11 @@ def request_identity(request: ServingIngestRequest) -> OutputDigest:
             },
             "configuration_identity": request.configuration_identity.as_str(),
             "lexical_configuration": request.lexical_configuration.as_payload(),
+            "dense_compatibility": (
+                None
+                if request.dense_compatibility is None
+                else request.dense_compatibility.canonical_payload()
+            ),
         }
     )
 

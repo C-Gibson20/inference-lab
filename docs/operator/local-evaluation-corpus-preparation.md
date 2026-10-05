@@ -2,8 +2,9 @@
 
 This procedure creates one pinned local corpus version from an explicit
 directory of approved source documents. It uses the serving ingest API to
-parse, chunk, and publish the lexical index. It does not download sources or
-models, build a dense index, or run retrieval evaluation.
+parse and chunk the sources, then publishes the lexical index and, when enabled,
+the dense index under one immutable corpus version. It does not download
+sources or models, or run retrieval evaluation.
 
 ## Requirements
 
@@ -11,6 +12,10 @@ models, build a dense index, or run retrieval evaluation.
 - Keep the source directory outside the configured managed source directory.
 - Point `EVALUATION_CORPUS_TOKENISER_DIRECTORY` at an existing local
   Transformers fast tokenizer directory. Loading is local only.
+- Set `EVALUATION_CORPUS_INCLUDE_DENSE=true` to include the configured local
+  Qwen embedding model in the same atomic publication. Its files must already
+  be present at `models.embedder_path` in `config.toml` and pass the backend's
+  artifact verification. The default is `false` for lexical-only preparation.
 - Choose one stable `EVALUATION_CORPUS_ID` and a new
   `EVALUATION_CORPUS_PROPOSED_VERSION`. Retain both identities for the
   evaluation manifest. An update must also set
@@ -30,6 +35,7 @@ export EVALUATION_CORPUS_SOURCE_DIRECTORY=/absolute/path/to/approved/documents
 export EVALUATION_CORPUS_TOKENISER_DIRECTORY=/absolute/path/to/local/fast-tokeniser
 export EVALUATION_CORPUS_ID='paste-a-generated-corpus-id'
 export EVALUATION_CORPUS_PROPOSED_VERSION='paste-a-new-corpus-version-id'
+export EVALUATION_CORPUS_INCLUDE_DENSE=true
 
 uv run --project /absolute/path/to/inference-lab python \
   /absolute/path/to/inference-lab/scripts/inference_lab/evaluation/prepare_local_evaluation_corpus.py
@@ -65,7 +71,9 @@ dataset version.
 
 ## Current scope
 
-The output is the lexical corpus foundation for the retrieval evaluation.
-Dense index creation, the channel request factory, the frozen benchmark, and
-the held-out report are separate steps. The report gate must remain inconclusive
-until every planned channel has an honest result on the same corpus version.
+The output includes corpus/version identities and the component generation IDs
+published in that version. With dense preparation enabled, the dense generation
+is built before publication and committed together with chunks and the lexical
+generation. The channel request factory, frozen benchmark, and held-out report
+are separate steps. The report gate must remain inconclusive until every
+planned channel has an honest result on the same corpus version.

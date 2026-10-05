@@ -200,6 +200,11 @@ class QwenEmbeddingBackend:
         """Return whether this backend has been permanently closed."""
         return self._is_closed
 
+    @property
+    def output_profile(self) -> EmbeddingProfile:
+        """Return the default path-free profile used for dense indexing."""
+        return _build_profile(normalise=False)
+
     def load(self) -> None:
         """Load the verified model and tokeniser without registry access."""
         if self._is_closed:
