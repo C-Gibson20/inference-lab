@@ -1,8 +1,9 @@
 # Retrieval-evaluation runbook
 
 > **Status:** The reproducible runner, local lexical adapter, publication bundle,
-> comparison, and deterministic report are implemented. This checkout contains
-> only synthetic contract fixtures; no real-corpus baseline score is claimed.
+> local dense-only adapter, publication bundle, comparison, and deterministic
+> report are implemented. This checkout contains only synthetic contract
+> fixtures; no real-corpus baseline score is claimed.
 
 This procedure measures one selected split of one immutable evaluation dataset
 against exactly one pinned corpus version. It does not send queries to a
@@ -15,10 +16,11 @@ corpus version implicitly.
    that its `corpus_id` and `corpus_version` identify the intended corpus
    generation.
 2. Prepare a deployment-local zero-argument request factory returning a
-   complete `RetrievalEvaluationRequest`. The shipped
-   `LocalLexicalEvaluationAdapter` uses the case question verbatim in lexical
-   terms mode, pins the selected historical generation, and declares its
-   actual configuration and generation identity.
+   complete `RetrievalEvaluationRequest`. `LocalLexicalEvaluationAdapter` and
+   `LocalDenseEvaluationAdapter` use the case question verbatim, pin the
+   selected historical generation, and declare their configuration and
+   generation identities. The dense adapter also requires the local embedding
+   backend used to build that generation.
 3. Ensure the adapter declares a complete path-free
    `RetrievalSystemIdentity`. Its algorithm, configuration, component
    generations, and model identities are part of reproducibility.
@@ -29,7 +31,10 @@ corpus version implicitly.
    Document Recall@10 is fixed; passage Recall@k is rendered for every
    configured cut-off.
 
-The request factory is the deployment integration boundary. The command does
+The example below constructs the lexical-only baseline. A dense-only request
+uses `LocalDenseEvaluationAdapter` with a locally loaded embedding backend and
+the same pinned corpus version. The request factory is the deployment
+integration boundary. The command does
 not discover files, open storage, choose a corpus version, or construct a
 query from command-line text. It invokes the injected adapter with one shared
 profiling context and keeps timing observations out of quality identity.

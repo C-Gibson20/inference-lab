@@ -87,6 +87,7 @@ from inference_lab.evaluation.coverage import (
     validate_final_benchmark,
 )
 from inference_lab.evaluation.datasets import DatasetManifest
+from inference_lab.evaluation.dense_adapter import LocalDenseEvaluationAdapter
 from inference_lab.evaluation.heldout_gate import (
     HELD_OUT_GATE_POLICY_VERSION,
     HELD_OUT_RUN_CONTRACT_VERSION,
@@ -333,6 +334,7 @@ __all__ = [
     "HeldOutRunContract",
     "LeakageGroup",
     "LoadedDataset",
+    "LocalDenseEvaluationAdapter",
     "LocalLexicalEvaluationAdapter",
     "MetricFraction",
     "NumericExpectation",

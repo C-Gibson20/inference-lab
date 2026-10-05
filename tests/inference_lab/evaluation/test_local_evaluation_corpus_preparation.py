@@ -1,10 +1,16 @@
 """Acceptance for private, version-pinned corpus preparation."""
 
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from runpy import run_path
+from textwrap import dedent
 from typing import cast
+
+import pytest
 
 from inference_lab.backends.runtime import (
     BackendCapability,
@@ -14,11 +20,20 @@ from inference_lab.backends.runtime import (
     EmbeddingRequest,
     EmbeddingResult,
 )
+from inference_lab.evaluation import (
+    LocalDenseEvaluationAdapter,
+    RetrievalEvaluationExecutionError,
+)
 from inference_lab.provenance import CorpusId, CorpusVersionId
-from inference_lab.retrieval import DENSE_COMPONENT_KIND, open_dense_generation
+from inference_lab.retrieval import (
+    DENSE_COMPONENT_KIND,
+    open_dense_generation,
+)
 from inference_lab.storage import open_metadata_repository
 from tests.inference_lab.serving.operator_fixtures import (  # noqa: TID252
     LOCAL_TOKENISER_FIXTURE,
+    PROJECT_ROOT,
+    environment,
     run_example,
     write_config,
 )
@@ -27,6 +42,116 @@ _SCRIPT = (
     Path(__file__).parents[3]
     / "scripts/inference_lab/evaluation/prepare_local_evaluation_corpus.py"
 )
+
+
+def _run_with_test_embedder(tmp_path: Path) -> dict[str, object]:
+    """Run the injected embedder acceptance in a fresh interpreter."""
+    runner = dedent(
+        """
+        import json
+        import os
+        import sys
+        from runpy import run_path
+        from tests.inference_lab.evaluation.test_local_evaluation_corpus_preparation import (
+            _EmbeddingFixture,
+        )
+        from tests.inference_lab.evaluation.fixtures import case_payload
+        from inference_lab.evaluation import (
+            EvaluationCase,
+            LocalDenseEvaluationAdapter,
+        )
+        from inference_lab.profiling import ProfilingContext
+        from inference_lab.provenance import CorpusId, CorpusVersionId
+        from inference_lab.retrieval import (
+            DENSE_COMPONENT_KIND,
+            RetrievalLimit,
+            ResultStatus,
+            open_dense_generation,
+        )
+        from inference_lab.settings import get_settings
+        from inference_lab.storage import open_metadata_repository
+
+        namespace = run_path(sys.argv[1], run_name="prepare_local_corpus_script")
+        backend = _EmbeddingFixture()
+        result = namespace["_run"](
+            embedding_backend_factory=lambda _path: backend,
+        )
+        assert backend.is_closed
+        settings = get_settings()
+        corpus_id = CorpusId.from_str(os.environ["EVALUATION_CORPUS_ID"])
+        corpus_version = CorpusVersionId.from_str(
+            os.environ["EVALUATION_CORPUS_PROPOSED_VERSION"]
+        )
+        repository = open_metadata_repository(
+            settings.storage.metadata_db_path,
+            source_dir=settings.storage.source_dir,
+            apply_migrations=False,
+        )
+        query_backend = _EmbeddingFixture()
+        query_backend.load()
+        try:
+            with repository.open_corpus_snapshot(corpus_id, corpus_version) as snapshot:
+                dense_reference = next(
+                    item
+                    for item in snapshot.manifest.component_generations
+                    if item.component_kind == DENSE_COMPONENT_KIND
+                )
+            with open_dense_generation(
+                settings.storage.index_dir, dense_reference.generation_id
+            ) as generation:
+                source_reference = generation.iter_entries()[0].candidate.sources[0]
+            assert source_reference is not None
+            adapter = LocalDenseEvaluationAdapter(
+                repository,
+                settings.storage.index_dir,
+                corpus_id,
+                corpus_version,
+                query_backend,
+            )
+            case_record = case_payload("case-dense")
+            case_record["question"] = "SARM1 literature passage"
+            case_record["evidence"][0].update(
+                corpus_version=corpus_version.as_str(),
+                document_id=source_reference.document_id.as_str(),
+                document_version_id=source_reference.document_version_id.as_str(),
+                source_span_id=source_reference.source_span_id.as_str(),
+            )
+            response = adapter.execute(
+                EvaluationCase.model_validate(case_record),
+                corpus_id=corpus_id,
+                corpus_version=corpus_version,
+                candidate_depth=RetrievalLimit(5),
+                profiling=ProfilingContext.create(),
+                profiling_identity="case-dense",
+            )
+            assert response.result.status is ResultStatus.COMPLETED
+            assert response.result.hits
+            assert response.system_identity == adapter.system_identity
+        finally:
+            query_backend.close()
+            repository.close()
+        print(json.dumps(result, sort_keys=True))
+        """
+    )
+    child_environment = environment({})
+    child_environment["PYTHONPATH"] = os.pathsep.join(
+        part
+        for part in (
+            str(PROJECT_ROOT),
+            child_environment.get("PYTHONPATH", ""),
+        )
+        if part
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", runner, str(_SCRIPT)],
+        cwd=tmp_path,
+        env=child_environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return cast(dict[str, object], json.loads(completed.stdout.splitlines()[-1]))
 
 
 def test_preparation_ingests_an_explicit_directory_without_leaking_payloads(
@@ -72,6 +197,23 @@ def test_preparation_ingests_an_explicit_directory_without_leaking_payloads(
     assert str(source) not in safe_output
     assert document_text not in safe_output
     assert "paper.txt" not in safe_output
+    repository = open_metadata_repository(
+        tmp_path / "metadata.sqlite3",
+        source_dir=tmp_path / "source-data",
+        apply_migrations=False,
+    )
+    try:
+        with pytest.raises(RetrievalEvaluationExecutionError) as error:
+            LocalDenseEvaluationAdapter(
+                repository,
+                tmp_path / "index",
+                CorpusId.from_str(corpus_id),
+                CorpusVersionId.from_str(version),
+                _EmbeddingFixture(),
+            )
+        assert error.value.category == "invalid_dense_generation"
+    finally:
+        repository.close()
 
 
 class _EmbeddingFixture:
@@ -134,7 +276,6 @@ def test_dense_index_is_published_with_the_same_immutable_corpus_version(
     )
     corpus_id = CorpusId.generate()
     version = CorpusVersionId.generate()
-    backend = _EmbeddingFixture()
     for key, value in {
         "EVALUATION_CORPUS_SOURCE_DIRECTORY": str(source),
         "EVALUATION_CORPUS_TOKENISER_DIRECTORY": str(LOCAL_TOKENISER_FIXTURE),
@@ -143,16 +284,11 @@ def test_dense_index_is_published_with_the_same_immutable_corpus_version(
         "EVALUATION_CORPUS_INCLUDE_DENSE": "true",
     }.items():
         monkeypatch.setenv(key, value)
-    namespace = run_path(str(_SCRIPT), run_name="prepare_local_corpus_script")
-
-    result = cast(Callable[..., dict[str, object]], namespace["_run"])(
-        embedding_backend_factory=lambda _path: backend
-    )
+    result = _run_with_test_embedder(tmp_path)
     assert result["publication_status"] == "committed"
     component_rows = cast(list[dict[str, str]], result["component_generation_ids"])
     components = {row["component_kind"]: row["generation_id"] for row in component_rows}
     assert set(components) == {"chunks", "lexical-index", DENSE_COMPONENT_KIND.as_str()}
-    assert backend.is_closed
 
     settings_repository = open_metadata_repository(
         tmp_path / "metadata.sqlite3",
@@ -171,6 +307,18 @@ def test_dense_index_is_published_with_the_same_immutable_corpus_version(
             assert generation.manifest.corpus_id == corpus_id
             assert generation.manifest.corpus_version == version
             assert generation.manifest.entry_count > 0
+        query_backend = _EmbeddingFixture()
+        adapter = LocalDenseEvaluationAdapter(
+            settings_repository,
+            tmp_path / "index",
+            corpus_id,
+            version,
+            query_backend,
+        )
+        assert (
+            adapter.system_identity.components[0].generation_id
+            == components[DENSE_COMPONENT_KIND.as_str()]
+        )
     finally:
         settings_repository.close()
 
