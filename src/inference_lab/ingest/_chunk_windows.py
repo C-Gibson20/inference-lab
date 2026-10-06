@@ -16,6 +16,7 @@ from inference_lab.ingest.parser import ParsedDocument
 from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.tokenisation import (
     ChunkTokeniser,
+    TokenisedText,
     validate_chunk_tokeniser,
     validate_tokenised_text,
 )
@@ -253,7 +254,7 @@ def build_chunk_drafts(request: ChunkingRequest) -> tuple[ChunkDraft, ...]:
             count_cache[key] = result
         return result
 
-    token_boundaries = _token_boundaries(
+    useful_range, token_boundaries = _token_boundaries(
         boundary_map,
         tokeniser,
         useful_range,
@@ -350,24 +351,61 @@ def _token_boundaries(
     boundary_map: CanonicalSourceBoundaryMap,
     tokeniser: ChunkTokeniser,
     useful_range: tuple[int, int],
-) -> tuple[SourceBoundary, ...]:
-    """Return safe source boundaries that coincide with standalone token edges."""
+) -> tuple[tuple[int, int], tuple[SourceBoundary, ...]]:
+    """Return the covered range expanded to safe source-mapped token edges."""
     useful_start, useful_end = useful_range
-    tokenised = tokeniser.tokenise(boundary_map.canonical_text)
+    tokenised = validate_tokenised_text(
+        boundary_map.canonical_text,
+        tokeniser.tokenise(boundary_map.canonical_text),
+    )
     canonical_offsets = {0, len(boundary_map.canonical_text)}
-    canonical_offsets.update(offset.start for offset in tokenised.offsets)
-    canonical_offsets.update(offset.end for offset in tokenised.offsets)
-    selected = tuple(
+    for start, end, _, _ in _token_offset_groups(tokenised):
+        canonical_offsets.update((start, end))
+    candidates = tuple(
         boundary
         for boundary in boundary_map.boundaries
-        if useful_start <= boundary.source_offset <= useful_end
-        and boundary.canonical_offset in canonical_offsets
+        if boundary.canonical_offset in canonical_offsets
     )
-    if not selected or selected[0].source_offset != useful_start:
+    starts = tuple(
+        boundary for boundary in candidates if boundary.source_offset <= useful_start
+    )
+    ends = tuple(
+        boundary for boundary in candidates if boundary.source_offset >= useful_end
+    )
+    if not starts or not ends:
         raise ChunkWindowError("unsafe_normalisation_boundary")
-    if selected[-1].source_offset != useful_end:
+    expanded_start = starts[-1].source_offset
+    expanded_end = ends[0].source_offset
+    if expanded_start >= expanded_end:
         raise ChunkWindowError("unsafe_normalisation_boundary")
-    return selected
+    selected = tuple(
+        boundary
+        for boundary in candidates
+        if expanded_start <= boundary.source_offset <= expanded_end
+    )
+    return (expanded_start, expanded_end), selected
+
+
+def _token_offset_groups(
+    tokenised: TokenisedText,
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Group token spans that overlap so chunk boundaries cannot split them."""
+    if not tokenised.offsets:
+        return ()
+    groups: list[tuple[int, int, int, int]] = []
+    first = 0
+    group_start = tokenised.offsets[0].start
+    group_end = tokenised.offsets[0].end
+    for index, offset in enumerate(tokenised.offsets[1:], start=1):
+        if offset.start < group_end:
+            group_end = max(group_end, offset.end)
+            continue
+        groups.append((group_start, group_end, first, index - 1))
+        first = index
+        group_start = offset.start
+        group_end = offset.end
+    groups.append((group_start, group_end, first, len(tokenised.offsets) - 1))
+    return tuple(groups)
 
 
 def _count_exact_block(tokeniser: ChunkTokeniser, block: StructuralBlock) -> int:
@@ -442,7 +480,12 @@ def _prefix_candidate_limit(
     if len(tokenised.offsets) <= probe_tokens:
         return useful_end
     canonical_start = boundary_map.canonical_offset_for_source(window_start)
-    canonical_limit = canonical_start + tokenised.offsets[probe_tokens - 1].end
+    probe_group = next(
+        group
+        for group in _token_offset_groups(tokenised)
+        if group[2] <= probe_tokens - 1 <= group[3]
+    )
+    canonical_limit = canonical_start + probe_group[1]
     return max(
         boundary.source_offset
         for boundary in boundary_map.boundaries
@@ -465,7 +508,13 @@ def _suffix_candidate_limit(
     probe_tokens = target_tokens + _STANDALONE_COUNT_CORRECTION_TOKENS
     if len(tokenised.offsets) <= probe_tokens:
         return previous.source_start
-    canonical_limit = previous.canonical_start + tokenised.offsets[-probe_tokens].start
+    probe_index = len(tokenised.offsets) - probe_tokens
+    probe_group = next(
+        group
+        for group in _token_offset_groups(tokenised)
+        if group[2] <= probe_index <= group[3]
+    )
+    canonical_limit = previous.canonical_start + probe_group[0]
     return min(
         boundary.source_offset
         for boundary in boundary_map.boundaries
@@ -487,10 +536,14 @@ def _choose_end(
 ) -> int:
     """Choose the furthest legal structural or token boundary."""
     count_range = count
+    safe_source_offsets = {boundary.source_offset for boundary in safe_boundaries}
 
     structural_candidates: list[tuple[int, StructuralBoundary]] = []
     for boundary in catalogue.boundaries:
-        if not progress_start < boundary.source_offset <= candidate_limit:
+        if (
+            not progress_start < boundary.source_offset <= candidate_limit
+            or boundary.source_offset not in safe_source_offsets
+        ):
             continue
         if _splits_protected(
             window_start,

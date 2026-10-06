@@ -43,6 +43,10 @@ from inference_lab.ingest import (
     serialise_chunk_set,
 )
 from inference_lab.ingest.normalisation import normalise_source_text
+from inference_lab.ingest.tokenisation import (
+    ChunkTokeniserError,
+    validate_tokenised_text,
+)
 from inference_lab.provenance import CorpusId, DocumentId, DocumentVersionId
 
 _FIXTURE_PATH = (
@@ -108,6 +112,40 @@ class ContextualTestTokeniser:
     def count_tokens(self, text: str) -> int:
         """Count the exact standalone token sequence for one text slice."""
         return len(self.tokenise(text).token_ids)
+
+
+class OverlappingOffsetTestTokeniser:
+    """Return ordered token spans with occasional shared source characters."""
+
+    _IDENTITY = TokeniserIdentity(
+        implementation="overlapping-offset-test",
+        contract_version="1.0.0",
+        artefact_identity="acceptance-fixture",
+        artefact_revision="v1",
+        options=(("overlap-period", "40"),),
+    )
+
+    @property
+    def identity(self) -> TokeniserIdentity:
+        """Return the stable acceptance identity."""
+        return self._IDENTITY
+
+    def tokenise(self, text: str) -> TokenisedText:
+        """Overlap every fortieth token with the preceding token by one character."""
+        offsets: list[TokenOffset] = []
+        for index, match in enumerate(re.finditer(r"\S+", text)):
+            start = match.start()
+            if index > 0 and index % 40 == 0:
+                start = offsets[-1].end - 1
+            offsets.append(TokenOffset(start, match.end()))
+        return TokenisedText(
+            token_ids=tuple(range(1, len(offsets) + 1)),
+            offsets=tuple(offsets),
+        )
+
+    def count_tokens(self, text: str) -> int:
+        """Count whitespace-delimited tokens exactly."""
+        return len(tuple(re.finditer(r"\S+", text)))
 
 
 class NonMonotonicTestTokeniser:
@@ -375,6 +413,45 @@ def _assert_invariants(
         for reference in chunk.source_references:
             assert chunk.source_start <= reference.source_start
             assert reference.source_end <= chunk.source_end
+
+
+def test_tokeniser_validation_accepts_ordered_overlapping_offsets() -> None:
+    """Permit overlapping token spans while rejecting reversed token order."""
+    overlapping = TokenisedText(
+        token_ids=(1, 2),
+        offsets=(TokenOffset(0, 3), TokenOffset(2, 4)),
+    )
+    assert validate_tokenised_text("abcd", overlapping) == overlapping
+
+    reversed_offsets = TokenisedText(
+        token_ids=(1, 2),
+        offsets=(TokenOffset(2, 4), TokenOffset(1, 3)),
+    )
+    with pytest.raises(ChunkTokeniserError):
+        validate_tokenised_text("abcd", reversed_offsets)
+
+
+def test_chunk_windows_do_not_split_overlapping_token_spans() -> None:
+    """Keep shared-character spans intact, including at structural boundaries."""
+    source_text = _words(700)
+    tokeniser = OverlappingOffsetTestTokeniser()
+    words = tuple(re.finditer(r"\S+", source_text))
+    structural_boundary = words[319].end()
+    document, chunk_set = _build_set(
+        source_text,
+        (
+            SpanSpec("paragraph", 0, structural_boundary),
+            SpanSpec("paragraph", structural_boundary, len(source_text)),
+        ),
+        tokeniser=tokeniser,
+    )
+
+    _assert_invariants(document, chunk_set, tokeniser)
+    assert len(chunk_set.chunks) > 1
+    offsets = tokeniser.tokenise(source_text).offsets
+    for chunk in chunk_set.chunks:
+        for boundary in (chunk.source_start, chunk.source_end):
+            assert not any(offset.start < boundary < offset.end for offset in offsets)
 
 
 @pytest.mark.parametrize(
