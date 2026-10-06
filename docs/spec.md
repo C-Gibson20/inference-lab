@@ -133,6 +133,13 @@ The baseline uses 256–512-token chunks with approximately 15% overlap, but chu
 boundaries should respect sections, paragraphs, claims, tables, and figure
 captions where possible.
 
+Chunking must remain practical for a small number of long papers or patents as
+well as for many short files. Build token-offset and source-boundary indexes
+once per document, then use indexed ranges to select each bounded window. Do
+not rescan or retokenize the entire remaining suffix for every chunk: that
+makes preparation grow roughly with document length multiplied by chunk count.
+Exact standalone token counts still validate each selected candidate window.
+
 Build these indexes:
 
 - lexical search, such as BM25, for exact terms and identifiers;

@@ -148,6 +148,36 @@ class OverlappingOffsetTestTokeniser:
         return len(tuple(re.finditer(r"\S+", text)))
 
 
+class CountingWhitespaceTokeniser:
+    """Record exact input lengths used by the chunk-window tokeniser."""
+
+    _IDENTITY = TokeniserIdentity(
+        implementation="counting-whitespace-test",
+        contract_version="1.0.0",
+        artefact_identity="acceptance-fixture",
+        artefact_revision="v1",
+        options=(),
+    )
+
+    def __init__(self) -> None:
+        self._delegate = FakeChunkTokeniser()
+        self.tokenised_lengths: list[int] = []
+
+    @property
+    def identity(self) -> TokeniserIdentity:
+        """Return the stable acceptance identity."""
+        return self._IDENTITY
+
+    def tokenise(self, text: str) -> TokenisedText:
+        """Record and delegate one offset-bearing tokenisation."""
+        self.tokenised_lengths.append(len(text))
+        return self._delegate.tokenise(text)
+
+    def count_tokens(self, text: str) -> int:
+        """Count standalone whitespace tokens exactly."""
+        return len(self.tokenise(text).token_ids)
+
+
 class NonMonotonicTestTokeniser:
     """Expose valid standalone counts that repeatedly cross a token limit."""
 
@@ -452,6 +482,50 @@ def test_chunk_windows_do_not_split_overlapping_token_spans() -> None:
     for chunk in chunk_set.chunks:
         for boundary in (chunk.source_start, chunk.source_end):
             assert not any(offset.start < boundary < offset.end for offset in offsets)
+
+
+def test_long_document_chunking_bounds_repeated_tokenisation() -> None:
+    """Reuse document offsets and keep exact token probes bounded per window."""
+    tokeniser = CountingWhitespaceTokeniser()
+    source_text = _words(5000)
+    policy = ChunkingPolicy()
+
+    _, chunk_set = _build_set(
+        source_text,
+        _full_span(source_text),
+        tokeniser=tokeniser,
+        policy=policy,
+    )
+
+    assert len(chunk_set.chunks) > 5
+    assert all(chunk.token_count <= policy.max_tokens for chunk in chunk_set.chunks)
+    whole_document_probe_count = sum(
+        length > len(_words(policy.max_tokens + 300))
+        for length in tokeniser.tokenised_lengths
+    )
+    assert whole_document_probe_count == 3
+    assert len(tokeniser.tokenised_lengths) < 5000
+
+
+def test_empty_parser_spans_do_not_create_empty_chunk_references() -> None:
+    """Ignore zero-width parser blocks when clipping chunk provenance."""
+    source_text = "alpha beta gamma"
+    document, chunk_set = _build_set(
+        source_text,
+        (
+            SpanSpec("paragraph", 0, 5),
+            SpanSpec("other", 5, 5),
+            SpanSpec("paragraph", 5, len(source_text)),
+        ),
+    )
+
+    _assert_invariants(document, chunk_set, FakeChunkTokeniser())
+    assert all(
+        reference.source_start < reference.source_end
+        for chunk in chunk_set.chunks
+        for reference in chunk.source_references
+    )
+    assert all(1 not in chunk.structural_block_ordinals for chunk in chunk_set.chunks)
 
 
 @pytest.mark.parametrize(
