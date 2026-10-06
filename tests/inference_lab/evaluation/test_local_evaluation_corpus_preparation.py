@@ -59,6 +59,8 @@ def _run_with_test_embedder(tmp_path: Path) -> dict[str, object]:
         from inference_lab.evaluation import (
             EvaluationCase,
             LocalDenseEvaluationAdapter,
+            LocalFusedEvaluationAdapter,
+            RetrievalEvaluationExecutionError,
         )
         from inference_lab.profiling import ProfilingContext
         from inference_lab.provenance import CorpusId, CorpusVersionId
@@ -127,6 +129,39 @@ def _run_with_test_embedder(tmp_path: Path) -> dict[str, object]:
             assert response.result.status is ResultStatus.COMPLETED
             assert response.result.hits
             assert response.system_identity == adapter.system_identity
+            fused_adapter = LocalFusedEvaluationAdapter(
+                repository,
+                settings.storage.index_dir,
+                corpus_id,
+                corpus_version,
+                query_backend,
+            )
+            fused_response = fused_adapter.execute(
+                EvaluationCase.model_validate(case_record),
+                corpus_id=corpus_id,
+                corpus_version=corpus_version,
+                candidate_depth=RetrievalLimit(10),
+                profiling=ProfilingContext.create(),
+                profiling_identity="case-fused",
+            )
+            assert fused_response.result.status is ResultStatus.COMPLETED
+            assert fused_response.result.hits
+            assert fused_response.system_identity == fused_adapter.system_identity
+            assert fused_adapter.system_identity.configuration_digest
+            assert fused_adapter.fusion_policy.identity
+            try:
+                fused_adapter.execute(
+                    EvaluationCase.model_validate(case_record),
+                    corpus_id=CorpusId.generate(),
+                    corpus_version=corpus_version,
+                    candidate_depth=RetrievalLimit(10),
+                    profiling=ProfilingContext.create(),
+                    profiling_identity="case-fused-mismatch",
+                )
+            except RetrievalEvaluationExecutionError as error:
+                assert error.category == "adapter_scope_mismatch"
+            else:
+                raise AssertionError("fused adapter accepted a different corpus")
         finally:
             query_backend.close()
             repository.close()
