@@ -74,6 +74,38 @@ class HeldOutChannelRunner(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class HeldOutBaselineRequest:
+    """Complete deployment-local input for one frozen baseline execution."""
+
+    contract: HeldOutRunContract
+    cases: tuple[EvaluationCase, ...]
+    run_channel: HeldOutChannelRunner
+    limitations: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Reject incomplete requests before a channel can execute."""
+        if not isinstance(self.contract, HeldOutRunContract):
+            raise TypeError("contract must be a HeldOutRunContract.")
+        if not isinstance(self.cases, tuple) or any(
+            not isinstance(case, EvaluationCase) for case in self.cases
+        ):
+            raise TypeError("cases must be a tuple of EvaluationCase values.")
+        if not callable(self.run_channel) or not callable(
+            getattr(self.run_channel, "system_identity", None)
+        ):
+            raise TypeError(
+                "run_channel must provide channel execution and identity methods."
+            )
+        if not isinstance(self.limitations, tuple) or any(
+            not isinstance(item, str) or not item.strip() for item in self.limitations
+        ):
+            raise TypeError("limitations must be a tuple of non-empty strings.")
+
+
+@dataclass(frozen=True, slots=True)
 class HeldOutBaselineRunResult:
     """Aggregate report and manifest returned by the operator workflow."""
 

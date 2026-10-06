@@ -124,6 +124,7 @@ from inference_lab.evaluation.heldout_reporting import (
     serialise_held_out_baseline_report,
 )
 from inference_lab.evaluation.heldout_runner import (
+    HeldOutBaselineRequest,
     HeldOutBaselineRunResult,
     HeldOutChannelRun,
     HeldOutChannelRunner,
@@ -135,6 +136,10 @@ from inference_lab.evaluation.lexical_adapter import (
     lexical_relationship_snapshot,
 )
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
+from inference_lab.evaluation.local_heldout import (
+    LocalHeldOutChannelRunner,
+    UnavailableMetadataEvaluationAdapter,
+)
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.reranked_adapter import LocalRerankedEvaluationAdapter
 from inference_lab.evaluation.retrieval_contracts import (
@@ -317,6 +322,7 @@ __all__ = [
     "EvidenceReference",
     "ExpectedAnswer",
     "HeldOutBaselineReport",
+    "HeldOutBaselineRequest",
     "HeldOutBaselineRunResult",
     "HeldOutCaseObservation",
     "HeldOutCategoryCoverage",
@@ -338,6 +344,7 @@ __all__ = [
     "LoadedDataset",
     "LocalDenseEvaluationAdapter",
     "LocalFusedEvaluationAdapter",
+    "LocalHeldOutChannelRunner",
     "LocalLexicalEvaluationAdapter",
     "LocalRerankedEvaluationAdapter",
     "MetricFraction",
@@ -374,6 +381,7 @@ __all__ = [
     "SanitisedSourceReference",
     "SplitName",
     "SplitPolicy",
+    "UnavailableMetadataEvaluationAdapter",
     "adapt_parse_persistence_request",
     "adapt_reconstructed_parse_outcome",
     "adapt_source_inventory",
