@@ -77,3 +77,10 @@ is built before publication and committed together with chunks and the lexical
 generation. The channel request factory, frozen benchmark, and held-out report
 are separate steps. The report gate must remain inconclusive until every
 planned channel has an honest result on the same corpus version.
+
+The command exits successfully only when ingest completed without document
+failures, every discovered document version is present in the published
+snapshot, and all requested index components are published. A committed
+publication can still be incomplete; check `readiness_status` is `ready` before
+using the version for evaluation. An incomplete result exits non-zero and lists
+bounded `readiness_failure_categories` without source paths or document text.

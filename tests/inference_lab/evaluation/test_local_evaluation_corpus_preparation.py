@@ -8,6 +8,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from runpy import run_path
 from textwrap import dedent
+from types import FunctionType
 from typing import cast
 
 import pytest
@@ -27,7 +28,25 @@ from inference_lab.evaluation import (
     LocalDenseEvaluationAdapter,
     RetrievalEvaluationExecutionError,
 )
-from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.ingest import (
+    BaselineDocumentOutcome,
+    BaselineDocumentOutcomeKind,
+    BaselineExecutionStatus,
+    BaselineFailure,
+    BaselineFailureCategory,
+    BaselineFailureScope,
+    BaselineFailureSeverity,
+    BaselineIngestSummary,
+    BaselinePublicationStatus,
+    BaselineStage,
+    BaselineStageDisposition,
+)
+from inference_lab.provenance import (
+    CorpusId,
+    CorpusVersionId,
+    DocumentId,
+    DocumentVersionId,
+)
 from inference_lab.retrieval import (
     DENSE_COMPONENT_KIND,
     open_dense_generation,
@@ -256,6 +275,9 @@ def test_preparation_ingests_an_explicit_directory_without_leaking_payloads(
         "failure_categories": [],
         "proposed_version": version,
         "publication_status": "committed",
+        "published_document_count": 1,
+        "readiness_failure_categories": [],
+        "readiness_status": "ready",
     }
     assert {
         item["component_kind"] for item in output[0]["component_generation_ids"]
@@ -281,6 +303,72 @@ def test_preparation_ingests_an_explicit_directory_without_leaking_payloads(
         assert error.value.category == "invalid_dense_generation"
     finally:
         repository.close()
+
+
+def test_readiness_rejects_published_partial_ingest() -> None:
+    """A committed version with failed documents is not evaluation-ready."""
+    namespace = run_path(str(_SCRIPT), run_name="prepare_local_corpus_script")
+    readiness_check = cast(
+        Callable[..., tuple[str, ...]],
+        namespace["_readiness_failure_categories"],
+    )
+    corpus_id = CorpusId.generate()
+    proposed_version = CorpusVersionId.generate()
+    document_id = DocumentId.generate()
+    document_version_id = DocumentVersionId.generate()
+    failure = BaselineFailure(
+        stage=BaselineStage.CHUNK,
+        category=BaselineFailureCategory.CHUNK_FAILED,
+        scope=BaselineFailureScope.DOCUMENT,
+        severity=BaselineFailureSeverity.RECOVERABLE,
+        retryable=False,
+    )
+    outcome = BaselineDocumentOutcome(
+        ordinal=0,
+        kind=BaselineDocumentOutcomeKind.FAILED,
+        document_id=document_id,
+        document_version_id=document_version_id,
+        parse_disposition=BaselineStageDisposition.COMPLETED,
+        chunk_disposition=BaselineStageDisposition.FAILED,
+        failures=(failure,),
+    )
+    summary = BaselineIngestSummary(
+        corpus_id=corpus_id,
+        proposed_corpus_version=proposed_version,
+        expected_corpus_version=None,
+        execution_status=BaselineExecutionStatus.COMPLETED_WITH_FAILURES,
+        publication_status=BaselinePublicationStatus.COMMITTED,
+        document_outcomes=(outcome,),
+    )
+
+    categories = readiness_check(
+        summary,
+        published_document_versions=set(),
+        published_component_kinds={"chunks", "lexical-index"},
+        include_dense=False,
+    )
+
+    assert categories == (
+        "ingest_incomplete",
+        "document_outcomes_incomplete",
+        "snapshot_membership_incomplete",
+    )
+
+
+def test_main_returns_failure_for_incomplete_corpus(capsys) -> None:
+    """Expose a bounded readiness result and a failing process status."""
+    namespace = run_path(str(_SCRIPT), run_name="prepare_local_corpus_script")
+    main = cast(FunctionType, namespace["main"])
+    main.__globals__["_run"] = lambda: {
+        "readiness_status": "incomplete",
+        "readiness_failure_categories": ["ingest_incomplete"],
+    }
+
+    assert main(None) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "readiness_status": "incomplete",
+        "readiness_failure_categories": ["ingest_incomplete"],
+    }
 
 
 class _EmbeddingFixture:

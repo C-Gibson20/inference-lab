@@ -19,6 +19,7 @@ from inference_lab.backends.runtime import (
 from inference_lab.ingest import (
     CURRENT_CHUNKER_VERSION,
     CURRENT_PARSER_VERSION,
+    BaselineIngestSummary,
     ChunkingPolicy,
     DiscoveryInput,
     DiscoveryInputKind,
@@ -60,6 +61,48 @@ def _include_dense_index() -> bool:
     if value not in {"true", "false"}:
         raise ValueError
     return value == "true"
+
+
+def _readiness_failure_categories(
+    summary: BaselineIngestSummary,
+    *,
+    published_document_versions: set[tuple[str, str]],
+    published_component_kinds: set[str],
+    include_dense: bool,
+) -> tuple[str, ...]:
+    """Require complete document outcomes and matching published state."""
+    failures: list[str] = []
+    if summary.execution_status.value != "completed":
+        failures.append("ingest_incomplete")
+    if summary.publication_status.value not in {"committed", "no_change"}:
+        failures.append("publication_incomplete")
+    outcomes = summary.document_outcomes
+    if not outcomes:
+        failures.append("no_documents_discovered")
+    if summary.failures or any(
+        outcome.kind.value in {"ambiguous", "conflicting", "failed", "unsupported"}
+        or outcome.failures
+        or outcome.document_id is None
+        or outcome.document_version_id is None
+        for outcome in outcomes
+    ):
+        failures.append("document_outcomes_incomplete")
+    expected_document_versions = {
+        (outcome.document_id.as_str(), outcome.document_version_id.as_str())
+        for outcome in outcomes
+        if outcome.document_id is not None and outcome.document_version_id is not None
+    }
+    if (
+        not expected_document_versions
+        or expected_document_versions != published_document_versions
+    ):
+        failures.append("snapshot_membership_incomplete")
+    required_components = {"chunks", "lexical-index"}
+    if include_dense:
+        required_components.add("dense-index")
+    if not required_components.issubset(published_component_kinds):
+        failures.append("required_components_missing")
+    return tuple(failures)
 
 
 def _run(
@@ -158,10 +201,26 @@ def _run(
         )
         summary = facade.ingest(request)
         component_generation_ids: list[dict[str, str]] = []
+        published_document_versions: set[tuple[str, str]] = set()
+        published_component_kinds: set[str] = set()
+        published_document_count = 0
         if summary.publication_status.value in {"committed", "no_change"}:
             with repository.open_corpus_snapshot(
                 corpus_id, proposed_version
             ) as snapshot:
+                memberships = snapshot.manifest.document_memberships
+                published_document_count = len(memberships)
+                published_document_versions = {
+                    (
+                        membership.document_id.as_str(),
+                        membership.document_version_id.as_str(),
+                    )
+                    for membership in memberships
+                }
+                published_component_kinds = {
+                    reference.component_kind.as_str()
+                    for reference in snapshot.manifest.component_generations
+                }
                 component_generation_ids = [
                     {
                         "component_kind": reference.component_kind.as_str(),
@@ -169,12 +228,23 @@ def _run(
                     }
                     for reference in snapshot.manifest.component_generations
                 ]
+        readiness_failure_categories = _readiness_failure_categories(
+            summary,
+            published_document_versions=published_document_versions,
+            published_component_kinds=published_component_kinds,
+            include_dense=dense_embedder is not None,
+        )
         return {
             "corpus_id": corpus_id.as_str(),
             "proposed_version": proposed_version.as_str(),
             "execution_status": summary.execution_status.value,
             "publication_status": summary.publication_status.value,
             "document_outcome_count": len(summary.document_outcomes),
+            "published_document_count": published_document_count,
+            "readiness_status": (
+                "ready" if not readiness_failure_categories else "incomplete"
+            ),
+            "readiness_failure_categories": list(readiness_failure_categories),
             "failure_categories": sorted(
                 {failure.category.value for failure in summary.failures}
                 | {
@@ -199,7 +269,7 @@ def main(_argv: Sequence[str] | None = None) -> int:
         print("local evaluation corpus preparation failed", file=sys.stderr)
         return 1
     print(json.dumps(result, sort_keys=True))
-    return 0
+    return 0 if result["readiness_status"] == "ready" else 1
 
 
 if __name__ == "__main__":
