@@ -136,6 +136,7 @@ from inference_lab.evaluation.lexical_adapter import (
 )
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
 from inference_lab.evaluation.privacy import validate_local_path
+from inference_lab.evaluation.reranked_adapter import LocalRerankedEvaluationAdapter
 from inference_lab.evaluation.retrieval_contracts import (
     AGGREGATION_POLICY_VERSION,
     DOCUMENT_RECALL_POLICY_VERSION,
@@ -338,6 +339,7 @@ __all__ = [
     "LocalDenseEvaluationAdapter",
     "LocalFusedEvaluationAdapter",
     "LocalLexicalEvaluationAdapter",
+    "LocalRerankedEvaluationAdapter",
     "MetricFraction",
     "NumericExpectation",
     "ParserCapabilityProfile",

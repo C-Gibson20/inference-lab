@@ -19,6 +19,9 @@ from inference_lab.backends.runtime import (
     EmbeddingProfile,
     EmbeddingRequest,
     EmbeddingResult,
+    RerankRequest,
+    RerankResult,
+    ScoredCandidate,
 )
 from inference_lab.evaluation import (
     LocalDenseEvaluationAdapter,
@@ -54,12 +57,14 @@ def _run_with_test_embedder(tmp_path: Path) -> dict[str, object]:
         from runpy import run_path
         from tests.inference_lab.evaluation.test_local_evaluation_corpus_preparation import (
             _EmbeddingFixture,
+            _RerankerFixture,
         )
         from tests.inference_lab.evaluation.fixtures import case_payload
         from inference_lab.evaluation import (
             EvaluationCase,
             LocalDenseEvaluationAdapter,
             LocalFusedEvaluationAdapter,
+            LocalRerankedEvaluationAdapter,
             RetrievalEvaluationExecutionError,
         )
         from inference_lab.profiling import ProfilingContext
@@ -69,6 +74,10 @@ def _run_with_test_embedder(tmp_path: Path) -> dict[str, object]:
             RetrievalLimit,
             ResultStatus,
             open_dense_generation,
+        )
+        from inference_lab.retrieval.reranking import (
+            EvidenceCount,
+            RerankCandidateLimit,
         )
         from inference_lab.settings import get_settings
         from inference_lab.storage import open_metadata_repository
@@ -149,6 +158,29 @@ def _run_with_test_embedder(tmp_path: Path) -> dict[str, object]:
             assert fused_response.system_identity == fused_adapter.system_identity
             assert fused_adapter.system_identity.configuration_digest
             assert fused_adapter.fusion_policy.identity
+            reranker = _RerankerFixture()
+            reranker.load()
+            reranked_adapter = LocalRerankedEvaluationAdapter(
+                fused_adapter,
+                reranker,
+                evidence_count=EvidenceCount(5),
+                candidate_limit=RerankCandidateLimit(10),
+            )
+            reranked_response = reranked_adapter.execute(
+                EvaluationCase.model_validate(case_record),
+                corpus_id=corpus_id,
+                corpus_version=corpus_version,
+                candidate_depth=RetrievalLimit(10),
+                profiling=ProfilingContext.create(),
+                profiling_identity="case-reranked",
+            )
+            assert reranked_response.result.status is ResultStatus.COMPLETED
+            assert len(reranked_response.result.hits) <= EvidenceCount(5).value
+            assert reranked_response.system_identity == (
+                reranked_adapter.system_identity
+            )
+            assert reranked_adapter.reranking_identity.evidence_count == 5
+            reranker.close()
             try:
                 fused_adapter.execute(
                     EvaluationCase.model_validate(case_record),
@@ -293,6 +325,45 @@ class _EmbeddingFixture:
             tuple((1.0, 0.0, 0.0) for _ in request.input_texts),
             self.metadata,
             self.output_profile,
+        )
+
+
+class _RerankerFixture:
+    """Deterministic reranker for the corpus-backed adapter acceptance."""
+
+    metadata = BackendMetadata(
+        backend_name="evaluation-test-reranker",
+        model_name="evaluation-test-reranker-model",
+        model_revision="r1",
+        supported_operations=(BackendOperation.RERANK,),
+        capabilities=(BackendCapability.BATCHING,),
+        preprocessing_profile_version="1.0.0",
+    )
+
+    def __init__(self) -> None:
+        self.is_ready = False
+        self.is_closed = False
+
+    def load(self) -> None:
+        self.is_ready = True
+
+    def close(self) -> None:
+        self.is_ready = False
+        self.is_closed = True
+
+    def rerank(self, request: RerankRequest) -> RerankResult:
+        selected = request.candidates[: request.top_k]
+        total = len(selected)
+        return RerankResult(
+            tuple(
+                ScoredCandidate(
+                    candidate_id=candidate.candidate_id,
+                    score=float(total - rank + 1),
+                    rank=rank,
+                )
+                for rank, candidate in enumerate(selected, start=1)
+            ),
+            self.metadata,
         )
 
 

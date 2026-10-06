@@ -17,11 +17,13 @@ corpus version implicitly.
    generation.
 2. Prepare a deployment-local zero-argument request factory returning a
    complete `RetrievalEvaluationRequest`. `LocalLexicalEvaluationAdapter`,
-   `LocalDenseEvaluationAdapter`, and `LocalFusedEvaluationAdapter` use the
-   case question verbatim, pin the selected historical generation or
-   generations, and declare their configuration and generation identities.
-   Dense and fused adapters also require the local embedding backend used to
-   build that generation.
+   `LocalDenseEvaluationAdapter`, `LocalFusedEvaluationAdapter`, and
+   `LocalRerankedEvaluationAdapter` use the case question verbatim, pin the
+   selected historical generation or generations, and declare their
+   configuration and generation identities. Dense and fused adapters also
+   require the local embedding backend used to build that generation. The
+   reranked adapter composes the fused adapter with a locally loaded reranker
+   and records its policy identity.
 3. Ensure the adapter declares a complete path-free
    `RetrievalSystemIdentity`. Its algorithm, configuration, component
    generations, and model identities are part of reproducibility.
@@ -34,12 +36,14 @@ corpus version implicitly.
 
 The example below constructs the lexical-only baseline. A dense-only request
 uses `LocalDenseEvaluationAdapter`; a fused pre-rerank request uses
-`LocalFusedEvaluationAdapter` with a locally loaded embedding backend. Both
-use the same pinned corpus version as the lexical adapter. The request factory
-is the deployment integration boundary. The command does
-not discover files, open storage, choose a corpus version, or construct a
-query from command-line text. It invokes the injected adapter with one shared
-profiling context and keeps timing observations out of quality identity.
+`LocalFusedEvaluationAdapter` with a locally loaded embedding backend. A final
+evidence request uses `LocalRerankedEvaluationAdapter` with the same fused
+adapter and a locally loaded reranker. All paths use the same pinned corpus
+version. The request factory is the deployment integration boundary. The
+command does not discover files, open storage, choose a corpus version, or
+construct a query from command-line text. It invokes the injected adapter with
+one shared profiling context and keeps timing observations out of quality
+identity.
 
 For a real 30–50-question dataset, save the following file outside the
 repository as `/deployment/private/retrieval_request.py`. Run it from the
