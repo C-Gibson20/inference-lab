@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import ctypes
-import errno
 import hashlib
-import os
 import shutil
-import sys
 from pathlib import Path
 from tempfile import mkdtemp
 
@@ -36,12 +32,9 @@ from inference_lab.evaluation.retrieval_report_contracts import (
 from inference_lab.evaluation.serialisation import (
     _fsync_directory,
     _fsync_tree_directories,
+    _rename_directory_without_replacement,
     atomic_write,
 )
-
-_AT_FDCWD = -100
-_RENAME_NOREPLACE = 1
-_RENAME_EXCL = 0x00000004
 
 
 class RetrievalEvaluationPublicationError(OSError):
@@ -251,70 +244,6 @@ def _verify_staged_files(
         content = (staging_path / artefact.name).read_bytes()
         if len(content) != artefact.size_bytes or _sha256(content) != artefact.checksum:
             raise OSError("staged retrieval evaluation checksum failed validation")
-
-
-def _rename_directory_without_replacement(source: Path, destination: Path) -> None:
-    """Atomically rename a directory only when the destination is absent."""
-    if sys.platform == "darwin":
-        _call_libc_rename(
-            "renamex_np",
-            os.fsencode(source),
-            os.fsencode(destination),
-            _RENAME_EXCL,
-            destination=destination,
-        )
-        return
-    if sys.platform.startswith("linux"):
-        _call_libc_rename(
-            "renameat2",
-            _AT_FDCWD,
-            os.fsencode(source),
-            _AT_FDCWD,
-            os.fsencode(destination),
-            _RENAME_NOREPLACE,
-            destination=destination,
-        )
-        return
-    if os.name == "nt":
-        os.rename(source, destination)
-        return
-    raise OSError(
-        errno.ENOTSUP,
-        "atomic no-replace directory rename is unsupported",
-        destination,
-    )
-
-
-def _call_libc_rename(
-    function_name: str,
-    *arguments: bytes | int,
-    destination: Path,
-) -> None:
-    """Call a platform rename primitive and preserve its errno semantics."""
-    libc = ctypes.CDLL(None, use_errno=True)
-    try:
-        rename = getattr(libc, function_name)
-    except AttributeError:
-        raise OSError(
-            errno.ENOTSUP,
-            "atomic no-replace directory rename is unsupported",
-            destination,
-        ) from None
-    if function_name == "renamex_np":
-        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
-    else:
-        rename.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-    rename.restype = ctypes.c_int
-    if rename(*arguments) == 0:
-        return
-    error_number = ctypes.get_errno()
-    raise OSError(error_number, os.strerror(error_number), destination)
 
 
 def _cleanup_staging(staging_path: Path | None) -> None:

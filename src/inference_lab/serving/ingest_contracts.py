@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from inference_lab.backends.runtime import EmbeddingBackend
 from inference_lab.ingest import (
     CURRENT_CHUNKER_VERSION,
     CURRENT_PARSER_REGISTRY,
@@ -33,7 +34,11 @@ from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
 )
-from inference_lab.retrieval import LexicalIndexConfiguration
+from inference_lab.retrieval import (
+    DENSE_COMPONENT_KIND,
+    DenseIndexCompatibility,
+    LexicalIndexConfiguration,
+)
 from inference_lab.storage import (
     BaselineCheckpointReader,
     BaselineCheckpointWriter,
@@ -100,6 +105,10 @@ class ServingIngestRequest:
         default_factory=LexicalIndexConfiguration,
         repr=False,
     )
+    dense_embedder: EmbeddingBackend | None = field(default=None, repr=False)
+    dense_compatibility: DenseIndexCompatibility | None = field(
+        default=None, repr=False
+    )
     parser_registry: ParserRegistry = field(
         default=CURRENT_PARSER_REGISTRY,
         repr=False,
@@ -149,6 +158,24 @@ class ServingIngestRequest:
             raise TypeError("configuration_identity must be a ConfigurationIdentity.")
         if not isinstance(self.chunking_policy, ChunkingPolicy):
             raise TypeError("chunking_policy must be a ChunkingPolicy.")
+        if (self.dense_embedder is None) != (self.dense_compatibility is None):
+            raise ValueError(
+                "dense_embedder and dense_compatibility must be supplied together."
+            )
+        if self.dense_embedder is not None and not isinstance(
+            self.dense_embedder, EmbeddingBackend
+        ):
+            raise TypeError("dense_embedder must implement EmbeddingBackend.")
+        if self.dense_compatibility is not None and not isinstance(
+            self.dense_compatibility, DenseIndexCompatibility
+        ):
+            raise TypeError("dense_compatibility must be a DenseIndexCompatibility.")
+        if (
+            self.dense_embedder is not None
+            and self.dense_compatibility is not None
+            and self.dense_compatibility.model_metadata != self.dense_embedder.metadata
+        ):
+            raise ValueError("dense_compatibility must match dense_embedder metadata.")
         if not isinstance(self.tokeniser, ChunkTokeniser):
             raise TypeError("tokeniser must implement ChunkTokeniser.")
         if not isinstance(self.parser_version, type(CURRENT_PARSER_VERSION)):
@@ -165,6 +192,7 @@ class ServingIngestRequest:
         )
         if self.configuration_identity != expected_configuration_identity:
             raise ValueError("configuration_identity does not match chunk inputs.")
+
         if not isinstance(self.excluded_paths, tuple):
             raise TypeError("excluded_paths must be a tuple.")
         if any(not isinstance(path, Path) for path in self.excluded_paths):
@@ -198,3 +226,10 @@ class ServingIngestRequest:
         ):
             if not callable(getattr(self.identity_allocator, name, None)):
                 raise TypeError(f"identity_allocator must provide {name}().")
+
+    @property
+    def required_component_kinds(self) -> tuple[ComponentKind, ...]:
+        """Return the immutable component set this ingest must publish."""
+        if self.dense_embedder is None:
+            return _BASELINE_REQUIRED_COMPONENT_KINDS
+        return (*_BASELINE_REQUIRED_COMPONENT_KINDS, DENSE_COMPONENT_KIND)

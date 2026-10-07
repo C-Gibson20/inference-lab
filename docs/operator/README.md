@@ -23,6 +23,8 @@ operational logs remain local in deployment.
   deterministic writing, held-out governance, and privacy boundaries.
 - [Retrieval-evaluation runbook](retrieval-evaluation.md): run and compare
   reproducible single-corpus retrieval measurements and review safe reports.
+- [Evaluation corpus preparation](local-evaluation-corpus-preparation.md): ingest
+  one approved local source set as an immutable evaluation corpus version.
 - [Corpus-audit runbook](corpus-audit.md): pin one corpus version, run the
   aggregate audit locally, review limitations, and compare reruns.
 - [Backup and restore](backup-restore.md): recover persistent corpus state.

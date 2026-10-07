@@ -3,6 +3,7 @@
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
+from operator import attrgetter
 from typing import Final, Literal, cast
 
 from inference_lab._validation import is_strict_integer
@@ -16,6 +17,7 @@ from inference_lab.ingest.parser import ParsedDocument
 from inference_lab.ingest.sources import StructuralBlock
 from inference_lab.ingest.tokenisation import (
     ChunkTokeniser,
+    TokenisedText,
     validate_chunk_tokeniser,
     validate_tokenised_text,
 )
@@ -34,6 +36,7 @@ _STRUCTURAL_PRIORITY: Final[dict[str, int]] = {
 _PROTECTED_KINDS: Final[frozenset[str]] = frozenset({"table", "figure_caption"})
 _MAX_COUNT_CACHE_ENTRIES: Final[int] = 4096
 _STANDALONE_COUNT_CORRECTION_TOKENS: Final[int] = 32
+_EXHAUSTIVE_OVERLAP_TOKEN_LIMIT: Final[int] = 64
 
 
 class ChunkWindowError(ValueError):
@@ -146,6 +149,15 @@ class ChunkDraft:
     structural_block_ordinals: tuple[int, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _TokenBoundaryIndex:
+    """Index safe source boundaries by their whole-document token positions."""
+
+    boundaries: tuple[SourceBoundary, ...]
+    source_offsets: tuple[int, ...]
+    token_positions: tuple[int, ...]
+
+
 def build_structural_catalogue(
     document: ParsedDocument,
     boundary_map: CanonicalSourceBoundaryMap,
@@ -253,11 +265,12 @@ def build_chunk_drafts(request: ChunkingRequest) -> tuple[ChunkDraft, ...]:
             count_cache[key] = result
         return result
 
-    token_boundaries = _token_boundaries(
+    useful_range, token_boundary_index = _token_boundaries(
         boundary_map,
         tokeniser,
         useful_range,
     )
+    token_boundaries = token_boundary_index.boundaries
     useful_start, useful_end = useful_range
     drafts: list[ChunkDraft] = []
     current_start = useful_start
@@ -287,6 +300,7 @@ def build_chunk_drafts(request: ChunkingRequest) -> tuple[ChunkDraft, ...]:
                 useful_end=useful_end,
                 boundary_map=boundary_map,
                 tokeniser=tokeniser,
+                token_boundary_index=token_boundary_index,
                 max_tokens=request.policy.max_tokens,
             ),
         )
@@ -316,6 +330,7 @@ def build_chunk_drafts(request: ChunkingRequest) -> tuple[ChunkDraft, ...]:
                 catalogue=catalogue,
                 boundary_map=boundary_map,
                 tokeniser=tokeniser,
+                tail_token_count=draft.token_count,
                 count=count,
                 numerator=request.policy.overlap_numerator,
                 denominator=request.policy.overlap_denominator,
@@ -350,24 +365,73 @@ def _token_boundaries(
     boundary_map: CanonicalSourceBoundaryMap,
     tokeniser: ChunkTokeniser,
     useful_range: tuple[int, int],
-) -> tuple[SourceBoundary, ...]:
-    """Return safe source boundaries that coincide with standalone token edges."""
+) -> tuple[tuple[int, int], _TokenBoundaryIndex]:
+    """Return the covered range expanded to safe source-mapped token edges."""
     useful_start, useful_end = useful_range
-    tokenised = tokeniser.tokenise(boundary_map.canonical_text)
-    canonical_offsets = {0, len(boundary_map.canonical_text)}
-    canonical_offsets.update(offset.start for offset in tokenised.offsets)
-    canonical_offsets.update(offset.end for offset in tokenised.offsets)
-    selected = tuple(
+    tokenised = validate_tokenised_text(
+        boundary_map.canonical_text,
+        tokeniser.tokenise(boundary_map.canonical_text),
+    )
+    token_positions_by_offset = {
+        0: 0,
+        len(boundary_map.canonical_text): len(tokenised.offsets),
+    }
+    for start, end, first, last in _token_offset_groups(tokenised):
+        token_positions_by_offset[start] = first
+        token_positions_by_offset[end] = last + 1
+    candidates = tuple(
         boundary
         for boundary in boundary_map.boundaries
-        if useful_start <= boundary.source_offset <= useful_end
-        and boundary.canonical_offset in canonical_offsets
+        if boundary.canonical_offset in token_positions_by_offset
     )
-    if not selected or selected[0].source_offset != useful_start:
+    starts = tuple(
+        boundary for boundary in candidates if boundary.source_offset <= useful_start
+    )
+    ends = tuple(
+        boundary for boundary in candidates if boundary.source_offset >= useful_end
+    )
+    if not starts or not ends:
         raise ChunkWindowError("unsafe_normalisation_boundary")
-    if selected[-1].source_offset != useful_end:
+    expanded_start = starts[-1].source_offset
+    expanded_end = ends[0].source_offset
+    if expanded_start >= expanded_end:
         raise ChunkWindowError("unsafe_normalisation_boundary")
-    return selected
+    selected = tuple(
+        boundary
+        for boundary in candidates
+        if expanded_start <= boundary.source_offset <= expanded_end
+    )
+    index = _TokenBoundaryIndex(
+        boundaries=selected,
+        source_offsets=tuple(boundary.source_offset for boundary in selected),
+        token_positions=tuple(
+            token_positions_by_offset[boundary.canonical_offset]
+            for boundary in selected
+        ),
+    )
+    return (expanded_start, expanded_end), index
+
+
+def _token_offset_groups(
+    tokenised: TokenisedText,
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Group token spans that overlap so chunk boundaries cannot split them."""
+    if not tokenised.offsets:
+        return ()
+    groups: list[tuple[int, int, int, int]] = []
+    first = 0
+    group_start = tokenised.offsets[0].start
+    group_end = tokenised.offsets[0].end
+    for index, offset in enumerate(tokenised.offsets[1:], start=1):
+        if offset.start < group_end:
+            group_end = max(group_end, offset.end)
+            continue
+        groups.append((group_start, group_end, first, index - 1))
+        first = index
+        group_start = offset.start
+        group_end = offset.end
+    groups.append((group_start, group_end, first, len(tokenised.offsets) - 1))
+    return tuple(groups)
 
 
 def _count_exact_block(tokeniser: ChunkTokeniser, block: StructuralBlock) -> int:
@@ -433,21 +497,42 @@ def _prefix_candidate_limit(
     useful_end: int,
     boundary_map: CanonicalSourceBoundaryMap,
     tokeniser: ChunkTokeniser,
+    token_boundary_index: _TokenBoundaryIndex,
     max_tokens: int,
 ) -> int:
-    """Bound exact prefix probes using native offsets plus correction headroom."""
-    text = boundary_map.canonical_text_for_source_range(window_start, useful_end)
-    tokenised = validate_tokenised_text(text, tokeniser.tokenise(text))
+    """Bound exact prefix probes using indexed offsets and correction headroom."""
+    start_index = bisect_left(token_boundary_index.source_offsets, window_start)
+    if start_index == len(token_boundary_index.boundaries):
+        raise ChunkWindowError("unsafe_normalisation_boundary")
     probe_tokens = max_tokens + _STANDALONE_COUNT_CORRECTION_TOKENS
-    if len(tokenised.offsets) <= probe_tokens:
-        return useful_end
-    canonical_start = boundary_map.canonical_offset_for_source(window_start)
-    canonical_limit = canonical_start + tokenised.offsets[probe_tokens - 1].end
-    return max(
-        boundary.source_offset
-        for boundary in boundary_map.boundaries
-        if boundary.canonical_offset <= canonical_limit
+    target_position = token_boundary_index.token_positions[start_index] + probe_tokens
+    limit_index = bisect_left(
+        token_boundary_index.token_positions,
+        target_position,
+        lo=start_index,
     )
+    if limit_index == len(token_boundary_index.boundaries):
+        return useful_end
+    candidate_limit = min(token_boundary_index.source_offsets[limit_index], useful_end)
+    text = boundary_map.canonical_text_for_source_range(window_start, candidate_limit)
+    tokenised = validate_tokenised_text(text, tokeniser.tokenise(text))
+    if len(tokenised.offsets) <= probe_tokens:
+        return candidate_limit
+    canonical_start = boundary_map.canonical_offset_for_source(window_start)
+    probe_group = next(
+        group
+        for group in _token_offset_groups(tokenised)
+        if group[2] <= max_tokens - 1 <= group[3]
+    )
+    canonical_limit = canonical_start + probe_group[1]
+    boundary_index = bisect_right(
+        boundary_map.boundaries,
+        canonical_limit,
+        key=attrgetter("canonical_offset"),
+    )
+    if boundary_index == 0:
+        raise ChunkWindowError("unsafe_normalisation_boundary")
+    return boundary_map.boundaries[boundary_index - 1].source_offset
 
 
 def _suffix_candidate_limit(
@@ -457,20 +542,32 @@ def _suffix_candidate_limit(
     tokeniser: ChunkTokeniser,
     target_tokens: int,
 ) -> int:
-    """Bound exact suffix probes using native offsets plus correction headroom."""
+    """Bound suffix probes by native offsets and the window-size policy."""
     tokenised = validate_tokenised_text(
         previous.text,
         tokeniser.tokenise(previous.text),
     )
-    probe_tokens = target_tokens + _STANDALONE_COUNT_CORRECTION_TOKENS
+    exhaustive = previous.token_count <= _EXHAUSTIVE_OVERLAP_TOKEN_LIMIT
+    probe_tokens = target_tokens
+    if exhaustive:
+        probe_tokens += _STANDALONE_COUNT_CORRECTION_TOKENS
     if len(tokenised.offsets) <= probe_tokens:
         return previous.source_start
-    canonical_limit = previous.canonical_start + tokenised.offsets[-probe_tokens].start
-    return min(
-        boundary.source_offset
-        for boundary in boundary_map.boundaries
-        if boundary.canonical_offset >= canonical_limit
+    probe_index = len(tokenised.offsets) - probe_tokens
+    probe_group = next(
+        group
+        for group in _token_offset_groups(tokenised)
+        if group[2] <= probe_index <= group[3]
     )
+    canonical_limit = previous.canonical_start + probe_group[0]
+    boundary_index = bisect_left(
+        boundary_map.boundaries,
+        canonical_limit,
+        key=attrgetter("canonical_offset"),
+    )
+    if boundary_index == len(boundary_map.boundaries):
+        raise ChunkWindowError("unsafe_normalisation_boundary")
+    return boundary_map.boundaries[boundary_index].source_offset
 
 
 def _choose_end(
@@ -487,10 +584,19 @@ def _choose_end(
 ) -> int:
     """Choose the furthest legal structural or token boundary."""
     count_range = count
-
     structural_candidates: list[tuple[int, StructuralBoundary]] = []
     for boundary in catalogue.boundaries:
-        if not progress_start < boundary.source_offset <= candidate_limit:
+        safe_boundary_index = bisect_left(
+            safe_boundaries,
+            boundary.source_offset,
+            key=attrgetter("source_offset"),
+        )
+        if (
+            not progress_start < boundary.source_offset <= candidate_limit
+            or safe_boundary_index == len(safe_boundaries)
+            or safe_boundaries[safe_boundary_index].source_offset
+            != boundary.source_offset
+        ):
             continue
         if _splits_protected(
             window_start,
@@ -510,11 +616,35 @@ def _choose_end(
         )
         return min(tied, key=StructuralBoundary.key).source_offset
 
+    exact_candidate_index = (
+        bisect_right(
+            safe_boundaries,
+            candidate_limit,
+            key=attrgetter("source_offset"),
+        )
+        - 1
+    )
+    if exact_candidate_index >= 0:
+        exact_candidate = safe_boundaries[exact_candidate_index].source_offset
+        if progress_start < exact_candidate <= candidate_limit:
+            exact_count = count_range(window_start, exact_candidate)
+            if exact_count <= max_tokens:
+                return exact_candidate
+
+    fallback_start = bisect_right(
+        safe_boundaries,
+        progress_start,
+        key=attrgetter("source_offset"),
+    )
+    fallback_end = bisect_right(
+        safe_boundaries,
+        candidate_limit,
+        key=attrgetter("source_offset"),
+    )
     fallback = tuple(
         boundary.source_offset
-        for boundary in safe_boundaries
-        if progress_start < boundary.source_offset <= candidate_limit
-        and not _splits_protected(
+        for boundary in safe_boundaries[fallback_start:fallback_end]
+        if not _splits_protected(
             window_start,
             boundary.source_offset,
             catalogue.protected,
@@ -551,13 +681,28 @@ def _overlap_for(
         tokeniser=tokeniser,
         target_tokens=target,
     )
+    candidate_start = bisect_left(
+        safe_boundaries,
+        candidate_limit,
+        key=attrgetter("source_offset"),
+    )
+    candidate_end = bisect_right(
+        safe_boundaries,
+        previous.source_end,
+        key=attrgetter("source_offset"),
+    )
     candidates = tuple(
         boundary.source_offset
-        for boundary in safe_boundaries
-        if candidate_limit <= boundary.source_offset <= previous.source_end
-        and not _starts_inside_protected(boundary.source_offset, catalogue.protected)
+        for boundary in safe_boundaries[candidate_start:candidate_end]
+        if not _starts_inside_protected(boundary.source_offset, catalogue.protected)
     )
     if not candidates:
+        return (previous.source_end, previous.source_end, target, 0)
+    if previous.token_count > _EXHAUSTIVE_OVERLAP_TOKEN_LIMIT:
+        for source_start in candidates:
+            overlap_count = count_range(source_start, previous.source_end)
+            if overlap_count <= target:
+                return (source_start, previous.source_end, target, overlap_count)
         return (previous.source_end, previous.source_end, target, 0)
     best: tuple[int, int] | None = None
     for source_start in candidates:
@@ -603,11 +748,10 @@ def _make_draft(
             minimum_exception = "protected_structure_neighbour"
         elif source_end == useful_end:
             minimum_exception = "final_remainder_minimum_exception"
-    intersecting = tuple(
-        (ordinal_index, block.kind)
-        for ordinal_index, block in enumerate(catalogue.blocks)
-        if block.source_span.start_offset < source_end
-        and block.source_span.end_offset > source_start
+    intersecting = _intersecting_blocks(
+        catalogue.blocks,
+        source_start=source_start,
+        source_end=source_end,
     )
     split_reason = (
         "oversize_structure"
@@ -644,6 +788,7 @@ def _rebalance_tail(
     catalogue: StructuralCatalogue,
     boundary_map: CanonicalSourceBoundaryMap,
     tokeniser: ChunkTokeniser,
+    tail_token_count: int,
     count: CountFn,
     numerator: int,
     denominator: int,
@@ -655,22 +800,19 @@ def _rebalance_tail(
         return None
     previous = drafts[-1]
     count_range = count
-    candidates: list[tuple[int, int]] = []
-    for boundary in safe_boundaries:
-        candidate_end = boundary.source_offset
+
+    def try_candidate(candidate_end: int) -> tuple[ChunkDraft, ChunkDraft] | None:
         if not previous.source_start < candidate_end < useful_end:
-            continue
+            return None
         if _splits_protected(
             previous.source_start,
             candidate_end,
             catalogue.protected,
         ):
-            continue
+            return None
         previous_count = count_range(previous.source_start, candidate_end)
         if not min_tokens <= previous_count <= max_tokens:
-            continue
-        candidates.append((abs(previous_count - previous.token_count), candidate_end))
-    for _, candidate_end in sorted(candidates):
+            return None
         candidate_previous = _replace_draft_range(
             previous,
             source_end=candidate_end,
@@ -691,7 +833,7 @@ def _rebalance_tail(
         )
         current_count = count_range(overlap[0], useful_end)
         if not min_tokens <= current_count <= max_tokens:
-            continue
+            return None
         current = _make_draft(
             ordinal=candidate_previous.ordinal + 1,
             source_start=overlap[0],
@@ -705,6 +847,70 @@ def _rebalance_tail(
             min_tokens=min_tokens,
         )
         return candidate_previous, current
+
+    required_tail_growth = max(0, min_tokens - tail_token_count)
+    target_previous_count = previous.token_count - required_tail_growth
+    if min_tokens <= target_previous_count < previous.token_count:
+        tokenised_previous = validate_tokenised_text(
+            previous.text,
+            tokeniser.tokenise(previous.text),
+        )
+        target_group = next(
+            group
+            for group in _token_offset_groups(tokenised_previous)
+            if group[2] <= target_previous_count - 1 <= group[3]
+        )
+        canonical_limit = previous.canonical_start + target_group[1]
+        boundary_index = (
+            bisect_right(
+                boundary_map.boundaries,
+                canonical_limit,
+                key=attrgetter("canonical_offset"),
+            )
+            - 1
+        )
+        if boundary_index >= 0:
+            source_limit = boundary_map.boundaries[boundary_index].source_offset
+            safe_index = (
+                bisect_right(
+                    safe_boundaries,
+                    source_limit,
+                    key=attrgetter("source_offset"),
+                )
+                - 1
+            )
+            if safe_index >= 0:
+                candidate = try_candidate(safe_boundaries[safe_index].source_offset)
+                if candidate is not None:
+                    return candidate
+
+    candidates: list[tuple[int, int]] = []
+    candidate_start = bisect_right(
+        safe_boundaries,
+        previous.source_start,
+        key=attrgetter("source_offset"),
+    )
+    candidate_stop = bisect_left(
+        safe_boundaries,
+        useful_end,
+        key=attrgetter("source_offset"),
+    )
+    for boundary in safe_boundaries[candidate_start:candidate_stop]:
+        candidate_end = boundary.source_offset
+        if _splits_protected(
+            previous.source_start,
+            candidate_end,
+            catalogue.protected,
+        ):
+            continue
+        previous_count = count_range(previous.source_start, candidate_end)
+        if not min_tokens <= previous_count <= max_tokens:
+            continue
+        candidates.append((abs(previous_count - previous.token_count), candidate_end))
+    for _, candidate_end in sorted(candidates):
+        candidate = try_candidate(candidate_end)
+        if candidate is not None:
+            return candidate
     return None
 
 
@@ -722,11 +928,10 @@ def _replace_draft_range(
     canonical_end = boundary_map.canonical_offset_for_source(source_end)
     text = boundary_map.canonical_text_for_source_range(draft.source_start, source_end)
     token_count = count_range(draft.source_start, source_end)
-    intersecting = tuple(
-        (index, block.kind)
-        for index, block in enumerate(catalogue.blocks)
-        if block.source_span.start_offset < source_end
-        and block.source_span.end_offset > draft.source_start
+    intersecting = _intersecting_blocks(
+        catalogue.blocks,
+        source_start=draft.source_start,
+        source_end=source_end,
     )
     split_reason = (
         "oversize_structure"
@@ -765,6 +970,22 @@ def _starts_inside_protected(
         structure.source_start < source_start < structure.source_end
         for structure in protected
     )
+
+
+def _intersecting_blocks(
+    blocks: tuple[StructuralBlock, ...],
+    *,
+    source_start: int,
+    source_end: int,
+) -> tuple[tuple[int, str], ...]:
+    """Return only parser blocks with a positive-width clipped source range."""
+    intersections: list[tuple[int, str]] = []
+    for ordinal, block in enumerate(blocks):
+        clipped_start = max(source_start, block.source_span.start_offset)
+        clipped_end = min(source_end, block.source_span.end_offset)
+        if clipped_start < clipped_end:
+            intersections.append((ordinal, block.kind))
+    return tuple(intersections)
 
 
 def _splits_protected(

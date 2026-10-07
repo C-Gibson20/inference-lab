@@ -107,11 +107,10 @@ outside the repository and subject to the deployment's source-data policy.
 
 ## Reviewed conclusion for this checkout
 
-No real-corpus conclusion is recorded in this repository because no local
-corpus snapshot or deployment metadata database is present here. The committed
-tests establish deterministic mixed-capability, reconciliation, privacy, and
-two-corpus isolation behaviour. A deployment operator must execute the
-procedure above and review the resulting aggregate report before EVAL-02 can
-be declared complete for a real corpus. No later implementation phase blocks
-that run: it can be performed now wherever the pinned corpus, its metadata, and
-the deployment-local request factory are available.
+No real-corpus audit conclusion is recorded in this repository. The pinned
+retrieval corpus and deployment metadata database remain local and are not used
+by the committed synthetic audit tests. Those tests establish deterministic
+mixed-capability, reconciliation, privacy, and two-corpus isolation behaviour.
+A deployment operator must execute the procedure above and review its
+aggregate report before the corpus audit can be considered complete for a real
+corpus. The retrieval baseline does not replace this separate audit.

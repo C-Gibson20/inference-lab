@@ -87,6 +87,8 @@ from inference_lab.evaluation.coverage import (
     validate_final_benchmark,
 )
 from inference_lab.evaluation.datasets import DatasetManifest
+from inference_lab.evaluation.dense_adapter import LocalDenseEvaluationAdapter
+from inference_lab.evaluation.fused_adapter import LocalFusedEvaluationAdapter
 from inference_lab.evaluation.heldout_gate import (
     HELD_OUT_GATE_POLICY_VERSION,
     HELD_OUT_RUN_CONTRACT_VERSION,
@@ -99,6 +101,17 @@ from inference_lab.evaluation.heldout_gate import (
     HeldOutRunContract,
     evaluate_held_out_gate,
 )
+from inference_lab.evaluation.heldout_publication import (
+    HeldOutPublicationError,
+    HeldOutPublicationMismatchError,
+    HeldOutReportArtifact,
+    HeldOutReportManifest,
+    compare_heldout_baseline_publication,
+    deserialise_heldout_report_manifest,
+    publish_heldout_baseline_report,
+    serialise_heldout_report_manifest,
+    verify_heldout_baseline_publication,
+)
 from inference_lab.evaluation.heldout_reporting import (
     HeldOutBaselineReport,
     HeldOutCaseObservation,
@@ -110,12 +123,25 @@ from inference_lab.evaluation.heldout_reporting import (
     render_held_out_baseline_report,
     serialise_held_out_baseline_report,
 )
+from inference_lab.evaluation.heldout_runner import (
+    HeldOutBaselineRequest,
+    HeldOutBaselineRunResult,
+    HeldOutChannelRun,
+    HeldOutChannelRunner,
+    run_and_publish_held_out_baseline,
+    run_held_out_baseline,
+)
 from inference_lab.evaluation.lexical_adapter import (
     LocalLexicalEvaluationAdapter,
     lexical_relationship_snapshot,
 )
 from inference_lab.evaluation.loader import LoadedDataset, load_dataset
+from inference_lab.evaluation.local_heldout import (
+    LocalHeldOutChannelRunner,
+    UnavailableMetadataEvaluationAdapter,
+)
 from inference_lab.evaluation.privacy import validate_local_path
+from inference_lab.evaluation.reranked_adapter import LocalRerankedEvaluationAdapter
 from inference_lab.evaluation.retrieval_contracts import (
     AGGREGATION_POLICY_VERSION,
     DOCUMENT_RECALL_POLICY_VERSION,
@@ -296,19 +322,31 @@ __all__ = [
     "EvidenceReference",
     "ExpectedAnswer",
     "HeldOutBaselineReport",
+    "HeldOutBaselineRequest",
+    "HeldOutBaselineRunResult",
     "HeldOutCaseObservation",
     "HeldOutCategoryCoverage",
     "HeldOutChannel",
     "HeldOutChannelCaseResult",
     "HeldOutChannelIdentity",
+    "HeldOutChannelRun",
+    "HeldOutChannelRunner",
     "HeldOutChannelSummary",
     "HeldOutGateOutcome",
     "HeldOutGatePolicy",
     "HeldOutPairedComparison",
+    "HeldOutPublicationError",
+    "HeldOutPublicationMismatchError",
+    "HeldOutReportArtifact",
+    "HeldOutReportManifest",
     "HeldOutRunContract",
     "LeakageGroup",
     "LoadedDataset",
+    "LocalDenseEvaluationAdapter",
+    "LocalFusedEvaluationAdapter",
+    "LocalHeldOutChannelRunner",
     "LocalLexicalEvaluationAdapter",
+    "LocalRerankedEvaluationAdapter",
     "MetricFraction",
     "NumericExpectation",
     "ParserCapabilityProfile",
@@ -343,6 +381,7 @@ __all__ = [
     "SanitisedSourceReference",
     "SplitName",
     "SplitPolicy",
+    "UnavailableMetadataEvaluationAdapter",
     "adapt_parse_persistence_request",
     "adapt_reconstructed_parse_outcome",
     "adapt_source_inventory",
@@ -354,10 +393,12 @@ __all__ = [
     "build_held_out_baseline_report",
     "build_leakage_groups",
     "build_relevance_targets",
+    "compare_heldout_baseline_publication",
     "compare_retrieval_evaluations",
     "complete_parse_observations",
     "deserialise_audit_report",
     "deserialise_case_results",
+    "deserialise_heldout_report_manifest",
     "deserialise_retrieval_manifest",
     "deserialise_retrieval_report",
     "deserialise_run_artifact",
@@ -370,6 +411,7 @@ __all__ = [
     "log_held_out_baseline_report",
     "parser_capability_profile",
     "publish_audit_report",
+    "publish_heldout_baseline_report",
     "publish_retrieval_evaluation",
     "render_audit_report",
     "render_held_out_baseline_report",
@@ -377,7 +419,9 @@ __all__ = [
     "report_content_digest",
     "retrieval_result_digest",
     "run_and_publish_audit",
+    "run_and_publish_held_out_baseline",
     "run_corpus_audit",
+    "run_held_out_baseline",
     "run_retrieval_evaluation",
     "score_retrieval_case",
     "serialise_audit_report",
@@ -385,6 +429,7 @@ __all__ = [
     "serialise_case_results",
     "serialise_cases",
     "serialise_held_out_baseline_report",
+    "serialise_heldout_report_manifest",
     "serialise_manifest",
     "serialise_retrieval_manifest",
     "serialise_retrieval_report",
@@ -394,6 +439,7 @@ __all__ = [
     "validate_local_path",
     "validate_no_leakage",
     "validate_parsed_document_capabilities",
+    "verify_heldout_baseline_publication",
     "write_dataset",
     "write_json_schema",
 ]
