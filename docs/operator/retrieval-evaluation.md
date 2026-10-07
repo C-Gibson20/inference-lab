@@ -3,8 +3,10 @@
 > **Status:** The reproducible single-channel runner and frozen baseline runner,
 > local channel composition, lexical, dense, fused, and reranked adapters,
 > publication bundles, comparison, and deterministic reports are implemented.
-> This checkout contains only synthetic contract fixtures; no real-corpus
-> baseline score is claimed.
+> A 30-case held-out run has been repeated byte-equivalently against the pinned
+> 18-document corpus. Its aggregate results and inconclusive gate decision are
+> recorded in the [local retrieval baseline](../../benchmarks/evaluation/retrieval-baseline.md);
+> detailed bundles remain in the ignored local evaluation directory.
 
 This procedure measures one selected split of one immutable evaluation dataset
 against exactly one pinned corpus version. It does not send queries to a
@@ -28,9 +30,10 @@ corpus version implicitly.
 3. Ensure the adapter declares a complete path-free
    `RetrievalSystemIdentity`. Its algorithm, configuration, component
    generations, and model identities are part of reproducibility.
-4. Choose a new output directory outside the repository. Do not commit the
-   request factory, corpus paths, output directories, or private benchmark
-   data.
+4. Choose a new output directory outside version control. Keep deployment
+   configuration, corpus paths, output directories, and private benchmark
+   data out of version control. A checked-in local request factory may load
+   ignored private assets, but must not embed their contents.
 5. Confirm the selected passage cut-offs and candidate depth in the request.
    Document Recall@10 is fixed; passage Recall@k is rendered for every
    configured cut-off.
@@ -197,6 +200,27 @@ unknown inventory entries, malformed JSON, checksum mismatches, mixed
 identities, and inconsistent result digests fail closed with the fixed generic
 runner error.
 
+For the pinned local corpus, the checked-in held-out request factory reads the
+ignored bound benchmark and setup record. Run it from the local evaluation
+directory so the application's `config.toml` is loaded:
+
+```sh
+cd .dev/local-evaluation
+PYTHONPATH=../../src ../../.venv/bin/python ../../scripts/inference_lab/evaluation/run-held-out-baseline.py \
+  --request-factory ../../scripts/inference_lab/evaluation/local_heldout_request.py:make_heldout_request \
+  --output runs/held-out-baseline-next
+```
+
+To verify an exact rerun, use a fresh output name and compare it with the
+previous bundle:
+
+```sh
+PYTHONPATH=../../src ../../.venv/bin/python ../../scripts/inference_lab/evaluation/run-held-out-baseline.py \
+  --request-factory ../../scripts/inference_lab/evaluation/local_heldout_request.py:make_heldout_request \
+  --compare-to runs/held-out-baseline-v1.3.0-20261007 \
+  --output runs/held-out-baseline-repeat-next
+```
+
 ## Frozen channel baseline
 
 The frozen baseline command runs the predeclared channel identities and case
@@ -284,6 +308,8 @@ per-case diagnostics.
   bundles when investigating a mismatch, subject to the deployment's data
   handling policy.
 
-No real-corpus conclusion is recorded in this repository. The committed
-acceptance tests use synthetic fixtures to establish reproducibility,
-corruption rejection, atomic publication, and privacy boundaries.
+The committed baseline summary contains aggregate metrics, run identities,
+repeatability evidence, and the gate limitation. The detailed report bundles
+and per-case diagnostics remain local. Acceptance tests use synthetic fixtures
+to establish reproducibility, corruption rejection, atomic publication, and
+privacy boundaries.
