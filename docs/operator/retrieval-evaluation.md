@@ -1,8 +1,12 @@
 # Retrieval-evaluation runbook
 
-> **Status:** The reproducible runner, local lexical adapter, publication bundle,
-> comparison, and deterministic report are implemented. This checkout contains
-> only synthetic contract fixtures; no real-corpus baseline score is claimed.
+> **Status:** The reproducible single-channel runner and frozen baseline runner,
+> local channel composition, lexical, dense, fused, and reranked adapters,
+> publication bundles, comparison, and deterministic reports are implemented.
+> A 30-case held-out run has been repeated byte-equivalently against the pinned
+> 18-document corpus. Its aggregate results and inconclusive gate decision are
+> recorded in the [local retrieval baseline](../../benchmarks/evaluation/retrieval-baseline.md);
+> detailed bundles remain in the ignored local evaluation directory.
 
 This procedure measures one selected split of one immutable evaluation dataset
 against exactly one pinned corpus version. It does not send queries to a
@@ -15,24 +19,35 @@ corpus version implicitly.
    that its `corpus_id` and `corpus_version` identify the intended corpus
    generation.
 2. Prepare a deployment-local zero-argument request factory returning a
-   complete `RetrievalEvaluationRequest`. The shipped
-   `LocalLexicalEvaluationAdapter` uses the case question verbatim in lexical
-   terms mode, pins the selected historical generation, and declares its
-   actual configuration and generation identity.
+   complete `RetrievalEvaluationRequest`. `LocalLexicalEvaluationAdapter`,
+   `LocalDenseEvaluationAdapter`, `LocalFusedEvaluationAdapter`, and
+   `LocalRerankedEvaluationAdapter` use the case question verbatim, pin the
+   selected historical generation or generations, and declare their
+   configuration and generation identities. Dense and fused adapters also
+   require the local embedding backend used to build that generation. The
+   reranked adapter composes the fused adapter with a locally loaded reranker
+   and records its policy identity.
 3. Ensure the adapter declares a complete path-free
    `RetrievalSystemIdentity`. Its algorithm, configuration, component
    generations, and model identities are part of reproducibility.
-4. Choose a new output directory outside the repository. Do not commit the
-   request factory, corpus paths, output directories, or private benchmark
-   data.
+4. Choose a new output directory outside version control. Keep deployment
+   configuration, corpus paths, output directories, and private benchmark
+   data out of version control. A checked-in local request factory may load
+   ignored private assets, but must not embed their contents.
 5. Confirm the selected passage cut-offs and candidate depth in the request.
    Document Recall@10 is fixed; passage Recall@k is rendered for every
    configured cut-off.
 
-The request factory is the deployment integration boundary. The command does
-not discover files, open storage, choose a corpus version, or construct a
-query from command-line text. It invokes the injected adapter with one shared
-profiling context and keeps timing observations out of quality identity.
+The example below constructs the lexical-only baseline. A dense-only request
+uses `LocalDenseEvaluationAdapter`; a fused pre-rerank request uses
+`LocalFusedEvaluationAdapter` with a locally loaded embedding backend. A final
+evidence request uses `LocalRerankedEvaluationAdapter` with the same fused
+adapter and a locally loaded reranker. All paths use the same pinned corpus
+version. The request factory is the deployment integration boundary. The
+command does not discover files, open storage, choose a corpus version, or
+construct a query from command-line text. It invokes the injected adapter with
+one shared profiling context and keeps timing observations out of quality
+identity.
 
 For a real 30–50-question dataset, save the following file outside the
 repository as `/deployment/private/retrieval_request.py`. Run it from the
@@ -185,6 +200,100 @@ unknown inventory entries, malformed JSON, checksum mismatches, mixed
 identities, and inconsistent result digests fail closed with the fixed generic
 runner error.
 
+For the pinned local corpus, the checked-in held-out request factory reads the
+ignored bound benchmark and setup record. Run it from the local evaluation
+directory so the application's `config.toml` is loaded:
+
+```sh
+cd .dev/local-evaluation
+PYTHONPATH=../../src ../../.venv/bin/python ../../scripts/inference_lab/evaluation/run-held-out-baseline.py \
+  --request-factory ../../scripts/inference_lab/evaluation/local_heldout_request.py:make_heldout_request \
+  --output runs/held-out-baseline-next
+```
+
+To verify an exact rerun, use a fresh output name and compare it with the
+previous bundle:
+
+```sh
+PYTHONPATH=../../src ../../.venv/bin/python ../../scripts/inference_lab/evaluation/run-held-out-baseline.py \
+  --request-factory ../../scripts/inference_lab/evaluation/local_heldout_request.py:make_heldout_request \
+  --compare-to runs/held-out-baseline-v1.3.0-20261007 \
+  --output runs/held-out-baseline-repeat-next
+```
+
+## Frozen channel baseline
+
+The frozen baseline command runs the predeclared channel identities and case
+set through the aggregate report workflow. Its deployment-local factory returns
+a `HeldOutBaselineRequest` containing the `HeldOutRunContract`, cases in the
+contract's frozen order, and a `LocalHeldOutChannelRunner`. Construct the runner
+with one held-out `RetrievalEvaluationRequest` and a mapping from each
+`HeldOutChannel` to its adapter. It checks the dataset, case order, corpus
+version, policy, relationship snapshot, and every adapter identity before
+executing queries. Each path then runs through the same retrieval evaluation
+contract. Use the local lexical, dense, fused, and reranked adapters for their
+respective paths, sharing the pinned fused adapter with the reranker. Where no
+metadata-only path exists, use `UnavailableMetadataEvaluationAdapter`; do not
+invent a ranking method to make the comparison appear complete. The report
+retains that outcome and the gate remains inconclusive when required coverage
+is missing.
+
+Build the runner after freezing the policy and channel identities. The identity
+recorded for the metadata path must come from the unavailable adapter when that
+path is not implemented:
+
+```python
+from inference_lab.evaluation import (
+    HeldOutBaselineRequest,
+    HeldOutChannel,
+    LocalHeldOutChannelRunner,
+    UnavailableMetadataEvaluationAdapter,
+)
+
+metadata_adapter = UnavailableMetadataEvaluationAdapter()
+channel_runner = LocalHeldOutChannelRunner(
+    contract,
+    held_out_request,
+    {
+        HeldOutChannel.LEXICAL_ONLY: lexical_adapter,
+        HeldOutChannel.DENSE_ONLY: dense_adapter,
+        HeldOutChannel.METADATA: metadata_adapter,
+        HeldOutChannel.FUSED_PRE_RERANK: fused_adapter,
+        HeldOutChannel.FUSED_RERANKED: reranked_adapter,
+    },
+)
+return HeldOutBaselineRequest(
+    contract=contract,
+    cases=held_out_cases,
+    run_channel=channel_runner,
+    limitations=("metadata-only retrieval is unavailable",),
+)
+```
+
+Run from the deployment directory with a new output destination:
+
+```sh
+uv run --project "$CHECKOUT" python "$CHECKOUT/scripts/inference_lab/evaluation/run-held-out-baseline.py" \
+  --request-factory /deployment/private/held_out_request.py:build_request \
+  --output /deployment/private/retrieval-output/baseline-001
+```
+
+Repeat the exact request against the first aggregate report:
+
+```sh
+uv run --project "$CHECKOUT" python "$CHECKOUT/scripts/inference_lab/evaluation/run-held-out-baseline.py" \
+  --request-factory /deployment/private/held_out_request.py:build_request \
+  --compare-to /deployment/private/retrieval-output/baseline-001 \
+  --output /deployment/private/retrieval-output/baseline-002
+```
+
+The command validates the comparison bundle and absent output destination
+before executing any held-out query. It publishes only after an equivalent
+repeat check, and emits bounded JSON containing run/report identities, gate
+outcome, and comparison status. The aggregate bundle contains `report.json`,
+`report.md`, and `manifest.json`; it excludes questions, answers, evidence, and
+per-case diagnostics.
+
 ## Failure handling and privacy
 
 - Treat a non-zero command status as an unsuccessful evaluation or comparison;
@@ -199,6 +308,8 @@ runner error.
   bundles when investigating a mismatch, subject to the deployment's data
   handling policy.
 
-No real-corpus conclusion is recorded in this repository. The committed
-acceptance tests use synthetic fixtures to establish reproducibility,
-corruption rejection, atomic publication, and privacy boundaries.
+The committed baseline summary contains aggregate metrics, run identities,
+repeatability evidence, and the gate limitation. The detailed report bundles
+and per-case diagnostics remain local. Acceptance tests use synthetic fixtures
+to establish reproducibility, corruption rejection, atomic publication, and
+privacy boundaries.

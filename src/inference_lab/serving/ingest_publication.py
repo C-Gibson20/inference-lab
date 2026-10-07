@@ -25,12 +25,14 @@ from inference_lab.ingest.baseline_membership import (
 from inference_lab.ingest.baseline_profiling import BaselineProfilingContext
 from inference_lab.ingest.baseline_publication import (
     BaselinePublicationOutcome,
-    publish_baseline_lexical_generations,
+    publish_baseline_generations,
 )
 from inference_lab.ingest.discovery_results import DiscoveryResult
 from inference_lab.provenance import CorpusDocumentVersionMembership
 from inference_lab.retrieval import (
+    DenseGenerationParticipant,
     LexicalGenerationParticipant,
+    build_dense_generation_for_corpus_update,
     build_lexical_generation_for_corpus_update,
     derive_lexical_generation_id,
     open_lexical_generation,
@@ -42,7 +44,6 @@ from inference_lab.retrieval.lexical import (
     LEXICAL_IMPLEMENTATION,
 )
 from inference_lab.serving.ingest_contracts import (
-    _BASELINE_REQUIRED_COMPONENT_KINDS,
     ServingIngestError,
     ServingIngestFailureCategory,
     ServingIngestRequest,
@@ -91,7 +92,7 @@ class ServingPublicationCoordinator:
             proposed_corpus_version=request.proposed_corpus_version,
             expected_corpus_version=request.expected_corpus_version,
             configuration_identity=request.configuration_identity,
-            required_component_kinds=_BASELINE_REQUIRED_COMPONENT_KINDS,
+            required_component_kinds=request.required_component_kinds,
             discovery_summary_identity=discovery_identity,
             state=BaselineManifestState.PREPARING,
         )
@@ -126,7 +127,7 @@ class ServingPublicationCoordinator:
                 request.corpus_id,
                 request.proposed_corpus_version,
                 expected_corpus_version=request.expected_corpus_version,
-                required_component_kinds=_BASELINE_REQUIRED_COMPONENT_KINDS,
+                required_component_kinds=request.required_component_kinds,
             )
             outcome = transaction.begin_baseline_manifest(
                 baseline_manifest_to_record(expected)
@@ -197,7 +198,7 @@ class ServingPublicationCoordinator:
                 request.corpus_id,
                 request.proposed_corpus_version,
                 expected_corpus_version=request.expected_corpus_version,
-                required_component_kinds=_BASELINE_REQUIRED_COMPONENT_KINDS,
+                required_component_kinds=request.required_component_kinds,
             )
             current = transaction.list_corpus_update_document_memberships(
                 request.corpus_id,
@@ -271,7 +272,9 @@ class ServingPublicationCoordinator:
         parent_stage_id: str | None = None,
     ) -> BaselinePublicationStatus:
         """Build immutable lexical data, then atomically publish both components."""
-        if self._is_unchanged_parent(request, chunk_manifest):
+        if request.dense_embedder is None and self._is_unchanged_parent(
+            request, chunk_manifest
+        ):
             # No generation is required: the committed parent already represents
             # this exact membership, chunk selection, and lexical configuration.
             with self._repository.transaction() as transaction:
@@ -279,7 +282,7 @@ class ServingPublicationCoordinator:
                     request.corpus_id,
                     request.proposed_corpus_version,
                     expected_corpus_version=request.expected_corpus_version,
-                    required_component_kinds=_BASELINE_REQUIRED_COMPONENT_KINDS,
+                    required_component_kinds=request.required_component_kinds,
                 ).update
                 active = transaction.get_active_corpus_version(request.corpus_id)
                 staged = transaction.list_corpus_update_document_memberships(
@@ -317,19 +320,40 @@ class ServingPublicationCoordinator:
             build,
             chunk_manifest,
         )
+        participants = [chunk_manifest, participant]
+        if (
+            request.dense_embedder is not None
+            and request.dense_compatibility is not None
+        ):
+            dense_build = build_dense_generation_for_corpus_update(
+                self._settings.storage.index_dir,
+                chunk_manifest,
+                request.dense_embedder,
+                self._repository,
+                expected_corpus_version=request.expected_corpus_version,
+                metadata_db_path=self._settings.storage.metadata_db_path,
+                source_dir=self._settings.storage.source_dir,
+                compatibility=request.dense_compatibility,
+            )
+            participants.append(
+                DenseGenerationParticipant(
+                    self._settings.storage.index_dir,
+                    dense_build,
+                    chunk_manifest,
+                )
+            )
         result: BaselinePublicationOutcome | None = None
         with self._repository.transaction() as transaction:
             transaction.begin_corpus_update(
                 request.corpus_id,
                 request.proposed_corpus_version,
                 expected_corpus_version=request.expected_corpus_version,
-                required_component_kinds=_BASELINE_REQUIRED_COMPONENT_KINDS,
+                required_component_kinds=request.required_component_kinds,
             )
-            result = publish_baseline_lexical_generations(
+            result = publish_baseline_generations(
                 transaction,
                 self._repository,
-                chunk_manifest,
-                participant,
+                tuple(participants),
                 profiling=profiling,
                 parent_stage_id=parent_stage_id,
             )
@@ -361,7 +385,7 @@ class ServingPublicationCoordinator:
             if snapshot.version.corpus_version != request.expected_corpus_version:
                 raise StorageConcurrencyError()
             parent = snapshot.manifest
-            if not parent.has_required_components(_BASELINE_REQUIRED_COMPONENT_KINDS):
+            if not parent.has_required_components(request.required_component_kinds):
                 return False
             proposed_lexical = ComponentGenerationReference(
                 component_kind=ComponentKind(LEXICAL_COMPONENT_KIND),
@@ -441,7 +465,7 @@ class ServingPublicationCoordinator:
                 for component in snapshot.manifest.component_generations
             )
             if tuple(sorted(kinds, key=ComponentKind.as_str)) != tuple(
-                sorted(_BASELINE_REQUIRED_COMPONENT_KINDS, key=ComponentKind.as_str)
+                sorted(request.required_component_kinds, key=ComponentKind.as_str)
             ):
                 raise ServingIngestError(
                     ServingIngestFailureCategory.INCOMPATIBLE_RESUME

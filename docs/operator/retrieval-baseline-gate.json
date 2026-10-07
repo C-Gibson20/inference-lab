@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0.0",
+  "dataset": {
+    "id": "sarm1-retrieval-question-set",
+    "version": "1.3.0",
+    "schema_version": "3.0.0",
+    "case_file_checksum": "sha256:e94930c567a2544c85efb7282faed45bc97430f363a256ff6cebb6f49bac4eb6"
+  },
+  "corpus": {
+    "id": "53473b29-e7af-453a-8793-54e0d126613a",
+    "version": "4ac51a57-3f6d-4bdd-9a66-1425d0170b39"
+  },
+  "split": "held_out",
+  "primary_gate": {
+    "channel": "fused_pre_rerank",
+    "metric": "document_recall",
+    "cutoff": 10,
+    "minimum": {"numerator": 9, "denominator": 10},
+    "denominator": "all relevant document targets, including failed and empty outcomes"
+  },
+  "maximum_failure_rate": {"numerator": 1, "denominator": 20},
+  "maximum_degraded_rate": {"numerator": 1, "denominator": 20},
+  "category_coverage": {
+    "minimum_cases": 3,
+    "minimum_leakage_groups": 3
+  },
+  "uncertainty": {
+    "method": "leakage-cluster-bootstrap",
+    "confidence_level_percent": 95,
+    "replicates": 10000
+  },
+  "rationale": "The product acceptance floor is at least nine of ten relevant document targets retrieved within the first ten fused candidates. The development split retrieved all 20 of 20 relevant document targets with no failed or degraded fused cases, so this floor is attainable on the pinned sample without using held-out outcomes. A 5% maximum for failures and degraded cases allows at most one in twenty while retaining those cases in the denominator. Requiring three cases from three leakage groups prevents singleton categories from being treated as conclusive; sparse categories must leave the overall gate inconclusive."
+}

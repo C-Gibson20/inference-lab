@@ -80,11 +80,11 @@ def validate_tokenised_text(text: str, tokenised: TokenisedText) -> TokenisedTex
         raise TypeError("text must be a string")
     if not isinstance(tokenised, TokenisedText):
         raise ChunkTokeniserError("invalid_output")
-    previous_end = 0
+    previous_start = -1
     for offset in tokenised.offsets:
-        if offset.end > len(text) or offset.start < previous_end:
+        if offset.end > len(text) or offset.start < previous_start:
             raise ChunkTokeniserError("invalid_offsets")
-        previous_end = offset.end
+        previous_start = offset.start
     return tokenised
 
 
