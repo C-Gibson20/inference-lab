@@ -206,6 +206,11 @@ Results are fused, reranked, deduplicated, and reduced to a small evidence set.
 The final answer should cite original passages wherever possible, rather than
 citing only a generated summary.
 
+Candidate provenance checks must stay bounded as result limits and corpus size
+grow. A snapshot may reuse validated source-location indexes for its immutable
+version, but it must not repeatedly deserialize a complete parsed document for
+each ranked chunk or carry cached source data across snapshot lifetimes.
+
 ### Answering
 
 Answers must:

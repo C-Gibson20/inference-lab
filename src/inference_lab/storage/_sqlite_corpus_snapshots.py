@@ -1,7 +1,10 @@
 """Dedicated SQLite snapshot lifecycle for version-pinned corpus readers."""
 
+from __future__ import annotations
+
 import sqlite3
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -74,7 +77,6 @@ from inference_lab.storage._sqlite_source_artefacts import (
     read_source_bytes,
     stream_source_bytes,
 )
-from inference_lab.storage._sqlite_source_spans import resolve_source_span
 from inference_lab.storage._sqlite_versions import (
     find_document_versions_by_content_hash as read_versions_by_content_hash,
 )
@@ -98,13 +100,41 @@ from inference_lab.storage.errors import (
 )
 from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
-from inference_lab.storage.source_locations import ResolvedSourceSpan
+from inference_lab.storage.source_locations import (
+    PageLayoutDescriptor,
+    ResolvedSourceSpan,
+    SourceLocation,
+)
 from inference_lab.storage.source_records import SourceArtefact
 from inference_lab.storage.versioning import (
     CorpusUpdateState,
     CorpusVersion,
     CorpusVersionManifest,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceSpanIndex:
+    """Compact source-location lookup built from one validated representation."""
+
+    document_id: DocumentId
+    locations: dict[SourceSpanId, SourceLocation]
+    layouts: dict[int, PageLayoutDescriptor]
+
+    @classmethod
+    def from_representation(
+        cls, representation: ParsedRepresentation
+    ) -> _SourceSpanIndex:
+        locations = {
+            location.source_span_id: location
+            for location in representation.source_locations
+        }
+        layouts = {layout.page_number: layout for layout in representation.page_layouts}
+        if len(locations) != len(representation.source_locations):
+            raise CorruptStorageError()
+        if len(layouts) != len(representation.page_layouts):
+            raise CorruptStorageError()
+        return cls(representation.document_id, locations, layouts)
 
 
 def _database_details(connection: sqlite3.Connection) -> tuple[Path, int]:
@@ -182,6 +212,7 @@ class SQLiteCorpusSnapshot:
         self._visible_membership_keys: frozenset[
             tuple[DocumentId, DocumentVersionId]
         ] = frozenset()
+        self._source_span_indexes: dict[RecordId, _SourceSpanIndex] = {}
         self._closed = False
 
     @property
@@ -366,15 +397,49 @@ class SQLiteCorpusSnapshot:
         connection = self._reader_connection()
         if not isinstance(source_span_id, SourceSpanId):
             raise TypeError("source_span_id must be a SourceSpanId.")
-        if not self._record_source_is_visible(
-            connection,
-            "SELECT document_version_id FROM source_spans WHERE source_span_id = ?",
-            source_span_id.as_str(),
-        ):
+        try:
+            row = connection.execute(
+                """SELECT span.parsed_record_id
+                FROM source_spans AS span
+                JOIN parsed_representations AS representation
+                    ON representation.record_id = span.parsed_record_id
+                    AND representation.document_version_id = span.document_version_id
+                JOIN corpus_document_version_memberships AS membership
+                    ON membership.document_version_id = representation.document_version_id
+                    AND membership.document_id = representation.document_id
+                WHERE membership.corpus_id = ? AND span.source_span_id = ?""",
+                (self.corpus_id.as_str(), source_span_id.as_str()),
+            ).fetchone()
+        except sqlite3.Error as error:
+            raise translate_sqlite_error(
+                error,
+                default=RepositoryUnavailableError,
+            ) from None
+        if row is None:
             return None
-        resolved = resolve_source_span(connection, self.corpus_id, source_span_id)
-        if resolved is None:
+        try:
+            record_id = RecordId.from_str(row["parsed_record_id"])
+        except (TypeError, ValueError, KeyError, IndexError):
             raise CorruptStorageError()
+        index = self._source_span_indexes.get(record_id)
+        if index is None:
+            representation = self.get_parsed_representation(record_id)
+            if representation is None:
+                raise CorruptStorageError()
+            index = _SourceSpanIndex.from_representation(representation)
+            self._source_span_indexes[record_id] = index
+        location = index.locations.get(source_span_id)
+        if location is None:
+            raise CorruptStorageError()
+        resolved = ResolvedSourceSpan(
+            document_id=index.document_id,
+            location=location,
+            page_layout=(
+                None
+                if location.page_number is None
+                else index.layouts.get(location.page_number)
+            ),
+        )
         return resolved
 
     def find_document_versions_by_content_hash(
@@ -648,6 +713,7 @@ class SQLiteCorpusSnapshot:
         version = self._version
         self._connection = None
         self._closed = True
+        self._source_span_indexes.clear()
         if connection is None:
             return
 

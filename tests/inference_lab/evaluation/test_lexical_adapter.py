@@ -1,5 +1,6 @@
 """Cross-issue acceptance for the shipped lexical evaluation adapter."""
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -16,9 +17,20 @@ from inference_lab.evaluation import (
 )
 from inference_lab.ingest import Chunk
 from inference_lab.profiling import ProfilingContext
-from inference_lab.provenance import CorpusId, CorpusVersionId, DocumentId
+from inference_lab.provenance import (
+    CorpusId,
+    CorpusVersionId,
+    DocumentId,
+    RecordId,
+    SourceSpanId,
+)
 from inference_lab.retrieval import LexicalMatchMode, RetrievalLimit
-from inference_lab.storage import open_metadata_repository
+from inference_lab.storage import (
+    ParsedRepresentation,
+    ResolvedSourceSpan,
+    _sqlite_corpus_snapshots,
+    open_metadata_repository,
+)
 from inference_lab.storage._sqlite_repository import SQLiteMetadataRepository
 from tests.inference_lab.evaluation.fixtures import (  # noqa: TID252
     case_payload,
@@ -150,7 +162,9 @@ def test_adapter_rejects_foreign_scope_before_query(tmp_path: Path) -> None:
         repository.close()
 
 
-def test_adapter_and_serving_facade_find_same_published_span(tmp_path: Path) -> None:
+def test_adapter_and_serving_facade_find_same_published_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Fresh-process ingest and serving agree with EVAL-03 on one version."""
     write_config(tmp_path)
     create_script = tmp_path / "create-corpus.py"
@@ -176,22 +190,50 @@ def test_adapter_and_serving_facade_find_same_published_span(tmp_path: Path) -> 
         },
     )
     hit = served[1]["hits"][0]
+    source_span_id = hit["source_locations"][0]["source_span_id"]
     case = case_payload()
     case["question"] = "alpha method"
     case["evidence"][0].update(
         document_id=hit["document_id"],
-        source_span_id=hit["source_locations"][0]["source_span_id"],
+        source_span_id=source_span_id,
         corpus_version=version,
     )
     repository = open_metadata_repository(
         tmp_path / "metadata.sqlite3", source_dir=tmp_path / "source-data"
     )
     try:
+        original = _sqlite_corpus_snapshots.get_parsed_representation
+        representation_reads = 0
+
+        def count_representation_reads(
+            connection: sqlite3.Connection,
+            selected_corpus_id: CorpusId,
+            record_id: RecordId,
+        ) -> ParsedRepresentation | None:
+            nonlocal representation_reads
+            representation_reads += 1
+            return original(connection, selected_corpus_id, record_id)
+
+        monkeypatch.setattr(
+            _sqlite_corpus_snapshots,
+            "get_parsed_representation",
+            count_representation_reads,
+        )
         selected_corpus = CorpusId.from_str(corpus_id)
         selected_version = CorpusVersionId.from_str(version)
+        resolved: ResolvedSourceSpan | None = None
         with repository.open_corpus_snapshot(
             selected_corpus, selected_version
         ) as snapshot:
+            resolved = snapshot.resolve_source_span(
+                SourceSpanId.from_str(source_span_id)
+            )
+            assert resolved is not None
+            assert (
+                snapshot.resolve_source_span(SourceSpanId.from_str(source_span_id))
+                == resolved
+            )
+            assert representation_reads == 1
             matching_memberships = tuple(
                 membership
                 for membership in snapshot.manifest.document_memberships
@@ -201,6 +243,15 @@ def test_adapter_and_serving_facade_find_same_published_span(tmp_path: Path) -> 
             case["evidence"][0]["document_version_id"] = matching_memberships[
                 0
             ].document_version_id.as_str()
+        assert resolved is not None
+        with repository.open_corpus_snapshot(
+            selected_corpus, selected_version
+        ) as next_snapshot:
+            assert (
+                next_snapshot.resolve_source_span(SourceSpanId.from_str(source_span_id))
+                == resolved
+            )
+            assert representation_reads == 2
         (tmp_path / "dataset").mkdir()
         dataset = load_dataset(
             write_dataset_fixture(
