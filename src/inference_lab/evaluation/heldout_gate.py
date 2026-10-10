@@ -1,7 +1,5 @@
 """Predeclared gate policy and coverage checks for held-out retrieval runs."""
 
-from __future__ import annotations
-
 import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
@@ -33,7 +31,7 @@ class HeldOutGateOutcome(StrEnum):
 
 
 class HeldOutChannel(StrEnum):
-    """Retrieval paths compared by the Phase 6 baseline."""
+    """Retrieval paths compared by the hybrid retrieval baseline."""
 
     LEXICAL_ONLY = "lexical_only"
     DENSE_ONLY = "dense_only"
@@ -75,7 +73,7 @@ class HeldOutChannelIdentity:
         reranked = self.channel is HeldOutChannel.FUSED_RERANKED
         if reranked != isinstance(self.reranking_identity, RerankingIdentity):
             raise RetrievalEvaluationContractError(
-                "the reranked path must identify its RET-06 configuration."
+                "the reranked path must identify its reranking configuration."
             )
         if self.reranking_identity is not None and not isinstance(
             self.reranking_identity, RerankingIdentity
@@ -123,7 +121,7 @@ class HeldOutChannelIdentity:
 
 @dataclass(frozen=True, slots=True)
 class HeldOutRunContract:
-    """Frozen single-corpus run identity and gate policy for EVAL-04."""
+    """Frozen single-corpus run identity and gate policy for the held-out baseline."""
 
     evaluation_identity: RetrievalEvaluationRunIdentity
     gate_policy: "HeldOutGatePolicy"
@@ -136,14 +134,14 @@ class HeldOutRunContract:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate that the run is held out and pins each Phase 6 path."""
+        """Validate that the run is held out and pins each compared retrieval path."""
         if not isinstance(self.evaluation_identity, RetrievalEvaluationRunIdentity):
             raise TypeError(
                 "evaluation_identity must be a RetrievalEvaluationRunIdentity."
             )
         if self.evaluation_identity.selected_split != "held_out":
             raise RetrievalEvaluationContractError(
-                "EVAL-04 run identity must select the held_out split."
+                "the held-out run identity must select the held_out split."
             )
         if not isinstance(self.gate_policy, HeldOutGatePolicy):
             raise TypeError("gate_policy must be a HeldOutGatePolicy.")
@@ -160,7 +158,7 @@ class HeldOutRunContract:
         required = tuple(HeldOutChannel)
         if len(channels) != len(set(channels)) or set(channels) != set(required):
             raise RetrievalEvaluationContractError(
-                "run contract must identify every Phase 6 comparison path once."
+                "run contract must identify every compared retrieval path once."
             )
         identity_by_channel = {item.channel: item for item in self.channel_identities}
         pre_rerank_fusion = identity_by_channel[
@@ -189,7 +187,7 @@ class HeldOutRunContract:
             != self.final_evidence_count
         ):
             raise RetrievalEvaluationContractError(
-                "RET-06 evidence count must match final_evidence_count."
+                "the reranked evidence count must match final_evidence_count."
             )
         calculated = self._calculate_fingerprint()
         if self.fingerprint is None:

@@ -1,6 +1,6 @@
-"""Executable, corpus-metadata filter contracts for RET-03.
+"""Executable, corpus-metadata filter contracts.
 
-The metadata-filter registry version is independent of RET-01's retrieval
+The metadata-filter registry version is independent of the retrieval
 query and result wire-schema version.
 """
 
@@ -33,7 +33,7 @@ MAX_METADATA_FILTER_NODES: Final[int] = 128
 
 
 class MetadataFieldType(StrEnum):
-    """Scalar types available in the Phase 5 metadata registry."""
+    """Scalar types available in the executable metadata registry."""
 
     STRING = "string"
     INTEGER = "integer"
@@ -117,7 +117,7 @@ class MetadataFieldDescriptor:
             raise TypeError("cardinality must be a MetadataCardinality.")
         if self.cardinality is not MetadataCardinality.SCALAR:
             raise InvalidRetrievalContractError(
-                "the Phase 5 metadata registry supports scalar fields only."
+                "the executable metadata registry supports scalar fields only."
             )
         if not isinstance(self.supported_operators, frozenset):
             raise TypeError("supported_operators must be a frozenset.")
@@ -212,7 +212,7 @@ def _descriptor(
     *,
     supports_range: bool = False,
 ) -> MetadataFieldDescriptor:
-    """Build one descriptor using the closed Phase 5 operator policy."""
+    """Build one descriptor using the closed operator policy."""
     operators = {
         MetadataFilterOperator.EXACT,
         MetadataFilterOperator.ONE_OF,
@@ -308,7 +308,7 @@ def _matches_type(value: object, field_type: MetadataFieldType) -> bool:
 
 
 def _operator_for(expression: FilterExpression) -> MetadataFilterOperator:
-    """Return the executable operator represented by one RET-01 node."""
+    """Return the executable operator represented by one filter node."""
     if isinstance(expression, ExactFilter):
         return MetadataFilterOperator.EXACT
     if isinstance(expression, OneOfFilter):

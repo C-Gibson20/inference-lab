@@ -1,4 +1,4 @@
-"""EVAL-04 frozen gate policy and coverage decision contract."""
+"""Frozen held-out gate policy and coverage decision contract."""
 
 import hashlib
 from dataclasses import replace
@@ -228,7 +228,9 @@ def test_frozen_run_contract_rejects_non_heldout_or_incomplete_channel_identity(
             channel_identities=_run_contract().channel_identities,
         )
 
-    with pytest.raises(RetrievalEvaluationContractError, match="every Phase 6"):
+    with pytest.raises(
+        RetrievalEvaluationContractError, match="every compared retrieval path"
+    ):
         HeldOutRunContract(
             evaluation_identity=_run_identity(),
             gate_policy=_policy(),

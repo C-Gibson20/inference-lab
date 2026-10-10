@@ -1,6 +1,4 @@
-"""Deployment-local EVAL-03 adapter for the shipped lexical retriever."""
-
-from __future__ import annotations
+"""Deployment-local evaluation adapter for the shipped lexical retriever."""
 
 import hashlib
 from pathlib import Path

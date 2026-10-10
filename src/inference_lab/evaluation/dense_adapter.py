@@ -1,7 +1,5 @@
 """Deployment-local adapter for the pinned dense retriever."""
 
-from __future__ import annotations
-
 import hashlib
 from pathlib import Path
 

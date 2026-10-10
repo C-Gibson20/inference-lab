@@ -463,7 +463,7 @@ def score_retrieval_case(
     policy: RetrievalEvaluationPolicy,
     case_ordinal: int = 0,
 ) -> RetrievalCaseResult:
-    """Score one ordered RET-01 result against authoritative case evidence."""
+    """Score one ordered retrieval result against authoritative case evidence."""
     if not isinstance(result, EvidenceResult):
         raise TypeError("result must be an EvidenceResult.")
     if not isinstance(corpus_id, CorpusId):

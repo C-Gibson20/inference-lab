@@ -1,6 +1,4 @@
-"""Run frozen EVAL-03 channel adapters and assemble an EVAL-04 report."""
-
-from __future__ import annotations
+"""Run each frozen channel adapter and assemble one held-out baseline report."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -38,7 +36,7 @@ from inference_lab.evaluation.splitting import build_leakage_groups
 
 @dataclass(frozen=True, slots=True)
 class HeldOutChannelRun:
-    """One channel's EVAL-03 output plus RET-06 degradation case IDs."""
+    """One channel's evaluation output plus reranker degradation case IDs."""
 
     channel: HeldOutChannel
     result: RetrievalEvaluationRunResult
@@ -62,7 +60,7 @@ class HeldOutChannelRun:
 
 
 class HeldOutChannelRunner(Protocol):
-    """Deployment-owned execution of one pinned channel through EVAL-03."""
+    """Deployment-owned execution of one pinned channel through retrieval evaluation."""
 
     def system_identity(self, channel: HeldOutChannel) -> RetrievalSystemIdentity:
         """Declare a channel's identity without executing a retrieval query."""
@@ -151,7 +149,7 @@ def _validate_cases(
         )
     if any(case.split != "held_out" for case in cases):
         raise RetrievalEvaluationContractError(
-            "the EVAL-04 runner accepts held_out cases only."
+            "the held-out runner accepts held_out cases only."
         )
     groups = build_leakage_groups(cases)
     group_by_case = {
@@ -198,9 +196,10 @@ def run_held_out_baseline(
 ) -> HeldOutBaselineReport:
     """Run all frozen channels and build their deterministic aggregate report.
 
-    The deployment supplies ``run_channel`` to adapt each Phase 6 path to the
-    EVAL-03 runner. This boundary keeps corpus access, model construction, and
-    RET-06 backend lifecycle deployment-local while the orchestration enforces
+    The deployment supplies ``run_channel`` to adapt each compared retrieval path to the
+    retrieval evaluation runner. This boundary keeps corpus access, model
+    construction, and
+    reranker backend lifecycle deployment-local while the orchestration enforces
     one dataset, one corpus version, complete channel coverage, and fixed order.
     """
     if not isinstance(contract, HeldOutRunContract):

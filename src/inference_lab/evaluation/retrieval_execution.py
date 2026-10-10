@@ -361,7 +361,7 @@ def _failed_result(
     request: RetrievalEvaluationRequest,
     category: FailureCategory,
 ) -> EvidenceResult:
-    """Create a payload-free failed RET-01 result pinned to the run corpus."""
+    """Create a payload-free failed retrieval result pinned to the run corpus."""
     if category not in _EXPECTED_FAILURE_CATEGORIES:
         raise ValueError("unsupported failure category")
     return EvidenceResult(

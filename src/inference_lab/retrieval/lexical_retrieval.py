@@ -87,7 +87,7 @@ def _failed_result(
 
 
 def _map_lexical_failure(error: LexicalError) -> FailureCategory:
-    """Map one bounded lexical failure to RET-01's channel vocabulary."""
+    """Map one bounded lexical failure to the shared channel vocabulary."""
     if error.category in {
         LexicalFailureCategory.GENERATION_UNAVAILABLE,
         LexicalFailureCategory.CORRUPT_GENERATION,
@@ -99,7 +99,7 @@ def _map_lexical_failure(error: LexicalError) -> FailureCategory:
 
 
 def _map_result_failure(result: EvidenceResult) -> FailureMapping | None:
-    """Map a returned RET-01 failure to the shared profiling vocabulary."""
+    """Map a returned retrieval failure to the shared profiling vocabulary."""
     if result.status is not ResultStatus.FAILED:
         return None
     if not result.failures:
@@ -445,7 +445,7 @@ def _normalise_request(
     request: LexicalQuery | RetrievalQuery,
     mode: LexicalMatchMode | None,
 ) -> tuple[RetrievalQuery, LexicalQuery]:
-    """Keep the public query envelope separate from the RET-02 request."""
+    """Keep the public query envelope separate from the lexical request."""
     if isinstance(request, LexicalQuery):
         if mode is not None and mode is not request.mode:
             raise InvalidRetrievalContractError(

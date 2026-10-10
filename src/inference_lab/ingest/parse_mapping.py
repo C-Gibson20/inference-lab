@@ -269,7 +269,7 @@ def _map_representation(
 def map_parse_persistence_request(
     request: ParsePersistenceRequest,
 ) -> MappedParseRecords:
-    """Map one validated ingest request into complete STOR-02 parser records."""
+    """Map one validated ingest request into complete storage parser records."""
     if not isinstance(request, ParsePersistenceRequest):
         raise TypeError("request must be a ParsePersistenceRequest.")
     producer = _producer(request)

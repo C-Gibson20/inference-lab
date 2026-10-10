@@ -320,7 +320,7 @@ class MetadataReader(Protocol):
         corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[KnownSourceSpan, ...]:
-        """Return a version's validated PROV-03 source-span catalogue."""
+        """Return a version's validated derived-record source-span catalogue."""
         ...
 
     def find_document_versions_by_content_hash(

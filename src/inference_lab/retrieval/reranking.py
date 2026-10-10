@@ -1,6 +1,4 @@
-"""Validated request boundary for RET-06 evidence reranking."""
-
-from __future__ import annotations
+"""Validated request boundary for evidence reranking."""
 
 import hashlib
 import json
@@ -32,7 +30,7 @@ from inference_lab.retrieval.results import (
 
 MAX_RERANK_CANDIDATES = 100
 RERANK_DEDUPLICATION_VERSION = "1.0.0"
-RET06_POLICY_VERSION = "1.0.0"
+RERANK_POLICY_VERSION = "1.0.0"
 _LOGGER = structlog.get_logger("inference_lab.retrieval")
 
 
@@ -53,7 +51,7 @@ class EvidenceCount:
 
 @dataclass(frozen=True, slots=True)
 class RerankCandidateLimit:
-    """Configured reranker request size, bounded by RUN-05's hard cap."""
+    """Configured reranker request size, bounded by the reranker backend's hard cap."""
 
     value: int = MAX_RERANK_CANDIDATES
 
@@ -70,7 +68,7 @@ class RerankCandidateLimit:
 class RerankingRequest:
     """Pair one query with the fused evidence result from the same snapshot.
 
-    The request retains RET-01 candidates and their provenance unchanged.
+    The request retains the fused candidates and their provenance unchanged.
     Ranking scores are supplied only by the backend at execution time and are
     not added to this input contract.
     """
@@ -131,25 +129,8 @@ class ScoredEvidence:
 
 
 @dataclass(frozen=True, slots=True)
-class RerankingOutcome:
-    """RET-01 result plus an explicit marker for fused-order degradation."""
-
-    result: EvidenceResult
-    degraded: bool
-    identity: RerankingIdentity
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.result, EvidenceResult):
-            raise TypeError("result must be an EvidenceResult.")
-        if type(self.degraded) is not bool:
-            raise TypeError("degraded must be a boolean.")
-        if not isinstance(self.identity, RerankingIdentity):
-            raise TypeError("identity must be a RerankingIdentity.")
-
-
-@dataclass(frozen=True, slots=True)
 class RerankingIdentity:
-    """Stable, path-free configuration identity for one RET-06 run."""
+    """Stable, path-free configuration identity for one reranking run."""
 
     backend_name: str
     model_name: str
@@ -158,7 +139,7 @@ class RerankingIdentity:
     evidence_count: int
     candidate_limit: int
     deduplication_version: str = RERANK_DEDUPLICATION_VERSION
-    policy_version: str = RET06_POLICY_VERSION
+    policy_version: str = RERANK_POLICY_VERSION
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -207,7 +188,7 @@ class RerankingIdentity:
 
     @property
     def digest(self) -> str:
-        """Return a stable digest over every result-affecting RET-06 choice."""
+        """Return a stable digest over every result-affecting reranking choice."""
         encoded = json.dumps(
             {
                 "backend_name": self.backend_name,
@@ -225,15 +206,32 @@ class RerankingIdentity:
         return hashlib.sha256(encoded).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class RerankingOutcome:
+    """Reranked result plus an explicit marker for fused-order degradation."""
+
+    result: EvidenceResult
+    degraded: bool
+    identity: RerankingIdentity
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.result, EvidenceResult):
+            raise TypeError("result must be an EvidenceResult.")
+        if type(self.degraded) is not bool:
+            raise TypeError("degraded must be a boolean.")
+        if not isinstance(self.identity, RerankingIdentity):
+            raise TypeError("identity must be a RerankingIdentity.")
+
+
 def prepare_rerank_request(
     request: RerankingRequest,
     *,
     evidence_count: EvidenceCount = EvidenceCount(),
     candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
 ) -> PreparedReranking:
-    """Build a bounded RUN-05 request while retaining original source evidence.
+    """Build a bounded reranker request while retaining original source evidence.
 
-    The pool policy retains the leading RET-05 fused candidates in their
+    The pool policy retains the leading fused candidates in their
     existing deterministic order. An empty pool requires no backend request.
     """
     if not isinstance(request, RerankingRequest):
@@ -325,7 +323,7 @@ def rank_evidence_hits(
 
     Scores affect ordering only. The returned hits are rebuilt from the
     original candidates and channel contributions, so source provenance and
-    RET-05 diagnostics survive unchanged.
+    Fused channel diagnostics survive unchanged.
     """
     if not isinstance(scored_evidence, tuple):
         raise TypeError("scored_evidence must be a tuple.")
@@ -406,7 +404,7 @@ def rerank_evidence(
     evidence_count: EvidenceCount = EvidenceCount(),
     candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
 ) -> tuple[PreparedReranking, tuple[ScoredEvidence, ...]]:
-    """Call RUN-05 with the bounded request and map scores to source evidence."""
+    """Call the reranker with the bounded request and map scores to source evidence."""
     if not callable(getattr(backend, "rerank", None)):
         raise TypeError("backend must implement the reranker contract.")
     prepared = prepare_rerank_request(
@@ -432,7 +430,8 @@ def execute_reranking(
     """Select evidence and convert backend failures to bounded outcomes.
 
     The caller supplies the corpus identity selected with the pinned query so
-    the stage can emit consistent retrieval context without changing RET-01.
+    the stage can emit consistent retrieval context without changing the
+    shared result contract.
     Retryable backend failures may return the deterministic fused order as a
     partial result. Invalid inputs, malformed responses, and non-retryable
     failures return no hits. Error messages and candidate payloads never cross
@@ -646,7 +645,7 @@ def _result_with_outcome(
     hits: tuple[EvidenceHit, ...],
     failures: tuple[RetrievalFailure, ...],
 ) -> EvidenceResult:
-    """Construct a valid final RET-01 result with contiguous ranks."""
+    """Construct a valid final retrieval result with contiguous ranks."""
     ranked_hits = tuple(
         EvidenceHit(hit.candidate, hit.contributions, rank)
         for rank, hit in enumerate(hits, start=1)

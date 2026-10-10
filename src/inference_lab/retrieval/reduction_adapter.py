@@ -1,6 +1,4 @@
-"""Snapshot-pinned RET-07 integration and exact lexical source mapping."""
-
-from __future__ import annotations
+"""Snapshot-pinned evidence reduction with exact lexical source mapping."""
 
 import time
 from enum import StrEnum
@@ -38,7 +36,7 @@ _LOGGER = structlog.get_logger("inference_lab.retrieval")
 
 
 class EvidenceReductionFailureCategory(StrEnum):
-    """Bounded reasons the RET-07 boundary could not complete."""
+    """Bounded reasons the evidence-reduction boundary could not complete."""
 
     CORPUS_VERSION_MISMATCH = "corpus_version_mismatch"
     TOKENISER_MISMATCH = "tokeniser_mismatch"
@@ -48,7 +46,7 @@ class EvidenceReductionFailureCategory(StrEnum):
 
 
 class EvidenceReductionExecutionError(RuntimeError):
-    """A privacy-safe failure raised by the RET-07 execution boundary."""
+    """A privacy-safe failure raised by the evidence-reduction execution boundary."""
 
     def __init__(self, category: EvidenceReductionFailureCategory) -> None:
         self.category = category
@@ -68,10 +66,10 @@ def reduce_retrieval_evidence(
     diversity_policy_override: Literal["none", "per_document"] | None = None,
     expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None,
 ) -> EvidenceReductionOutcome:
-    """Reduce one RET-06 result against its exact pinned corpus snapshot.
+    """Reduce one reranked result against its exact pinned corpus snapshot.
 
     The lexical generation supplies immutable chunk source intervals. Parsed
-    text and the ING-04 canonical boundary map turn those intervals into exact
+    text and the canonical source-boundary map turn those intervals into exact
     candidate-to-source ranges. Any candidate whose map cannot be proved can
     still be retained whole, but the pure reducer will fail that candidate
     closed if it needs shortening.

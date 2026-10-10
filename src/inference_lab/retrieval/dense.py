@@ -1,7 +1,5 @@
 """Versioned contracts and deterministic ranking for dense retrieval."""
 
-from __future__ import annotations
-
 import hashlib
 import math
 import re
@@ -284,7 +282,7 @@ class DenseIndexBuildRequest:
 
 @dataclass(frozen=True, slots=True)
 class DenseIndexQuery:
-    """Pair a RET-01 query with its query-purpose vector and compatibility."""
+    """Pair a retrieval query with its query-purpose vector and compatibility."""
 
     query: RetrievalQuery
     query_vector: DenseVector

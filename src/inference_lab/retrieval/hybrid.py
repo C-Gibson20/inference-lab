@@ -1,7 +1,5 @@
 """Single-snapshot execution and validation for hybrid retrieval."""
 
-from __future__ import annotations
-
 from collections.abc import Hashable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -88,7 +86,7 @@ def execute_hybrid_retrieval(
 ) -> EvidenceResult:
     """Execute lexical and dense retrieval against one pinned corpus snapshot.
 
-    Channel failures remain visible in the returned RET-01 outcome. Candidate
+    Channel failures remain visible in the returned retrieval outcome. Candidate
     source links are revalidated against the shared snapshot before fusion;
     metadata predicates are applied by each channel before its result limit.
     """

@@ -153,7 +153,7 @@ def _require_positive_integer(value: object, field_name: str) -> int:
 
 
 def _require_case_id(value: object, field_name: str = "case_id") -> str:
-    """Validate the immutable EVAL-01 case identifier shape."""
+    """Validate the immutable evaluation case identifier shape."""
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
     if _CASE_ID_PATTERN.fullmatch(value) is None:
@@ -747,7 +747,7 @@ class SanitisedHitReference:
 
     @classmethod
     def from_hit(cls, hit: EvidenceHit) -> "SanitisedHitReference":
-        """Build a safe reference from one validated RET-01 hit."""
+        """Build a safe reference from one validated retrieval hit."""
         if not isinstance(hit, EvidenceHit):
             raise TypeError("hit must be an EvidenceHit.")
         return cls(
@@ -1058,7 +1058,7 @@ class RetrievalCaseResult:
         corpus_id: CorpusId,
         result: EvidenceResult,
     ) -> "RetrievalCaseResult":
-        """Sanitise one validated RET-01 result for later scoring/publication."""
+        """Sanitise one validated retrieval result for later scoring/publication."""
         if not isinstance(case, EvaluationCase):
             raise TypeError("case must be an EvaluationCase.")
         _require_type(corpus_id, CorpusId, "corpus_id")

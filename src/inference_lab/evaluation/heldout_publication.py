@@ -1,7 +1,5 @@
 """Immutable local publication for aggregate held-out baseline reports."""
 
-from __future__ import annotations
-
 import hashlib
 import shutil
 from dataclasses import asdict, dataclass

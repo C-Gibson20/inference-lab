@@ -1,7 +1,5 @@
 """Pinned-snapshot execution for the dense retrieval channel."""
 
-from __future__ import annotations
-
 from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType
@@ -81,7 +79,7 @@ def _failed_result(
 
 
 def _map_dense_failure(error: DenseError) -> FailureCategory:
-    """Map the dense store's bounded failures into RET-01's result vocabulary."""
+    """Map the dense store's bounded failures into the shared result vocabulary."""
     if error.category in {
         DenseFailureCategory.GENERATION_UNAVAILABLE,
         DenseFailureCategory.CORRUPT_GENERATION,
@@ -386,7 +384,7 @@ def _build_hits(
     matches: tuple[DenseIndexMatch, ...],
     validation: MetadataFilterValidation | None,
 ) -> tuple[EvidenceHit, ...]:
-    """Filter ranked candidates through the pinned snapshot and build RET-01 hits."""
+    """Filter ranked candidates through the pinned snapshot and build retrieval hits."""
     hits: list[EvidenceHit] = []
     for match in matches:
         _validate_candidate_snapshot_links(snapshot, match.candidate)
@@ -439,7 +437,7 @@ def _candidate_metadata_values(
     snapshot: CorpusSnapshot,
     candidate: RetrievalCandidate,
 ) -> MetadataValues:
-    """Resolve RET-03 metadata from canonical records visible in the snapshot."""
+    """Resolve registered metadata from canonical records visible in the snapshot."""
     source = candidate.sources[0]
     source_artefact = snapshot.get_source_artefact(source.document_version_id)
     if source_artefact is None or (

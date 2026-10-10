@@ -1,7 +1,5 @@
 """Immutable SQLite generations for corpus-scoped dense retrieval."""
 
-from __future__ import annotations
-
 import hashlib
 import os
 import shutil
@@ -11,7 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import Self, cast
 from urllib.parse import quote
 
 from inference_lab._json import (
@@ -203,7 +201,7 @@ class DenseIndexManifest:
         return sum(member.chunk_count for member in self.members)
 
     def component_generation(self) -> ComponentGenerationReference:
-        """Return the preparing reference used by STOR-03 registration."""
+        """Return the preparing reference used by corpus-version registration."""
         return ComponentGenerationReference(
             component_kind=DENSE_COMPONENT_KIND,
             generation_id=self.generation_id,
@@ -1046,34 +1044,6 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _generation_matches(
-    generation: DenseGeneration,
-    source_manifest: BaselineChunkGenerationManifest,
-    compatibility: DenseIndexCompatibility,
-) -> bool:
-    if (
-        generation.manifest.corpus_id != source_manifest.corpus_id
-        or generation.manifest.corpus_version != source_manifest.corpus_version
-        or generation.manifest.source_manifest_digest
-        != source_manifest.source_manifest_digest
-        or generation.manifest.configuration_digest
-        != compatibility.configuration_digest
-    ):
-        return False
-    prepared, members = _prepare_source(source_manifest)
-    if generation.manifest.members != members or generation.manifest.entry_count != len(
-        prepared
-    ):
-        return False
-    actual = {entry.candidate.record_id: entry for entry in generation.iter_entries()}
-    return all(
-        (entry := actual.get(item.candidate.record_id)) is not None
-        and entry.candidate == item.candidate
-        and len(entry.vector.values) == compatibility.dimensions
-        for item in prepared
-    ) and len(actual) == len(prepared)
-
-
 class DenseGeneration:
     """Read-only handle for a validated immutable dense generation."""
 
@@ -1086,7 +1056,7 @@ class DenseGeneration:
         self.manifest = manifest
         self._closed = False
 
-    def __enter__(self) -> DenseGeneration:
+    def __enter__(self) -> Self:
         if self._closed:
             raise DenseError(DenseFailureCategory.GENERATION_UNAVAILABLE)
         return self
@@ -1168,6 +1138,34 @@ class DenseGeneration:
     def _require_open(self) -> None:
         if self._closed:
             raise DenseError(DenseFailureCategory.GENERATION_UNAVAILABLE)
+
+
+def _generation_matches(
+    generation: DenseGeneration,
+    source_manifest: BaselineChunkGenerationManifest,
+    compatibility: DenseIndexCompatibility,
+) -> bool:
+    if (
+        generation.manifest.corpus_id != source_manifest.corpus_id
+        or generation.manifest.corpus_version != source_manifest.corpus_version
+        or generation.manifest.source_manifest_digest
+        != source_manifest.source_manifest_digest
+        or generation.manifest.configuration_digest
+        != compatibility.configuration_digest
+    ):
+        return False
+    prepared, members = _prepare_source(source_manifest)
+    if generation.manifest.members != members or generation.manifest.entry_count != len(
+        prepared
+    ):
+        return False
+    actual = {entry.candidate.record_id: entry for entry in generation.iter_entries()}
+    return all(
+        (entry := actual.get(item.candidate.record_id)) is not None
+        and entry.candidate == item.candidate
+        and len(entry.vector.values) == compatibility.dimensions
+        for item in prepared
+    ) and len(actual) == len(prepared)
 
 
 def _entry_from_row(row: sqlite3.Row, dimensions: int) -> DenseIndexEntry:
@@ -1335,7 +1333,7 @@ class DenseGenerationParticipant:
         self._source_manifest = source_manifest
 
     def component_generation(self) -> ComponentGenerationReference:
-        """Return the preparing reference for STOR-03 registration."""
+        """Return the preparing reference for corpus-version registration."""
         return self._outcome.manifest.component_generation()
 
     def build_validator(

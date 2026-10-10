@@ -1,7 +1,5 @@
 """Aggregate, compare, serialise, and observe frozen held-out retrieval runs."""
 
-from __future__ import annotations
-
 import hashlib
 from collections import defaultdict
 from dataclasses import dataclass
@@ -44,7 +42,7 @@ _CHANNEL_COMPARISON_PAIRS: Final[tuple[tuple[HeldOutChannel, HeldOutChannel], ..
 
 @dataclass(frozen=True, slots=True)
 class HeldOutChannelCaseResult:
-    """One sanitised channel result, retaining RET-06 degradation state."""
+    """One sanitised channel result, retaining reranker degradation state."""
 
     channel: HeldOutChannel
     result: RetrievalCaseResult
@@ -67,7 +65,7 @@ class HeldOutChannelCaseResult:
         if self.channel is HeldOutChannel.FUSED_RERANKED:
             if len(self.result.hits) > 10:
                 raise RetrievalEvaluationContractError(
-                    "reranked evidence must respect the RET-06 evidence limit."
+                    "reranked evidence must respect the configured evidence limit."
                 )
         elif self.result.requested_limit < _CANDIDATE_CUTOFF:
             raise RetrievalEvaluationContractError(
@@ -339,7 +337,7 @@ class HeldOutPairedComparison:
 
 @dataclass(frozen=True, slots=True)
 class HeldOutBaselineReport:
-    """Aggregate-only, reproducible result of an EVAL-04 held-out run."""
+    """Aggregate-only, reproducible result of a held-out baseline run."""
 
     contract: HeldOutRunContract
     case_count: int
@@ -699,7 +697,7 @@ def _document_metric_at(
     result: RetrievalCaseResult,
     cutoff: int,
 ) -> MetricFraction | None:
-    """Calculate document recall from EVAL-03 target ranks at one cutoff."""
+    """Calculate document recall from scored target ranks at one cutoff."""
     if not result.document_match_ranks:
         return None
     return MetricFraction(

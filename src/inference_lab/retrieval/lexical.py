@@ -349,7 +349,7 @@ def build_fts5_query(
 
 @dataclass(frozen=True, slots=True)
 class LexicalQuery:
-    """A RET-01 query plus one closed lexical matching mode."""
+    """A retrieval query plus one closed lexical matching mode."""
 
     query: RetrievalQuery
     mode: LexicalMatchMode = LexicalMatchMode.TERMS
@@ -365,7 +365,8 @@ class LexicalQuery:
             raise TypeError("mode must be a LexicalMatchMode.")
         if self.query.filter is not None:
             raise InvalidLexicalContractError(
-                "lexical requests do not support filters; RET-03 owns filter execution."
+                "lexical requests do not support filters; metadata "
+                "filtering owns filter execution."
             )
         if not analyse_terms(self.query.text):
             raise InvalidLexicalContractError(
