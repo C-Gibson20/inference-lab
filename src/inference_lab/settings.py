@@ -1,6 +1,7 @@
 """Typed application settings and configuration-source precedence."""
 
 import os
+from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Final, Literal, Self
@@ -108,6 +109,13 @@ MAX_EVIDENCE_COUNT: Final = 10
 MAX_RERANK_CANDIDATES: Final = 100
 
 
+class EvidenceDiversityPolicy(StrEnum):
+    """Supported ways evidence reduction may thin out crowded candidates."""
+
+    NONE = "none"
+    PER_DOCUMENT = "per_document"
+
+
 class RetrievalConfig(BaseModel):
     """Limits and defaults for selecting and reducing downstream evidence."""
 
@@ -116,7 +124,7 @@ class RetrievalConfig(BaseModel):
     evidence_count: int = Field(default=8, ge=MIN_EVIDENCE_COUNT, le=MAX_EVIDENCE_COUNT)
     candidate_limit: int = Field(default=100, ge=1, le=MAX_RERANK_CANDIDATES)
     evidence_token_budget: int = Field(default=4096, gt=0)
-    diversity_policy: Literal["none", "per_document"] = "none"
+    diversity_policy: EvidenceDiversityPolicy = EvidenceDiversityPolicy.NONE
 
     @field_validator("evidence_count", "candidate_limit", mode="before")
     @classmethod

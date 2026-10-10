@@ -455,9 +455,18 @@ policy and exact-deduplication versions. Its SHA-256 digest covers all of
 these fields. Identity values must not include deployment paths; raw scores,
 queries, passages, and prompts are not part of the identity.
 
+Every outcome also reports the candidate pool it actually worked on:
+`available_candidate_count` is the fused pool it was given,
+`submitted_candidate_count` is the pool the backend request contained, and
+`truncated_candidate_count` is the difference. These are taken from the
+prepared request rather than recomputed, and the available count is reported
+as observed, so a fused pool larger than the configured ceiling is visible
+instead of being clamped to it.
+
 The `reranking_completed` structured event includes the caller-supplied
-`corpus_id` and query-pinned `corpus_version`, bounded candidate and evidence
-counts, configured limits, result status, degraded state, a typed failure
+`corpus_id` and query-pinned `corpus_version`, the three candidate-pool counts
+above, the selected evidence count, configured limits, result status, degraded
+state, a typed failure
 category when present, the stable identity fields and digest, and elapsed
 milliseconds. It excludes query and candidate text, source passages, raw
 scores, prompts, raw exception messages, credentials, and deployment paths.
@@ -498,7 +507,10 @@ ceiling is `retrieval.evidence_token_budget = 4096`; a request may supply a
 positive token-budget override. The default item ceiling is RET-06's configured
 `evidence_count` (at most eight by default), further capped by the request's
 result limit and an optional lower per-request item limit. The configured
-diversity policy defaults to `none`; `per_document` keeps the first
+diversity policy is the typed `EvidenceDiversityPolicy` owned by `settings`,
+which is where the supported values are fixed; a reserved value such as
+`per_family` is therefore rejected by configuration validation rather than
+compared as a bare string. It defaults to `none`; `per_document` keeps the first
 (highest-ranked) candidate for a document and drops later candidates for that
 document. A request may override this policy for one call. Selection follows
 RET-06 order and never re-ranks evidence.

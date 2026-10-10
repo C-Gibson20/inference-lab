@@ -34,6 +34,7 @@ from inference_lab.retrieval.reduction import (
 )
 from inference_lab.retrieval.results import EvidenceResult, ResultStatus
 from inference_lab.retrieval.values import RetrievalChannel, RetrievalLimit
+from inference_lab.settings import EvidenceDiversityPolicy
 
 
 @dataclass(frozen=True)
@@ -234,7 +235,7 @@ def test_per_document_diversity_keeps_highest_ranked_candidate() -> None:
     )
     request = replace(
         _request((first, second), token_budget=10),
-        diversity_policy="per_document",
+        diversity_policy=EvidenceDiversityPolicy.PER_DOCUMENT,
     )
 
     outcome = reduce_evidence(request)
@@ -245,7 +246,7 @@ def test_per_document_diversity_keeps_highest_ranked_candidate() -> None:
         EvidenceReductionAction.DROPPED_DIVERSITY,
     )
     assert outcome.dropped_count == 1
-    assert outcome.identity.diversity_policy == "per_document"
+    assert outcome.identity.diversity_policy is EvidenceDiversityPolicy.PER_DOCUMENT
     assert outcome.identity.digest == reduce_evidence(request).identity.digest
 
 

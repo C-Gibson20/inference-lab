@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
 from inference_lab.provenance import CorpusId, CorpusVersionId, RecordId
@@ -24,6 +24,7 @@ from inference_lab.retrieval.results import (
     ResultStatus,
     RetrievalFailure,
 )
+from inference_lab.settings import EvidenceDiversityPolicy
 
 EVIDENCE_SEPARATOR = "\n\n"
 REDUCTION_POLICY_VERSION = "1.0.0"
@@ -305,7 +306,7 @@ class EvidenceReductionIdentity:
     tokeniser: EvidenceTokeniserIdentity
     token_budget: int
     item_budget: int
-    diversity_policy: Literal["none", "per_document"] = "none"
+    diversity_policy: EvidenceDiversityPolicy = EvidenceDiversityPolicy.NONE
     separator: str = EVIDENCE_SEPARATOR
     policy_version: str = REDUCTION_POLICY_VERSION
     accounting_version: str = REDUCTION_ACCOUNTING_VERSION
@@ -331,17 +332,15 @@ class EvidenceReductionIdentity:
             self.policy_version
         ) or not is_canonical_semantic_version(self.accounting_version):
             raise ValueError("reduction versions must be semantic versions.")
-        if not isinstance(self.diversity_policy, str):
-            raise TypeError("diversity_policy must be a string.")
-        if self.diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        if not isinstance(self.diversity_policy, EvidenceDiversityPolicy):
+            raise TypeError("diversity_policy must be an EvidenceDiversityPolicy.")
 
     @property
     def digest(self) -> str:
         """Return a stable digest of every reduction-affecting identity field."""
         payload = {
             "accounting_version": self.accounting_version,
-            "diversity_policy": self.diversity_policy,
+            "diversity_policy": self.diversity_policy.value,
             "item_budget": self.item_budget,
             "policy_version": self.policy_version,
             "separator": self.separator,
@@ -368,7 +367,7 @@ class EvidenceReductionRequest:
     token_budget: int
     item_budget: int
     source_ranges: Mapping[RecordId, tuple[EvidenceTextSourceRange, ...]]
-    diversity_policy: Literal["none", "per_document"] = "none"
+    diversity_policy: EvidenceDiversityPolicy = EvidenceDiversityPolicy.NONE
 
     def __post_init__(self) -> None:
         self._validate()
@@ -395,10 +394,8 @@ class EvidenceReductionRequest:
             raise ValueError("item_budget must be a positive integer.")
         if self.item_budget > self.result.requested_limit.value:
             raise ValueError("item_budget must not exceed the retrieval result limit.")
-        if not isinstance(self.diversity_policy, str):
-            raise TypeError("diversity_policy must be a string.")
-        if self.diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        if not isinstance(self.diversity_policy, EvidenceDiversityPolicy):
+            raise TypeError("diversity_policy must be an EvidenceDiversityPolicy.")
         if not isinstance(self.source_ranges, Mapping):
             raise TypeError("source_ranges must be a mapping.")
         for record_id, ranges in self.source_ranges.items():
@@ -495,7 +492,7 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
     for hit in considered:
         candidate = hit.candidate
         document_ids = {source.document_id.as_str() for source in candidate.sources}
-        if request.diversity_policy == "per_document" and (
+        if request.diversity_policy is EvidenceDiversityPolicy.PER_DOCUMENT and (
             not document_ids or seen_documents.intersection(document_ids)
         ):
             dropped += 1
@@ -505,7 +502,7 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
                 )
             )
             continue
-        if request.diversity_policy == "per_document":
+        if request.diversity_policy is EvidenceDiversityPolicy.PER_DOCUMENT:
             seen_documents.update(document_ids)
         full_text = candidate.content
         if (

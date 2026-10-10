@@ -10,6 +10,7 @@ import structlog
 from inference_lab._validation import (
     is_canonical_semantic_version,
     is_path_free_identifier,
+    is_strict_integer,
 )
 from inference_lab.backends.runtime import (
     BackendClosedError,
@@ -243,9 +244,16 @@ class RerankingOutcome:
     result: EvidenceResult
     degraded: bool
     identity: RerankingIdentity
+    available_candidate_count: int = 0
+    submitted_candidate_count: int = 0
 
     def __post_init__(self) -> None:
         self._validate()
+
+    @property
+    def truncated_candidate_count(self) -> int:
+        """Return how many fused candidates the declared pool cap excluded."""
+        return self.available_candidate_count - self.submitted_candidate_count
 
     def _validate(self) -> None:
         """Validate the outcome's result, degradation marker, and identity."""
@@ -255,6 +263,20 @@ class RerankingOutcome:
             raise TypeError("degraded must be a boolean.")
         if not isinstance(self.identity, RerankingIdentity):
             raise TypeError("identity must be a RerankingIdentity.")
+        self._validate_counts()
+
+    def _validate_counts(self) -> None:
+        """Validate that the submitted pool is a subset of the available pool."""
+        for name in ("available_candidate_count", "submitted_candidate_count"):
+            value = getattr(self, name)
+            if not is_strict_integer(value):
+                raise TypeError(f"{name} must be an integer.")
+            if value < 0:
+                raise InvalidRetrievalContractError(f"{name} must not be negative.")
+        if self.submitted_candidate_count > self.available_candidate_count:
+            raise InvalidRetrievalContractError(
+                "submitted_candidate_count must not exceed the available count."
+            )
 
 
 def prepare_rerank_request(
@@ -432,10 +454,17 @@ def rerank_evidence(
         evidence_count=evidence_count,
         candidate_limit=candidate_limit,
     )
+    return prepared, _score_prepared_reranking(backend, prepared)
+
+
+def _score_prepared_reranking(
+    backend: RerankerBackend,
+    prepared: PreparedReranking,
+) -> tuple[ScoredEvidence, ...]:
+    """Call the reranker for one prepared request and map scores to evidence."""
     if prepared.backend_request is None:
-        return prepared, ()
-    response = backend.rerank(prepared.backend_request)
-    return prepared, map_rerank_result(prepared, response)
+        return ()
+    return map_rerank_result(prepared, backend.rerank(prepared.backend_request))
 
 
 def execute_reranking(
@@ -473,7 +502,6 @@ def execute_reranking(
     ) -> RerankingOutcome:
         return _log_reranking_outcome(
             outcome,
-            candidate_count=len(fused_result.hits),
             evidence_count=evidence_count,
             candidate_limit=candidate_limit,
             corpus_id=corpus_id.as_str(),
@@ -513,14 +541,15 @@ def execute_reranking(
             category,
         )
 
-    request = RerankingRequest(query, fused_result)
+    prepared = prepare_rerank_request(
+        RerankingRequest(query, fused_result),
+        evidence_count=evidence_count,
+        candidate_limit=candidate_limit,
+    )
+    available = prepared.available_candidate_count
+    submitted = len(prepared.candidate_hits)
     try:
-        _, scored = rerank_evidence(
-            backend,
-            request,
-            evidence_count=evidence_count,
-            candidate_limit=candidate_limit,
-        )
+        scored = _score_prepared_reranking(backend, prepared)
     except BackendError as error:
         failure = RetrievalFailure(
             category=(
@@ -543,6 +572,8 @@ def execute_reranking(
                     ),
                     degraded=bool(fallback),
                     identity=identity,
+                    available_candidate_count=available,
+                    submitted_candidate_count=submitted,
                 ),
                 failure.category,
             )
@@ -552,6 +583,8 @@ def execute_reranking(
                 failure,
                 prior_failures=fused_result.failures,
                 identity=identity,
+                available_candidate_count=available,
+                submitted_candidate_count=submitted,
             ),
             failure.category,
         )
@@ -562,6 +595,8 @@ def execute_reranking(
                 RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False),
                 prior_failures=fused_result.failures,
                 identity=identity,
+                available_candidate_count=available,
+                submitted_candidate_count=submitted,
             ),
             FailureCategory.INVALID_CHANNEL_RESPONSE,
         )
@@ -572,6 +607,8 @@ def execute_reranking(
                 RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False),
                 prior_failures=fused_result.failures,
                 identity=identity,
+                available_candidate_count=available,
+                submitted_candidate_count=submitted,
             ),
             FailureCategory.CHANNEL_EXECUTION_FAILURE,
         )
@@ -582,6 +619,8 @@ def execute_reranking(
             _result_with_outcome(query, hits, fused_result.failures),
             degraded=False,
             identity=identity,
+            available_candidate_count=available,
+            submitted_candidate_count=submitted,
         )
     )
 
@@ -589,7 +628,6 @@ def execute_reranking(
 def _log_reranking_outcome(
     outcome: RerankingOutcome,
     *,
-    candidate_count: int,
     evidence_count: EvidenceCount,
     candidate_limit: RerankCandidateLimit,
     corpus_id: str,
@@ -617,8 +655,9 @@ def _log_reranking_outcome(
         failure_category=(
             failure_category.value if failure_category is not None else None
         ),
-        candidate_count=min(candidate_count, MAX_RERANK_CANDIDATES),
-        submitted_candidate_count=min(candidate_count, candidate_limit.value),
+        candidate_count=outcome.available_candidate_count,
+        submitted_candidate_count=outcome.submitted_candidate_count,
+        truncated_candidate_count=outcome.truncated_candidate_count,
         selected_evidence_count=len(outcome.result.hits),
         evidence_count_limit=evidence_count.value,
         candidate_limit=candidate_limit.value,
@@ -684,10 +723,14 @@ def _failed_reranking_outcome(
     *,
     identity: RerankingIdentity,
     prior_failures: tuple[RetrievalFailure, ...] = (),
+    available_candidate_count: int = 0,
+    submitted_candidate_count: int = 0,
 ) -> RerankingOutcome:
     """Build a hit-free failure result without retaining private error data."""
     return RerankingOutcome(
         _result_with_outcome(query, (), (*prior_failures, failure)),
         degraded=False,
         identity=identity,
+        available_candidate_count=available_candidate_count,
+        submitted_candidate_count=submitted_candidate_count,
     )

@@ -537,6 +537,7 @@ def test_reranking_logs_bounded_identity_and_status_without_payload_text() -> No
     assert event["failure_category"] is None
     assert event["candidate_count"] == 2
     assert event["submitted_candidate_count"] == 2
+    assert event["truncated_candidate_count"] == 0
     assert event["selected_evidence_count"] == 2
     assert event["evidence_count_limit"] == 8
     assert event["candidate_limit"] == 100
@@ -546,6 +547,56 @@ def test_reranking_logs_bounded_identity_and_status_without_payload_text() -> No
     assert event["duration_ms"] >= 0
     assert "question" not in str(logs)
     assert "source passage" not in str(logs)
+
+
+def test_reranking_reports_how_many_candidates_the_pool_cap_excluded() -> None:
+    query = _query(limit=12)
+    fused = _many_candidate_result(query, 12)
+    backend = FakeBackend()
+    backend.load()
+
+    with capture_logs() as logs:
+        outcome = execute_reranking(
+            backend,
+            query,
+            fused,
+            corpus_id=_corpus_id(),
+            evidence_count=EvidenceCount(8),
+            candidate_limit=RerankCandidateLimit(5),
+        )
+
+    assert outcome.available_candidate_count == 12
+    assert outcome.submitted_candidate_count == 5
+    assert outcome.truncated_candidate_count == 7
+    event = next(row for row in logs if row["event"] == "reranking_completed")
+    assert event["candidate_count"] == 12
+    assert event["submitted_candidate_count"] == 5
+    assert event["truncated_candidate_count"] == 7
+    backend.close()
+
+
+def test_reranking_reports_a_pool_larger_than_the_global_candidate_ceiling() -> None:
+    oversized = MAX_RERANK_CANDIDATES + 50
+    query = _query(limit=oversized)
+    fused = _many_candidate_result(query, oversized)
+    backend = FakeBackend()
+    backend.load()
+
+    with capture_logs() as logs:
+        execute_reranking(
+            backend,
+            query,
+            fused,
+            corpus_id=_corpus_id(),
+            evidence_count=EvidenceCount(8),
+            candidate_limit=RerankCandidateLimit(MAX_RERANK_CANDIDATES),
+        )
+
+    event = next(row for row in logs if row["event"] == "reranking_completed")
+    assert event["candidate_count"] == oversized
+    assert event["submitted_candidate_count"] == MAX_RERANK_CANDIDATES
+    assert event["truncated_candidate_count"] == 50
+    backend.close()
 
 
 def test_degraded_reranking_log_uses_warning_and_bounded_failure_category() -> None:

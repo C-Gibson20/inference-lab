@@ -106,8 +106,11 @@ environment override is
 `RETRIEVAL__EVIDENCE_TOKEN_BUDGET`. The default matches the upstream evidence
 count of eight passages and ING-04's default chunk ceiling of 512 tokens each.
 `retrieval.diversity_policy` defaults to `"none"`; its environment override is
-`RETRIEVAL__DIVERSITY_POLICY`. The currently supported choices are `"none"`
-and `"per_document"`, which keeps only the highest-ranked candidate for each
+`RETRIEVAL__DIVERSITY_POLICY`. Its type is the `EvidenceDiversityPolicy`
+enumeration declared in `inference_lab.settings`, so the supported choices are
+fixed in one place and loading converts the TOML or environment string into
+that type once. The currently supported choices are `"none"` and
+`"per_document"`, which keeps only the highest-ranked candidate for each
 document. Both settings are caller-overridable for one reduction request.
 
 `"per_family"` is a reserved candidate value, not a supported choice:

@@ -2,7 +2,6 @@
 
 import time
 from enum import StrEnum
-from typing import Literal
 
 import structlog
 
@@ -30,7 +29,7 @@ from inference_lab.retrieval.reduction import (
     reduce_evidence,
 )
 from inference_lab.retrieval.results import EvidenceResult
-from inference_lab.settings import RetrievalConfig
+from inference_lab.settings import EvidenceDiversityPolicy, RetrievalConfig
 from inference_lab.storage import (
     CorpusSnapshot,
     generation_matches_reference,
@@ -70,7 +69,7 @@ def reduce_retrieval_evidence(
     *,
     token_budget_override: int | None = None,
     item_budget_override: int | None = None,
-    diversity_policy_override: Literal["none", "per_document"] | None = None,
+    diversity_policy_override: EvidenceDiversityPolicy | None = None,
     expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None,
 ) -> EvidenceReductionOutcome:
     """Reduce one reranked result against its exact pinned corpus snapshot."""
@@ -177,10 +176,10 @@ def reduce_retrieval_evidence(
             if diversity_policy_override is None
             else diversity_policy_override
         )
-        if not isinstance(diversity_policy, str):
-            raise TypeError("diversity policy override must be a string.")
-        if diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        if not isinstance(diversity_policy, EvidenceDiversityPolicy):
+            raise TypeError(
+                "diversity_policy_override must be an EvidenceDiversityPolicy."
+            )
         source_ranges: dict[RecordId, tuple[EvidenceTextSourceRange, ...]] = {}
         for hit in result.hits[:item_budget]:
             mapped = _source_ranges_for_candidate(
