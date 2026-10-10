@@ -105,6 +105,291 @@ Cross-corpus or federated retrieval is outside this contract and the first
 build. Comparing corpora requires separate queries and results; callers must
 not combine their hits into a result labelled as one corpus version.
 
+## RET-04 dense index
+
+The dense channel is a durable, corpus-version-scoped vector index built from
+the same canonical chunks the lexical channel indexes. It is an **exact flat
+scan**, not an approximate-nearest-neighbour index: the declared
+implementation is `sqlite-flat` and every query scores every entry in the
+selected generation. Approximate search, quantised vectors, and partitioned
+indexes are outside this contract.
+
+### Component identity and compatibility
+
+| Field | Value |
+| --- | --- |
+| `ComponentKind` | `dense-index` |
+| Implementation | `sqlite-flat` |
+| Format version | `1.0.0` |
+| Contract version | `1.0.0` |
+| Distance metric | `cosine` |
+| Tie-break policy | `record-id-ascending` |
+| Score semantics label | `cosine_similarity` |
+
+`DenseIndexCompatibility` is the complete answer to "may these vectors be
+reused?". It pairs the backend's `BackendMetadata`, the returned output
+dimension, and the runtime `EmbeddingProfile` with the versioned
+`DenseIndexConfiguration`. Its `configuration_digest` is the SHA-256 of the
+canonical JSON of all four, so any change to tokeniser identity or revision,
+query or document prefix, pooling, input normalisation, token limit or
+over-limit policy, L2 normalisation, dtype, device type, dimension, distance
+metric, tie-break policy, or the format and contract versions produces a
+different, incompatible generation. Compatibility fields are path-free; model
+and backend names are validated as non-path identifiers.
+
+A generation ID is `"dense-"` followed by the SHA-256 of the canonical JSON of
+the compatibility digest, `corpus_id`, `corpus_version`, and the chunk
+`source_manifest_digest` — 70 characters, with no path, corpus name, or
+payload content. Two builds with identical inputs therefore derive the same
+immutable identity, which is what makes an interrupted build safe to repeat.
+
+### Durable layout
+
+A generation is a directory under `storage.index_dir`:
+
+```text
+<index_dir>/dense/<generation_id>/
+  vectors.sqlite3    # PRAGMA user_version = 1
+  manifest.json      # canonical, path-free DenseIndexManifest payload
+```
+
+The database is written with `foreign_keys = ON`, `journal_mode = DELETE`, and
+`synchronous = FULL` so a published generation is a single self-contained file
+with no sidecar journal. It holds a `members` table of selected document
+versions with their chunk-set selection digests and chunk counts, and an
+`entries` table of one row per chunk carrying its record identity, owning
+document and version, ordinal, exact chunk text, canonical source links, and
+vector blob. Vectors are packed little-endian with one IEEE-754 **double** per
+dimension; `manifest.json` records the SHA-256 of the complete database file.
+
+Manifest members are unique and ordered by `document_id`. The mutable
+`active` link of any component must never be a reader selection mechanism:
+readers open a generation only by the ID recorded in a committed corpus-version
+manifest.
+
+### Opening and validation
+
+`open_dense_generation` rejects a symlinked directory or artefact, a manifest
+whose generation ID does not match the requested one, a manifest declaring a
+different implementation, format, or contract version, a database whose
+SHA-256 does not match the manifest, a failed `integrity_check`, an unexpected
+`user_version`, a failed `foreign_key_check`, member rows that disagree with
+the manifest, and per-document entry counts that disagree with declared chunk
+counts. The connection is opened read-only and immutable.
+
+Query execution additionally requires exactly one ready `dense-index`
+reference in the pinned snapshot manifest, owned by the selected corpus and
+version, whose implementation, format, contract, configuration, and
+source-manifest digests all match the opened manifest.
+
+### Query execution
+
+The query text is embedded through the runtime embedding boundary with
+`purpose="query"`, the dimension recorded in the generation's compatibility,
+and the normalisation recorded in its embedding profile. The response is
+rejected unless its `BackendMetadata` and `EmbeddingProfile` are equal to the
+generation's, which is how an incompatible or silently re-configured embedder
+is caught before it can contaminate results.
+
+Candidates are scored by cosine similarity, clamped to `[-1.0, 1.0]`, and
+ordered by descending similarity with ascending canonical `RecordId` as the
+only tie-break. Zero vectors are invalid for cosine and are rejected at
+construction. When the query carries a metadata filter, the predicate is
+evaluated in exact dense rank order before the requested limit is applied, so
+filtering never reorders surviving candidates.
+
+### Incremental reuse
+
+A build may name a parent generation reference. Vectors are reused from the
+parent only when the parent's `configuration_digest` equals the proposed
+compatibility digest **and** the candidate — record identity, kind, exact
+text, and complete source links — is unchanged. Everything else is
+re-embedded. A parent owned by another corpus, in a non-ready state, or
+declaring a different implementation or configuration digest fails closed
+rather than being partially trusted.
+
+Re-publishing an identical generation ID is a no-op: the existing durable
+generation is revalidated against the proposed inputs and returned with
+`generation_reused=true`. Build statistics report members processed, chunks
+processed, and vectors reused, embedded, replaced, and removed.
+
+### Failures
+
+`DenseError` carries one bounded category and a retryability hint:
+`invalid_request`, `generation_unavailable`, `corrupt_generation`,
+`incompatible_generation`, `embedding_failure`, `execution_failure`. It never
+carries SQL, paths, vectors, chunk text, query text, or raw exception
+messages. At the retrieval boundary, unavailable and corrupt generations
+become `channel_unavailable`; incompatible generations and invalid requests
+become `invalid_channel_response`; everything else becomes
+`channel_execution_failure`.
+
+### Storage participation
+
+The dense owner participates in corpus-version publication through
+`DenseGenerationParticipant` and `DenseGenerationValidator`. The validator
+returns a strict boolean and confirms that the registered reference is exactly
+the one derived from the manifest, that staged membership matches the chunk
+source manifest entry for entry, that each document version's persisted
+chunk-set selection still matches, and that the durable generation reopens by
+ID and matches its inputs. A database commit failure may leave an
+unreferenced immutable generation; it is unreachable through any committed
+manifest, and the dense owner retains cleanup responsibility under a future
+retention policy.
+
+### Outstanding against this contract
+
+These are known gaps, recorded here so the contract is not read as a
+description of finished work:
+
+- **Query cost grows with corpus size.** Opening a generation materialises
+  every entry to verify declared counts, and scoring materialises every
+  vector again. With a metadata filter, candidate provenance is also resolved
+  for every entry rather than for a bounded window. The specification requires
+  candidate provenance checks to stay bounded as result limits and corpus size
+  grow; this implementation does not yet meet that requirement.
+- **No operational logging or stage instrumentation.** The lexical build emits
+  an observed stage; the dense build emits neither logs nor profiling records.
+  The retrieval logging policy applies to this channel and is not yet
+  implemented for it.
+- **`library_version` defaults to the host SQLite version** and participates
+  in the configuration digest, so an unrelated SQLite upgrade invalidates
+  existing generations and blocks cross-machine builds. The library version
+  belongs in recorded compatibility metadata, not in the reuse identity.
+- **Vectors are stored as doubles** although the backend produces single
+  precision, doubling index size for no additional precision.
+
+## RET-05 fusion and document deduplication
+
+Fusion combines the ranked lexical and dense channels into one corpus-version
+scoped result without treating their incomparable raw scores as a single
+scale. Both channels are executed against **one** pinned snapshot, and every
+candidate's source links are revalidated against that snapshot before fusion;
+a channel whose candidates do not resolve becomes a channel-scoped failure
+rather than contributing unverified evidence.
+
+### Ranked channels and the metadata predicate
+
+Only `lexical` and `dense` are ranked, fusible channels. **Metadata is a
+predicate, not a channel**: `RET-03` filters are applied inside each channel's
+execution before its result limit, so there is no metadata candidate list to
+fuse and no metadata weight. A metadata-only comparison is therefore
+unavailable by construction, and an evaluation that reports one must report it
+as unavailable rather than as zero recall. Presenting a metadata result
+alongside ranked channels would imply a ranking the system does not compute.
+
+### Algorithm
+
+The baseline policy is weighted reciprocal-rank fusion, version `1.0.0`:
+
+```text
+fused_score(record) = sum over each contributing channel of
+                          weight(channel)
+                      ───────────────────────────────
+                      rank_constant + rank(record, channel)
+```
+
+| Parameter | Default | Constraint |
+| --- | --- | --- |
+| `rank_constant` | `60` | positive integer |
+| `lexical_weight` | `1.0` | finite, strictly positive |
+| `dense_weight` | `1.0` | finite, strictly positive |
+
+Ranks are channel-local and strictly positive; raw scores are never read.
+`FusionPolicy.identity` renders every ranking parameter as
+`reciprocal_rank_fusion/<version>/k=<constant>/dense=<weight>/lexical=<weight>`
+with weights formatted at full double precision so an identity cannot hide a
+weight change.
+
+Records are merged by `RecordId`. A merge requires identical candidate kind
+and byte-identical content; a source span identity appearing twice must carry
+identical ownership. Merged source links are the union, in canonical
+`(document_id, document_version_id, source_span_id)` order. A record
+contributes at most once per channel, and every contributing channel's
+contribution is retained in the fused hit so downstream stages can see which
+channels found the evidence.
+
+Fused order is descending `fused_score`, then ascending canonical `RecordId`.
+Channel results are themselves processed in canonical channel order, so fusion
+is deterministic for identical inputs.
+
+### Deduplication, version `1.0.0`
+
+Deduplication runs **after** ranking and **before** the requested limit, so
+the highest-ranked member of a duplicate group survives and the caller still
+receives up to its requested number of distinct hits.
+
+Byte-identical duplicate relationships visible in the pinned snapshot are
+resolved into connected components by union–find; a component's root is its
+lexicographically smallest `DocumentVersionId`. Only
+`DuplicateClass.BYTE_IDENTICAL` participates, because only that class
+guarantees identical content, and persistence already enforces matching hash
+algorithm and digest for it. A relationship whose endpoint is not visible in
+the snapshot is a corrupt read, not a silently dropped edge.
+
+The key for one candidate is its kind plus the sorted set of per-source keys:
+
+| Condition | Per-source key |
+| --- | --- |
+| Owning document version is in a duplicate component of size > 1 | `("byte_identical_source_range", component_root, start_offset, end_offset, page_number, content_origin)` |
+| Otherwise | `("source_span", source_span_id)` |
+
+An absent page number is normalised to `-1` so a page-less span cannot collide
+with page one. The effect is that the same passage reached through two
+byte-identical copies of a document collapses to one hit, while two genuinely
+different passages never collapse.
+
+### Document families are deliberately not collapsed
+
+Family membership is resolved and validated against the snapshot, but it does
+**not** affect the deduplication key. Two members of one publication or patent
+family remain separate hits.
+
+This follows from the provenance contract: `DocumentFamilyId` "identifies a
+family grouping, not a document", family membership "does not merge member
+documents or their immutable source versions", and "each member remains
+independently citable". Collapsing family members would discard distinct,
+separately citable evidence — precisely the outcome the issue boundary warns
+against — and would do so before the stage that is actually responsible for
+diversity.
+
+Resolved family identities are therefore exposed as **diagnostics**: the fused
+completion event reports how many distinct families the evidence set touches.
+Later channel planning and answer construction may use that signal to
+diversify or to annotate an answer; fusion does not act on it.
+
+> **Open decision for the maintainer.** `RET-05`'s scope line in
+> `build-details.md` still reads "document-version and family deduplication",
+> which this section does not implement and argues against. Either amend that
+> scope line to "document-version deduplication and family-aware diagnostics",
+> or keep it and record family-level collapse as a successor issue sequenced
+> with multi-channel planning. This section documents shipped behaviour and
+> its rationale; it does not resolve which of those two routes the plan takes.
+
+### Degraded channels and corpus-version mismatch
+
+Channel failures are preserved in the fused result and determine its status
+under the shared result rules: hits with failures is `partial`, no hits with
+failures is `failed`. Fusion requires at least one ranked channel result, and
+a channel result whose requested limit differs from the query's is invalid
+input.
+
+Any channel observing a corpus version other than the query's makes the whole
+fused result fail closed with no hits and an unscoped corpus-version mismatch
+failure. Fusion does not emit the channel-scoped partial form; a mismatch at
+this level means the snapshot and the query disagree, which is not a
+recoverable per-channel degradation.
+
+### Logging
+
+`retrieval_fusion_completed` is emitted once per execution at `INFO` when
+completed, `WARNING` when partial, and `ERROR` when failed. It carries the
+caller-supplied `corpus_id`, the result's `corpus_version`, the fusion policy
+identity, the deduplication policy version, result status, bounded per-channel
+candidate counts, the final result count, the family-diagnostic count, and the
+bounded failure categories. It excludes query text, candidate content, source
+passages, raw scores, paths, and raw exception messages.
+
 ## RET-06 limits
 
 Reranking uses the typed `[retrieval]` settings owned by
