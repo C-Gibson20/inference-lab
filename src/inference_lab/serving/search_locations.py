@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from inference_lab.provenance import RecordId
 from inference_lab.retrieval import (
+    LEXICAL_COMPONENT_KIND,
     EvidenceSource,
     LexicalError,
 )
@@ -18,9 +19,9 @@ from inference_lab.serving.search_contracts import (
     ServingSearchSourceLocation,
 )
 from inference_lab.storage import (
-    ComponentGenerationState,
     CorpusSnapshot,
     StructuralBlockKind,
+    select_ready_component_generation,
 )
 
 
@@ -61,19 +62,13 @@ def resolve_source_locations(
 
 def _lexical_reference(snapshot: CorpusSnapshot):
     """Select exactly one ready lexical reference from the pinned manifest."""
-    references = tuple(
-        reference
-        for reference in snapshot.manifest.component_generations
-        if reference.component_kind.as_str() == "lexical-index"
+    reference = select_ready_component_generation(
+        snapshot.manifest,
+        LEXICAL_COMPONENT_KIND,
+        corpus_id=snapshot.corpus_id,
+        corpus_version=snapshot.version.corpus_version,
     )
-    if len(references) != 1:
-        raise _invalid_location()
-    reference = references[0]
-    if (
-        reference.state is not ComponentGenerationState.READY
-        or reference.corpus_id != snapshot.corpus_id
-        or reference.corpus_version != snapshot.version.corpus_version
-    ):
+    if reference is None:
         raise _invalid_location()
     return reference
 

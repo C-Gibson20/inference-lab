@@ -20,9 +20,14 @@ from inference_lab.provenance import (
     RecordId,
 )
 from inference_lab.retrieval.errors import InvalidRetrievalContractError
+from inference_lab.retrieval.lexical_store_models import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.query import RetrievalQuery
+from inference_lab.storage import (
+    ComponentGenerationReference,
+    ComponentGenerationState,
+)
 
-LEXICAL_COMPONENT_KIND: Final[str] = "lexical-index"
+LEXICAL_COMPONENT_KIND_VALUE: Final[str] = LEXICAL_COMPONENT_KIND.as_str()
 LEXICAL_IMPLEMENTATION: Final[str] = "sqlite-fts5"
 LEXICAL_FORMAT_VERSION: Final[str] = "2.0.0"
 LEXICAL_CONTRACT_VERSION: Final[str] = "1.2.0"
@@ -416,7 +421,7 @@ class LexicalIndexManifest:
     chunk_count: int
     identifier_count: int
     schema_version: str = LEXICAL_MANIFEST_SCHEMA_VERSION
-    component_kind: str = LEXICAL_COMPONENT_KIND
+    component_kind: str = LEXICAL_COMPONENT_KIND_VALUE
     implementation: str = LEXICAL_IMPLEMENTATION
     format_version: str = LEXICAL_FORMAT_VERSION
     contract_version: str = LEXICAL_CONTRACT_VERSION
@@ -445,7 +450,7 @@ class LexicalIndexManifest:
             raise TypeError("configuration must be a LexicalIndexConfiguration.")
         if self.schema_version != LEXICAL_MANIFEST_SCHEMA_VERSION:
             raise InvalidLexicalContractError("unsupported lexical manifest version.")
-        if self.component_kind != LEXICAL_COMPONENT_KIND:
+        if self.component_kind != LEXICAL_COMPONENT_KIND_VALUE:
             raise InvalidLexicalContractError("unsupported lexical component kind.")
         if self.implementation != self.configuration.engine:
             raise InvalidLexicalContractError(
@@ -476,6 +481,21 @@ class LexicalIndexManifest:
             "identifier_count",
         ):
             _validate_non_negative_integer(getattr(self, field_name), field_name)
+
+    def component_generation(self) -> ComponentGenerationReference:
+        """Return the preparing reference represented by this manifest."""
+        return ComponentGenerationReference(
+            component_kind=LEXICAL_COMPONENT_KIND,
+            generation_id=self.generation_id,
+            implementation=self.implementation,
+            format_version=self.format_version,
+            contract_version=self.contract_version,
+            configuration_digest=self.configuration_digest,
+            source_manifest_digest=self.source_manifest_digest,
+            corpus_id=self.corpus_id,
+            corpus_version=self.corpus_version,
+            state=ComponentGenerationState.PREPARING,
+        )
 
     def as_payload(self) -> JsonObject:
         """Return the complete manifest payload without filesystem details."""
@@ -601,7 +621,7 @@ def derive_lexical_generation_id(
         raise TypeError("configuration must be a LexicalIndexConfiguration.")
     _validate_sha256(source_manifest_digest, "source_manifest_digest")
     payload: JsonObject = {
-        "component_kind": LEXICAL_COMPONENT_KIND,
+        "component_kind": LEXICAL_COMPONENT_KIND_VALUE,
         "configuration_digest": configuration.configuration_identity.digest,
         "contract_version": LEXICAL_CONTRACT_VERSION,
         "corpus_id": corpus_id.as_str(),

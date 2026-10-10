@@ -27,27 +27,21 @@ from inference_lab.retrieval import (
 )
 from inference_lab.storage import (
     ComponentGenerationReference,
-    ComponentGenerationState,
     CorpusSnapshot,
     MetadataRepository,
+    select_ready_component_generation,
 )
 
 
 def _dense_reference(snapshot: CorpusSnapshot) -> ComponentGenerationReference:
     """Select the ready dense generation that belongs to one pinned version."""
-    references = tuple(
-        reference
-        for reference in snapshot.manifest.component_generations
-        if reference.component_kind == DENSE_COMPONENT_KIND
+    reference = select_ready_component_generation(
+        snapshot.manifest,
+        DENSE_COMPONENT_KIND,
+        corpus_id=snapshot.corpus_id,
+        corpus_version=snapshot.version.corpus_version,
     )
-    if len(references) != 1:
-        raise RetrievalEvaluationExecutionError("invalid_dense_generation")
-    reference = references[0]
-    if (
-        reference.state is not ComponentGenerationState.READY
-        or reference.corpus_id != snapshot.corpus_id
-        or reference.corpus_version != snapshot.version.corpus_version
-    ):
+    if reference is None:
         raise RetrievalEvaluationExecutionError("invalid_dense_generation")
     return reference
 

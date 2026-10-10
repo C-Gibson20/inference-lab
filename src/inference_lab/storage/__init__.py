@@ -86,7 +86,11 @@ from inference_lab.storage.protocols import (
     MetadataWriter,
     WorkerRepositoryOpener,
 )
-from inference_lab.storage.snapshots import CorpusSnapshot
+from inference_lab.storage.snapshots import (
+    CorpusSnapshot,
+    generation_matches_reference,
+    select_ready_component_generation,
+)
 from inference_lab.storage.source_locations import (
     BoundingBox,
     CollectionAvailability,
@@ -213,7 +217,9 @@ __all__ = [
     "WriteChunkSetOutcome",
     "build_parsed_representation_output_digest",
     "build_source_blob_storage_key",
+    "generation_matches_reference",
     "open_metadata_repository",
+    "select_ready_component_generation",
     "serialise_parse_outcome",
     "serialise_parsed_representation",
     "serialise_source_artefact",

@@ -17,6 +17,8 @@ from inference_lab.evaluation.retrieval_execution import (
 from inference_lab.profiling import ProfilingContext
 from inference_lab.provenance import CorpusId, CorpusVersionId
 from inference_lab.retrieval import (
+    LEXICAL_COMPONENT_KIND,
+    LexicalIndexManifest,
     LexicalMatchMode,
     RetrievalLimit,
     RetrievalQuery,
@@ -25,47 +27,32 @@ from inference_lab.retrieval import (
 )
 from inference_lab.storage import (
     ComponentGenerationReference,
-    ComponentGenerationState,
     CorpusSnapshot,
     MetadataRepository,
+    generation_matches_reference,
+    select_ready_component_generation,
 )
 
 
 def _lexical_reference(snapshot: CorpusSnapshot) -> ComponentGenerationReference:
     """Select the one ready lexical generation of this immutable snapshot."""
-    references = tuple(
-        reference
-        for reference in snapshot.manifest.component_generations
-        if reference.component_kind.as_str() == "lexical-index"
+    reference = select_ready_component_generation(
+        snapshot.manifest,
+        LEXICAL_COMPONENT_KIND,
+        corpus_id=snapshot.corpus_id,
+        corpus_version=snapshot.version.corpus_version,
     )
-    if len(references) != 1:
-        raise RetrievalEvaluationExecutionError("invalid_lexical_generation")
-    reference = references[0]
-    if (
-        reference.state is not ComponentGenerationState.READY
-        or reference.corpus_id != snapshot.corpus_id
-        or reference.corpus_version != snapshot.version.corpus_version
-    ):
+    if reference is None:
         raise RetrievalEvaluationExecutionError("invalid_lexical_generation")
     return reference
 
 
 def _validate_generation(
-    reference: ComponentGenerationReference, manifest: object
+    reference: ComponentGenerationReference, manifest: LexicalIndexManifest
 ) -> None:
     """Require the opened generation to agree with its committed reference."""
-    for field in (
-        "corpus_id",
-        "corpus_version",
-        "generation_id",
-        "implementation",
-        "format_version",
-        "contract_version",
-        "configuration_digest",
-        "source_manifest_digest",
-    ):
-        if getattr(reference, field) != getattr(manifest, field, None):
-            raise RetrievalEvaluationExecutionError("invalid_lexical_generation")
+    if not generation_matches_reference(reference, manifest.component_generation()):
+        raise RetrievalEvaluationExecutionError("invalid_lexical_generation")
 
 
 def lexical_relationship_snapshot(

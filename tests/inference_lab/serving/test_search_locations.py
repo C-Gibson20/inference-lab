@@ -25,6 +25,7 @@ from inference_lab.serving.search_contracts import (
 from inference_lab.serving.search_locations import resolve_source_locations
 from inference_lab.storage import (
     ComponentGenerationState,
+    ComponentKind,
     ContentOrigin,
     CorpusSnapshot,
     ResolvedSourceSpan,
@@ -73,7 +74,7 @@ class _Snapshot:
         self.manifest = SimpleNamespace(
             component_generations=(
                 SimpleNamespace(
-                    component_kind=SimpleNamespace(as_str=lambda: "lexical-index"),
+                    component_kind=ComponentKind("lexical-index"),
                     state=ComponentGenerationState.READY,
                     corpus_id=CORPUS_ID,
                     corpus_version=CORPUS_VERSION_ID,

@@ -73,6 +73,7 @@ from inference_lab.storage import (
     ComponentGenerationValidator,
     MetadataRepository,
     StorageError,
+    select_ready_component_generation,
 )
 
 DENSE_DIRECTORY_NAME = "dense"
@@ -961,19 +962,13 @@ def select_dense_parent_reference(
         with repository.open_active_corpus_snapshot(corpus_id) as snapshot:
             if snapshot.version.corpus_version != expected_corpus_version:
                 raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
-            references = tuple(
-                item
-                for item in snapshot.manifest.component_generations
-                if item.component_kind == DENSE_COMPONENT_KIND
+            reference = select_ready_component_generation(
+                snapshot.manifest,
+                DENSE_COMPONENT_KIND,
+                corpus_id=corpus_id,
+                corpus_version=expected_corpus_version,
             )
-            if len(references) != 1:
-                raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
-            reference = references[0]
-            if (
-                reference.state is not ComponentGenerationState.READY
-                or reference.corpus_id != corpus_id
-                or reference.corpus_version != expected_corpus_version
-            ):
+            if reference is None:
                 raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
             return reference
     except DenseError:

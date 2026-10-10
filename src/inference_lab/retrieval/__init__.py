@@ -69,7 +69,6 @@ from inference_lab.retrieval.hybrid import (
     execute_hybrid_retrieval,
 )
 from inference_lab.retrieval.lexical import (
-    LEXICAL_COMPONENT_KIND,
     LEXICAL_CONTRACT_VERSION,
     LEXICAL_FORMAT_VERSION,
     LEXICAL_IDENTIFIER_SCORE_LABEL,
@@ -112,6 +111,7 @@ from inference_lab.retrieval.lexical_store import (
     open_lexical_generation,
     select_lexical_parent_reference,
 )
+from inference_lab.retrieval.lexical_store_models import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.metadata_adapter import (
     LexicalCandidateMetadata,
     resolve_lexical_candidate_metadata,
