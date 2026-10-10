@@ -143,7 +143,6 @@ def execute_dense_retrieval(
         profiling if profiling is not None else ProfilingContext.create()
     )
     stage_id = selected_profiling.stage_id("dense_retrieval", profiling_identity)
-    result: EvidenceResult | None = None
     with selected_profiling.observed_stage(
         stage="dense_retrieval",
         stage_id=stage_id,
@@ -166,8 +165,7 @@ def execute_dense_retrieval(
         failure = _map_result_failure(result)
         if failure is not None:
             stage.mark_failure(failure)
-    assert result is not None
-    return result
+        return result
 
 
 def _execute_dense_retrieval(
@@ -180,12 +178,7 @@ def _execute_dense_retrieval(
     snapshot: CorpusSnapshot | None = None,
     generation: DenseGeneration | None = None,
 ) -> EvidenceResult:
-    """Execute one dense query against a single pinned corpus snapshot.
-
-    Supplied snapshot and generation handles are borrowed and remain owned by
-    their caller.  Filters are evaluated in exact dense rank order before the
-    requested result limit is applied.
-    """
+    """Execute one dense query; supplied handles stay owned by the caller."""
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
         raise TypeError("repository must provide corpus snapshots.")
     if not isinstance(index_dir, Path):

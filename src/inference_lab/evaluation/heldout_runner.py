@@ -196,11 +196,8 @@ def run_held_out_baseline(
 ) -> HeldOutBaselineReport:
     """Run all frozen channels and build their deterministic aggregate report.
 
-    The deployment supplies ``run_channel`` to adapt each compared retrieval path to the
-    retrieval evaluation runner. This boundary keeps corpus access, model
-    construction, and
-    reranker backend lifecycle deployment-local while the orchestration enforces
-    one dataset, one corpus version, complete channel coverage, and fixed order.
+    ``run_channel`` is deployment-supplied so corpus access and model lifecycle
+    stay local to the deployment.
     """
     if not isinstance(contract, HeldOutRunContract):
         raise TypeError("contract must be a HeldOutRunContract.")

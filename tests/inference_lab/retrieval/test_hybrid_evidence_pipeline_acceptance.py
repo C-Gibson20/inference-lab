@@ -1,11 +1,4 @@
-"""Composed acceptance journey for the hybrid evidence pipeline.
-
-One scenario takes two corpora through dense and lexical index publication,
-a repository restart, fused multi-channel retrieval, reranked evidence
-selection, and token-budgeted evidence reduction, then re-runs the build to
-prove unchanged indexes are reused. It protects the composition of those
-stages, which their individual suites cannot observe.
-"""
+"""Composed journey: publish, restart, fuse, rerank, reduce, and reuse."""
 
 from pathlib import Path
 
@@ -65,13 +58,7 @@ def _generation_id(
 def _fused_order_from_contributions(
     hits: tuple[EvidenceHit, ...], policy: FusionPolicy
 ) -> tuple[str, ...]:
-    """Recompute the fused order from each hit's retained channel contributions.
-
-    This verifies the fusion arithmetic, weights, rank constant, and record-id
-    tie break against the ranks fusion actually retained. It deliberately does
-    not re-derive each channel's own ranks, which belong to that channel's
-    contract.
-    """
+    """Recompute the fused order from each hit's retained contributions."""
     scored = []
     for hit in hits:
         score = sum(

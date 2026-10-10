@@ -289,7 +289,7 @@ class StageTimer:
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Emit completion timing and propagate any stage exception."""
         del exc_value, traceback
         if not self._entered or self._start_ns is None:

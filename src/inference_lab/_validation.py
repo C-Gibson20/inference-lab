@@ -69,12 +69,7 @@ def is_local_path_shape(value: object) -> bool:
 
 
 def is_path_free_identifier(value: object) -> bool:
-    """Return whether a value is free of local-path shapes.
-
-    Immutable artefact, model, and backend identities must stay portable, so a
-    deployment path must never reach one. This predicate checks syntax only;
-    each owning boundary raises its own domain error on rejection.
-    """
+    """Return whether a value is free of local-path shapes."""
     if not isinstance(value, str):
         return False
     return not (

@@ -180,12 +180,7 @@ def execute_lexical_retrieval(
     snapshot: CorpusSnapshot | None = None,
     generation: LexicalGeneration | None = None,
 ) -> EvidenceResult:
-    """Execute one lexical query and instrument its bounded retrieval stage.
-
-    Supplied snapshot and generation handles are borrowed, never closed here.
-    This lets serving use one pinned version and one validated lexical handle
-    through retrieval and source-location resolution.
-    """
+    """Execute one lexical query; supplied handles stay owned by the caller."""
     if profiling is not None and not isinstance(profiling, ProfilingContext):
         raise TypeError("profiling must be a ProfilingContext or None.")
     if parent_stage_id is not None and not isinstance(parent_stage_id, str):

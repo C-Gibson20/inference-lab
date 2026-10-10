@@ -1,8 +1,4 @@
-"""Executable, corpus-metadata filter contracts.
-
-The metadata-filter registry version is independent of the retrieval
-query and result wire-schema version.
-"""
+"""Executable, corpus-metadata filter contracts."""
 
 from __future__ import annotations
 

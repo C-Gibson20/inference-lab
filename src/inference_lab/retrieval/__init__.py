@@ -1,4 +1,4 @@
-"""Channel-neutral, provenance-preserving retrieval value contracts."""
+"""Retrieval contracts, persistent lexical and dense indexes, and execution."""
 
 from inference_lab.retrieval.dense import (
     DENSE_COMPONENT_KIND,

@@ -48,10 +48,8 @@ def resolve_lexical_candidate_metadata(
 ) -> LexicalCandidateMetadata:
     """Resolve one candidate's source and exact parsed-record metadata.
 
-    The snapshot owns visibility and version pinning.  This adapter only
-    accepts source links that consistently identify the candidate's document
-    version and one exact parsed representation; missing reachable records or
-    ambiguous links are corrupt state rather than ordinary missing values.
+    A missing reachable record or an ambiguous link is corrupt state, not an
+    ordinary missing value.
     """
     if not isinstance(candidate, LexicalIndexedChunk):
         raise TypeError("candidate must be a LexicalIndexedChunk.")

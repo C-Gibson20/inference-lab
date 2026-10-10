@@ -28,7 +28,6 @@ from inference_lab._json import (
 from inference_lab._validation import paths_overlap
 from inference_lab.backends.runtime import (
     BackendCapability,
-    BackendError,
     BackendMetadata,
     BackendOperation,
     EmbeddingBackend,
@@ -705,8 +704,6 @@ def _embed_pending(
                     purpose="document",
                 )
             )
-        except BackendError:
-            raise DenseError(DenseFailureCategory.EMBEDDING_FAILURE) from None
         except Exception:
             raise DenseError(DenseFailureCategory.EMBEDDING_FAILURE) from None
         if (
@@ -715,7 +712,7 @@ def _embed_pending(
             or len(response.vectors) != len(batch)
         ):
             raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
-        for item, values in zip(batch, response.vectors):
+        for item, values in zip(batch, response.vectors, strict=True):
             try:
                 vector = DenseVector(tuple(values))
             except (TypeError, ValueError, InvalidDenseContractError):

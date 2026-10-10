@@ -179,7 +179,7 @@ class ObservedStage:
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Emit terminal and failure records without masking stage failures."""
         if not self._entered:
             raise RuntimeError("ObservedStage must be entered before it can exit")
@@ -214,12 +214,7 @@ class ObservedStage:
         )
 
     def mark_success(self) -> None:
-        """Mark a returned success, reuse, empty result, or no-change result.
-
-        These outcomes intentionally share the successful timing status. Their
-        domain-specific distinction is represented by the caller's counts and
-        result contract rather than by a second profiling schema.
-        """
+        """Mark a returned success, reuse, empty result, or no-change result."""
         self._require_active()
         if self._failure is not None:
             raise RuntimeError("a stage cannot be marked successful after failure")

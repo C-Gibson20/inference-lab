@@ -1,11 +1,4 @@
-"""Held-out baseline acceptance over a published fixture corpus.
-
-One scenario drives every shipped channel adapter against a real two-corpus
-deployment, aggregates the frozen run, applies the gate policy, publishes the
-report bundle, and repeats the run to prove the fingerprint and report digest
-are byte-identical. It is the only path that exercises the adapters, runner,
-reporter, gate, and publisher together; the operator suite substitutes fakes.
-"""
+"""Held-out baseline run over a published fixture corpus."""
 
 import hashlib
 import json
@@ -60,12 +53,7 @@ _EVIDENCE_COUNT = 5
 
 
 def _source_span_id(member: tuple[DocumentId, DocumentVersionId, str]) -> str:
-    """Return the deterministic parser source-span identity of one member.
-
-    Span identities derive from the document version, parser version, block
-    ordinal, kind, and range, so re-parsing the fixture text reproduces exactly
-    the spans the published corpus holds.
-    """
+    """Return the deterministic parser source-span identity of one member."""
     document_id, version_id, text = member
     representation = parse_records(
         SELECTED_CORPUS, document_id, version_id, text

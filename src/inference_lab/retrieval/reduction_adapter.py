@@ -66,14 +66,7 @@ def reduce_retrieval_evidence(
     diversity_policy_override: Literal["none", "per_document"] | None = None,
     expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None,
 ) -> EvidenceReductionOutcome:
-    """Reduce one reranked result against its exact pinned corpus snapshot.
-
-    The lexical generation supplies immutable chunk source intervals. Parsed
-    text and the canonical source-boundary map turn those intervals into exact
-    candidate-to-source ranges. Any candidate whose map cannot be proved can
-    still be retained whole, but the pure reducer will fail that candidate
-    closed if it needs shortening.
-    """
+    """Reduce one reranked result against its exact pinned corpus snapshot."""
     started = time.perf_counter()
     corpus_version: CorpusVersionId | None = None
     try:

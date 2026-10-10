@@ -237,9 +237,7 @@ class HeldOutRunContract:
 class HeldOutGatePolicy:
     """Immutable thresholds fixed before opening held-out results.
 
-    Fractions are exact integer ratios. The policy deliberately has no guessed
-    defaults: a run must provide a threshold and its rationale before it can
-    be executed against held-out cases.
+    Deliberately has no defaults: a run must state its threshold and rationale.
     """
 
     minimum_document_recall_at_10: MetricFraction

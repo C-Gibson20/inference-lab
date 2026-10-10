@@ -69,12 +69,7 @@ class RerankCandidateLimit:
 
 @dataclass(frozen=True, slots=True)
 class RerankingRequest:
-    """Pair one query with the fused evidence result from the same snapshot.
-
-    The request retains the fused candidates and their provenance unchanged.
-    Ranking scores are supplied only by the backend at execution time and are
-    not added to this input contract.
-    """
+    """Pair one query with the fused evidence result from the same snapshot."""
 
     query: RetrievalQuery
     fused_result: EvidenceResult
@@ -242,11 +237,7 @@ def prepare_rerank_request(
     evidence_count: EvidenceCount = EvidenceCount(),
     candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
 ) -> PreparedReranking:
-    """Build a bounded reranker request while retaining original source evidence.
-
-    The pool policy retains the leading fused candidates in their
-    existing deterministic order. An empty pool requires no backend request.
-    """
+    """Build a bounded reranker request retaining original source evidence."""
     if not isinstance(request, RerankingRequest):
         raise TypeError("request must be a RerankingRequest.")
     if not isinstance(evidence_count, EvidenceCount):
@@ -332,12 +323,7 @@ def map_rerank_result(
 def rank_evidence_hits(
     scored_evidence: tuple[ScoredEvidence, ...],
 ) -> tuple[EvidenceHit, ...]:
-    """Return score-ordered evidence with deterministic ties and fresh ranks.
-
-    Scores affect ordering only. The returned hits are rebuilt from the
-    original candidates and channel contributions, so source provenance and
-    Fused channel diagnostics survive unchanged.
-    """
+    """Return score-ordered evidence with fresh ranks; scores order only."""
     if not isinstance(scored_evidence, tuple):
         raise TypeError("scored_evidence must be a tuple.")
     if any(not isinstance(item, ScoredEvidence) for item in scored_evidence):
@@ -360,12 +346,7 @@ def rank_evidence_hits(
 def deduplicate_evidence_hits(
     ranked_hits: tuple[EvidenceHit, ...],
 ) -> tuple[EvidenceHit, ...]:
-    """Drop exact repeated source evidence, retaining the highest-ranked hit.
-
-    The key uses candidate kind and the complete ordered-independent set of
-    source-span identities with their owning document versions. Document- or
-    family-level similarity and span overlap do not make candidates duplicates.
-    """
+    """Drop only exact repeated source spans, never document or family peers."""
     if not isinstance(ranked_hits, tuple):
         raise TypeError("ranked_hits must be a tuple.")
     if any(not isinstance(hit, EvidenceHit) for hit in ranked_hits):
@@ -442,13 +423,8 @@ def execute_reranking(
 ) -> RerankingOutcome:
     """Select evidence and convert backend failures to bounded outcomes.
 
-    The caller supplies the corpus identity selected with the pinned query so
-    the stage can emit consistent retrieval context without changing the
-    shared result contract.
-    Retryable backend failures may return the deterministic fused order as a
-    partial result. Invalid inputs, malformed responses, and non-retryable
-    failures return no hits. Error messages and candidate payloads never cross
-    into the result contract.
+    ``corpus_id`` is supplied for logging context only; it does not widen the
+    pinned query.
     """
     if not isinstance(query, RetrievalQuery):
         raise TypeError("query must be a RetrievalQuery.")
