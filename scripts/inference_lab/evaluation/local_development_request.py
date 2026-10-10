@@ -19,6 +19,10 @@ from inference_lab.evaluation import (
     load_dataset,
 )
 from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.retrieval.reranking import (
+    EvidenceCount,
+    RerankCandidateLimit,
+)
 from inference_lab.settings import get_settings
 from inference_lab.storage import open_metadata_repository
 
@@ -104,7 +108,12 @@ def make_development_request() -> RetrievalEvaluationRequest:
             reranker = LocalRerankerBackend(settings.models.reranker_path)
             _OPEN_RESOURCES.append(reranker)
             reranker.load()
-            adapter = LocalRerankedEvaluationAdapter(fused, reranker)
+            adapter = LocalRerankedEvaluationAdapter(
+                fused,
+                reranker,
+                evidence_count=EvidenceCount.from_config(settings.retrieval),
+                candidate_limit=RerankCandidateLimit.from_config(settings.retrieval),
+            )
 
     return RetrievalEvaluationRequest(
         dataset=dataset,

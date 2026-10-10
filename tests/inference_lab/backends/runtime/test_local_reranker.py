@@ -26,6 +26,7 @@ from inference_lab.backends.runtime import (
     RerankRequest,
     reranker,
 )
+from inference_lab.backends.runtime.reranker import _MAX_CANDIDATES
 from inference_lab.logging.logging_config import configure_logging
 from inference_lab.provenance import (
     CorpusId,
@@ -52,7 +53,7 @@ from inference_lab.retrieval.reranking import (
     RerankCandidateLimit,
     execute_reranking,
 )
-from inference_lab.settings import LoggingConfig
+from inference_lab.settings import MAX_RERANK_CANDIDATES, LoggingConfig
 
 
 class _TestTokenizer:
@@ -500,3 +501,9 @@ def test_artifact_verification_checks_full_inventory_and_digests(
     (tmp_path / "config.json").write_text("changed", encoding="utf-8")
     with pytest.raises(ValueError, match="digest"):
         reranker._verify_local_artefacts(tmp_path)
+
+
+def test_configured_candidate_ceiling_matches_the_backend_hard_cap() -> None:
+    # The settings ceiling exists because of this backend's cap. Settings is a
+    # dependency-free leaf and cannot import the backend, so assert equality.
+    assert MAX_RERANK_CANDIDATES == _MAX_CANDIDATES

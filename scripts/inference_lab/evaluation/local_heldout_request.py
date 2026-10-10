@@ -29,6 +29,10 @@ from inference_lab.evaluation import (
 )
 from inference_lab.evaluation.loader import LoadedDataset
 from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.retrieval.reranking import (
+    EvidenceCount,
+    RerankCandidateLimit,
+)
 from inference_lab.settings import get_settings
 from inference_lab.storage import open_metadata_repository
 
@@ -167,7 +171,12 @@ def make_heldout_request() -> HeldOutBaselineRequest:
         corpus_version,
         embedder,
     )
-    reranked = LocalRerankedEvaluationAdapter(fused, reranker)
+    reranked = LocalRerankedEvaluationAdapter(
+        fused,
+        reranker,
+        evidence_count=EvidenceCount.from_config(settings.retrieval),
+        candidate_limit=RerankCandidateLimit.from_config(settings.retrieval),
+    )
     metadata = UnavailableMetadataEvaluationAdapter()
     adapters = {
         HeldOutChannel.LEXICAL_ONLY: lexical,

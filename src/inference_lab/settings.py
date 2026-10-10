@@ -3,7 +3,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Self
+from typing import Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
@@ -99,13 +99,22 @@ class IngestConfig(BaseModel):
     max_concurrent_documents: int = Field(default=1, gt=0)
 
 
+# The reranking bounds are declared here so the typed settings and the
+# retrieval values that enforce them cannot drift. The candidate ceiling
+# mirrors the local reranker backend's hard cap, which is asserted by its
+# own tests.
+MIN_EVIDENCE_COUNT: Final = 5
+MAX_EVIDENCE_COUNT: Final = 10
+MAX_RERANK_CANDIDATES: Final = 100
+
+
 class RetrievalConfig(BaseModel):
     """Limits and defaults for selecting and reducing downstream evidence."""
 
     model_config = ConfigDict(extra="forbid")
 
-    evidence_count: int = Field(default=8, ge=5, le=10)
-    candidate_limit: int = Field(default=100, ge=1, le=100)
+    evidence_count: int = Field(default=8, ge=MIN_EVIDENCE_COUNT, le=MAX_EVIDENCE_COUNT)
+    candidate_limit: int = Field(default=100, ge=1, le=MAX_RERANK_CANDIDATES)
     evidence_token_budget: int = Field(default=4096, gt=0)
     diversity_policy: Literal["none", "per_document"] = "none"
 

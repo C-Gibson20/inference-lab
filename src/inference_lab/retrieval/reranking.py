@@ -30,8 +30,13 @@ from inference_lab.retrieval.results import (
     ResultStatus,
     RetrievalFailure,
 )
+from inference_lab.settings import (
+    MAX_EVIDENCE_COUNT,
+    MAX_RERANK_CANDIDATES,
+    MIN_EVIDENCE_COUNT,
+    RetrievalConfig,
+)
 
-MAX_RERANK_CANDIDATES = 100
 RERANK_DEDUPLICATION_VERSION = "1.0.0"
 RERANK_POLICY_VERSION = "1.0.0"
 _LOGGER = structlog.get_logger("inference_lab.retrieval")
@@ -46,10 +51,18 @@ class EvidenceCount:
     def __post_init__(self) -> None:
         if type(self.value) is not int:
             raise TypeError("value must be an integer.")
-        if not 5 <= self.value <= 10:
+        if not MIN_EVIDENCE_COUNT <= self.value <= MAX_EVIDENCE_COUNT:
             raise InvalidRetrievalContractError(
-                "evidence count must be between 5 and 10."
+                "evidence count must be between "
+                f"{MIN_EVIDENCE_COUNT} and {MAX_EVIDENCE_COUNT}."
             )
+
+    @classmethod
+    def from_config(cls, configuration: RetrievalConfig) -> "EvidenceCount":
+        """Build the configured evidence count from validated settings."""
+        if not isinstance(configuration, RetrievalConfig):
+            raise TypeError("configuration must be a RetrievalConfig.")
+        return cls(configuration.evidence_count)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +76,16 @@ class RerankCandidateLimit:
             raise TypeError("value must be an integer.")
         if not 1 <= self.value <= MAX_RERANK_CANDIDATES:
             raise InvalidRetrievalContractError(
-                "reranker candidate limit must be between 1 and 100."
+                f"reranker candidate limit must be between 1 and "
+                f"{MAX_RERANK_CANDIDATES}."
             )
+
+    @classmethod
+    def from_config(cls, configuration: RetrievalConfig) -> "RerankCandidateLimit":
+        """Build the configured candidate limit from validated settings."""
+        if not isinstance(configuration, RetrievalConfig):
+            raise TypeError("configuration must be a RetrievalConfig.")
+        return cls(configuration.candidate_limit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,16 +199,21 @@ class RerankingIdentity:
 
     def _validate_limits(self) -> None:
         """Require both limits to stay inside the configured baseline ranges."""
-        if type(self.evidence_count) is not int or not 5 <= self.evidence_count <= 10:
+        if (
+            type(self.evidence_count) is not int
+            or not MIN_EVIDENCE_COUNT <= self.evidence_count <= MAX_EVIDENCE_COUNT
+        ):
             raise InvalidRetrievalContractError(
-                "identity evidence count must be between 5 and 10."
+                "identity evidence count must be between "
+                f"{MIN_EVIDENCE_COUNT} and {MAX_EVIDENCE_COUNT}."
             )
         if (
             type(self.candidate_limit) is not int
             or not 1 <= self.candidate_limit <= MAX_RERANK_CANDIDATES
         ):
             raise InvalidRetrievalContractError(
-                "identity candidate limit must be between 1 and 100."
+                "identity candidate limit must be between 1 and "
+                f"{MAX_RERANK_CANDIDATES}."
             )
 
     @property
@@ -234,8 +260,8 @@ class RerankingOutcome:
 def prepare_rerank_request(
     request: RerankingRequest,
     *,
-    evidence_count: EvidenceCount = EvidenceCount(),
-    candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
+    evidence_count: EvidenceCount,
+    candidate_limit: RerankCandidateLimit,
 ) -> PreparedReranking:
     """Build a bounded reranker request retaining original source evidence."""
     if not isinstance(request, RerankingRequest):
@@ -395,8 +421,8 @@ def rerank_evidence(
     backend: RerankerBackend,
     request: RerankingRequest,
     *,
-    evidence_count: EvidenceCount = EvidenceCount(),
-    candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
+    evidence_count: EvidenceCount,
+    candidate_limit: RerankCandidateLimit,
 ) -> tuple[PreparedReranking, tuple[ScoredEvidence, ...]]:
     """Call the reranker with the bounded request and map scores to source evidence."""
     if not callable(getattr(backend, "rerank", None)):
@@ -418,8 +444,8 @@ def execute_reranking(
     fused_result: EvidenceResult,
     *,
     corpus_id: CorpusId,
-    evidence_count: EvidenceCount = EvidenceCount(),
-    candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
+    evidence_count: EvidenceCount,
+    candidate_limit: RerankCandidateLimit,
 ) -> RerankingOutcome:
     """Select evidence and convert backend failures to bounded outcomes.
 

@@ -425,7 +425,12 @@ passages, raw scores, paths, and raw exception messages.
 ## RET-06 limits
 
 Reranking uses the typed `[retrieval]` settings owned by
-`inference_lab.settings.RetrievalConfig`:
+`inference_lab.settings.RetrievalConfig`. Callers build the typed limits with
+`EvidenceCount.from_config` and `RerankCandidateLimit.from_config`; both limits
+are required arguments at every reranking entry point, so a deployment cannot
+fall back to the baseline silently. `settings` declares `MIN_EVIDENCE_COUNT`,
+`MAX_EVIDENCE_COUNT`, and `MAX_RERANK_CANDIDATES`, and the retrieval values
+enforce exactly those bounds:
 
 | Setting | Environment override | Default | Valid range |
 | --- | --- | --- | --- |
