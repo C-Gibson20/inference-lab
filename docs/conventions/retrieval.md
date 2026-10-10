@@ -481,7 +481,19 @@ malformed responses, and corpus-version mismatches fail closed without hits.
 `reduce_retrieval_evidence` accepts one RET-06 `EvidenceResult`, a pinned
 `CorpusSnapshot`, the matching immutable lexical generation, an explicit local
 offset-bearing tokeniser, and validated `RetrievalConfig`. It rejects a corpus
-or version mismatch before reading candidate source data. The default token
+or version mismatch before reading candidate source data, and distinguishes the
+three ways that check can fail: `corpus_version_mismatch` when the snapshot,
+result, or generation disagree about the corpus version;
+`component_unavailable` when the snapshot publishes no ready lexical component;
+and `component_mismatch` when a ready component is not the generation that was
+opened. A missing index and a stale index need different operator responses, so
+they are never reported as the same cause.
+
+Reduction failures name the cause the operator must act on. An item evicted
+because the token budget is exhausted is recorded as `dropped_budget` even when
+it had already been truncated; `failed_source_map` and its `source_map_*`
+failures are reserved for a candidate whose source ranges are genuinely absent
+or unusable. The default token
 ceiling is `retrieval.evidence_token_budget = 4096`; a request may supply a
 positive token-budget override. The default item ceiling is RET-06's configured
 `evidence_count` (at most eight by default), further capped by the request's

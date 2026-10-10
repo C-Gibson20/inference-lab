@@ -44,6 +44,7 @@ class EvidenceReductionFailureCategory(StrEnum):
     """Bounded reasons the evidence-reduction boundary could not complete."""
 
     CORPUS_VERSION_MISMATCH = "corpus_version_mismatch"
+    COMPONENT_UNAVAILABLE = "component_unavailable"
     COMPONENT_MISMATCH = "component_mismatch"
     TOKENISER_MISMATCH = "tokeniser_mismatch"
     TOKENISER_UNAVAILABLE = "tokeniser_unavailable"
@@ -117,10 +118,12 @@ def reduce_retrieval_evidence(
             corpus_id=corpus_id,
             corpus_version=corpus_version,
         )
+        if reference is None:
+            raise EvidenceReductionExecutionError(
+                EvidenceReductionFailureCategory.COMPONENT_UNAVAILABLE
+            )
         manifest = generation.manifest
-        if reference is None or not generation_matches_reference(
-            reference, manifest.component_generation()
-        ):
+        if not generation_matches_reference(reference, manifest.component_generation()):
             raise EvidenceReductionExecutionError(
                 EvidenceReductionFailureCategory.COMPONENT_MISMATCH
             )

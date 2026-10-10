@@ -199,6 +199,86 @@ def _source_artefact(text: str) -> SourceArtefact:
     )
 
 
+def _prepared_reduction(tmp_path: Path):
+    """Build one pinned snapshot, lexical generation, and single-hit result."""
+    source_text = "Cafe\u0301 alpha beta gamma"
+    chunk_set, selected = selection(
+        source_text,
+        document_id=DOCUMENT_ID,
+        document_version_id=DOCUMENT_VERSION_ID,
+    )
+    chunk = chunk_set.chunks[0]
+    built = build_lexical_generation(tmp_path, manifest((selected,)))
+    snapshot = _Snapshot(
+        _parsed_for_chunk(source_text, chunk),
+        _source_artefact(source_text),
+        built.manifest,
+    )
+    candidate = RetrievalCandidate(
+        record_id=chunk.record_id,
+        kind=CandidateKind.ORIGINAL_PASSAGE,
+        content=chunk.text,
+        sources=tuple(
+            EvidenceSource(DOCUMENT_ID, link.document_version_id, link.source_span_id)
+            for link in chunk.source_references
+        ),
+    )
+    result = EvidenceResult(
+        corpus_version=CORPUS_VERSION_ID,
+        requested_limit=RetrievalLimit(5),
+        hits=(EvidenceHit(candidate, (ChannelScore(RetrievalChannel.LEXICAL, 1),), 1),),
+        status=ResultStatus.COMPLETED,
+        failures=(),
+    )
+    return snapshot, built.manifest, result
+
+
+def test_missing_and_stale_lexical_components_are_distinguishable(
+    tmp_path: Path,
+) -> None:
+    snapshot, built_manifest, result = _prepared_reduction(tmp_path)
+    ready = snapshot.manifest.component_generations[0]
+
+    with open_lexical_generation(tmp_path, built_manifest.generation_id) as generation:
+
+        def reduce() -> None:
+            reduce_retrieval_evidence(
+                CORPUS_ID,
+                cast(CorpusSnapshot, snapshot),
+                generation,
+                result,
+                _WhitespaceTokeniser(),
+                RetrievalConfig(),
+            )
+
+        snapshot.manifest = SimpleNamespace(component_generations=())
+        with pytest.raises(EvidenceReductionExecutionError) as unavailable:
+            reduce()
+
+        snapshot.manifest = SimpleNamespace(
+            component_generations=(
+                replace(ready, state=ComponentGenerationState.PREPARING),
+            )
+        )
+        with pytest.raises(EvidenceReductionExecutionError) as unready:
+            reduce()
+
+        snapshot.manifest = SimpleNamespace(
+            component_generations=(replace(ready, configuration_digest="0" * 64),)
+        )
+        with pytest.raises(EvidenceReductionExecutionError) as stale:
+            reduce()
+
+    assert (
+        unavailable.value.category
+        is EvidenceReductionFailureCategory.COMPONENT_UNAVAILABLE
+    )
+    assert (
+        unready.value.category is EvidenceReductionFailureCategory.COMPONENT_UNAVAILABLE
+    )
+    assert stale.value.category is EvidenceReductionFailureCategory.COMPONENT_MISMATCH
+
+
 def test_public_reduction_maps_unicode_truncation_and_logs_privately(
     tmp_path: Path,
 ) -> None:

@@ -602,19 +602,12 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
         removed = items.pop()
         dropped += 1
         final_count = _count_joined(request.tokeniser, [item.text for item in items])
-        if removed.action is EvidenceReductionAction.TRUNCATED:
-            failures.append(
-                EvidenceReductionFailure(
-                    removed.hit.candidate.record_id, "source_map_invalid"
-                )
-            )
-            action = EvidenceReductionAction.FAILED_SOURCE_MAP
-        else:
-            action = EvidenceReductionAction.DROPPED_BUDGET
+        # A truncated item that still does not fit was evicted by the budget,
+        # not by a defective source map.
         decisions = [
             EvidenceReductionDecision(
                 decision.record_id,
-                action
+                EvidenceReductionAction.DROPPED_BUDGET
                 if decision.record_id == removed.hit.candidate.record_id
                 else decision.action,
             )
