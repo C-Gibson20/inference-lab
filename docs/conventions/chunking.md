@@ -27,7 +27,7 @@ Native token offsets establish a bounded candidate neighbourhood for end and
 overlap selection. Exact standalone counts choose between candidates within
 that neighbourhood and independently enforce the hard maximum. Selection must
 not binary-search scalar counts as though they were globally monotonic, nor
-rescan the entire source-boundary map or retokenize the remaining suffix for
+rescan the entire source-boundary map or retokenise the remaining suffix for
 each chunk. Build token and source-boundary indexes once per document, slice
 the indexed neighbourhood for each window, and retain exact standalone counts
 for candidate validation. This avoids work growing with the product of

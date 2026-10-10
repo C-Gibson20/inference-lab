@@ -18,9 +18,12 @@ doing so can hide dependency direction and create initialisation cycles. Across
 domain boundaries, prefer the owning package's public API when it exports the
 required symbol; otherwise import the defining module explicitly.
 
-Test modules may use explicit relative imports for fixture and helper modules in
-the same test package. These helpers are local test implementation details, not
-an application API. Imports of application code remain absolute.
+Test modules follow the same policy. Relative imports are banned repository
+wide by the enforced `flake8-tidy-imports` rule
+(`ban-relative-imports = "all"`), so fixture and helper modules in the same
+test package are imported absolutely through their test package path. These
+helpers remain local test implementation details rather than an application
+API; only their import spelling is shared with production code.
 
 Imports are grouped as standard library, third-party packages, then
 `inference_lab` or test-package imports, with one blank line between groups.
@@ -96,6 +99,27 @@ them into project-owned names.
 A spelling correction to a persisted or public project contract is an
 incompatible change and requires the owning schema or contract version to
 advance. Do not add aliases solely to preserve a superseded first implementation.
+
+## Descriptive names and comments
+
+Module, class, function, constant, and test names, docstrings, and comments
+describe behaviour and contracts. They do not reference build-plan items. Do
+not use phase numbers or issue identifiers such as `RET-06` or `Phase 6` in
+`src/` or `tests/`.
+
+A reader working in the codebase must be able to understand what a module owns
+without opening the build plan. A docstring reading "Validated request
+boundary for RET-06 evidence reranking" requires an external document to
+decode; "Rerank fused candidates into a bounded evidence set" does not. The
+same applies to a constant: prefer `RERANK_POLICY_VERSION` over
+`RET06_POLICY_VERSION`.
+
+Build-plan vocabulary belongs in `docs/plans/`. A convention document may cite
+the issue that owns a contract, because a convention's purpose is to connect a
+product decision to the boundary that implements it. Acceptance traceability
+belongs in the test-suite plan's coverage-trace table, which maps each build
+item to the acceptance evidence that protects it, rather than in test names or
+docstrings.
 
 ## Package docstrings
 

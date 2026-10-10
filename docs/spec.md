@@ -133,13 +133,6 @@ The baseline uses 256–512-token chunks with approximately 15% overlap, but chu
 boundaries should respect sections, paragraphs, claims, tables, and figure
 captions where possible.
 
-Chunking must remain practical for a small number of long papers or patents as
-well as for many short files. Build token-offset and source-boundary indexes
-once per document, then use indexed ranges to select each bounded window. Do
-not rescan or retokenize the entire remaining suffix for every chunk: that
-makes preparation grow roughly with document length multiplied by chunk count.
-Exact standalone token counts still validate each selected candidate window.
-
 Build these indexes:
 
 - lexical search, such as BM25, for exact terms and identifiers;
@@ -205,11 +198,6 @@ For each question, the planner may combine:
 Results are fused, reranked, deduplicated, and reduced to a small evidence set.
 The final answer should cite original passages wherever possible, rather than
 citing only a generated summary.
-
-Candidate provenance checks must stay bounded as result limits and corpus size
-grow. A snapshot may reuse validated source-location indexes for its immutable
-version, but it must not repeatedly deserialize a complete parsed document for
-each ranked chunk or carry cached source data across snapshot lifetimes.
 
 ### Answering
 

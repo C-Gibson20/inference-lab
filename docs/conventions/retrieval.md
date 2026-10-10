@@ -105,6 +105,26 @@ Cross-corpus or federated retrieval is outside this contract and the first
 build. Comparing corpora requires separate queries and results; callers must
 not combine their hits into a result labelled as one corpus version.
 
+### Bounded candidate provenance
+
+Resolving a candidate's source links is a per-candidate cost, so a channel
+must keep that cost bounded by its result limit rather than by the size of the
+selected corpus version. A channel may resolve and revalidate provenance for
+the candidates it is about to expose, and it may reuse validated
+source-location indexes for the lifetime of one pinned snapshot. It must not
+repeatedly deserialise a complete parsed representation for each ranked chunk,
+resolve provenance for every indexed record in order to apply a predicate, or
+carry cached source data across snapshot lifetimes.
+
+A predicate that must be evaluated before the result limit still bounds its
+work: it reduces a bounded candidate window and tops that window up
+deterministically, rather than ranking and resolving the whole generation.
+
+This requirement derives from the specification's product decision — thousands
+of documents per corpus, small query-time context, and stable interactive
+latency — and the specification deliberately does not restate it as an
+implementation rule.
+
 ## RET-04 dense index
 
 The dense channel is a durable, corpus-version-scoped vector index built from
@@ -245,9 +265,8 @@ description of finished work:
 - **Query cost grows with corpus size.** Opening a generation materialises
   every entry to verify declared counts, and scoring materialises every
   vector again. With a metadata filter, candidate provenance is also resolved
-  for every entry rather than for a bounded window. The specification requires
-  candidate provenance checks to stay bounded as result limits and corpus size
-  grow; this implementation does not yet meet that requirement.
+  for every entry rather than for a bounded window. This breaches the bounded
+  candidate provenance rule above.
 - **No operational logging or stage instrumentation.** The lexical build emits
   an observed stage; the dense build emits neither logs nor profiling records.
   The retrieval logging policy applies to this channel and is not yet
@@ -358,13 +377,26 @@ completion event reports how many distinct families the evidence set touches.
 Later channel planning and answer construction may use that signal to
 diversify or to annotate an answer; fusion does not act on it.
 
-> **Open decision for the maintainer.** `RET-05`'s scope line in
-> `build-details.md` still reads "document-version and family deduplication",
-> which this section does not implement and argues against. Either amend that
-> scope line to "document-version deduplication and family-aware diagnostics",
-> or keep it and record family-level collapse as a successor issue sequenced
-> with multi-channel planning. This section documents shipped behaviour and
-> its rationale; it does not resolve which of those two routes the plan takes.
+This is a settled decision, not a deferral. Fusion cannot see query intent, so
+it cannot judge when family members are redundant: they are interchangeable
+for an aggregation such as "how many patents mention Y after 2018" and
+materially distinct for a claim-level question, where jurisdictional members
+of one patent family carry different claim language. Byte-identical duplicates
+are collapsed here precisely because identical bytes are redundant for every
+question a caller could ask. A collapse at this stage is also irreversible:
+reranking and evidence reduction run downstream, so a member dropped here
+cannot be recovered by a stage that knows better.
+
+Family handling therefore belongs to the two stages that do know the question:
+
+- **Diversity** belongs to RET-07, whose configured policy already selects
+  between no diversity and per-document diversity. `per_family` is a candidate
+  value for `retrieval.diversity_policy`, gated on the family crowding
+  diagnostics that evaluation already measures showing that crowding occurs.
+- **Counting** belongs to RET-08. Whether a family counts once or per member
+  is an aggregation decision that must be explicit, versioned with the
+  aggregation algorithm identity, and visible in the result's uncertainty when
+  family membership is incomplete.
 
 ### Degraded channels and corpus-version mismatch
 
