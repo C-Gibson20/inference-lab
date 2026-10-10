@@ -242,7 +242,12 @@ not by corpus size; `iter_entries` remains the full-materialisation reader used
 by incremental reuse and registration validation, which legitimately need every
 entry. When the query carries a metadata filter, the predicate is
 evaluated in exact dense rank order before the requested limit is applied, so
-filtering never reorders surviving candidates.
+filtering never reorders surviving candidates. Because that evaluation happens
+before the limit, the channel ranks a bounded candidate window of
+`FILTERED_WINDOW_FACTOR` times the requested limit and doubles that window,
+capped at the generation's entry count, until enough candidates survive. The
+ranking is a total deterministic order, so a wider window only extends the
+previous one and the result is identical to ranking the whole generation.
 
 ### Incremental reuse
 
@@ -288,13 +293,9 @@ retention policy.
 These are known gaps, recorded here so the contract is not read as a
 description of finished work:
 
-- **Filtered queries still rank the whole index.** Scoring itself is now
-  bounded by the requested limit, but when the query carries a metadata
-  predicate the ranking limit is widened to the full entry count so that
-  candidate provenance is resolved for every entry rather than for a bounded
-  window. This breaches the bounded candidate provenance rule above.
-  Generation opening also still materialises every entry to verify declared
-  counts.
+- **Generation opening materialises every entry** to verify declared counts,
+  so opening cost still grows with corpus size even though query cost no
+  longer does.
 - **No operational logging or stage instrumentation.** The lexical build emits
   an observed stage; the dense build emits neither logs nor profiling records.
   The retrieval logging policy applies to this channel and is not yet

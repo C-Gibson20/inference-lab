@@ -3,7 +3,7 @@
 from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType
-from typing import cast
+from typing import Final, cast
 
 from inference_lab.backends.runtime import (
     BackendError,
@@ -54,6 +54,12 @@ from inference_lab.storage import (
     generation_matches_reference,
     select_ready_component_generation,
 )
+
+# A metadata predicate is applied after ranking but before the result limit,
+# so the first ranked window is this multiple of the limit. A window that does
+# not yield enough surviving candidates doubles until it reaches the whole
+# generation, which keeps the common case bounded without losing a match.
+FILTERED_WINDOW_FACTOR: Final = 4
 
 
 def _failed_result(
@@ -295,20 +301,13 @@ def _execute_dense_retrieval(
                 entry_count = selected_generation.manifest.entry_count
                 if entry_count == 0:
                     return _completed_result(query, selected_snapshot, ())
-                ranking_limit = (
-                    entry_count
-                    if validation is not None
-                    else min(query.limit.value, entry_count)
-                )
-                matches = selected_generation.search(
-                    query_vector,
-                    limit=ranking_limit,
-                )
-                hits = _build_hits(
+                hits = _ranked_hits_within_budget(
+                    selected_generation,
                     query,
                     selected_snapshot,
-                    matches,
+                    query_vector,
                     validation,
+                    entry_count=entry_count,
                 )
                 return _completed_result(query, selected_snapshot, hits)
     except InvalidMetadataFilterError:
@@ -342,6 +341,34 @@ def _is_snapshot_reader(snapshot: CorpusSnapshot) -> bool:
         hasattr(snapshot, property_name)
         for property_name in ("corpus_id", "version", "manifest")
     )
+
+
+def _ranked_hits_within_budget(
+    generation: DenseGeneration,
+    query: RetrievalQuery,
+    snapshot: CorpusSnapshot,
+    query_vector: DenseVector,
+    validation: MetadataFilterValidation | None,
+    *,
+    entry_count: int,
+) -> tuple[EvidenceHit, ...]:
+    """Rank a bounded candidate window, topping it up until the limit is met."""
+    if validation is None:
+        return _build_hits(
+            query,
+            snapshot,
+            generation.search(query_vector, limit=min(query.limit.value, entry_count)),
+            validation,
+        )
+    # A predicate is evaluated before the limit, so widen the window
+    # deterministically instead of ranking the whole generation at once.
+    window = min(entry_count, query.limit.value * FILTERED_WINDOW_FACTOR)
+    while True:
+        matches = generation.search(query_vector, limit=window)
+        hits = _build_hits(query, snapshot, matches, validation)
+        if len(hits) == query.limit.value or window >= entry_count:
+            return hits
+        window = min(entry_count, window * 2)
 
 
 def _build_hits(
