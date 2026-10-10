@@ -38,6 +38,7 @@ from inference_lab.retrieval.errors import (
     InvalidRetrievalContractError,
     InvalidRetrievalResultError,
     InvalidRetrievalSerialisationError,
+    RetrievalOperationalError,
     UnsupportedRetrievalSchemaVersionError,
 )
 from inference_lab.retrieval.evidence import (
@@ -149,6 +150,7 @@ from inference_lab.retrieval.reduction import (
     EvidenceTokenisation,
     EvidenceTokeniser,
     EvidenceTokeniserError,
+    EvidenceTokeniserFailureCategory,
     EvidenceTokeniserIdentity,
     EvidenceTokenOffset,
     ReducedEvidenceItem,
@@ -239,6 +241,7 @@ __all__ = [
     "EvidenceTokenisation",
     "EvidenceTokeniser",
     "EvidenceTokeniserError",
+    "EvidenceTokeniserFailureCategory",
     "EvidenceTokeniserIdentity",
     "ExactDenseVectorIndex",
     "ExactFilter",
@@ -287,6 +290,7 @@ __all__ = [
     "RetrievalChannel",
     "RetrievalFailure",
     "RetrievalLimit",
+    "RetrievalOperationalError",
     "RetrievalQuery",
     "TextSourceBoundary",
     "UnsupportedRetrievalSchemaVersionError",

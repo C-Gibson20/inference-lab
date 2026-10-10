@@ -11,6 +11,7 @@ from inference_lab.ingest import (
     build_canonical_source_boundary_map,
 )
 from inference_lab.provenance import CorpusId, CorpusVersionId, RecordId
+from inference_lab.retrieval.errors import RetrievalOperationalError
 from inference_lab.retrieval.evidence import EvidenceSource
 from inference_lab.retrieval.lexical_store import (
     LexicalGeneration,
@@ -50,12 +51,12 @@ class EvidenceReductionFailureCategory(StrEnum):
     REDUCTION_FAILURE = "reduction_failure"
 
 
-class EvidenceReductionExecutionError(RuntimeError):
+class EvidenceReductionExecutionError(
+    RetrievalOperationalError[EvidenceReductionFailureCategory]
+):
     """A privacy-safe failure raised by the evidence-reduction execution boundary."""
 
-    def __init__(self, category: EvidenceReductionFailureCategory) -> None:
-        self.category = category
-        super().__init__(category.value)
+    category_type = EvidenceReductionFailureCategory
 
 
 def reduce_retrieval_evidence(

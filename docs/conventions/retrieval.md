@@ -510,6 +510,22 @@ bounded mapping counts. Failed calls emit a typed `ERROR` event. None of these
 events includes candidate text, queries, prompts, token IDs, paths or raw
 exceptions.
 
+## Operational failures
+
+Every failure crossing an operational retrieval boundary derives from
+`RetrievalOperationalError`. It carries a category drawn from that boundary's
+own `StrEnum` and an explicit `retryable` hint, and nothing else: no query
+text, candidate content, stored payloads, or paths. The concrete boundaries are
+`LexicalError`, `DenseError`, `EvidenceTokeniserError`, and
+`EvidenceReductionExecutionError`.
+
+Retryability is owned by the layer that failed and is propagated outwards, not
+re-decided by the caller. A channel executor copies the retry hint from the
+`BackendError`, `StorageError`, or boundary error it caught into the resulting
+`RetrievalFailure`. An exception a dependency does not declare retryable is
+reported as not retryable, so a caller never retries a request or protocol
+error indefinitely.
+
 ## Serialisation and privacy
 
 Queries and evidence results use retrieval schema version `2.0.0` and

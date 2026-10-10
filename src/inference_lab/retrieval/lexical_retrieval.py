@@ -70,6 +70,8 @@ class _MetadataFilterObservation:
 def _failed_result(
     query: RetrievalQuery,
     category: FailureCategory,
+    *,
+    retryable: bool = False,
 ) -> EvidenceResult:
     """Return one payload-free failed lexical result."""
     return EvidenceResult.from_query(
@@ -80,7 +82,7 @@ def _failed_result(
         failures=(
             RetrievalFailure(
                 category=category,
-                retryable=False,
+                retryable=retryable,
                 channel=RetrievalChannel.LEXICAL,
             ),
         ),
@@ -396,11 +398,19 @@ def _execute_lexical_retrieval(
                     and error.category is LexicalFailureCategory.CORRUPT_GENERATION
                 ):
                     failure_category = FailureCategory.CHANNEL_EXECUTION_FAILURE
-                return _failed_result(query, failure_category)
+                return _failed_result(
+                    query, failure_category, retryable=error.retryable
+                )
     except StorageError as error:
         if metadata_observation is not None and isinstance(error, CorruptStorageError):
-            return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
-        return _failed_result(query, FailureCategory.CHANNEL_UNAVAILABLE)
+            return _failed_result(
+                query,
+                FailureCategory.CHANNEL_EXECUTION_FAILURE,
+                retryable=error.retryable,
+            )
+        return _failed_result(
+            query, FailureCategory.CHANNEL_UNAVAILABLE, retryable=error.retryable
+        )
     return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
 
 
