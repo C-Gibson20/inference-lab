@@ -87,7 +87,13 @@ Results are scoped to one corpus version:
 - `failed` has no hits and at least one typed failure.
 
 Every result retains the query's `requested_limit` and must contain no more
-hits than that limit. A corpus-version mismatch fails closed: an unscoped
+hits than that limit. A stage that detects a mismatch returns
+`EvidenceResult.corpus_version_mismatch(query, observed)`, which rejects an
+observed version equal to the requested one so a matching version can never
+report a mismatch. `from_query` keeps the same override as a backstop for a
+stage that does not check, and discards any hits it was given.
+
+A corpus-version mismatch fails closed: an unscoped
 mismatch requires a failed, hit-free result, while a channel-scoped mismatch
 may appear in a partial aggregate only when none of its hits contains a score
 contribution from that channel. Failure values expose only a bounded category,

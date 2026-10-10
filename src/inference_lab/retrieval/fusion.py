@@ -116,13 +116,7 @@ def fuse_evidence_results(
         None,
     )
     if mismatch is not None:
-        return EvidenceResult.from_query(
-            query,
-            observed_corpus_version=mismatch.corpus_version,
-            hits=(),
-            status=ResultStatus.COMPLETED,
-            failures=(),
-        )
+        return EvidenceResult.corpus_version_mismatch(query, mismatch.corpus_version)
 
     candidates: dict[RecordId, _CandidateContribution] = {}
     failures: list[RetrievalFailure] = []

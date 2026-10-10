@@ -210,12 +210,8 @@ def _execute_dense_retrieval(
             if selected_snapshot.corpus_id != corpus_id:
                 return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
             if selected_snapshot.version.corpus_version != query.corpus_version:
-                return EvidenceResult.from_query(
-                    query,
-                    observed_corpus_version=selected_snapshot.version.corpus_version,
-                    hits=(),
-                    status=ResultStatus.FAILED,
-                    failures=(),
+                return EvidenceResult.corpus_version_mismatch(
+                    query, selected_snapshot.version.corpus_version
                 )
 
             reference = select_ready_component_generation(

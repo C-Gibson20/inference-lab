@@ -140,14 +140,8 @@ def execute_hybrid_retrieval(
                         FailureCategory.INVALID_CHANNEL_RESPONSE,
                     )
                 elif selected_snapshot.version.corpus_version != query.corpus_version:
-                    result = EvidenceResult.from_query(
-                        query,
-                        observed_corpus_version=(
-                            selected_snapshot.version.corpus_version
-                        ),
-                        hits=(),
-                        status=ResultStatus.COMPLETED,
-                        failures=(),
+                    result = EvidenceResult.corpus_version_mismatch(
+                        query, selected_snapshot.version.corpus_version
                     )
                 else:
                     result, channel_counts, family_count = _retrieve_and_fuse(

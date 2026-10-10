@@ -337,7 +337,10 @@ def test_ret01_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
     assert result.status is ResultStatus.FAILED
     assert result.hits == ()
     assert result.failures[0].category is FailureCategory.CORPUS_VERSION_MISMATCH
+    assert result == EvidenceResult.corpus_version_mismatch(query, other_version)
 
+    with pytest.raises(InvalidRetrievalResultError):
+        EvidenceResult.corpus_version_mismatch(query, version)
     with pytest.raises(InvalidRetrievalResultError):
         EvidenceResult(
             version,
