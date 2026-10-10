@@ -52,8 +52,10 @@ from inference_lab.retrieval import (
     DenseGenerationParticipant,
     DenseIndexCompatibility,
     EvidenceResult,
+    FailureCategory,
     LexicalGenerationParticipant,
     LexicalQuery,
+    ResultStatus,
     RetrievalLimit,
     RetrievalQuery,
     build_dense_generation,
@@ -62,6 +64,14 @@ from inference_lab.retrieval import (
     build_lexical_generation_for_corpus_update,
     execute_dense_retrieval,
     execute_lexical_retrieval,
+)
+from inference_lab.retrieval.dense_store import (
+    DENSE_DATABASE_NAME,
+    DENSE_DIRECTORY_NAME,
+)
+from inference_lab.retrieval.lexical_store_models import (
+    LEXICAL_DATABASE_NAME,
+    LEXICAL_DIRECTORY_NAME,
 )
 from inference_lab.storage import (
     ChunkSetSelectionRecord,
@@ -1283,4 +1293,117 @@ def test_pinned_readers_remain_coherent_during_publication(
                 )
     finally:
         published.set()
+        repository.close()
+
+
+class _IncompatibleEmbeddingFixture(_EmbeddingFixture):
+    """Return valid vectors under a different pinned model revision."""
+
+    metadata = BackendMetadata(
+        backend_name="persistent-index-fixture",
+        model_name="persistent-index-fixture",
+        model_revision="2",
+        supported_operations=(BackendOperation.EMBED,),
+        capabilities=(),
+        embedding_dimensions=3,
+    )
+
+
+def _truncate(path: Path) -> None:
+    """Damage a published component file without removing it."""
+    assert path.is_file()
+    path.write_bytes(b"")
+
+
+def test_corrupt_or_incompatible_components_fail_closed_without_losing_the_view(
+    tmp_path: Path,
+) -> None:
+    """One damaged component fails closed while the rest of the view still serves."""
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "indexes"
+    versions, _, generation_ids, _ = _publish_fixture(
+        database_path,
+        source_dir,
+        index_dir,
+    )
+
+    def lexical(corpus_id: CorpusId, term: str) -> EvidenceResult:
+        query = RetrievalQuery(term, versions[corpus_id], RetrievalLimit(5))
+        return execute_lexical_retrieval(
+            repository, index_dir, corpus_id, LexicalQuery(query)
+        )
+
+    def dense(
+        corpus_id: CorpusId,
+        term: str,
+        embedder: _EmbeddingFixture | None = None,
+    ) -> EvidenceResult:
+        query = RetrievalQuery(term, versions[corpus_id], RetrievalLimit(5))
+        return execute_dense_retrieval(
+            repository,
+            index_dir,
+            corpus_id,
+            query,
+            embedder or _EmbeddingFixture(),
+        )
+
+    def categories(result: EvidenceResult) -> set[FailureCategory]:
+        return {failure.category for failure in result.failures}
+
+    repository = open_metadata_repository(database_path, source_dir=source_dir)
+    try:
+        # Both channels serve both corpora before anything is damaged.
+        for corpus_id in (_CORPUS_A, _CORPUS_B):
+            assert lexical(corpus_id, "common").status is ResultStatus.COMPLETED
+            assert dense(corpus_id, "common").hits
+
+        # An embedder that no longer matches the published compatibility must
+        # fail closed rather than return vectors from a different model.
+        incompatible = dense(_CORPUS_A, "common", _IncompatibleEmbeddingFixture())
+        assert incompatible.status is ResultStatus.FAILED
+        assert not incompatible.hits
+        assert categories(incompatible) == {FailureCategory.INVALID_CHANNEL_RESPONSE}
+        assert lexical(_CORPUS_A, "common").hits, (
+            "an incompatible embedder must not disturb the lexical channel"
+        )
+
+        # Corrupting one corpus's dense database contains the failure: that
+        # channel fails closed, its lexical channel still serves, and the other
+        # corpus is untouched.
+        _truncate(
+            index_dir
+            / DENSE_DIRECTORY_NAME
+            / generation_ids[f"{_CORPUS_A.as_str()}:{DENSE_COMPONENT_KIND.as_str()}"]
+            / DENSE_DATABASE_NAME
+        )
+        corrupt_dense = dense(_CORPUS_A, "common")
+        assert corrupt_dense.status is ResultStatus.FAILED
+        assert not corrupt_dense.hits
+        assert categories(corrupt_dense) == {FailureCategory.CHANNEL_UNAVAILABLE}
+        assert lexical(_CORPUS_A, "common").hits
+        assert dense(_CORPUS_B, "common").hits
+
+        # Corrupting the lexical database of the same corpus leaves the other
+        # corpus serving both channels and the metadata view intact.
+        _truncate(
+            index_dir
+            / LEXICAL_DIRECTORY_NAME
+            / generation_ids[f"{_CORPUS_A.as_str()}:lexical-index"]
+            / LEXICAL_DATABASE_NAME
+        )
+        corrupt_lexical = lexical(_CORPUS_A, "common")
+        assert corrupt_lexical.status is ResultStatus.FAILED
+        assert not corrupt_lexical.hits
+        assert categories(corrupt_lexical) == {FailureCategory.CHANNEL_UNAVAILABLE}
+        assert lexical(_CORPUS_B, "common").hits
+        assert dense(_CORPUS_B, "common").hits
+
+        # Damaged index files never invalidate the published corpus version.
+        with repository.open_corpus_snapshot(
+            _CORPUS_A, versions[_CORPUS_A]
+        ) as snapshot:
+            assert len(snapshot.manifest.document_memberships) == 3
+            assert snapshot.version.corpus_version == versions[_CORPUS_A]
+    finally:
         repository.close()

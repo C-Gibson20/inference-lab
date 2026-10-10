@@ -30,9 +30,10 @@ uv run pytest --cov
 
 Use Ruff’s 88-character formatting and keep imports/lint rules clean. Ruff
 enforces docstrings on public source modules, classes, and functions. Comments
-should explain non-obvious reasoning, not restate code. The test suite must
-maintain at least 80% combined statement-and-branch coverage; the canonical
-policy is configured in `pyproject.toml`. Focused test runs may omit `--cov`.
+should explain non-obvious reasoning, not restate code. The coverage floor
+configured in `pyproject.toml` is a regression tripwire, not a target: do not
+add tests solely to raise it. Behaviour is gated by the acceptance journeys
+described in `docs/plans/test-suite.md`. Focused test runs may omit `--cov`.
 Use `structlog` inside `inference_lab`; use standard-library `logging` only for
 dependencies and process-level handlers. Do not log documents, queries, or
 other sensitive content.

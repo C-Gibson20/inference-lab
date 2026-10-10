@@ -72,7 +72,17 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pyright
 uv run pytest --cov
-uv run coverage report --include='src/inference_lab/storage/*' --fail-under=85
+```
+
+Storage, index, and retrieval behaviour is gated by acceptance journeys, not by
+a line-coverage threshold. The journeys that must pass for a change touching
+persistence or retrieval are the corpus-foundation, recovery, persistent-index,
+and hybrid-pipeline suites under `tests/inference_lab/`. Read coverage as a
+diagnostic that points at untested behaviour, never as a target to be met by
+adding tests:
+
+```sh
+uv run coverage report --include='src/inference_lab/storage/*'
 ```
 
 For changes affecting retrieval or answering, also update or run the relevant
