@@ -15,9 +15,6 @@ from structlog.testing import capture_logs
 from inference_lab.backends.runtime import (
     BackendMetadata,
     BackendOperation,
-    EmbeddingProfile,
-    EmbeddingRequest,
-    EmbeddingResult,
 )
 from inference_lab.ingest import (
     CURRENT_PARSER_VERSION,
@@ -89,98 +86,27 @@ from inference_lab.storage import (
     open_metadata_repository,
 )
 from tests.inference_lab.retrieval.lexical_fixtures import parsed_document
-
-_CORPUS_A = CorpusId.from_str("00000000-0000-4000-8000-000000000011")
-_CORPUS_B = CorpusId.from_str("00000000-0000-4000-8000-000000000012")
-_VERSION_A = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000021")
-_VERSION_B = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000022")
-_UNPUBLISHED_VERSION = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000023")
-_VERSION_A2 = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000024")
-_VERSION_A3 = CorpusVersionId.from_str("00000000-0000-4000-8000-000000000025")
-_DOC_SHARED = DocumentId.from_str("00000000-0000-4000-8000-000000000031")
-_DOC_A = DocumentId.from_str("00000000-0000-4000-8000-000000000032")
-_DOC_B = DocumentId.from_str("00000000-0000-4000-8000-000000000033")
-_DOC_STABLE = DocumentId.from_str("00000000-0000-4000-8000-000000000034")
-_DOC_VERSION_SHARED = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000041")
-_DOC_VERSION_A = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000042")
-_DOC_VERSION_B = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000043")
-_DOC_VERSION_STABLE = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000044")
-_DOC_VERSION_A2 = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000045")
-_DOC_VERSION_A3 = DocumentVersionId.from_str("00000000-0000-4000-8000-000000000046")
-_DOCUMENTS = (
-    (_DOC_SHARED, _DOC_VERSION_SHARED, "common assay terminology"),
-    (_DOC_A, _DOC_VERSION_A, "orchid receptor evidence"),
-    (_DOC_B, _DOC_VERSION_B, "tulip catalyst evidence"),
-    (_DOC_STABLE, _DOC_VERSION_STABLE, "stable control evidence"),
+from tests.inference_lab.storage.persistent_index_fixtures import (
+    CORPUS_A,
+    CORPUS_B,
+    DOC_A,
+    DOC_B,
+    DOC_SHARED,
+    DOC_STABLE,
+    DOC_VERSION_A,
+    DOC_VERSION_A2,
+    DOC_VERSION_A3,
+    DOC_VERSION_B,
+    DOC_VERSION_SHARED,
+    DOC_VERSION_STABLE,
+    DOCUMENTS,
+    UNPUBLISHED_VERSION,
+    VERSION_A,
+    VERSION_A2,
+    VERSION_A3,
+    VERSION_B,
+    EmbeddingFixture,
 )
-
-
-class _EmbeddingFixture:
-    """Deterministic local vectors with an observable embed-work count."""
-
-    metadata = BackendMetadata(
-        backend_name="persistent-index-fixture",
-        model_name="persistent-index-fixture",
-        model_revision="1",
-        supported_operations=(BackendOperation.EMBED,),
-        capabilities=(),
-        embedding_dimensions=3,
-    )
-    profile = EmbeddingProfile(
-        profile_version="1.0.0",
-        tokenizer_id="persistent-index-tokenizer",
-        tokenizer_revision="1",
-        query_prefix="query: ",
-        document_prefix="",
-        pooling_strategy="mean",
-        input_normalisation="identity",
-        max_input_tokens=128,
-        over_limit_policy="truncate_tail",
-        l2_normalised=False,
-        inference_dtype="float32",
-        device_type="cpu",
-    )
-
-    def __init__(self) -> None:
-        self.embedded_texts: list[str] = []
-
-    def load(self) -> None:
-        return None
-
-    def close(self) -> None:
-        return None
-
-    @property
-    def is_ready(self) -> bool:
-        return True
-
-    @property
-    def is_closed(self) -> bool:
-        return False
-
-    @property
-    def output_metadata(self) -> BackendMetadata:
-        return self.metadata
-
-    @property
-    def output_profile(self) -> EmbeddingProfile:
-        return self.profile
-
-    def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
-        self.embedded_texts.extend(request.input_texts)
-
-        def vector(text: str) -> tuple[float, float, float]:
-            if "orchid" in text:
-                return (1.0, 0.0, 0.0)
-            if "tulip" in text:
-                return (0.0, 1.0, 0.0)
-            return (0.0, 0.0, 1.0)
-
-        return EmbeddingResult(
-            tuple(vector(text) for text in request.input_texts),
-            self.metadata,
-            self.profile,
-        )
 
 
 class _AcceptingValidator:
@@ -307,12 +233,12 @@ def _persist_a_catalogue_member(
         hashlib.sha256(source_bytes).hexdigest(),
     )
     membership = CorpusDocumentVersionMembership(
-        _CORPUS_A,
+        CORPUS_A,
         document_id,
         document_version_id,
     )
     selection = _make_selection(
-        _CORPUS_A,
+        CORPUS_A,
         document_id,
         document_version_id,
         text,
@@ -324,10 +250,10 @@ def _persist_a_catalogue_member(
             )
         transaction.add_corpus_document_version_membership(membership)
         transaction.write_chunk_set(
-            ChunkSetWriteRequest(corpus_id=_CORPUS_A, selection=selection)
+            ChunkSetWriteRequest(corpus_id=CORPUS_A, selection=selection)
         )
     repository.persist_source_artefact(
-        _CORPUS_A,
+        CORPUS_A,
         SourceArtefact(
             document_id=document_id,
             document_version_id=document_version_id,
@@ -358,45 +284,45 @@ def _stage_a_update(
 ) -> None:
     """Stage the same membership delta and both indexes for a publication attempt."""
     transaction.begin_corpus_update(
-        _CORPUS_A,
-        _VERSION_A2,
-        expected_corpus_version=_VERSION_A,
+        CORPUS_A,
+        VERSION_A2,
+        expected_corpus_version=VERSION_A,
         required_component_kinds=(
             ComponentKind("lexical-index"),
             DENSE_COMPONENT_KIND,
         ),
     )
     transaction.replace_corpus_update_document_membership(
-        _CORPUS_A,
-        _VERSION_A2,
+        CORPUS_A,
+        VERSION_A2,
         old_membership,
         replacement,
     )
     transaction.remove_corpus_update_document_membership(
-        _CORPUS_A,
-        _VERSION_A2,
+        CORPUS_A,
+        VERSION_A2,
         removed,
     )
     transaction.add_corpus_update_document_membership(
-        _CORPUS_A,
-        _VERSION_A2,
+        CORPUS_A,
+        VERSION_A2,
         added,
     )
     transaction.register_corpus_update_component_generation(
-        _CORPUS_A,
-        _VERSION_A2,
+        CORPUS_A,
+        VERSION_A2,
         lexical.component_generation(),
         validator=lexical.build_validator(repository),
     )
     transaction.register_corpus_update_component_generation(
-        _CORPUS_A,
-        _VERSION_A2,
+        CORPUS_A,
+        VERSION_A2,
         dense.component_generation(),
         validator=(
             _RejectingValidator() if reject_dense else dense.build_validator(repository)
         ),
     )
-    transaction.seal_corpus_update(_CORPUS_A, _VERSION_A2)
+    transaction.seal_corpus_update(CORPUS_A, VERSION_A2)
 
 
 def _publish_fixture(
@@ -405,7 +331,7 @@ def _publish_fixture(
     index_dir: Path,
 ) -> tuple[
     dict[CorpusId, CorpusVersionId],
-    _EmbeddingFixture,
+    EmbeddingFixture,
     dict[str, str],
     dict[DocumentVersionId, MappedParseRecords],
 ]:
@@ -416,8 +342,8 @@ def _publish_fixture(
         apply_migrations=True,
     )
     corpus_members = {
-        _CORPUS_A: (_DOCUMENTS[0], _DOCUMENTS[1], _DOCUMENTS[3]),
-        _CORPUS_B: (_DOCUMENTS[0], _DOCUMENTS[2]),
+        CORPUS_A: (DOCUMENTS[0], DOCUMENTS[1], DOCUMENTS[3]),
+        CORPUS_B: (DOCUMENTS[0], DOCUMENTS[2]),
     }
     selected: dict[tuple[CorpusId, DocumentId], ChunkSetSelectionRecord] = {}
     memberships: dict[CorpusId, tuple[CorpusDocumentVersionMembership, ...]] = {}
@@ -448,9 +374,9 @@ def _publish_fixture(
         memberships[corpus_id] = tuple(built_members)
 
     with repository.transaction() as transaction:
-        transaction.add_corpus(CorpusMetadata(_CORPUS_A, "Shared corpus A"))
-        transaction.add_corpus(CorpusMetadata(_CORPUS_B, "Shared corpus B"))
-        for document_id, version_id, text in _DOCUMENTS:
+        transaction.add_corpus(CorpusMetadata(CORPUS_A, "Shared corpus A"))
+        transaction.add_corpus(CorpusMetadata(CORPUS_B, "Shared corpus B"))
+        for document_id, version_id, text in DOCUMENTS:
             source_bytes = text.encode("utf-8")
             content_hash = ContentHash(
                 HashAlgorithm.SHA256,
@@ -469,7 +395,7 @@ def _publish_fixture(
                 )
 
     parse_records_by_version: dict[DocumentVersionId, MappedParseRecords] = {}
-    for document_id, version_id, text in _DOCUMENTS:
+    for document_id, version_id, text in DOCUMENTS:
         source_bytes = text.encode("utf-8")
         content_hash = ContentHash(
             HashAlgorithm.SHA256,
@@ -482,7 +408,7 @@ def _publish_fixture(
         )
         parse_records = map_parse_persistence_request(
             ParsePersistenceRequest(
-                corpus_id=_CORPUS_A if document_id != _DOC_B else _CORPUS_B,
+                corpus_id=CORPUS_A if document_id != DOC_B else CORPUS_B,
                 parser_input=ParserInput(
                     document_id,
                     version_id,
@@ -515,7 +441,7 @@ def _publish_fixture(
                     parsed_representation=parse_records.representation,
                 )
 
-    versions = {_CORPUS_A: _VERSION_A, _CORPUS_B: _VERSION_B}
+    versions = {CORPUS_A: VERSION_A, CORPUS_B: VERSION_B}
     manifests = {
         corpus_id: _build_source_manifest(
             corpus_id,
@@ -527,7 +453,7 @@ def _publish_fixture(
         )
         for corpus_id, version in versions.items()
     }
-    embedder = _EmbeddingFixture()
+    embedder = EmbeddingFixture()
     compatibility = DenseIndexCompatibility(
         model_metadata=embedder.metadata,
         dimensions=3,
@@ -612,42 +538,11 @@ def test_persistent_indexes_reopen_reuse_and_isolate_corpora(
         index_dir,
     )
 
-    cold_query = """
-from pathlib import Path
-import sys
-
-from inference_lab.provenance import CorpusId, CorpusVersionId
-from inference_lab.retrieval import execute_dense_retrieval, execute_lexical_retrieval
-from inference_lab.retrieval.lexical import LexicalQuery
-from inference_lab.retrieval.query import RetrievalQuery
-from inference_lab.retrieval.values import RetrievalLimit
-from inference_lab.storage import open_metadata_repository
-from tests.inference_lab.retrieval.test_persistent_index_systems_acceptance import _EmbeddingFixture
-
-database_path, source_dir, index_dir = map(Path, sys.argv[1:])
-repository = open_metadata_repository(database_path, source_dir=source_dir)
-expected = (
-    ("00000000-0000-4000-8000-000000000011", "00000000-0000-4000-8000-000000000021", "orchid", "orchid receptor evidence", "00000000-0000-4000-8000-000000000042"),
-    ("00000000-0000-4000-8000-000000000011", "00000000-0000-4000-8000-000000000021", "common", "common assay terminology", "00000000-0000-4000-8000-000000000041"),
-    ("00000000-0000-4000-8000-000000000012", "00000000-0000-4000-8000-000000000022", "tulip", "tulip catalyst evidence", "00000000-0000-4000-8000-000000000043"),
-    ("00000000-0000-4000-8000-000000000012", "00000000-0000-4000-8000-000000000022", "common", "common assay terminology", "00000000-0000-4000-8000-000000000041"),
-)
-for corpus, version, term, expected_text, expected_document_version in expected:
-    corpus_id = CorpusId.from_str(corpus)
-    query = RetrievalQuery(term, CorpusVersionId.from_str(version), RetrievalLimit(1))
-    lexical = execute_lexical_retrieval(repository, index_dir, corpus_id, LexicalQuery(query))
-    dense = execute_dense_retrieval(repository, index_dir, corpus_id, query, _EmbeddingFixture())
-    for result in (lexical, dense):
-        assert result.status.value == "completed"
-        assert tuple(hit.candidate.content for hit in result.hits) == (expected_text,)
-        assert result.hits[0].candidate.sources[0].document_version_id.as_str() == expected_document_version
-repository.close()
-"""
     completed = subprocess.run(
         [
             sys.executable,
-            "-c",
-            cold_query,
+            "-m",
+            "tests.inference_lab.storage.cold_query",
             str(database_path),
             str(source_dir),
             str(index_dir),
@@ -681,7 +576,7 @@ repository.close()
                     ref.state is ComponentGenerationState.READY for ref in refs.values()
                 )
         foreign_lexical: ComponentGenerationReference | None = None
-        with repository.open_corpus_snapshot(_CORPUS_B, _VERSION_B) as snapshot_b:
+        with repository.open_corpus_snapshot(CORPUS_B, VERSION_B) as snapshot_b:
             foreign_lexical = next(
                 ref
                 for ref in snapshot_b.manifest.component_generations
@@ -691,33 +586,33 @@ repository.close()
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
                 transaction.begin_corpus_update(
-                    _CORPUS_A,
-                    _UNPUBLISHED_VERSION,
-                    expected_corpus_version=_VERSION_A,
+                    CORPUS_A,
+                    UNPUBLISHED_VERSION,
+                    expected_corpus_version=VERSION_A,
                     required_component_kinds=(ComponentKind("lexical-index"),),
                 )
                 transaction.register_corpus_update_component_generation(
-                    _CORPUS_A,
-                    _UNPUBLISHED_VERSION,
+                    CORPUS_A,
+                    UNPUBLISHED_VERSION,
                     foreign_lexical,
                     validator=_AcceptingValidator(),
                 )
-        active = repository.get_active_corpus_version(_CORPUS_A)
+        active = repository.get_active_corpus_version(CORPUS_A)
         assert active is not None
-        assert active.corpus_version == _VERSION_A
-        query = RetrievalQuery("orchid", _VERSION_A, RetrievalLimit(1))
+        assert active.corpus_version == VERSION_A
+        query = RetrievalQuery("orchid", VERSION_A, RetrievalLimit(1))
         lexical = execute_lexical_retrieval(
             repository,
             index_dir,
-            _CORPUS_A,
+            CORPUS_A,
             LexicalQuery(query),
         )
         dense = execute_dense_retrieval(
             repository,
             index_dir,
-            _CORPUS_A,
+            CORPUS_A,
             query,
-            _EmbeddingFixture(),
+            EmbeddingFixture(),
         )
         assert tuple(hit.candidate.content for hit in lexical.hits) == (
             "orchid receptor evidence",
@@ -748,39 +643,39 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
         added_text = "tulip catalyst evidence"
         replacement, replacement_selection = _persist_a_catalogue_member(
             repository,
-            document_id=_DOC_A,
-            document_version_id=_DOC_VERSION_A2,
+            document_id=DOC_A,
+            document_version_id=DOC_VERSION_A2,
             text=replacement_text,
             parse_records=_map_source_records(
-                _CORPUS_A,
-                _DOC_A,
-                _DOC_VERSION_A2,
+                CORPUS_A,
+                DOC_A,
+                DOC_VERSION_A2,
                 replacement_text,
             ),
             is_new_version=True,
         )
         added, added_selection = _persist_a_catalogue_member(
             repository,
-            document_id=_DOC_B,
-            document_version_id=_DOC_VERSION_B,
+            document_id=DOC_B,
+            document_version_id=DOC_VERSION_B,
             text=added_text,
-            parse_records=parse_records_by_version[_DOC_VERSION_B],
+            parse_records=parse_records_by_version[DOC_VERSION_B],
             is_new_version=False,
         )
         stable = CorpusDocumentVersionMembership(
-            _CORPUS_A,
-            _DOC_STABLE,
-            _DOC_VERSION_STABLE,
+            CORPUS_A,
+            DOC_STABLE,
+            DOC_VERSION_STABLE,
         )
         stable_selection = _make_selection(
-            _CORPUS_A,
-            _DOC_STABLE,
-            _DOC_VERSION_STABLE,
+            CORPUS_A,
+            DOC_STABLE,
+            DOC_VERSION_STABLE,
             "stable control evidence",
         )
         source_manifest = _build_source_manifest(
-            _CORPUS_A,
-            _VERSION_A2,
+            CORPUS_A,
+            VERSION_A2,
             (
                 (replacement, replacement_selection),
                 (added, added_selection),
@@ -797,14 +692,14 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
             index_dir,
             source_manifest,
             repository,
-            expected_corpus_version=_VERSION_A,
+            expected_corpus_version=VERSION_A,
         )
         dense_outcome = build_dense_generation_for_corpus_update(
             index_dir,
             source_manifest,
             embedder,
             repository,
-            expected_corpus_version=_VERSION_A,
+            expected_corpus_version=VERSION_A,
             metadata_db_path=database_path,
             source_dir=source_dir,
             compatibility=compatibility,
@@ -822,14 +717,14 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
         )
         dense = DenseGenerationParticipant(index_dir, dense_outcome, source_manifest)
         old_membership = CorpusDocumentVersionMembership(
-            _CORPUS_A,
-            _DOC_A,
-            _DOC_VERSION_A,
+            CORPUS_A,
+            DOC_A,
+            DOC_VERSION_A,
         )
         removed = CorpusDocumentVersionMembership(
-            _CORPUS_A,
-            _DOC_SHARED,
-            _DOC_VERSION_SHARED,
+            CORPUS_A,
+            DOC_SHARED,
+            DOC_VERSION_SHARED,
         )
 
         # Reject the second component after the first one has registered. The
@@ -847,20 +742,20 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
                     repository=repository,
                     reject_dense=True,
                 )
-        active = repository.get_active_corpus_version(_CORPUS_A)
+        active = repository.get_active_corpus_version(CORPUS_A)
         assert active is not None
-        assert active.corpus_version == _VERSION_A
-        previous_query = RetrievalQuery("orchid", _VERSION_A, RetrievalLimit(1))
+        assert active.corpus_version == VERSION_A
+        previous_query = RetrievalQuery("orchid", VERSION_A, RetrievalLimit(1))
         previous_lexical = execute_lexical_retrieval(
             repository,
             index_dir,
-            _CORPUS_A,
+            CORPUS_A,
             LexicalQuery(previous_query),
         )
         previous_dense = execute_dense_retrieval(
             repository,
             index_dir,
-            _CORPUS_A,
+            CORPUS_A,
             previous_query,
             embedder,
         )
@@ -884,31 +779,31 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
                 repository=repository,
                 reject_dense=False,
             )
-            committed = transaction.commit_corpus_update(_CORPUS_A, _VERSION_A2)
+            committed = transaction.commit_corpus_update(CORPUS_A, VERSION_A2)
         assert committed is not None
-        assert committed.version.corpus_version == _VERSION_A2
+        assert committed.version.corpus_version == VERSION_A2
         assert {
             membership.document_version_id
             for membership in committed.manifest.document_memberships
-        } == {_DOC_VERSION_A2, _DOC_VERSION_B, _DOC_VERSION_STABLE}
+        } == {DOC_VERSION_A2, DOC_VERSION_B, DOC_VERSION_STABLE}
 
         expected_results = (
-            ("orchid", "orchid reformulated evidence", _DOC_VERSION_A2),
-            ("tulip", "tulip catalyst evidence", _DOC_VERSION_B),
-            ("stable", "stable control evidence", _DOC_VERSION_STABLE),
+            ("orchid", "orchid reformulated evidence", DOC_VERSION_A2),
+            ("tulip", "tulip catalyst evidence", DOC_VERSION_B),
+            ("stable", "stable control evidence", DOC_VERSION_STABLE),
         )
         for term, expected_text, expected_version in expected_results:
-            query = RetrievalQuery(term, _VERSION_A2, RetrievalLimit(1))
+            query = RetrievalQuery(term, VERSION_A2, RetrievalLimit(1))
             lexical_result = execute_lexical_retrieval(
                 repository,
                 index_dir,
-                _CORPUS_A,
+                CORPUS_A,
                 LexicalQuery(query),
             )
             dense_result = execute_dense_retrieval(
                 repository,
                 index_dir,
-                _CORPUS_A,
+                CORPUS_A,
                 query,
                 embedder,
             )
@@ -927,21 +822,21 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
         with pytest.raises(_InjectedPublicationFailure):
             with repository.transaction() as transaction:
                 transaction.begin_corpus_update(
-                    _CORPUS_A,
-                    _VERSION_A3,
-                    expected_corpus_version=_VERSION_A2,
+                    CORPUS_A,
+                    VERSION_A3,
+                    expected_corpus_version=VERSION_A2,
                 )
-                transaction.seal_corpus_update(_CORPUS_A, _VERSION_A3)
+                transaction.seal_corpus_update(CORPUS_A, VERSION_A3)
                 raise _InjectedPublicationFailure
-        active = repository.get_active_corpus_version(_CORPUS_A)
+        active = repository.get_active_corpus_version(CORPUS_A)
         assert active is not None
-        assert active.corpus_version == _VERSION_A2
-        query = RetrievalQuery("orchid", _VERSION_A2, RetrievalLimit(1))
+        assert active.corpus_version == VERSION_A2
+        query = RetrievalQuery("orchid", VERSION_A2, RetrievalLimit(1))
         assert (
             execute_lexical_retrieval(
                 repository,
                 index_dir,
-                _CORPUS_A,
+                CORPUS_A,
                 LexicalQuery(query),
             )
             .hits[0]
@@ -952,7 +847,7 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
             execute_dense_retrieval(
                 repository,
                 index_dir,
-                _CORPUS_A,
+                CORPUS_A,
                 query,
                 embedder,
             )
@@ -1059,21 +954,21 @@ def test_pinned_readers_remain_coherent_during_publication(
                 futures = (
                     executor.submit(
                         run_reader,
-                        _CORPUS_A,
+                        CORPUS_A,
                         "orchid",
                         ("lexical",),
                         ready_events[0],
                     ),
                     executor.submit(
                         run_reader,
-                        _CORPUS_A,
+                        CORPUS_A,
                         "orchid",
                         ("dense",),
                         ready_events[1],
                     ),
                     executor.submit(
                         run_reader,
-                        _CORPUS_B,
+                        CORPUS_B,
                         "tulip",
                         ("lexical", "dense"),
                         ready_events[2],
@@ -1089,61 +984,61 @@ def test_pinned_readers_remain_coherent_during_publication(
                         future.result()
                 try:
                     replacement_selection = _make_selection(
-                        _CORPUS_A,
-                        _DOC_A,
-                        _DOC_VERSION_A3,
+                        CORPUS_A,
+                        DOC_A,
+                        DOC_VERSION_A3,
                         canary_text,
                     )
                     _persist_a_catalogue_member(
                         repository,
-                        document_id=_DOC_A,
-                        document_version_id=_DOC_VERSION_A3,
+                        document_id=DOC_A,
+                        document_version_id=DOC_VERSION_A3,
                         text=canary_text,
                         parse_records=_map_source_records(
-                            _CORPUS_A,
-                            _DOC_A,
-                            _DOC_VERSION_A3,
+                            CORPUS_A,
+                            DOC_A,
+                            DOC_VERSION_A3,
                             canary_text,
                         ),
                         is_new_version=True,
                     )
                     shared_a = CorpusDocumentVersionMembership(
-                        _CORPUS_A,
-                        _DOC_SHARED,
-                        _DOC_VERSION_SHARED,
+                        CORPUS_A,
+                        DOC_SHARED,
+                        DOC_VERSION_SHARED,
                     )
                     stable_a = CorpusDocumentVersionMembership(
-                        _CORPUS_A,
-                        _DOC_STABLE,
-                        _DOC_VERSION_STABLE,
+                        CORPUS_A,
+                        DOC_STABLE,
+                        DOC_VERSION_STABLE,
                     )
                     source_manifest = _build_source_manifest(
-                        _CORPUS_A,
-                        _VERSION_A3,
+                        CORPUS_A,
+                        VERSION_A3,
                         (
                             (
                                 CorpusDocumentVersionMembership(
-                                    _CORPUS_A,
-                                    _DOC_A,
-                                    _DOC_VERSION_A3,
+                                    CORPUS_A,
+                                    DOC_A,
+                                    DOC_VERSION_A3,
                                 ),
                                 replacement_selection,
                             ),
                             (
                                 shared_a,
                                 _make_selection(
-                                    _CORPUS_A,
-                                    _DOC_SHARED,
-                                    _DOC_VERSION_SHARED,
+                                    CORPUS_A,
+                                    DOC_SHARED,
+                                    DOC_VERSION_SHARED,
                                     "common assay terminology",
                                 ),
                             ),
                             (
                                 stable_a,
                                 _make_selection(
-                                    _CORPUS_A,
-                                    _DOC_STABLE,
-                                    _DOC_VERSION_STABLE,
+                                    CORPUS_A,
+                                    DOC_STABLE,
+                                    DOC_VERSION_STABLE,
                                     "stable control evidence",
                                 ),
                             ),
@@ -1158,14 +1053,14 @@ def test_pinned_readers_remain_coherent_during_publication(
                         index_dir,
                         source_manifest,
                         repository,
-                        expected_corpus_version=_VERSION_A,
+                        expected_corpus_version=VERSION_A,
                     )
                     dense_outcome = build_dense_generation_for_corpus_update(
                         index_dir,
                         source_manifest,
                         embedder,
                         repository,
-                        expected_corpus_version=_VERSION_A,
+                        expected_corpus_version=VERSION_A,
                         metadata_db_path=database_path,
                         source_dir=source_dir,
                         compatibility=compatibility,
@@ -1183,52 +1078,52 @@ def test_pinned_readers_remain_coherent_during_publication(
                     committed: CommitCorpusUpdateOutcome | None = None
                     with repository.transaction() as transaction:
                         transaction.begin_corpus_update(
-                            _CORPUS_A,
-                            _VERSION_A3,
-                            expected_corpus_version=_VERSION_A,
+                            CORPUS_A,
+                            VERSION_A3,
+                            expected_corpus_version=VERSION_A,
                             required_component_kinds=(
                                 ComponentKind("lexical-index"),
                                 DENSE_COMPONENT_KIND,
                             ),
                         )
                         transaction.replace_corpus_update_document_membership(
-                            _CORPUS_A,
-                            _VERSION_A3,
+                            CORPUS_A,
+                            VERSION_A3,
                             CorpusDocumentVersionMembership(
-                                _CORPUS_A,
-                                _DOC_A,
-                                _DOC_VERSION_A,
+                                CORPUS_A,
+                                DOC_A,
+                                DOC_VERSION_A,
                             ),
                             CorpusDocumentVersionMembership(
-                                _CORPUS_A,
-                                _DOC_A,
-                                _DOC_VERSION_A3,
+                                CORPUS_A,
+                                DOC_A,
+                                DOC_VERSION_A3,
                             ),
                         )
                         transaction.register_corpus_update_component_generation(
-                            _CORPUS_A,
-                            _VERSION_A3,
+                            CORPUS_A,
+                            VERSION_A3,
                             lexical.component_generation(),
                             validator=lexical.build_validator(repository),
                         )
                         transaction.register_corpus_update_component_generation(
-                            _CORPUS_A,
-                            _VERSION_A3,
+                            CORPUS_A,
+                            VERSION_A3,
                             dense.component_generation(),
                             validator=dense.build_validator(repository),
                         )
-                        transaction.seal_corpus_update(_CORPUS_A, _VERSION_A3)
+                        transaction.seal_corpus_update(CORPUS_A, VERSION_A3)
                         committed = transaction.commit_corpus_update(
-                            _CORPUS_A,
-                            _VERSION_A3,
+                            CORPUS_A,
+                            VERSION_A3,
                         )
                     assert committed is not None
-                    assert committed.version.corpus_version == _VERSION_A3
+                    assert committed.version.corpus_version == VERSION_A3
 
                     with repository.open_active_corpus_snapshot(
-                        _CORPUS_A
+                        CORPUS_A
                     ) as active_snapshot:
-                        assert active_snapshot.version.corpus_version == _VERSION_A3
+                        assert active_snapshot.version.corpus_version == VERSION_A3
                         active_query = RetrievalQuery(
                             "orchid",
                             active_snapshot.version.corpus_version,
@@ -1237,25 +1132,25 @@ def test_pinned_readers_remain_coherent_during_publication(
                         active_lexical = execute_lexical_retrieval(
                             repository,
                             index_dir,
-                            _CORPUS_A,
+                            CORPUS_A,
                             LexicalQuery(active_query),
                             snapshot=active_snapshot,
                         )
                         active_dense = execute_dense_retrieval(
                             repository,
                             index_dir,
-                            _CORPUS_A,
+                            CORPUS_A,
                             active_query,
                             embedder,
                             snapshot=active_snapshot,
                         )
                         for result in (active_lexical, active_dense):
                             assert result.status.value == "completed"
-                            assert result.corpus_version == _VERSION_A3
+                            assert result.corpus_version == VERSION_A3
                             assert result.hits[0].candidate.content == canary_text
                             assert (
                                 result.hits[0].candidate.sources[0].document_version_id
-                                == _DOC_VERSION_A3
+                                == DOC_VERSION_A3
                             )
                 finally:
                     published.set()
@@ -1264,9 +1159,9 @@ def test_pinned_readers_remain_coherent_during_publication(
             assert canary_text not in repr(logs)
 
         expected_by_reader = (
-            (_VERSION_A, "orchid receptor evidence", _DOC_VERSION_A),
-            (_VERSION_A, "orchid receptor evidence", _DOC_VERSION_A),
-            (_VERSION_B, "tulip catalyst evidence", _DOC_VERSION_B),
+            (VERSION_A, "orchid receptor evidence", DOC_VERSION_A),
+            (VERSION_A, "orchid receptor evidence", DOC_VERSION_A),
+            (VERSION_B, "tulip catalyst evidence", DOC_VERSION_B),
         )
         for (pinned_version, memberships, before, after), expected in zip(
             reader_results,
@@ -1276,9 +1171,9 @@ def test_pinned_readers_remain_coherent_during_publication(
             expected_version, expected_text, expected_document_version = expected
             assert pinned_version == expected_version
             expected_membership_versions = (
-                {_DOC_VERSION_SHARED, _DOC_VERSION_A, _DOC_VERSION_STABLE}
-                if expected_version == _VERSION_A
-                else {_DOC_VERSION_SHARED, _DOC_VERSION_B}
+                {DOC_VERSION_SHARED, DOC_VERSION_A, DOC_VERSION_STABLE}
+                if expected_version == VERSION_A
+                else {DOC_VERSION_SHARED, DOC_VERSION_B}
             )
             assert {
                 membership.document_version_id for membership in memberships
@@ -1296,7 +1191,7 @@ def test_pinned_readers_remain_coherent_during_publication(
         repository.close()
 
 
-class _IncompatibleEmbeddingFixture(_EmbeddingFixture):
+class _IncompatibleEmbeddingFixture(EmbeddingFixture):
     """Return valid vectors under a different pinned model revision."""
 
     metadata = BackendMetadata(
@@ -1337,7 +1232,7 @@ def test_corrupt_or_incompatible_components_fail_closed_without_losing_the_view(
     def dense(
         corpus_id: CorpusId,
         term: str,
-        embedder: _EmbeddingFixture | None = None,
+        embedder: EmbeddingFixture | None = None,
     ) -> EvidenceResult:
         query = RetrievalQuery(term, versions[corpus_id], RetrievalLimit(5))
         return execute_dense_retrieval(
@@ -1345,7 +1240,7 @@ def test_corrupt_or_incompatible_components_fail_closed_without_losing_the_view(
             index_dir,
             corpus_id,
             query,
-            embedder or _EmbeddingFixture(),
+            embedder or EmbeddingFixture(),
         )
 
     def categories(result: EvidenceResult) -> set[FailureCategory]:
@@ -1354,17 +1249,17 @@ def test_corrupt_or_incompatible_components_fail_closed_without_losing_the_view(
     repository = open_metadata_repository(database_path, source_dir=source_dir)
     try:
         # Both channels serve both corpora before anything is damaged.
-        for corpus_id in (_CORPUS_A, _CORPUS_B):
+        for corpus_id in (CORPUS_A, CORPUS_B):
             assert lexical(corpus_id, "common").status is ResultStatus.COMPLETED
             assert dense(corpus_id, "common").hits
 
         # An embedder that no longer matches the published compatibility must
         # fail closed rather than return vectors from a different model.
-        incompatible = dense(_CORPUS_A, "common", _IncompatibleEmbeddingFixture())
+        incompatible = dense(CORPUS_A, "common", _IncompatibleEmbeddingFixture())
         assert incompatible.status is ResultStatus.FAILED
         assert not incompatible.hits
         assert categories(incompatible) == {FailureCategory.INVALID_CHANNEL_RESPONSE}
-        assert lexical(_CORPUS_A, "common").hits, (
+        assert lexical(CORPUS_A, "common").hits, (
             "an incompatible embedder must not disturb the lexical channel"
         )
 
@@ -1374,37 +1269,35 @@ def test_corrupt_or_incompatible_components_fail_closed_without_losing_the_view(
         _truncate(
             index_dir
             / DENSE_DIRECTORY_NAME
-            / generation_ids[f"{_CORPUS_A.as_str()}:{DENSE_COMPONENT_KIND.as_str()}"]
+            / generation_ids[f"{CORPUS_A.as_str()}:{DENSE_COMPONENT_KIND.as_str()}"]
             / DENSE_DATABASE_NAME
         )
-        corrupt_dense = dense(_CORPUS_A, "common")
+        corrupt_dense = dense(CORPUS_A, "common")
         assert corrupt_dense.status is ResultStatus.FAILED
         assert not corrupt_dense.hits
         assert categories(corrupt_dense) == {FailureCategory.CHANNEL_UNAVAILABLE}
-        assert lexical(_CORPUS_A, "common").hits
-        assert dense(_CORPUS_B, "common").hits
+        assert lexical(CORPUS_A, "common").hits
+        assert dense(CORPUS_B, "common").hits
 
         # Corrupting the lexical database of the same corpus leaves the other
         # corpus serving both channels and the metadata view intact.
         _truncate(
             index_dir
             / LEXICAL_DIRECTORY_NAME
-            / generation_ids[f"{_CORPUS_A.as_str()}:lexical-index"]
+            / generation_ids[f"{CORPUS_A.as_str()}:lexical-index"]
             / LEXICAL_DATABASE_NAME
         )
-        corrupt_lexical = lexical(_CORPUS_A, "common")
+        corrupt_lexical = lexical(CORPUS_A, "common")
         assert corrupt_lexical.status is ResultStatus.FAILED
         assert not corrupt_lexical.hits
         assert categories(corrupt_lexical) == {FailureCategory.CHANNEL_UNAVAILABLE}
-        assert lexical(_CORPUS_B, "common").hits
-        assert dense(_CORPUS_B, "common").hits
+        assert lexical(CORPUS_B, "common").hits
+        assert dense(CORPUS_B, "common").hits
 
         # Damaged index files never invalidate the published corpus version.
-        with repository.open_corpus_snapshot(
-            _CORPUS_A, versions[_CORPUS_A]
-        ) as snapshot:
+        with repository.open_corpus_snapshot(CORPUS_A, versions[CORPUS_A]) as snapshot:
             assert len(snapshot.manifest.document_memberships) == 3
-            assert snapshot.version.corpus_version == versions[_CORPUS_A]
+            assert snapshot.version.corpus_version == versions[CORPUS_A]
     finally:
         repository.close()
 
@@ -1416,7 +1309,7 @@ def _staged_generations(
     return {
         reference.component_kind.as_str(): reference
         for reference in repository.list_corpus_update_component_generations(
-            _CORPUS_A, _VERSION_A2
+            CORPUS_A, VERSION_A2
         )
     }
 
@@ -1438,24 +1331,24 @@ def test_superseded_preparing_generation_is_replaced_before_sealing(
     # genuine change rather than a no-op republication of the active version.
     members = tuple(
         (
-            CorpusDocumentVersionMembership(_CORPUS_A, document_id, version_id),
-            _make_selection(_CORPUS_A, document_id, version_id, text),
+            CorpusDocumentVersionMembership(CORPUS_A, document_id, version_id),
+            _make_selection(CORPUS_A, document_id, version_id, text),
         )
-        for document_id, version_id, text in (_DOCUMENTS[0], _DOCUMENTS[1])
+        for document_id, version_id, text in (DOCUMENTS[0], DOCUMENTS[1])
     )
     removed = CorpusDocumentVersionMembership(
-        _CORPUS_A, _DOCUMENTS[3][0], _DOCUMENTS[3][1]
+        CORPUS_A, DOCUMENTS[3][0], DOCUMENTS[3][1]
     )
     # The superseded candidate was built before the last member was staged, so
     # it carries a different source-manifest digest and generation identity.
-    superseded_manifest = _build_source_manifest(_CORPUS_A, _VERSION_A2, members[:1])
-    complete_manifest = _build_source_manifest(_CORPUS_A, _VERSION_A2, members)
+    superseded_manifest = _build_source_manifest(CORPUS_A, VERSION_A2, members[:1])
+    complete_manifest = _build_source_manifest(CORPUS_A, VERSION_A2, members)
     assert (
         superseded_manifest.source_manifest_digest
         != complete_manifest.source_manifest_digest
     )
 
-    embedder = _EmbeddingFixture()
+    embedder = EmbeddingFixture()
     compatibility = DenseIndexCompatibility(
         model_metadata=embedder.metadata,
         dimensions=3,
@@ -1498,26 +1391,26 @@ def test_superseded_preparing_generation_is_replaced_before_sealing(
         staged: ComponentGenerationReference | None = None
         with repository.transaction() as transaction:
             transaction.begin_corpus_update(
-                _CORPUS_A,
-                _VERSION_A2,
-                expected_corpus_version=versions[_CORPUS_A],
+                CORPUS_A,
+                VERSION_A2,
+                expected_corpus_version=versions[CORPUS_A],
                 required_component_kinds=(
                     ComponentKind("lexical-index"),
                     DENSE_COMPONENT_KIND,
                 ),
             )
             transaction.remove_corpus_update_document_membership(
-                _CORPUS_A, _VERSION_A2, removed
+                CORPUS_A, VERSION_A2, removed
             )
             transaction.register_corpus_update_component_generation(
-                _CORPUS_A,
-                _VERSION_A2,
+                CORPUS_A,
+                VERSION_A2,
                 lexical.component_generation(),
                 validator=lexical.build_validator(repository),
             )
             staged = transaction.register_corpus_update_component_generation(
-                _CORPUS_A,
-                _VERSION_A2,
+                CORPUS_A,
+                VERSION_A2,
                 superseded.component_generation(),
                 validator=_AcceptingValidator(),
             )
@@ -1530,8 +1423,8 @@ def test_superseded_preparing_generation_is_replaced_before_sealing(
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
                 transaction.replace_corpus_update_component_generation(
-                    _CORPUS_A,
-                    _VERSION_A2,
+                    CORPUS_A,
+                    VERSION_A2,
                     complete.component_generation(),
                     complete.component_generation(),
                     validator=complete.build_validator(repository),
@@ -1546,8 +1439,8 @@ def test_superseded_preparing_generation_is_replaced_before_sealing(
         with pytest.raises(StorageConflictError):
             with repository.transaction() as transaction:
                 transaction.replace_corpus_update_component_generation(
-                    _CORPUS_A,
-                    _VERSION_A2,
+                    CORPUS_A,
+                    VERSION_A2,
                     staged,
                     lexical.component_generation(),
                     validator=lexical.build_validator(repository),
@@ -1561,8 +1454,8 @@ def test_superseded_preparing_generation_is_replaced_before_sealing(
         committed: CommitCorpusUpdateOutcome | None = None
         with repository.transaction() as transaction:
             replaced = transaction.replace_corpus_update_component_generation(
-                _CORPUS_A,
-                _VERSION_A2,
+                CORPUS_A,
+                VERSION_A2,
                 staged,
                 complete.component_generation(),
                 validator=complete.build_validator(repository),
@@ -1574,16 +1467,16 @@ def test_superseded_preparing_generation_is_replaced_before_sealing(
             # Exact replay of the same replacement is a no-op.
             assert (
                 transaction.replace_corpus_update_component_generation(
-                    _CORPUS_A,
-                    _VERSION_A2,
+                    CORPUS_A,
+                    VERSION_A2,
                     staged,
                     complete.component_generation(),
                     validator=complete.build_validator(repository),
                 )
                 == replaced
             )
-            transaction.seal_corpus_update(_CORPUS_A, _VERSION_A2)
-            committed = transaction.commit_corpus_update(_CORPUS_A, _VERSION_A2)
+            transaction.seal_corpus_update(CORPUS_A, VERSION_A2)
+            committed = transaction.commit_corpus_update(CORPUS_A, VERSION_A2)
 
         assert committed is not None
         published = {
@@ -1600,13 +1493,13 @@ def test_superseded_preparing_generation_is_replaced_before_sealing(
         )
         assert (
             published[DENSE_COMPONENT_KIND.as_str()]
-            != generation_ids[f"{_CORPUS_A.as_str()}:{DENSE_COMPONENT_KIND.as_str()}"]
+            != generation_ids[f"{CORPUS_A.as_str()}:{DENSE_COMPONENT_KIND.as_str()}"]
         )
 
         # The replacement is the generation that actually serves queries.
-        query = RetrievalQuery("orchid", _VERSION_A2, RetrievalLimit(5))
+        query = RetrievalQuery("orchid", VERSION_A2, RetrievalLimit(5))
         result = execute_dense_retrieval(
-            repository, index_dir, _CORPUS_A, query, _EmbeddingFixture()
+            repository, index_dir, CORPUS_A, query, EmbeddingFixture()
         )
         assert result.status is ResultStatus.COMPLETED
         assert result.hits
