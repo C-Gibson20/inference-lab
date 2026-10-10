@@ -2,9 +2,13 @@
 
 from pathlib import Path
 
+import pytest
+
 from inference_lab.backends.runtime import FakeFailureMode
 from inference_lab.provenance import CorpusId
 from inference_lab.retrieval import (
+    DenseError,
+    DenseFailureCategory,
     EvidenceHit,
     EvidenceReductionAction,
     EvidenceReductionOutcome,
@@ -281,3 +285,44 @@ def test_retryable_reranker_failure_degrades_to_fused_order(tmp_path: Path) -> N
         tuple(hit.candidate.record_id.as_str() for hit in outcome.result.hits)
         == expected
     )
+
+
+def test_publishing_onto_an_emptied_generation_directory_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A partially removed generation must not be silently replaced."""
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "indexes"
+    manifests = publish_corpora(
+        database_path, source_dir, index_dir, PipelineEmbedder()
+    )
+    manifest = manifests[SELECTED_CORPUS]
+
+    # Reuse is the normal outcome for an unchanged build.
+    reused = build_dense_generation(
+        index_dir,
+        manifest,
+        PipelineEmbedder(),
+        metadata_db_path=database_path,
+        source_dir=source_dir,
+        compatibility=compatibility(),
+    )
+    assert reused.statistics.generation_reused
+
+    # Emptying the directory leaves a destination a plain rename would replace
+    # without complaint, losing the published artefact.
+    generation_dir = index_dir / "dense" / reused.manifest.generation_id
+    for path in sorted(generation_dir.iterdir()):
+        path.unlink()
+    with pytest.raises(DenseError) as failure:
+        build_dense_generation(
+            index_dir,
+            manifest,
+            PipelineEmbedder(),
+            metadata_db_path=database_path,
+            source_dir=source_dir,
+            compatibility=compatibility(),
+        )
+    assert failure.value.category == DenseFailureCategory.CORRUPT_GENERATION
+    assert generation_dir.exists()

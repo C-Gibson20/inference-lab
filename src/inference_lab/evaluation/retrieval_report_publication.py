@@ -7,6 +7,11 @@ import shutil
 from pathlib import Path
 from tempfile import mkdtemp
 
+from inference_lab._fs import (
+    fsync_directory,
+    fsync_tree_directories,
+    rename_directory_without_replacement,
+)
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.retrieval_contracts import (
     PUBLISHED_ARTIFACT_NAMES,
@@ -30,9 +35,6 @@ from inference_lab.evaluation.retrieval_report_contracts import (
     RetrievalEvaluationReport,
 )
 from inference_lab.evaluation.serialisation import (
-    _fsync_directory,
-    _fsync_tree_directories,
-    _rename_directory_without_replacement,
     atomic_write,
 )
 
@@ -116,10 +118,10 @@ def publish_retrieval_evaluation(
             artefact_bytes,
             manifest_bytes,
         )
-        _fsync_tree_directories(staging_path)
-        _rename_directory_without_replacement(staging_path, destination)
+        fsync_tree_directories(staging_path)
+        rename_directory_without_replacement(staging_path, destination)
         staging_path = None
-        _fsync_directory(destination.parent)
+        fsync_directory(destination.parent)
         return manifest
     except FileExistsError:
         _cleanup_staging(staging_path)

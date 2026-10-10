@@ -7,6 +7,11 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import cast
 
+from inference_lab._fs import (
+    fsync_directory,
+    fsync_tree_directories,
+    rename_directory_without_replacement,
+)
 from inference_lab._json import (
     JsonObject,
     canonical_json_bytes,
@@ -25,9 +30,6 @@ from inference_lab.evaluation.heldout_reporting import (
 )
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.serialisation import (
-    _fsync_directory,
-    _fsync_tree_directories,
-    _rename_directory_without_replacement,
     atomic_write,
 )
 
@@ -173,10 +175,10 @@ def publish_heldout_baseline_report(
             atomic_write(staging_path / name, artifact_bytes[name])
         atomic_write(staging_path / "manifest.json", manifest_bytes)
         _verify_staged(staging_path, artifact_bytes, manifest_bytes, report)
-        _fsync_tree_directories(staging_path)
-        _rename_directory_without_replacement(staging_path, destination)
+        fsync_tree_directories(staging_path)
+        rename_directory_without_replacement(staging_path, destination)
         staging_path = None
-        _fsync_directory(destination.parent)
+        fsync_directory(destination.parent)
         return manifest
     except FileExistsError:
         _cleanup_staging(staging_path)
