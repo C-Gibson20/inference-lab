@@ -121,6 +121,24 @@ belongs in the test-suite plan's coverage-trace table, which maps each build
 item to the acceptance evidence that protects it, rather than in test names or
 docstrings.
 
+## Package exports
+
+A package's `__init__.py` exports its complete domain vocabulary, not a
+minimal entry-point set. A name belongs in `__all__` when it is part of that
+package's contract: a value or type a consumer constructs, annotates, catches,
+implements, compares, or calls. A name reachable only through a private helper
+does not, and neither does an alias of an already-exported name.
+
+Not every exported name has an in-repository importer: later build items are
+expected consumers of contract identities, protocols, and versioned
+constants. Absence of a current importer is therefore not evidence that a name
+should be removed.
+
+Across domain boundaries, a consumer that needs a symbol the owning package
+does not export imports the defining module explicitly. Removing a name from
+`__all__` changes the required import spelling; it does not make the symbol
+unreachable.
+
 ## Package docstrings
 
 Every production `__init__.py` has a concise docstring that identifies the

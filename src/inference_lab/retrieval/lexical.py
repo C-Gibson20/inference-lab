@@ -399,7 +399,6 @@ class LexicalQuery:
 
 # The longer name is useful at integration boundaries while the short name is
 # convenient for callers constructing a request.
-LexicalRetrievalRequest = LexicalQuery
 
 
 @dataclass(frozen=True, slots=True)
