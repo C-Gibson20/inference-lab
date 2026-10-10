@@ -1,6 +1,7 @@
 """Persistent dense generation build, reuse, and publication seam tests."""
 
 import hashlib
+import math
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -225,6 +226,10 @@ def test_full_generation_reopens_and_registration_validator_checks_membership(
     ) as generation:
         entries = generation.iter_entries()
         assert len(entries) == 2
+        # Stored vectors are unit-length so query scoring is a dot product.
+        for entry in entries:
+            norm = math.sqrt(sum(value * value for value in entry.vector.values))
+            assert norm == pytest.approx(1.0, abs=1e-6)
         assert generation.member_selections() == outcome.manifest.members
         assert (
             generation.manifest.source_manifest_digest == source.source_manifest_digest

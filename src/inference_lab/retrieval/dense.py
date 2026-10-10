@@ -22,7 +22,7 @@ from inference_lab.storage import ComponentKind
 
 DENSE_COMPONENT_KIND: Final[ComponentKind] = ComponentKind("dense-index")
 DENSE_IMPLEMENTATION: Final[str] = "sqlite-flat"
-DENSE_FORMAT_VERSION: Final[str] = "1.0.0"
+DENSE_FORMAT_VERSION: Final[str] = "2.0.0"
 DENSE_CONTRACT_VERSION: Final[str] = "1.0.0"
 DENSE_SCORE_LABEL: Final[str] = "cosine_similarity"
 _SHA256_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{64}$")
@@ -217,6 +217,16 @@ class DenseVector:
                 raise InvalidDenseContractError("vector values must be finite.")
         if not any(value != 0 for value in self.values):
             raise InvalidDenseContractError("cosine vectors must not be zero vectors.")
+
+
+def l2_normalised(vector: DenseVector) -> DenseVector:
+    """Return the unit-length form used for stored and compared vectors."""
+    if not isinstance(vector, DenseVector):
+        raise TypeError("vector must be a DenseVector.")
+    norm = math.sqrt(sum(value * value for value in vector.values))
+    if not math.isfinite(norm) or norm == 0.0:
+        raise InvalidDenseContractError("vectors must have a positive finite norm.")
+    return DenseVector(tuple(value / norm for value in vector.values))
 
 
 @dataclass(frozen=True, slots=True)

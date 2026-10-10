@@ -17,6 +17,7 @@ from inference_lab.retrieval.dense import (
     DenseVectorIndex,
     ExactDenseVectorIndex,
     InvalidDenseContractError,
+    l2_normalised,
     rank_dense_entries,
 )
 from inference_lab.retrieval.dense_retrieval import execute_dense_retrieval
@@ -313,6 +314,7 @@ __all__ = [
     "extract_identifiers",
     "fuse_evidence_results",
     "identifier_score",
+    "l2_normalised",
     "lexical_order_key",
     "lexical_score_label",
     "open_dense_generation",

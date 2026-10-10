@@ -185,8 +185,17 @@ with no sidecar journal. It holds a `members` table of selected document
 versions with their chunk-set selection digests and chunk counts, and an
 `entries` table of one row per chunk carrying its record identity, owning
 document and version, ordinal, exact chunk text, canonical source links, and
-vector blob. Vectors are packed little-endian with one IEEE-754 **double** per
-dimension; `manifest.json` records the SHA-256 of the complete database file.
+vector blob. Vectors are stored L2-normalised and packed little-endian with
+one IEEE-754 **single** per dimension, so a stored vector is unit-length and
+query scoring is a dot product rather than a cosine with two recomputed norms.
+Single precision is what the embedding backend produces, so this discards no
+information the index ever held, and it halves the blob. `manifest.json`
+records the SHA-256 of the complete database file.
+
+Format version `2.0.0` introduced this layout. `format_version` is part of the
+configuration digest, so a generation written as `1.0.0` double-precision data
+is rejected on open and must be rebuilt; because the digest feeds the
+generation ID, the rebuilt generation has a new identity.
 
 Manifest members are unique and ordered by `document_id`. The mutable
 `active` link of any component must never be a reader selection mechanism:

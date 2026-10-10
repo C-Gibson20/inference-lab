@@ -64,6 +64,7 @@ from inference_lab.retrieval.dense import (
     DenseIndexEntry,
     DenseVector,
     InvalidDenseContractError,
+    l2_normalised,
 )
 from inference_lab.retrieval.errors import RetrievalOperationalError
 from inference_lab.retrieval.evidence import (
@@ -86,6 +87,7 @@ DENSE_DATABASE_NAME = "vectors.sqlite3"
 DENSE_MANIFEST_NAME = "manifest.json"
 DENSE_DATABASE_USER_VERSION = 1
 _EMBED_BATCH_SIZE = 32
+_VECTOR_VALUE_BYTES = 4
 
 
 class DenseFailureCategory(StrEnum):
@@ -651,8 +653,8 @@ def _write_generation_database(
                         for source in entry.candidate.sources
                     ]
                     vector = struct.pack(
-                        f"<{compatibility.dimensions}d",
-                        *entry.vector.values,
+                        f"<{compatibility.dimensions}f",
+                        *l2_normalised(entry.vector).values,
                     )
                     connection.execute(
                         "INSERT INTO entries VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1175,9 +1177,9 @@ def _entry_from_row(row: sqlite3.Row, dimensions: int) -> DenseIndexEntry:
             sources=sources,
         )
         vector_bytes = bytes(row[6])
-        if len(vector_bytes) != dimensions * 8:
-            raise ValueError
-        vector = DenseVector(struct.unpack(f"<{dimensions}d", vector_bytes))
+        if len(vector_bytes) != dimensions * _VECTOR_VALUE_BYTES:
+            raise ValueError("stored vector width does not match the index.")
+        vector = DenseVector(struct.unpack(f"<{dimensions}f", vector_bytes))
         document_id = DocumentId.from_str(row[1])
         document_version_id = DocumentVersionId.from_str(row[2])
         if (
