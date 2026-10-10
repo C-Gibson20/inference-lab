@@ -19,7 +19,6 @@ from inference_lab.retrieval.dense import (
     DenseIndexMatch,
     DenseVector,
     InvalidDenseContractError,
-    rank_dense_entries,
 )
 from inference_lab.retrieval.dense_store import (
     DenseError,
@@ -293,16 +292,15 @@ def _execute_dense_retrieval(
                         FailureCategory.INVALID_CHANNEL_RESPONSE,
                     )
 
-                entries = selected_generation.iter_entries()
-                if not entries:
+                entry_count = selected_generation.manifest.entry_count
+                if entry_count == 0:
                     return _completed_result(query, selected_snapshot, ())
                 ranking_limit = (
-                    len(entries)
+                    entry_count
                     if validation is not None
-                    else min(query.limit.value, len(entries))
+                    else min(query.limit.value, entry_count)
                 )
-                matches = rank_dense_entries(
-                    entries,
+                matches = selected_generation.search(
                     query_vector,
                     limit=ranking_limit,
                 )

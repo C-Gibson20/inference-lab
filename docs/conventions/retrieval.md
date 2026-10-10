@@ -229,7 +229,18 @@ is caught before it can contaminate results.
 Candidates are scored by cosine similarity, clamped to `[-1.0, 1.0]`, and
 ordered by descending similarity with ascending canonical `RecordId` as the
 only tie-break. Zero vectors are invalid for cosine and are rejected at
-construction. When the query carries a metadata filter, the predicate is
+construction.
+
+`DenseGeneration.search` performs that ranking without materialising the
+index. It streams `(record_id, vector)` rows, scores each against the
+unit-length query as a dot product, keeps only a heap of the requested size,
+and then hydrates content, source links, and vectors for the ranked winners
+alone. The query vector is normalised once per query rather than per
+candidate, so the reported similarity is a true cosine for a query of any
+magnitude. Per-query hydration is therefore bounded by the requested limit and
+not by corpus size; `iter_entries` remains the full-materialisation reader used
+by incremental reuse and registration validation, which legitimately need every
+entry. When the query carries a metadata filter, the predicate is
 evaluated in exact dense rank order before the requested limit is applied, so
 filtering never reorders surviving candidates.
 
@@ -277,11 +288,13 @@ retention policy.
 These are known gaps, recorded here so the contract is not read as a
 description of finished work:
 
-- **Query cost grows with corpus size.** Opening a generation materialises
-  every entry to verify declared counts, and scoring materialises every
-  vector again. With a metadata filter, candidate provenance is also resolved
-  for every entry rather than for a bounded window. This breaches the bounded
-  candidate provenance rule above.
+- **Filtered queries still rank the whole index.** Scoring itself is now
+  bounded by the requested limit, but when the query carries a metadata
+  predicate the ranking limit is widened to the full entry count so that
+  candidate provenance is resolved for every entry rather than for a bounded
+  window. This breaches the bounded candidate provenance rule above.
+  Generation opening also still materialises every entry to verify declared
+  counts.
 - **No operational logging or stage instrumentation.** The lexical build emits
   an observed stage; the dense build emits neither logs nor profiling records.
   The retrieval logging policy applies to this channel and is not yet

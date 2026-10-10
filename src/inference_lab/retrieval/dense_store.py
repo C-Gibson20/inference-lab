@@ -1,6 +1,7 @@
 """Immutable SQLite generations for corpus-scoped dense retrieval."""
 
 import hashlib
+import heapq
 import os
 import shutil
 import sqlite3
@@ -8,8 +9,9 @@ import struct
 import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
+from operator import mul
 from pathlib import Path
-from typing import Self, cast
+from typing import Iterator, Self, cast
 from urllib.parse import quote
 
 from inference_lab._fs import (
@@ -62,6 +64,7 @@ from inference_lab.retrieval.dense import (
     DenseIndexCompatibility,
     DenseIndexConfiguration,
     DenseIndexEntry,
+    DenseIndexMatch,
     DenseVector,
     InvalidDenseContractError,
     l2_normalised,
@@ -1066,6 +1069,68 @@ class DenseGeneration:
             raise
         except (sqlite3.Error, TypeError, ValueError, KeyError, struct.error):
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION) from None
+
+    def search(
+        self,
+        query_vector: DenseVector,
+        *,
+        limit: int,
+    ) -> tuple[DenseIndexMatch, ...]:
+        """Return the best matches without materialising the whole index."""
+        if not isinstance(query_vector, DenseVector):
+            raise TypeError("query_vector must be a DenseVector.")
+        if type(limit) is not int:
+            raise TypeError("limit must be an integer.")
+        if limit <= 0:
+            raise DenseError(DenseFailureCategory.INVALID_REQUEST)
+        self._require_open()
+        dimensions = self.manifest.compatibility.dimensions
+        if len(query_vector.values) != dimensions:
+            raise DenseError(DenseFailureCategory.INVALID_REQUEST)
+        try:
+            unit_query = l2_normalised(query_vector).values
+            ranked = heapq.nsmallest(
+                limit,
+                self._stream_similarities(unit_query, dimensions),
+                key=lambda scored: (-scored[0], scored[1]),
+            )
+            return tuple(
+                DenseIndexMatch(
+                    candidate=self._require_entry(record_id).candidate,
+                    cosine_similarity=max(-1.0, min(1.0, similarity)),
+                    rank=rank,
+                )
+                for rank, (similarity, record_id) in enumerate(ranked, start=1)
+            )
+        except DenseError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError, KeyError, struct.error):
+            raise DenseError(DenseFailureCategory.CORRUPT_GENERATION) from None
+
+    def _stream_similarities(
+        self,
+        unit_query: tuple[float, ...],
+        dimensions: int,
+    ) -> Iterator[tuple[float, str]]:
+        """Score every stored vector without holding more than one row."""
+        expected_bytes = dimensions * _VECTOR_VALUE_BYTES
+        for record_id, vector_bytes in self._connection.execute(
+            "SELECT record_id, vector FROM entries"
+        ):
+            stored = bytes(vector_bytes)
+            if len(stored) != expected_bytes:
+                raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+            # Stored vectors are unit-length, so cosine similarity is the
+            # dot product with the unit query.
+            values = struct.unpack(f"<{dimensions}f", stored)
+            yield sum(map(mul, unit_query, values)), record_id
+
+    def _require_entry(self, record_id: str) -> DenseIndexEntry:
+        """Hydrate one ranked record, rejecting a generation that lost it."""
+        entry = self.get_entry(RecordId.from_str(record_id))
+        if entry is None:
+            raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+        return entry
 
     def get_entry(self, record_id: RecordId) -> DenseIndexEntry | None:
         """Return one vector record by its immutable identity."""

@@ -32,6 +32,7 @@ from inference_lab.retrieval import (
     DenseFailureCategory,
     DenseGenerationParticipant,
     DenseIndexCompatibility,
+    DenseVector,
     build_dense_generation,
     open_dense_generation,
     select_dense_parent_reference,
@@ -406,3 +407,69 @@ def test_backend_metadata_must_match_the_full_compatibility_identity(
 
     assert raised.value.category is DenseFailureCategory.INCOMPATIBLE_GENERATION
     assert not (tmp_path / "index" / "dense").exists()
+
+
+def test_search_scores_exact_cosines_for_a_query_of_any_magnitude(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    source = _source(
+        (
+            ("alpha passage", _DOC_A, _DOC_A_V1),
+            ("beta passage", _DOC_B, _DOC_B_V1),
+        ),
+        _VERSION_ONE,
+    )
+    outcome = _build(tmp_path, source, embedder)
+
+    with open_dense_generation(
+        tmp_path / "index",
+        outcome.manifest.generation_id,
+    ) as generation:
+        target = generation.iter_entries()[0]
+        # A query parallel to a stored vector scores exactly 1.0 even though
+        # the query itself is not unit-length.
+        scaled = DenseVector(tuple(value * 7.5 for value in target.vector.values))
+
+        matches = generation.search(scaled, limit=2)
+
+        assert matches[0].candidate.record_id == target.candidate.record_id
+        assert matches[0].cosine_similarity == pytest.approx(1.0, abs=1e-6)
+        assert (matches[0].rank, matches[1].rank) == (1, 2)
+        assert matches[1].cosine_similarity < matches[0].cosine_similarity
+        # A tighter limit truncates the same order rather than reordering it.
+        assert generation.search(scaled, limit=1) == matches[:1]
+
+
+def test_search_breaks_equal_similarities_by_record_identity(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    source = _source(
+        (
+            ("identical passage", _DOC_A, _DOC_A_V1),
+            ("identical passage", _DOC_B, _DOC_B_V1),
+        ),
+        _VERSION_ONE,
+    )
+    outcome = _build(tmp_path, source, embedder)
+
+    with open_dense_generation(
+        tmp_path / "index",
+        outcome.manifest.generation_id,
+    ) as generation:
+        entries = generation.iter_entries()
+        assert entries[0].vector.values == entries[1].vector.values
+
+        matches = generation.search(DenseVector(entries[0].vector.values), limit=2)
+
+        assert matches[0].cosine_similarity == pytest.approx(
+            matches[1].cosine_similarity
+        )
+        assert [match.candidate.record_id.as_str() for match in matches] == sorted(
+            entry.candidate.record_id.as_str() for entry in entries
+        )
+        # The single-result query keeps the same winner as the full ranking.
+        assert generation.search(DenseVector(entries[0].vector.values), limit=1) == (
+            matches[0],
+        )
