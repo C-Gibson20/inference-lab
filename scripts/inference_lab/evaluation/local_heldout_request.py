@@ -18,7 +18,6 @@ from inference_lab.evaluation import (
     LocalHeldOutChannelRunner,
     LocalLexicalEvaluationAdapter,
     LocalRerankedEvaluationAdapter,
-    MetricFraction,
     RetrievalEvaluationPolicy,
     RetrievalEvaluationRequest,
     RetrievalEvaluationRunIdentity,
@@ -26,6 +25,10 @@ from inference_lab.evaluation import (
     lexical_relationship_snapshot,
     load_dataset,
     validate_final_benchmark,
+)
+from inference_lab.evaluation.heldout_gate_codec import (
+    HeldOutGateBinding,
+    deserialise_approved_held_out_gate,
 )
 from inference_lab.evaluation.loader import LoadedDataset
 from inference_lab.provenance import CorpusId, CorpusVersionId
@@ -59,65 +62,22 @@ def _load_gate_policy(
     corpus_version: CorpusVersionId,
 ) -> HeldOutGatePolicy:
     """Load the approved policy only when it matches these frozen inputs."""
-    payload = json.loads(_GATE_POLICY.read_text(encoding="utf-8"))
+    approved = deserialise_approved_held_out_gate(_GATE_POLICY.read_bytes())
     manifest = dataset.manifest
     checksum = manifest.checksums.get(manifest.case_file)
-    if (
-        payload.get("schema_version") != "1.0.0"
-        or payload.get("dataset")
-        != {
-            "id": manifest.dataset_id,
-            "version": manifest.dataset_version,
-            "schema_version": manifest.schema_version,
-            "case_file_checksum": checksum,
-        }
-        or payload.get("corpus")
-        != {
-            "id": corpus_id.as_str(),
-            "version": corpus_version.as_str(),
-        }
-        or payload.get("split") != "held_out"
-        or checksum is None
-    ):
-        raise ValueError("approved gate policy does not match the local benchmark")
-    primary = payload.get("primary_gate")
-    uncertainty = payload.get("uncertainty")
-    coverage = payload.get("category_coverage")
-    failure = payload.get("maximum_failure_rate")
-    degraded = payload.get("maximum_degraded_rate")
-    if (
-        not isinstance(primary, dict)
-        or primary.get("channel") != "fused_pre_rerank"
-        or primary.get("metric") != "document_recall"
-        or primary.get("cutoff") != 10
-        or primary.get("denominator")
-        != "all relevant document targets, including failed and empty outcomes"
-        or not isinstance(uncertainty, dict)
-        or uncertainty.get("method") != "leakage-cluster-bootstrap"
-        or not isinstance(coverage, dict)
-        or not isinstance(failure, dict)
-        or not isinstance(degraded, dict)
-    ):
-        raise ValueError("approved gate policy has unsupported metric semantics")
-    minimum = primary.get("minimum")
-    if not isinstance(minimum, dict):
-        raise ValueError("approved gate policy has no primary threshold")
-    return HeldOutGatePolicy(
-        minimum_document_recall_at_10=MetricFraction(
-            minimum["numerator"], minimum["denominator"]
-        ),
-        maximum_failure_rate=MetricFraction(
-            failure["numerator"], failure["denominator"]
-        ),
-        maximum_degraded_rate=MetricFraction(
-            degraded["numerator"], degraded["denominator"]
-        ),
-        minimum_category_cases=coverage["minimum_cases"],
-        minimum_category_leakage_groups=coverage["minimum_leakage_groups"],
-        confidence_level_percent=uncertainty["confidence_level_percent"],
-        bootstrap_replicates=uncertainty["replicates"],
-        rationale=payload["rationale"],
+    if checksum is None:
+        raise ValueError("local benchmark manifest has no case-file checksum")
+    expected = HeldOutGateBinding(
+        dataset_id=manifest.dataset_id,
+        dataset_version=manifest.dataset_version,
+        dataset_schema_version=manifest.schema_version,
+        case_file_checksum=checksum,
+        corpus_id=corpus_id.as_str(),
+        corpus_version=corpus_version.as_str(),
     )
+    if approved.binding != expected:
+        raise ValueError("approved gate policy does not match the local benchmark")
+    return approved.policy
 
 
 def make_heldout_request() -> HeldOutBaselineRequest:

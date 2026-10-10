@@ -200,6 +200,22 @@ unknown inventory entries, malformed JSON, checksum mismatches, mixed
 identities, and inconsistent result digests fail closed with the fixed generic
 runner error.
 
+### The approved gate policy artefact
+
+`docs/operator/retrieval-baseline-gate.json` records the thresholds approved
+before any held-out result was opened. It is decoded by
+`deserialise_approved_held_out_gate`, which rejects unknown or missing fields,
+an unsupported `schema_version`, any split other than `held_out`, any primary
+metric semantics other than fused pre-rerank `document_recall@10` over all
+relevant targets, an unapproved uncertainty method, and a malformed case-file
+checksum. Relaxing a threshold therefore requires editing the artefact in a
+reviewable change; it cannot be widened by adding a field the reader ignores.
+
+The artefact also names the dataset and corpus it was approved against. A run
+loads it only when that binding equals the local benchmark exactly, so an
+approved policy can never be applied to a different dataset version, case file,
+or corpus version.
+
 For the pinned local corpus, the checked-in held-out request factory reads the
 ignored bound benchmark and setup record. Run it from the local evaluation
 directory so the application's `config.toml` is loaded:
