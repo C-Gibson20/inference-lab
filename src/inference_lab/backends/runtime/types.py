@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Literal, get_args
 
+from inference_lab._validation import is_path_free_identifier
 from inference_lab.backends.runtime._validation import (
     validate_finite_number,
     validate_integer,
@@ -58,11 +59,7 @@ _EMBEDDING_PURPOSES: Final[frozenset[EmbeddingPurpose]] = frozenset(
 
 def _validate_path_free_identifier(value: str, field_name: str) -> None:
     """Reject local paths where an immutable artefact identity is required."""
-    if (
-        value.startswith(("/", "\\", "~"))
-        or "://" in value
-        or (len(value) >= 3 and value[1] == ":" and value[2] in ("/", "\\"))
-    ):
+    if not is_path_free_identifier(value):
         raise ValueError(f"{field_name} must not be a local path")
 
 

@@ -22,6 +22,7 @@ from inference_lab.retrieval import (
     CandidateKind,
     DenseIndexBuildRequest,
     DenseIndexCompatibility,
+    DenseIndexConfiguration,
     DenseIndexEntry,
     DenseIndexQuery,
     DenseVector,
@@ -216,3 +217,25 @@ def test_exact_dense_index_rejects_dimension_mismatch_and_duplicate_records() ->
                 DenseIndexEntry(same_id, DenseVector((0.0, 1.0))),
             )
         ).search(_query(DenseVector((1.0, 0.0))))
+
+
+@pytest.mark.parametrize(
+    "revision",
+    ["/mnt/models/embedder", "~/models/embedder", "https://example.invalid/model"],
+)
+def test_dense_compatibility_rejects_a_deployment_path_in_model_identity(
+    revision: str,
+) -> None:
+    # The configuration digest is persisted in every generation manifest, so a
+    # deployment path must never reach it.
+    with pytest.raises(InvalidDenseContractError):
+        DenseIndexCompatibility(
+            model_metadata=_metadata(revision=revision),
+            dimensions=2,
+            embedding_profile=_embedding_profile(),
+        )
+
+
+def test_dense_configuration_rejects_a_deployment_path_in_library_version() -> None:
+    with pytest.raises(InvalidDenseContractError):
+        DenseIndexConfiguration(library_version="/usr/lib/sqlite3")

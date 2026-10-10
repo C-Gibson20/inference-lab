@@ -7,7 +7,10 @@ from dataclasses import dataclass
 
 import structlog
 
-from inference_lab._validation import is_canonical_semantic_version
+from inference_lab._validation import (
+    is_canonical_semantic_version,
+    is_path_free_identifier,
+)
 from inference_lab.backends.runtime import (
     BackendClosedError,
     BackendError,
@@ -142,38 +145,44 @@ class RerankingIdentity:
     policy_version: str = RERANK_POLICY_VERSION
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate every field that participates in the run identity."""
+        self._validate_identities()
+        self._validate_versions()
+        self._validate_limits()
+
+    def _validate_identities(self) -> None:
+        """Require non-empty backend and model identities free of local paths."""
         for name, value in (
             ("backend_name", self.backend_name),
             ("model_name", self.model_name),
             ("model_revision", self.model_revision),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string.")
+            if not is_path_free_identifier(value):
+                raise InvalidRetrievalContractError(
+                    f"{name} must not contain a deployment path."
+                )
+
+    def _validate_versions(self) -> None:
+        """Require each contract version to be a canonical semantic version."""
+        for name, value in (
             ("preprocessing_profile_version", self.preprocessing_profile_version),
             ("deduplication_version", self.deduplication_version),
             ("policy_version", self.policy_version),
         ):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string.")
-        for name, value in (
-            ("backend_name", self.backend_name),
-            ("model_name", self.model_name),
-            ("model_revision", self.model_revision),
-        ):
-            if (
-                value.startswith(("/", "\\", "~"))
-                or "://" in value
-                or (len(value) >= 3 and value[1] == ":" and value[2] in ("/", "\\"))
-            ):
-                raise InvalidRetrievalContractError(
-                    f"{name} must not contain a deployment path."
-                )
-        for name, value in (
-            ("preprocessing_profile_version", self.preprocessing_profile_version),
-            ("deduplication_version", self.deduplication_version),
-            ("policy_version", self.policy_version),
-        ):
             if not is_canonical_semantic_version(value):
                 raise InvalidRetrievalContractError(
                     f"{name} must be a semantic version."
                 )
+
+    def _validate_limits(self) -> None:
+        """Require both limits to stay inside the configured baseline ranges."""
         if type(self.evidence_count) is not int or not 5 <= self.evidence_count <= 10:
             raise InvalidRetrievalContractError(
                 "identity evidence count must be between 5 and 10."
@@ -215,6 +224,10 @@ class RerankingOutcome:
     identity: RerankingIdentity
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate the outcome's result, degradation marker, and identity."""
         if not isinstance(self.result, EvidenceResult):
             raise TypeError("result must be an EvidenceResult.")
         if type(self.degraded) is not bool:
