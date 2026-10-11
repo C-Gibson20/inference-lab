@@ -77,7 +77,7 @@ def test_resolving_spans_across_documents_never_exceeds_the_bound(
             with open_lexical_generation(index_dir, generation_id) as generation:
                 span_ids = [
                     link.source_span_id
-                    for chunk in generation.iter_chunks()
+                    for chunk in generation.read_chunks()
                     for link in chunk.source_links
                 ]
 

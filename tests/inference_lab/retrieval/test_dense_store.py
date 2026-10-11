@@ -228,7 +228,7 @@ def test_full_generation_reopens_and_registration_validator_checks_membership(
         tmp_path / "index",
         outcome.manifest.generation_id,
     ) as generation:
-        entries = generation.iter_entries()
+        entries = generation.read_entries()
         assert len(entries) == 2
         # Stored vectors are unit-length so query scoring is a dot product.
         for entry in entries:
@@ -340,7 +340,7 @@ def test_incremental_build_reuses_matching_chunks_and_tracks_changes(
     with open_dense_generation(
         tmp_path / "index", child.manifest.generation_id
     ) as opened:
-        assert len(opened.iter_entries()) == 3
+        assert len(opened.read_entries()) == 3
 
     removal_source = _source((("stable passage", _DOC_A, _DOC_A_V1),), _VERSION_THREE)
     child_reference = replace(
@@ -372,7 +372,7 @@ def test_empty_generation_is_valid_and_does_not_call_embedder(tmp_path: Path) ->
     with open_dense_generation(
         tmp_path / "index", outcome.manifest.generation_id
     ) as opened:
-        assert opened.iter_entries() == ()
+        assert opened.read_entries() == ()
 
 
 def test_embedding_failure_leaves_no_generation_and_suppresses_backend_message(
@@ -429,7 +429,7 @@ def test_search_scores_exact_cosines_for_a_query_of_any_magnitude(
         tmp_path / "index",
         outcome.manifest.generation_id,
     ) as generation:
-        target = generation.iter_entries()[0]
+        target = generation.read_entries()[0]
         # A query parallel to a stored vector scores exactly 1.0 even though
         # the query itself is not unit-length.
         scaled = DenseVector(tuple(value * 7.5 for value in target.vector.values))
@@ -461,7 +461,7 @@ def test_search_breaks_equal_similarities_by_record_identity(
         tmp_path / "index",
         outcome.manifest.generation_id,
     ) as generation:
-        entries = generation.iter_entries()
+        entries = generation.read_entries()
         assert entries[0].vector.values == entries[1].vector.values
 
         matches = generation.search(DenseVector(entries[0].vector.values), limit=2)

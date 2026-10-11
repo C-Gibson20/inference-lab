@@ -318,7 +318,7 @@ class LexicalGenerationValidator:
                 if opened.member_selections() != expected_selections:
                     return False
 
-                actual_chunks = opened.iter_chunks()
+                actual_chunks = opened.read_chunks()
                 if len(actual_chunks) != len(expected_chunks):
                     return False
                 seen_record_ids: set[RecordId] = set()

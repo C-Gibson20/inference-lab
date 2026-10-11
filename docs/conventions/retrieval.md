@@ -246,9 +246,9 @@ and then hydrates content, source links, and vectors for the ranked winners
 alone. The query vector is normalised once per query rather than per
 candidate, so the reported similarity is a true cosine for a query of any
 magnitude. Per-query hydration is therefore bounded by the requested limit and
-not by corpus size; `iter_entries` remains the full-materialisation reader used
-by incremental reuse and registration validation, which legitimately need every
-entry. When the query carries a metadata filter, the predicate is
+not by corpus size; `read_entries` remains the full-materialisation reader
+used by incremental reuse and registration validation, which legitimately need
+every entry; its name says so rather than implying a lazy iterator. When the query carries a metadata filter, the predicate is
 evaluated in exact dense rank order before the requested limit is applied, so
 filtering never reorders surviving candidates. Because that evaluation happens
 before the limit, the channel ranks a bounded candidate window of
