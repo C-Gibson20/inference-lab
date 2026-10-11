@@ -109,6 +109,32 @@ class _SnapshotEvidence:
     duplicate_expansion_truncated: bool = False
 
 
+def _validate_hybrid_inputs(
+    query: object,
+    embedder: object,
+    policy: object,
+    profiling: object,
+    parent_stage_id: object,
+    profiling_identity: object,
+    snapshot: object,
+) -> None:
+    """Reject inputs that cannot describe one pinned hybrid request."""
+    if not isinstance(query, RetrievalQuery):
+        raise TypeError("query must be a RetrievalQuery.")
+    if not callable(getattr(embedder, "embed", None)):
+        raise TypeError("embedder must implement the embedding contract.")
+    if policy is not None and not isinstance(policy, FusionPolicy):
+        raise TypeError("policy must be a FusionPolicy or None.")
+    if profiling is not None and not isinstance(profiling, ProfilingContext):
+        raise TypeError("profiling must be a ProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    if not isinstance(profiling_identity, str) or not profiling_identity:
+        raise ValueError("profiling_identity must be a non-empty string.")
+    if snapshot is not None and not _is_hybrid_snapshot(snapshot):
+        raise TypeError("snapshot must provide the corpus snapshot contract or None.")
+
+
 def execute_hybrid_retrieval(
     repository: MetadataRepository,
     index_dir: Path,
@@ -133,20 +159,15 @@ def execute_hybrid_retrieval(
         raise TypeError("index_dir must be a Path.")
     if not isinstance(corpus_id, CorpusId):
         raise TypeError("corpus_id must be a CorpusId.")
-    if not isinstance(query, RetrievalQuery):
-        raise TypeError("query must be a RetrievalQuery.")
-    if not callable(getattr(embedder, "embed", None)):
-        raise TypeError("embedder must implement the embedding contract.")
-    if policy is not None and not isinstance(policy, FusionPolicy):
-        raise TypeError("policy must be a FusionPolicy or None.")
-    if profiling is not None and not isinstance(profiling, ProfilingContext):
-        raise TypeError("profiling must be a ProfilingContext or None.")
-    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
-        raise TypeError("parent_stage_id must be a string or None.")
-    if not isinstance(profiling_identity, str) or not profiling_identity:
-        raise ValueError("profiling_identity must be a non-empty string.")
-    if snapshot is not None and not _is_hybrid_snapshot(snapshot):
-        raise TypeError("snapshot must provide the corpus snapshot contract or None.")
+    _validate_hybrid_inputs(
+        query,
+        embedder,
+        policy,
+        profiling,
+        parent_stage_id,
+        profiling_identity,
+        snapshot,
+    )
 
     selected_policy = FusionPolicy() if policy is None else policy
     selected_profiling = profiling or ProfilingContext.create()

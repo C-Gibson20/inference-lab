@@ -15,6 +15,7 @@ from inference_lab.evaluation.heldout_gate import (
     HeldOutCategoryCoverage,
     HeldOutChannel,
     HeldOutChannelIdentity,
+    HeldOutGateObservations,
     HeldOutGateOutcome,
     HeldOutGatePolicy,
     HeldOutRunContract,
@@ -171,13 +172,15 @@ def _decide(
         )
     return evaluate_held_out_gate(
         policy=_policy(),
-        categories=selected_categories,
-        overall_document_recall_at_10=recall,
-        overall_recall_interval_lower=lower,
-        overall_recall_interval_upper=upper,
-        case_count=2 * len(QUESTION_TYPES),
-        failed_case_count=failed,
-        degraded_case_count=degraded,
+        observations=HeldOutGateObservations(
+            categories=selected_categories,
+            overall_document_recall_at_10=recall,
+            overall_recall_interval_lower=lower,
+            overall_recall_interval_upper=upper,
+            case_count=2 * len(QUESTION_TYPES),
+            failed_case_count=failed,
+            degraded_case_count=degraded,
+        ),
     )
 
 

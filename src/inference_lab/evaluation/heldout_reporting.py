@@ -15,6 +15,7 @@ from inference_lab.evaluation.cases import QUESTION_TYPES, QuestionType
 from inference_lab.evaluation.heldout_gate import (
     HeldOutCategoryCoverage,
     HeldOutChannel,
+    HeldOutGateObservations,
     HeldOutGateOutcome,
     HeldOutGatePolicy,
     HeldOutRunContract,
@@ -801,13 +802,15 @@ def build_held_out_baseline_report(
     )
     gate_outcome, gate_reasons = evaluate_held_out_gate(
         policy=contract.gate_policy,
-        categories=gate_summary.categories,
-        overall_document_recall_at_10=gate_summary.document_recall.micro,
-        overall_recall_interval_lower=gate_summary.recall_interval_lower,
-        overall_recall_interval_upper=gate_summary.recall_interval_upper,
-        case_count=len(observations),
-        failed_case_count=gate_summary.failed_case_count,
-        degraded_case_count=gate_summary.degraded_case_count,
+        observations=HeldOutGateObservations(
+            categories=gate_summary.categories,
+            overall_document_recall_at_10=gate_summary.document_recall.micro,
+            overall_recall_interval_lower=gate_summary.recall_interval_lower,
+            overall_recall_interval_upper=gate_summary.recall_interval_upper,
+            case_count=len(observations),
+            failed_case_count=gate_summary.failed_case_count,
+            degraded_case_count=gate_summary.degraded_case_count,
+        ),
     )
     candidate_document_denominator = gate_summary.document_recall.relevant_target_count
     candidate_passage_denominator = gate_summary.passage_recall.relevant_target_count

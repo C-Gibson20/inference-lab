@@ -73,6 +73,81 @@ class EvidenceReductionOverrides:
     expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _ReductionBudgets:
+    """The limits one reduction request will actually be executed under."""
+
+    token_budget: int
+    item_budget: int
+    diversity_policy: EvidenceDiversityPolicy
+
+
+def _verify_tokeniser_identity(
+    tokeniser: EvidenceTokeniser,
+    expected: EvidenceTokeniserIdentity | None,
+) -> None:
+    """Require a usable tokeniser whose identity matches any pinned one."""
+    if not callable(getattr(tokeniser, "tokenise", None)) or not callable(
+        getattr(tokeniser, "count_tokens", None)
+    ):
+        raise EvidenceReductionExecutionError(
+            EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
+        )
+    if expected is not None and not isinstance(expected, EvidenceTokeniserIdentity):
+        raise TypeError(
+            "expected_tokeniser_identity must be an EvidenceTokeniserIdentity."
+        )
+    try:
+        identity = tokeniser.identity
+    except Exception:
+        raise EvidenceReductionExecutionError(
+            EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
+        ) from None
+    if not isinstance(identity, EvidenceTokeniserIdentity):
+        raise EvidenceReductionExecutionError(
+            EvidenceReductionFailureCategory.INVALID_TOKENISER_OUTPUT
+        )
+    if expected is not None and identity != expected:
+        raise EvidenceReductionExecutionError(
+            EvidenceReductionFailureCategory.TOKENISER_MISMATCH
+        )
+
+
+def _resolve_reduction_budgets(
+    configuration: RetrievalConfig,
+    result: EvidenceResult,
+    overrides: EvidenceReductionOverrides,
+) -> _ReductionBudgets:
+    """Narrow the configured limits by any valid per-request override."""
+    token_override = overrides.token_budget
+    if token_override is not None and (
+        type(token_override) is not int or token_override <= 0
+    ):
+        raise ValueError("token_budget_override must be a positive integer.")
+    item_budget = min(result.requested_limit.value, configuration.evidence_count)
+    item_override = overrides.item_budget
+    if item_override is not None:
+        if type(item_override) is not int or item_override <= 0:
+            raise ValueError("item_budget_override must be a positive integer.")
+        item_budget = min(item_budget, item_override)
+    diversity_policy = (
+        configuration.diversity_policy
+        if overrides.diversity_policy is None
+        else overrides.diversity_policy
+    )
+    if not isinstance(diversity_policy, EvidenceDiversityPolicy):
+        raise TypeError("diversity_policy_override must be an EvidenceDiversityPolicy.")
+    return _ReductionBudgets(
+        token_budget=(
+            configuration.evidence_token_budget
+            if token_override is None
+            else token_override
+        ),
+        item_budget=item_budget,
+        diversity_policy=diversity_policy,
+    )
+
+
 def _validate_reduction_inputs(
     corpus_id: object,
     snapshot: object,
@@ -121,10 +196,6 @@ def reduce_retrieval_evidence(
     selected = EvidenceReductionOverrides() if overrides is None else overrides
     if not isinstance(selected, EvidenceReductionOverrides):
         raise TypeError("overrides must be an EvidenceReductionOverrides or None.")
-    token_budget_override = selected.token_budget
-    item_budget_override = selected.item_budget
-    diversity_policy_override = selected.diversity_policy
-    expected_tokeniser_identity = selected.expected_tokeniser_identity
     started = time.perf_counter()
     corpus_version: CorpusVersionId | None = None
     try:
@@ -157,60 +228,11 @@ def reduce_retrieval_evidence(
             raise EvidenceReductionExecutionError(
                 EvidenceReductionFailureCategory.COMPONENT_MISMATCH
             )
-        if not callable(getattr(tokeniser, "tokenise", None)) or not callable(
-            getattr(tokeniser, "count_tokens", None)
-        ):
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
-            )
-        if expected_tokeniser_identity is not None and not isinstance(
-            expected_tokeniser_identity, EvidenceTokeniserIdentity
-        ):
-            raise TypeError(
-                "expected_tokeniser_identity must be an EvidenceTokeniserIdentity."
-            )
-        try:
-            identity = tokeniser.identity
-        except Exception:
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
-            ) from None
-        if not isinstance(identity, EvidenceTokeniserIdentity):
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.INVALID_TOKENISER_OUTPUT
-            )
-        if (
-            expected_tokeniser_identity is not None
-            and identity != expected_tokeniser_identity
-        ):
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.TOKENISER_MISMATCH
-            )
-
-        if token_budget_override is not None and (
-            type(token_budget_override) is not int or token_budget_override <= 0
-        ):
-            raise ValueError("token_budget_override must be a positive integer.")
-
-        token_budget = (
-            configuration.evidence_token_budget
-            if token_budget_override is None
-            else token_budget_override
-        )
-        item_budget = min(result.requested_limit.value, configuration.evidence_count)
-        if item_budget_override is not None:
-            if type(item_budget_override) is not int or item_budget_override <= 0:
-                raise ValueError("item_budget_override must be a positive integer.")
-            item_budget = min(item_budget, item_budget_override)
-        diversity_policy = (
-            configuration.diversity_policy
-            if diversity_policy_override is None
-            else diversity_policy_override
-        )
-        if not isinstance(diversity_policy, EvidenceDiversityPolicy):
-            raise TypeError(
-                "diversity_policy_override must be an EvidenceDiversityPolicy."
-            )
+        _verify_tokeniser_identity(tokeniser, selected.expected_tokeniser_identity)
+        budgets = _resolve_reduction_budgets(configuration, result, selected)
+        token_budget = budgets.token_budget
+        item_budget = budgets.item_budget
+        diversity_policy = budgets.diversity_policy
         source_ranges: dict[RecordId, tuple[EvidenceTextSourceRange, ...]] = {}
         for hit in result.hits[:item_budget]:
             mapped = _source_ranges_for_candidate(

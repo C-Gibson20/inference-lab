@@ -80,7 +80,6 @@ max-statements = 80
 "tests/inference_lab/ingest/test_identity_isolation_acceptance.py" = ["PLR0915"]
 "tests/inference_lab/storage/test_persistent_index_systems_acceptance.py" = ["PLR0915"]
 "src/inference_lab/backends/runtime/_memory_values.py" = ["C901", "PLR0912"]
-"src/inference_lab/evaluation/heldout_gate.py" = ["C901", "PLR0912"]
 "src/inference_lab/ingest/_chunk_identity.py" = ["PLR0913"]
 "src/inference_lab/ingest/_chunk_windows.py" = ["PLR0913"]
 "src/inference_lab/ingest/baseline_execution.py" = ["C901"]

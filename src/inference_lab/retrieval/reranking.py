@@ -3,7 +3,7 @@
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import structlog
 
@@ -467,6 +467,99 @@ def _score_prepared_reranking(
     return map_rerank_result(prepared, backend.rerank(prepared.backend_request))
 
 
+@dataclass(frozen=True, slots=True)
+class _RerankingContext:
+    """What every reranking outcome needs in order to be constructed."""
+
+    query: RetrievalQuery
+    fused_result: EvidenceResult
+    identity: RerankingIdentity
+    evidence_count: EvidenceCount
+    available_candidate_count: int = 0
+    submitted_candidate_count: int = 0
+
+    def with_pool(self, prepared: PreparedReranking) -> "_RerankingContext":
+        """Return the same context carrying the prepared candidate pool."""
+        return replace(
+            self,
+            available_candidate_count=prepared.available_candidate_count,
+            submitted_candidate_count=len(prepared.candidate_hits),
+        )
+
+    def failed(
+        self,
+        failure: RetrievalFailure,
+    ) -> tuple[RerankingOutcome, FailureCategory]:
+        """Build a hit-free outcome that retains the fused result's failures."""
+        return (
+            _failed_reranking_outcome(
+                self.query,
+                failure,
+                prior_failures=self.fused_result.failures,
+                identity=self.identity,
+                available_candidate_count=self.available_candidate_count,
+                submitted_candidate_count=self.submitted_candidate_count,
+            ),
+            failure.category,
+        )
+
+
+def _rejected_before_reranking(
+    context: _RerankingContext,
+) -> tuple[RerankingOutcome, FailureCategory | None] | None:
+    """Reject a fused result the reranker must not be asked to score."""
+    query = context.query
+    fused_result = context.fused_result
+    if fused_result.corpus_version != query.corpus_version:
+        return context.failed(
+            RetrievalFailure(FailureCategory.CORPUS_VERSION_MISMATCH, retryable=False)
+        )
+    if fused_result.requested_limit != query.limit:
+        return context.failed(
+            RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, retryable=False)
+        )
+    if fused_result.status is ResultStatus.FAILED or not fused_result.hits:
+        return (
+            RerankingOutcome(fused_result, degraded=False, identity=context.identity),
+            fused_result.failures[-1].category if fused_result.failures else None,
+        )
+    return None
+
+
+def _backend_failure_outcome(
+    context: _RerankingContext,
+    error: BackendError,
+) -> tuple[RerankingOutcome, FailureCategory]:
+    """Degrade to the fused order when retryable, otherwise fail closed."""
+    failure = RetrievalFailure(
+        category=(
+            FailureCategory.CHANNEL_UNAVAILABLE
+            if isinstance(error, (BackendNotReadyError, BackendClosedError))
+            else FailureCategory.CHANNEL_EXECUTION_FAILURE
+        ),
+        retryable=error.retryable,
+    )
+    if not error.retryable:
+        return context.failed(failure)
+    fallback = deduplicate_evidence_hits(context.fused_result.hits)[
+        : context.evidence_count.value
+    ]
+    return (
+        RerankingOutcome(
+            _result_with_outcome(
+                context.query,
+                fallback,
+                (*context.fused_result.failures, failure),
+            ),
+            degraded=bool(fallback),
+            identity=context.identity,
+            available_candidate_count=context.available_candidate_count,
+            submitted_candidate_count=context.submitted_candidate_count,
+        ),
+        failure.category,
+    )
+
+
 def execute_reranking(
     backend: RerankerBackend,
     query: RetrievalQuery,
@@ -510,117 +603,50 @@ def execute_reranking(
             duration_ms=(time.perf_counter() - started_at) * 1000,
         )
 
-    if fused_result.corpus_version != query.corpus_version:
-        return finish(
-            _failed_reranking_outcome(
-                query,
-                RetrievalFailure(
-                    FailureCategory.CORPUS_VERSION_MISMATCH,
-                    retryable=False,
-                ),
-                identity=identity,
-            ),
-            FailureCategory.CORPUS_VERSION_MISMATCH,
-        )
-    if fused_result.requested_limit != query.limit:
-        return finish(
-            _failed_reranking_outcome(
-                query,
-                RetrievalFailure(
-                    FailureCategory.INVALID_CHANNEL_RESPONSE,
-                    retryable=False,
-                ),
-                identity=identity,
-            ),
-            FailureCategory.INVALID_CHANNEL_RESPONSE,
-        )
-    if fused_result.status is ResultStatus.FAILED or not fused_result.hits:
-        category = fused_result.failures[-1].category if fused_result.failures else None
-        return finish(
-            RerankingOutcome(fused_result, degraded=False, identity=identity),
-            category,
-        )
+    context = _RerankingContext(
+        query=query,
+        fused_result=fused_result,
+        identity=identity,
+        evidence_count=evidence_count,
+    )
+    rejected = _rejected_before_reranking(context)
+    if rejected is not None:
+        return finish(*rejected)
 
     prepared = prepare_rerank_request(
         RerankingRequest(query, fused_result),
         evidence_count=evidence_count,
         candidate_limit=candidate_limit,
     )
-    available = prepared.available_candidate_count
-    submitted = len(prepared.candidate_hits)
+    context = context.with_pool(prepared)
     try:
         scored = _score_prepared_reranking(backend, prepared)
     except BackendError as error:
-        failure = RetrievalFailure(
-            category=(
-                FailureCategory.CHANNEL_UNAVAILABLE
-                if isinstance(error, (BackendNotReadyError, BackendClosedError))
-                else FailureCategory.CHANNEL_EXECUTION_FAILURE
-            ),
-            retryable=error.retryable,
-        )
-        if error.retryable:
-            fallback = deduplicate_evidence_hits(fused_result.hits)[
-                : evidence_count.value
-            ]
-            return finish(
-                RerankingOutcome(
-                    _result_with_outcome(
-                        query,
-                        fallback,
-                        (*fused_result.failures, failure),
-                    ),
-                    degraded=bool(fallback),
-                    identity=identity,
-                    available_candidate_count=available,
-                    submitted_candidate_count=submitted,
-                ),
-                failure.category,
-            )
-        return finish(
-            _failed_reranking_outcome(
-                query,
-                failure,
-                prior_failures=fused_result.failures,
-                identity=identity,
-                available_candidate_count=available,
-                submitted_candidate_count=submitted,
-            ),
-            failure.category,
-        )
+        return finish(*_backend_failure_outcome(context, error))
     except InvalidRetrievalContractError:
         return finish(
-            _failed_reranking_outcome(
-                query,
-                RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False),
-                prior_failures=fused_result.failures,
-                identity=identity,
-                available_candidate_count=available,
-                submitted_candidate_count=submitted,
-            ),
-            FailureCategory.INVALID_CHANNEL_RESPONSE,
+            *context.failed(
+                RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False)
+            )
         )
     except Exception:
         return finish(
-            _failed_reranking_outcome(
-                query,
-                RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False),
-                prior_failures=fused_result.failures,
-                identity=identity,
-                available_candidate_count=available,
-                submitted_candidate_count=submitted,
-            ),
-            FailureCategory.CHANNEL_EXECUTION_FAILURE,
+            *context.failed(
+                RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False)
+            )
         )
 
-    hits = rank_evidence_hits(scored)[: evidence_count.value]
     return finish(
         RerankingOutcome(
-            _result_with_outcome(query, hits, fused_result.failures),
+            _result_with_outcome(
+                query,
+                rank_evidence_hits(scored)[: evidence_count.value],
+                fused_result.failures,
+            ),
             degraded=False,
             identity=identity,
-            available_candidate_count=available,
-            submitted_candidate_count=submitted,
+            available_candidate_count=context.available_candidate_count,
+            submitted_candidate_count=context.submitted_candidate_count,
         )
     )
 
