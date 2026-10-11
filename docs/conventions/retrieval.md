@@ -565,6 +565,16 @@ and `component_mismatch` when a ready component is not the generation that was
 opened. A missing index and a stale index need different operator responses, so
 they are never reported as the same cause.
 
+The lexical and dense generations of one corpus version are built from the
+same `BaselineChunkGenerationManifest`, so their record sets are identical by
+construction. Reduction relies on that: it maps a candidate's source ranges
+through the lexical generation whatever channel retrieved it. A result
+candidate the lexical generation does not hold therefore means the two
+component generations disagree despite claiming the same source manifest, and
+it fails closed with `component_record_sets_disagree`. It must never be
+treated as a merely unmappable candidate, because that would silently drop a
+dense-only passage at the budget instead of truncating it.
+
 Reduction failures name the cause the operator must act on. An item evicted
 because the token budget is exhausted is recorded as `dropped_budget` even when
 it had already been truncated; `failed_source_map` and its `source_map_*`

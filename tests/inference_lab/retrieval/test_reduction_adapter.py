@@ -233,6 +233,64 @@ def _prepared_reduction(tmp_path: Path):
     return snapshot, built.manifest, result
 
 
+def test_an_invalid_request_is_logged_like_every_other_failure(
+    tmp_path: Path,
+) -> None:
+    snapshot, built_manifest, result = _prepared_reduction(tmp_path)
+
+    with open_lexical_generation(tmp_path, built_manifest.generation_id) as generation:
+        with capture_logs() as logs:
+            with pytest.raises(TypeError):
+                reduce_retrieval_evidence(
+                    CORPUS_ID,
+                    cast(CorpusSnapshot, snapshot),
+                    generation,
+                    result,
+                    _WhitespaceTokeniser(),
+                    RetrievalConfig(),
+                    expected_tokeniser_identity=cast(
+                        EvidenceTokeniserIdentity, "not-an-identity"
+                    ),
+                )
+
+    failure = next(log for log in logs if log["event"] == "evidence_reduction_failed")
+    assert failure["failure_category"] == "invalid_request"
+    assert failure["log_level"] == "error"
+
+
+def test_a_candidate_absent_from_the_lexical_generation_fails_closed(
+    tmp_path: Path,
+) -> None:
+    snapshot, built_manifest, result = _prepared_reduction(tmp_path)
+    # Both component generations derive from one chunk manifest, so a result
+    # candidate the lexical generation does not hold means the two record sets
+    # disagree. Truncation must not be silently abandoned for that candidate.
+    foreign = replace(
+        result.hits[0].candidate,
+        record_id=RecordId.generate(),
+    )
+    foreign_result = replace(
+        result,
+        hits=(replace(result.hits[0], candidate=foreign),),
+    )
+
+    with open_lexical_generation(tmp_path, built_manifest.generation_id) as generation:
+        with pytest.raises(EvidenceReductionExecutionError) as disagreement:
+            reduce_retrieval_evidence(
+                CORPUS_ID,
+                cast(CorpusSnapshot, snapshot),
+                generation,
+                foreign_result,
+                _WhitespaceTokeniser(),
+                RetrievalConfig(),
+            )
+
+    assert (
+        disagreement.value.category
+        is EvidenceReductionFailureCategory.COMPONENT_RECORD_SETS_DISAGREE
+    )
+
+
 def test_missing_and_stale_lexical_components_are_distinguishable(
     tmp_path: Path,
 ) -> None:

@@ -24,6 +24,7 @@ from inference_lab.retrieval.reduction import (
     EvidenceTextSourceRange,
     EvidenceTokeniser,
     EvidenceTokeniserError,
+    EvidenceTokeniserFailureCategory,
     EvidenceTokeniserIdentity,
     TextSourceBoundary,
     reduce_evidence,
@@ -45,6 +46,8 @@ class EvidenceReductionFailureCategory(StrEnum):
     CORPUS_VERSION_MISMATCH = "corpus_version_mismatch"
     COMPONENT_UNAVAILABLE = "component_unavailable"
     COMPONENT_MISMATCH = "component_mismatch"
+    COMPONENT_RECORD_SETS_DISAGREE = "component_record_sets_disagree"
+    INVALID_REQUEST = "invalid_request"
     TOKENISER_MISMATCH = "tokeniser_mismatch"
     TOKENISER_UNAVAILABLE = "tokeniser_unavailable"
     INVALID_TOKENISER_OUTPUT = "invalid_tokeniser_output"
@@ -217,16 +220,22 @@ def reduce_retrieval_evidence(
             EvidenceReductionFailureCategory.INVALID_TOKENISER_OUTPUT
             if error.category
             in {
-                "invalid_tokeniser_output",
-                "invalid_token_offsets",
-                "inconsistent_token_count",
-                "unmeasurable_text",
+                EvidenceTokeniserFailureCategory.INVALID_TOKENISER_OUTPUT,
+                EvidenceTokeniserFailureCategory.INVALID_TOKEN_OFFSETS,
+                EvidenceTokeniserFailureCategory.INCONSISTENT_TOKEN_COUNT,
+                EvidenceTokeniserFailureCategory.UNMEASURABLE_TEXT,
             }
             else EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
         )
         _log_failure(corpus_id, corpus_version, category, started=started)
         raise EvidenceReductionExecutionError(category) from None
     except TypeError:
+        _log_failure(
+            corpus_id,
+            corpus_version,
+            EvidenceReductionFailureCategory.INVALID_REQUEST,
+            started=started,
+        )
         raise
     except Exception:
         category = EvidenceReductionFailureCategory.REDUCTION_FAILURE
@@ -244,7 +253,11 @@ def _source_ranges_for_candidate(
     """Build exact per-span text mappings, returning None when proof fails."""
     try:
         chunk = generation.get_chunk(record_id)
-        if chunk is None or not _candidate_matches_chunk(chunk, content, sources):
+        if chunk is None:
+            raise EvidenceReductionExecutionError(
+                EvidenceReductionFailureCategory.COMPONENT_RECORD_SETS_DISAGREE
+            )
+        if not _candidate_matches_chunk(chunk, content, sources):
             return None
         metadata = resolve_lexical_candidate_metadata(snapshot, chunk)
         boundary_map = build_canonical_source_boundary_map(
@@ -308,6 +321,9 @@ def _source_ranges_for_candidate(
                 )
             )
         return tuple(sorted(ranges, key=lambda item: item.text_start))
+    except EvidenceReductionExecutionError:
+        # A broken component invariant is not an unmappable candidate.
+        raise
     except Exception:
         return None
 
