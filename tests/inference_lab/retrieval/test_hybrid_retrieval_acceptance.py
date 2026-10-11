@@ -20,6 +20,7 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 from inference_lab.retrieval import (
+    BorrowedRetrievalState,
     CandidateKind,
     ChannelScore,
     DenseBuildRequest,
@@ -214,7 +215,7 @@ def test_hybrid_fails_closed_when_pinned_snapshot_version_differs() -> None:
         CORPUS_ID,
         query,
         _QueryEmbedder(),
-        snapshot=cast(CorpusSnapshot, snapshot),
+        borrowed=BorrowedRetrievalState(snapshot=cast(CorpusSnapshot, snapshot)),
     )
 
     assert result.status is ResultStatus.FAILED
@@ -306,9 +307,11 @@ def test_hybrid_journey_fuses_channels_and_keeps_distinct_family_evidence(
                 query,
                 embedder,
                 policy=FusionPolicy(),
-                snapshot=cast(CorpusSnapshot, snapshot),
-                lexical_generation=cast(LexicalGeneration, lexical_generation),
-                dense_generation=cast(DenseGeneration, dense_generation),
+                borrowed=BorrowedRetrievalState(
+                    snapshot=cast(CorpusSnapshot, snapshot),
+                    lexical_generation=cast(LexicalGeneration, lexical_generation),
+                    dense_generation=cast(DenseGeneration, dense_generation),
+                ),
             )
 
     assert result.status.value == "completed"
@@ -409,7 +412,7 @@ def test_hybrid_discards_a_foreign_channel_candidate_and_keeps_safe_partial_hits
         CORPUS_ID,
         query,
         _QueryEmbedder(),
-        snapshot=cast(CorpusSnapshot, snapshot),
+        borrowed=BorrowedRetrievalState(snapshot=cast(CorpusSnapshot, snapshot)),
     )
 
     assert result.status is ResultStatus.PARTIAL

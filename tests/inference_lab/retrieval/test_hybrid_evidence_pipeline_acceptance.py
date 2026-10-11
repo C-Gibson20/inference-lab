@@ -13,6 +13,7 @@ from inference_lab.retrieval import (
     EvidenceHit,
     EvidenceReductionAction,
     EvidenceReductionOutcome,
+    EvidenceReductionOverrides,
     FusionPolicy,
     ResultStatus,
     RetrievalChannel,
@@ -206,7 +207,7 @@ def test_hybrid_evidence_pipeline_survives_restart_and_reuses_indexes(
                     reranked.result,
                     tokeniser,
                     RetrievalConfig(),
-                    token_budget_override=budget,
+                    overrides=EvidenceReductionOverrides(token_budget=budget),
                 )
             # Resolving provenance for every retained passage must not grow
             # snapshot memory past its declared bound.

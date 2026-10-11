@@ -26,6 +26,7 @@ from inference_lab.retrieval import (
     EvidenceHit,
     EvidenceReductionExecutionError,
     EvidenceReductionFailureCategory,
+    EvidenceReductionOverrides,
     EvidenceResult,
     EvidenceSource,
     EvidenceTokenisation,
@@ -248,8 +249,10 @@ def test_an_invalid_request_is_logged_like_every_other_failure(
                     result,
                     _WhitespaceTokeniser(),
                     RetrievalConfig(),
-                    expected_tokeniser_identity=cast(
-                        EvidenceTokeniserIdentity, "not-an-identity"
+                    overrides=EvidenceReductionOverrides(
+                        expected_tokeniser_identity=cast(
+                            EvidenceTokeniserIdentity, "not-an-identity"
+                        ),
                     ),
                 )
 
@@ -381,7 +384,7 @@ def test_public_reduction_maps_unicode_truncation_and_logs_privately(
                 result,
                 _WhitespaceTokeniser(),
                 RetrievalConfig(evidence_token_budget=4),
-                token_budget_override=1,
+                overrides=EvidenceReductionOverrides(token_budget=1),
             )
         with pytest.raises(EvidenceReductionExecutionError) as mismatch:
             reduce_retrieval_evidence(
@@ -391,9 +394,11 @@ def test_public_reduction_maps_unicode_truncation_and_logs_privately(
                 result,
                 _WhitespaceTokeniser(),
                 RetrievalConfig(),
-                expected_tokeniser_identity=replace(
-                    _WhitespaceTokeniser().identity,
-                    revision="different-revision",
+                overrides=EvidenceReductionOverrides(
+                    expected_tokeniser_identity=replace(
+                        _WhitespaceTokeniser().identity,
+                        revision="different-revision",
+                    ),
                 ),
             )
         snapshot.version = SimpleNamespace(

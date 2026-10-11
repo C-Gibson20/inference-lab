@@ -1,6 +1,7 @@
 """Snapshot-pinned evidence reduction with exact lexical source mapping."""
 
 import time
+from dataclasses import dataclass
 from enum import StrEnum
 
 import structlog
@@ -62,6 +63,50 @@ class EvidenceReductionExecutionError(
     category_type = EvidenceReductionFailureCategory
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceReductionOverrides:
+    """Per-request narrowings of the configured reduction limits."""
+
+    token_budget: int | None = None
+    item_budget: int | None = None
+    diversity_policy: EvidenceDiversityPolicy | None = None
+    expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None
+
+
+def _validate_reduction_inputs(
+    corpus_id: object,
+    snapshot: object,
+    generation: object,
+    result: object,
+    configuration: object,
+) -> None:
+    """Reject inputs that cannot describe one pinned reduction request."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if any(
+        not callable(getattr(snapshot, method_name, None))
+        for method_name in (
+            "get_source_artefact",
+            "get_parsed_representation",
+            "resolve_source_span",
+            "get_document_version",
+        )
+    ):
+        raise TypeError("snapshot must implement CorpusSnapshot.")
+    if (
+        not hasattr(snapshot, "corpus_id")
+        or not hasattr(snapshot, "version")
+        or not hasattr(snapshot, "manifest")
+    ):
+        raise TypeError("snapshot must expose its selected corpus version.")
+    if not isinstance(generation, LexicalGeneration):
+        raise TypeError("generation must be a LexicalGeneration.")
+    if not isinstance(result, EvidenceResult):
+        raise TypeError("result must be an EvidenceResult.")
+    if not isinstance(configuration, RetrievalConfig):
+        raise TypeError("configuration must be a RetrievalConfig.")
+
+
 def reduce_retrieval_evidence(
     corpus_id: CorpusId,
     snapshot: CorpusSnapshot,
@@ -70,39 +115,22 @@ def reduce_retrieval_evidence(
     tokeniser: EvidenceTokeniser,
     configuration: RetrievalConfig,
     *,
-    token_budget_override: int | None = None,
-    item_budget_override: int | None = None,
-    diversity_policy_override: EvidenceDiversityPolicy | None = None,
-    expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None,
+    overrides: EvidenceReductionOverrides | None = None,
 ) -> EvidenceReductionOutcome:
     """Reduce one reranked result against its exact pinned corpus snapshot."""
+    selected = EvidenceReductionOverrides() if overrides is None else overrides
+    if not isinstance(selected, EvidenceReductionOverrides):
+        raise TypeError("overrides must be an EvidenceReductionOverrides or None.")
+    token_budget_override = selected.token_budget
+    item_budget_override = selected.item_budget
+    diversity_policy_override = selected.diversity_policy
+    expected_tokeniser_identity = selected.expected_tokeniser_identity
     started = time.perf_counter()
     corpus_version: CorpusVersionId | None = None
     try:
-        if not isinstance(corpus_id, CorpusId):
-            raise TypeError("corpus_id must be a CorpusId.")
-        if any(
-            not callable(getattr(snapshot, method_name, None))
-            for method_name in (
-                "get_source_artefact",
-                "get_parsed_representation",
-                "resolve_source_span",
-                "get_document_version",
-            )
-        ):
-            raise TypeError("snapshot must implement CorpusSnapshot.")
-        if (
-            not hasattr(snapshot, "corpus_id")
-            or not hasattr(snapshot, "version")
-            or not hasattr(snapshot, "manifest")
-        ):
-            raise TypeError("snapshot must expose its selected corpus version.")
-        if not isinstance(generation, LexicalGeneration):
-            raise TypeError("generation must be a LexicalGeneration.")
-        if not isinstance(result, EvidenceResult):
-            raise TypeError("result must be an EvidenceResult.")
-        if not isinstance(configuration, RetrievalConfig):
-            raise TypeError("configuration must be a RetrievalConfig.")
+        _validate_reduction_inputs(
+            corpus_id, snapshot, generation, result, configuration
+        )
         corpus_version = snapshot.version.corpus_version
         if (
             snapshot.corpus_id != corpus_id

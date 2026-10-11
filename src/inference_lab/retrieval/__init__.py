@@ -69,6 +69,7 @@ from inference_lab.retrieval.fusion import (
 )
 from inference_lab.retrieval.hybrid import (
     FUSION_DEDUPLICATION_VERSION,
+    BorrowedRetrievalState,
     execute_hybrid_retrieval,
 )
 from inference_lab.retrieval.lexical import (
@@ -162,6 +163,7 @@ from inference_lab.retrieval.reduction import (
 from inference_lab.retrieval.reduction_adapter import (
     EvidenceReductionExecutionError,
     EvidenceReductionFailureCategory,
+    EvidenceReductionOverrides,
     reduce_retrieval_evidence,
 )
 from inference_lab.retrieval.results import (
@@ -208,6 +210,7 @@ __all__ = [
     "SUPPORTED_RETRIEVAL_SCHEMA_VERSIONS",
     "AllFilter",
     "AnyFilter",
+    "BorrowedRetrievalState",
     "CandidateKind",
     "ChannelScore",
     "DenseBuildRequest",
@@ -236,6 +239,7 @@ __all__ = [
     "EvidenceReductionFailureCategory",
     "EvidenceReductionIdentity",
     "EvidenceReductionOutcome",
+    "EvidenceReductionOverrides",
     "EvidenceReductionRequest",
     "EvidenceResult",
     "EvidenceSource",

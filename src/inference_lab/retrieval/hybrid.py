@@ -69,6 +69,26 @@ _UNRESOLVED: Final = object()
 
 
 @dataclass(frozen=True, slots=True)
+class _ChannelRequest:
+    """What both ranked channels need to execute one query."""
+
+    repository: MetadataRepository
+    index_dir: Path
+    corpus_id: CorpusId
+    query: RetrievalQuery
+    embedder: EmbeddingBackend
+
+
+@dataclass(frozen=True, slots=True)
+class BorrowedRetrievalState:
+    """Pinned snapshot and generations a caller has already opened."""
+
+    snapshot: CorpusSnapshot | None = None
+    lexical_generation: LexicalGeneration | None = None
+    dense_generation: DenseGeneration | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _FusionOutcome:
     """One fused result with the bounded diagnostics its stage reports."""
 
@@ -100,11 +120,13 @@ def execute_hybrid_retrieval(
     profiling: ProfilingContext | None = None,
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
-    snapshot: CorpusSnapshot | None = None,
-    lexical_generation: LexicalGeneration | None = None,
-    dense_generation: DenseGeneration | None = None,
+    borrowed: BorrowedRetrievalState | None = None,
 ) -> EvidenceResult:
     """Execute lexical and dense retrieval against one pinned snapshot."""
+    borrowed = BorrowedRetrievalState() if borrowed is None else borrowed
+    if not isinstance(borrowed, BorrowedRetrievalState):
+        raise TypeError("borrowed must be a BorrowedRetrievalState or None.")
+    snapshot = borrowed.snapshot
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
         raise TypeError("repository must provide the metadata repository contract.")
     if not isinstance(index_dir, Path):
@@ -166,18 +188,19 @@ def execute_hybrid_retrieval(
                     )
                 else:
                     fused = _retrieve_and_fuse(
-                        repository,
-                        index_dir,
-                        corpus_id,
-                        query,
-                        embedder,
+                        _ChannelRequest(
+                            repository=repository,
+                            index_dir=index_dir,
+                            corpus_id=corpus_id,
+                            query=query,
+                            embedder=embedder,
+                        ),
                         selected_snapshot,
                         selected_policy,
                         selected_profiling,
                         stage_id,
                         profiling_identity,
-                        lexical_generation,
-                        dense_generation,
+                        borrowed,
                     )
                     result = fused.result
                     channel_counts = dict(fused.channel_counts)
@@ -218,43 +241,39 @@ def execute_hybrid_retrieval(
 
 
 def _retrieve_and_fuse(
-    repository: MetadataRepository,
-    index_dir: Path,
-    corpus_id: CorpusId,
-    query: RetrievalQuery,
-    embedder: EmbeddingBackend,
+    request: _ChannelRequest,
     snapshot: CorpusSnapshot,
     policy: FusionPolicy,
     profiling: ProfilingContext,
     stage_id: str,
     profiling_identity: str,
-    lexical_generation: LexicalGeneration | None,
-    dense_generation: DenseGeneration | None,
+    borrowed: BorrowedRetrievalState,
 ) -> _FusionOutcome:
     """Run both ranked channels, validate provenance, then fuse candidates."""
+    query = request.query
     channel_results = {
         RetrievalChannel.LEXICAL: execute_lexical_retrieval(
-            repository,
-            index_dir,
-            corpus_id,
+            request.repository,
+            request.index_dir,
+            request.corpus_id,
             query,
             profiling=profiling,
             parent_stage_id=stage_id,
             profiling_identity=f"{profiling_identity}-lexical",
             snapshot=snapshot,
-            generation=lexical_generation,
+            generation=borrowed.lexical_generation,
         ),
         RetrievalChannel.DENSE: execute_dense_retrieval(
-            repository,
-            index_dir,
-            corpus_id,
+            request.repository,
+            request.index_dir,
+            request.corpus_id,
             query,
-            embedder,
+            request.embedder,
             profiling=profiling,
             parent_stage_id=stage_id,
             profiling_identity=f"{profiling_identity}-dense",
             snapshot=snapshot,
-            generation=dense_generation,
+            generation=borrowed.dense_generation,
         ),
     }
     channel_counts: dict[RetrievalChannel, int] = {}
