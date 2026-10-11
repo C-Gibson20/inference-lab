@@ -238,15 +238,24 @@ provisional status are documented in
 
 ## Shared local-backend policies
 
-Both local model backends follow the same rules, so one cannot drift into a
-different operational contract than the other.
+`QwenEmbeddingBackend` (RUN-04) and `LocalRerankerBackend` (RUN-05) follow the
+same rules, so one cannot drift into a different operational contract than the
+other. The RUN-02 fixture backend is deliberately stricter and is described
+with its own section above.
 
 **Artefact verification.** A backend pins the digest of every file that
 affects how its model loads or behaves, and verifies exactly those. Files it
 does not pin — caches, lock files, operator tooling leftovers, documentation
 and images shipped alongside a model — are ignored rather than treated as a
 corrupt inventory, so routine tooling cannot prevent a load. A missing or
-symlinked required artefact, or a digest mismatch, fails the load.
+symlinked required artefact, or a digest mismatch, fails the load. The
+fixture backend keeps an exact-inventory check instead, because its directory
+is project-owned test data rather than an operator-managed model download.
+
+Where a pinned set is also recorded outside the backend — the RUN-05
+candidate-comparison manifest under `benchmarks/` — a test asserts the two
+agree on the revision and on every pinned digest, so a descriptive copy
+cannot drift from the authority.
 
 **Declared preprocessing identity.** A backend whose preprocessing affects its
 results must declare `preprocessing_profile_version` in its

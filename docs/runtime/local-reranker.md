@@ -17,22 +17,24 @@ then configure `models.reranker_path` in the deployment's uncommitted
 `config.toml` to point at that directory. The backend does not download files,
 resolve a repository ID, run remote model code, or fall back to a registry.
 
-Before and after loading, the backend verifies an exact file inventory and the
-SHA-256 digest of every entry: the model, tokeniser, configuration, repository
-card, and the repository's included assets. That inventory is pinned in the
-backend source, which is the single authority for what may load. The same
-inventory is mirrored in
-[`benchmarks/run-05/artifact-manifest.json`](../../benchmarks/run-05/artifact-manifest.json)
-for the candidate-comparison benchmark; the benchmark copy is descriptive and
-must be kept equal to the pinned inventory.
+Before and after loading, the backend verifies the SHA-256 digest of every
+file that affects how the model loads or behaves: the model weights, the
+tokeniser and its configuration, and the model configuration. That pinned set
+is declared in the backend source, which is the single authority for what may
+load. A missing, symlinked, or altered pinned file fails closed.
 
-Missing, changed, symlinked, or unexpected files fail closed. Model and
-tokeniser loading both set `local_files_only=True` and
-`trust_remote_code=False`. Hugging Face's `.cache` metadata directory is the
-only excluded path, so any other extra file in the directory — an editor or
-operating-system metadata file, a lock file, or a second snapshot — also fails
-the load. Treat the configured directory as containing exactly the pinned
-revision and nothing else.
+Files the backend does not pin are ignored. The repository card and its
+included assets do not affect loading, and operator tooling routinely leaves
+caches, lock files, and download metadata in a model directory; none of those
+may prevent a load. Model and tokeniser loading both set
+`local_files_only=True` and `trust_remote_code=False`.
+
+[`benchmarks/run-05/artifact-manifest.json`](../../benchmarks/run-05/artifact-manifest.json)
+records the complete acquired file list for all three candidates compared in
+the RUN-05 pilot, so it is a superset of the pinned set for the deployed
+candidate. It is descriptive, not consulted at load time. A test asserts that
+the revision and every pinned digest agree with that manifest, so the two
+cannot drift apart silently.
 
 ## Request and ranking behaviour
 
