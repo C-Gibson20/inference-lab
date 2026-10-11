@@ -168,6 +168,18 @@ it is not a product-facing snapshot selection mechanism. Persistent component
 generations record the exact source-manifest digest used to build their derived
 state.
 
+A snapshot may reuse validated source-location indexes for its own lifetime,
+but that reuse is bounded, not a growing cache. It keeps at most
+`source_span_cache_entries` parsed source-location indexes and evicts the
+least recently used; the bound defaults to
+`DEFAULT_SOURCE_SPAN_CACHE_ENTRIES` and is a constructor parameter of
+`open_metadata_repository`, like the source-reconciliation bound. Snapshot
+memory is therefore independent of corpus size. `CorpusSnapshot` exposes
+`source_span_cache_entries` and `source_span_cache_entry_count` so memory
+accounting can read the live contribution without the storage layer depending
+on the runtime; wiring that contribution into the VRAM and host budget belongs
+to the runtime owner, not to storage.
+
 The selected version does not change during the snapshot, even when another
 writer publishes. Keep the snapshot open for one bounded request or job unit,
 then close it promptly so SQLite can reclaim reader resources and checkpoint

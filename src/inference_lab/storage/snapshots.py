@@ -57,6 +57,16 @@ class CorpusSnapshot(Protocol):
         """Return the complete materialised manifest selected on entry."""
         ...
 
+    @property
+    def source_span_cache_entry_count(self) -> int:
+        """Return how many parsed source-location indexes are cached now."""
+        ...
+
+    @property
+    def source_span_cache_entries(self) -> int:
+        """Return the maximum parsed source-location indexes held at once."""
+        ...
+
     def get_document(self, document_id: DocumentId) -> DocumentIdentity | None:
         """Return a document visible in this version, or ``None``."""
         ...

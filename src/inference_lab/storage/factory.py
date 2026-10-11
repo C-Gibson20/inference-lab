@@ -3,6 +3,9 @@
 from pathlib import Path
 
 from inference_lab._validation import paths_overlap
+from inference_lab.storage._sqlite_corpus_snapshots import (
+    DEFAULT_SOURCE_SPAN_CACHE_ENTRIES,
+)
 from inference_lab.storage._sqlite_repository import (
     DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES,
     SQLiteMetadataRepository,
@@ -46,6 +49,7 @@ def open_metadata_repository(
     source_reconciliation_max_entries: int = (
         DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES
     ),
+    source_span_cache_entries: int = DEFAULT_SOURCE_SPAN_CACHE_ENTRIES,
 ) -> MetadataRepository:
     """Open the configured local metadata store under an explicit schema policy."""
     _validate_resolved_path_separation(metadata_db_path, source_dir)
@@ -54,4 +58,5 @@ def open_metadata_repository(
         apply_migrations=apply_migrations,
         source_dir=source_dir,
         source_reconciliation_max_entries=source_reconciliation_max_entries,
+        source_span_cache_entries=source_span_cache_entries,
     )
