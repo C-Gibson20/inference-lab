@@ -236,6 +236,7 @@ def test_dense_compatibility_rejects_a_deployment_path_in_model_identity(
         )
 
 
-def test_dense_configuration_rejects_a_deployment_path_in_library_version() -> None:
-    with pytest.raises(InvalidDenseContractError):
-        DenseIndexConfiguration(library_version="/usr/lib/sqlite3")
+def test_dense_configuration_digest_excludes_the_host_library_version() -> None:
+    # A host library upgrade must not change the reuse identity, so the
+    # library version is recorded on the manifest instead of the digest.
+    assert "library_version" not in DenseIndexConfiguration().canonical_payload()

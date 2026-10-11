@@ -341,8 +341,13 @@ class LexicalGenerationValidator:
                     ):
                         return False
                 return seen_record_ids == set(expected_by_record_id)
+        except LexicalError as error:
+            # An availability failure is not a mismatch verdict, so it must
+            # reach the adapter rather than being reported as a conflict.
+            if error.category is LexicalFailureCategory.GENERATION_UNAVAILABLE:
+                raise
+            return False
         except (
-            LexicalError,
             OSError,
             sqlite3.Error,
             TypeError,

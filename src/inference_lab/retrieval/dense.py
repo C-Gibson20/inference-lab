@@ -3,7 +3,6 @@
 import hashlib
 import math
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Protocol
@@ -77,7 +76,6 @@ class DenseIndexConfiguration:
     """Versioned, path-free settings that affect index interpretation."""
 
     implementation: str = DENSE_IMPLEMENTATION
-    library_version: str = field(default_factory=lambda: sqlite3.sqlite_version)
     format_version: str = DENSE_FORMAT_VERSION
     contract_version: str = DENSE_CONTRACT_VERSION
     distance_metric: DenseDistanceMetric = DenseDistanceMetric.COSINE
@@ -89,10 +87,6 @@ class DenseIndexConfiguration:
     def _validate(self) -> None:
         """Validate that the configuration is consistent with the dense contract."""
         _validate_slug(self.implementation, "implementation")
-        _path_free_identifier(
-            _validate_non_empty_string(self.library_version, "library_version"),
-            "library_version",
-        )
         _validate_semantic_version(self.format_version, "format_version")
         _validate_semantic_version(self.contract_version, "contract_version")
         if not isinstance(self.distance_metric, DenseDistanceMetric):
@@ -109,7 +103,6 @@ class DenseIndexConfiguration:
             "distance_metric": self.distance_metric.value,
             "format_version": self.format_version,
             "implementation": self.implementation,
-            "library_version": self.library_version,
             "tie_break_policy": self.tie_break_policy,
         }
 

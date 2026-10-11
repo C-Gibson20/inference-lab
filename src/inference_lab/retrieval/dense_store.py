@@ -31,7 +31,7 @@ from inference_lab._json import (
     require_optional_json_integer,
     require_optional_json_string,
 )
-from inference_lab._validation import paths_overlap
+from inference_lab._validation import is_path_free_identifier, paths_overlap
 from inference_lab.backends.runtime import (
     BackendCapability,
     BackendMetadata,
@@ -152,6 +152,7 @@ class DenseIndexManifest:
     members: tuple[DenseMemberSelection, ...]
     entry_count: int
     database_digest: str
+    library_version: str
 
     def __post_init__(self) -> None:
         self._validate()
@@ -185,6 +186,13 @@ class DenseIndexManifest:
         if type(self.entry_count) is not int or self.entry_count < 0:
             raise ValueError("entry_count must be a non-negative integer.")
         _validate_sha256(self.database_digest, "database_digest")
+        # Recorded for restore decisions only; deliberately outside the
+        # configuration digest so a host library upgrade cannot invalidate
+        # an otherwise reusable generation.
+        if not isinstance(self.library_version, str) or not self.library_version:
+            raise ValueError("library_version must be a non-empty string.")
+        if not is_path_free_identifier(self.library_version):
+            raise ValueError("library_version must not be a local path.")
 
     @property
     def configuration_digest(self) -> str:
@@ -221,6 +229,7 @@ class DenseIndexManifest:
             "entry_count": self.entry_count,
             "format_version": DENSE_FORMAT_VERSION,
             "generation_id": self.generation_id,
+            "library_version": self.library_version,
             "members": [
                 {
                     "chunk_count": item.chunk_count,
@@ -322,6 +331,7 @@ def _read_manifest(path: Path) -> DenseIndexManifest:
                     "entry_count",
                     "format_version",
                     "generation_id",
+                    "library_version",
                     "members",
                     "source_manifest_digest",
                 }
@@ -353,6 +363,7 @@ def _read_manifest(path: Path) -> DenseIndexManifest:
             compatibility=compatibility,
             members=members,
             entry_count=require_json_integer(payload["entry_count"]),
+            library_version=require_json_string(payload["library_version"]),
             database_digest=require_json_string(payload["database_digest"]),
         )
     except (OSError, KeyError, TypeError, ValueError, AttributeError):
@@ -430,7 +441,6 @@ def _compatibility_from_payload(payload: JsonObject) -> DenseIndexCompatibility:
                     "distance_metric",
                     "format_version",
                     "implementation",
-                    "library_version",
                     "tie_break_policy",
                 }
             ),
@@ -471,7 +481,6 @@ def _compatibility_from_payload(payload: JsonObject) -> DenseIndexCompatibility:
         )
         configuration = DenseIndexConfiguration(
             implementation=require_json_string(config["implementation"]),
-            library_version=require_json_string(config["library_version"]),
             format_version=require_json_string(config["format_version"]),
             contract_version=require_json_string(config["contract_version"]),
             distance_metric=DenseDistanceMetric(
@@ -747,7 +756,6 @@ def build_dense_generation(
         configuration.implementation != DENSE_IMPLEMENTATION
         or configuration.format_version != DENSE_FORMAT_VERSION
         or configuration.contract_version != DENSE_CONTRACT_VERSION
-        or configuration.library_version != sqlite3.sqlite_version
     ):
         raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
     if parent_reference is not None:
@@ -781,7 +789,13 @@ def build_dense_generation(
         if target.is_symlink():
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
         with open_dense_generation(resolved_index_dir, generation_id) as generation:
-            if not _generation_matches(generation, source_manifest, compatibility):
+            if not _generation_matches_selection(
+                generation.manifest,
+                source_manifest,
+                compatibility,
+                prepared,
+                members,
+            ):
                 raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
             return DenseIndexBuildOutcome(
                 manifest=generation.manifest,
@@ -869,6 +883,7 @@ def build_dense_generation(
                 members=members,
                 entry_count=len(entries),
                 database_digest=_sha256_file(database_path),
+                library_version=sqlite3.sqlite_version,
             )
             manifest_path = staging / DENSE_MANIFEST_NAME
             _write_durable(manifest_path, _manifest_json(manifest))
@@ -878,7 +893,13 @@ def build_dense_generation(
             with _open_dense_path(staging, generation_id) as opened:
                 if opened.manifest != manifest:
                     raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-                if not _generation_matches(opened, source_manifest, compatibility):
+                if not _generation_matches_selection(
+                    opened.manifest,
+                    source_manifest,
+                    compatibility,
+                    prepared,
+                    members,
+                ) or not _generation_contents_match(opened, prepared, compatibility):
                     raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
             try:
                 rename_directory_without_replacement(staging, target)
@@ -1182,25 +1203,41 @@ class DenseGeneration:
             raise DenseError(DenseFailureCategory.GENERATION_UNAVAILABLE)
 
 
-def _generation_matches(
-    generation: DenseGeneration,
+def _generation_matches_source(
+    manifest: DenseIndexManifest,
     source_manifest: BaselineChunkGenerationManifest,
     compatibility: DenseIndexCompatibility,
 ) -> bool:
-    if (
-        generation.manifest.corpus_id != source_manifest.corpus_id
-        or generation.manifest.corpus_version != source_manifest.corpus_version
-        or generation.manifest.source_manifest_digest
-        != source_manifest.source_manifest_digest
-        or generation.manifest.configuration_digest
-        != compatibility.configuration_digest
-    ):
-        return False
-    prepared, members = _prepare_source(source_manifest)
-    if generation.manifest.members != members or generation.manifest.entry_count != len(
-        prepared
-    ):
-        return False
+    """Compare recorded identities without re-deriving the source selections."""
+    return (
+        manifest.corpus_id == source_manifest.corpus_id
+        and manifest.corpus_version == source_manifest.corpus_version
+        and manifest.source_manifest_digest == source_manifest.source_manifest_digest
+        and manifest.configuration_digest == compatibility.configuration_digest
+    )
+
+
+def _generation_matches_selection(
+    manifest: DenseIndexManifest,
+    source_manifest: BaselineChunkGenerationManifest,
+    compatibility: DenseIndexCompatibility,
+    prepared: tuple[_PreparedChunk, ...],
+    members: tuple[DenseMemberSelection, ...],
+) -> bool:
+    """Compare identities and the already-derived membership of one build."""
+    return (
+        _generation_matches_source(manifest, source_manifest, compatibility)
+        and manifest.members == members
+        and manifest.entry_count == len(prepared)
+    )
+
+
+def _generation_contents_match(
+    generation: DenseGeneration,
+    prepared: tuple[_PreparedChunk, ...],
+    compatibility: DenseIndexCompatibility,
+) -> bool:
+    """Verify every written candidate, used where a fresh write is proved."""
     actual = {entry.candidate.record_id: entry for entry in generation.iter_entries()}
     return all(
         (entry := actual.get(item.candidate.record_id)) is not None
@@ -1446,10 +1483,18 @@ class DenseGenerationValidator:
                 self._index_dir,
                 self._manifest.generation_id,
             ) as opened:
-                return _generation_matches(
-                    opened,
+                if opened.manifest != self._manifest:
+                    return False
+                return _generation_matches_source(
+                    opened.manifest,
                     self._source_manifest,
                     self._manifest.compatibility,
                 )
-        except (DenseError, StorageError, OSError, TypeError, ValueError):
+        except DenseError as error:
+            # An availability failure is not a mismatch verdict, so it must
+            # reach the adapter rather than being reported as a conflict.
+            if error.category is DenseFailureCategory.GENERATION_UNAVAILABLE:
+                raise
+            return False
+        except (OSError, TypeError, ValueError):
             return False

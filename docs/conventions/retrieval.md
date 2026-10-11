@@ -146,7 +146,7 @@ indexes are outside this contract.
 | --- | --- |
 | `ComponentKind` | `dense-index` |
 | Implementation | `sqlite-flat` |
-| Format version | `1.0.0` |
+| Format version | `2.0.0` |
 | Contract version | `1.0.0` |
 | Distance metric | `cosine` |
 | Tie-break policy | `record-id-ascending` |
@@ -162,6 +162,14 @@ over-limit policy, L2 normalisation, dtype, device type, dimension, distance
 metric, tie-break policy, or the format and contract versions produces a
 different, incompatible generation. Compatibility fields are path-free; model
 and backend names are validated as non-path identifiers.
+
+The host index library version is deliberately **not** part of that digest.
+It is recorded on the manifest as `library_version`, which satisfies the
+backup policy's requirement that each index record its library version while
+keeping an unrelated SQLite upgrade from invalidating every generation or
+preventing a build on another machine. Nothing rejects a generation because
+the reading host reports a different library version; the format, contract,
+and database integrity checks decide whether it can be read.
 
 A generation ID is `"dense-"` followed by the SHA-256 of the canonical JSON of
 the compatibility digest, `corpus_id`, `corpus_version`, and the chunk
@@ -283,7 +291,21 @@ returns a strict boolean and confirms that the registered reference is exactly
 the one derived from the manifest, that staged membership matches the chunk
 source manifest entry for entry, that each document version's persisted
 chunk-set selection still matches, and that the durable generation reopens by
-ID and matches its inputs. A database commit failure may leave an
+ID and matches the identities it recorded.
+
+The validator's boolean is a *verdict about the data*, never a report about
+the system's availability. A storage failure while reading chunk-set
+selections, or an unavailable generation, propagates so publication records a
+retryable availability failure; returning `False` there would be recorded as a
+permanent conflict. The lexical owner draws the same distinction through its
+own error type.
+
+Comparing a published generation against its inputs uses the identities both
+sides already recorded — corpus, source-manifest digest, configuration digest,
+membership, and entry count — and the caller passes membership it has already
+derived rather than having it re-derived. The full entry-by-entry comparison
+runs only where it proves a fresh write, immediately after staging and before
+publication. A database commit failure may leave an
 unreferenced immutable generation; it is unreachable through any committed
 manifest, and the dense owner retains cleanup responsibility under a future
 retention policy.
@@ -300,12 +322,6 @@ description of finished work:
   an observed stage; the dense build emits neither logs nor profiling records.
   The retrieval logging policy applies to this channel and is not yet
   implemented for it.
-- **`library_version` defaults to the host SQLite version** and participates
-  in the configuration digest, so an unrelated SQLite upgrade invalidates
-  existing generations and blocks cross-machine builds. The library version
-  belongs in recorded compatibility metadata, not in the reuse identity.
-- **Vectors are stored as doubles** although the backend produces single
-  precision, doubling index size for no additional precision.
 
 ## RET-05 fusion and document deduplication
 

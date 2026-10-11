@@ -2,10 +2,11 @@
 
 import hashlib
 import math
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -42,6 +43,8 @@ from inference_lab.storage import (
     ComponentGenerationReference,
     ComponentGenerationState,
     MetadataRepository,
+    RepositoryUnavailableError,
+    StorageError,
 )
 from tests.inference_lab.retrieval.lexical_fixtures import (
     CORPUS_ID,
@@ -473,3 +476,84 @@ def test_search_breaks_equal_similarities_by_record_identity(
         assert generation.search(DenseVector(entries[0].vector.values), limit=1) == (
             matches[0],
         )
+
+
+def test_unavailable_storage_is_not_reported_as_a_generation_mismatch(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    source = _source((("alpha passage", _DOC_A, _DOC_A_V1),), _VERSION_ONE)
+    outcome = _build(tmp_path, source, embedder)
+    participant = DenseGenerationParticipant(tmp_path / "index", outcome, source)
+    reference = outcome.manifest.component_generation()
+    memberships = tuple(entry.membership for entry in source.entries)
+
+    class _UnavailableReader:
+        def get_chunk_set_selection(self, *_: object) -> ChunkSetSelectionRecord | None:
+            raise RepositoryUnavailableError()
+
+    validator = participant.build_validator(cast(Any, _UnavailableReader()))
+
+    # Reporting False here would be recorded as a permanent conflict rather
+    # than a retryable availability failure.
+    with pytest.raises(StorageError):
+        validator.validate_component_generation(reference, memberships)
+
+
+def test_a_genuine_membership_mismatch_is_still_reported_as_false(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    source = _source(
+        (
+            ("alpha passage", _DOC_A, _DOC_A_V1),
+            ("beta passage", _DOC_B, _DOC_B_V1),
+        ),
+        _VERSION_ONE,
+    )
+    outcome = _build(tmp_path, source, embedder)
+    participant = DenseGenerationParticipant(tmp_path / "index", outcome, source)
+    validator = participant.build_validator(_ChunkReader(source))
+    memberships = tuple(entry.membership for entry in source.entries)
+
+    assert (
+        validator.validate_component_generation(
+            outcome.manifest.component_generation(), memberships[:-1]
+        )
+        is False
+    )
+
+
+def test_a_generation_built_from_another_source_manifest_is_rejected(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    published = _source((("alpha passage", _DOC_A, _DOC_A_V1),), _VERSION_ONE)
+    other = _source((("beta passage", _DOC_B, _DOC_B_V1),), _VERSION_ONE)
+    outcome = _build(tmp_path, published, embedder)
+
+    # Claiming a source manifest the published generation was not built from
+    # is rejected before any validator can report it as a mere mismatch.
+    with pytest.raises(DenseError) as rejected:
+        DenseGenerationParticipant(tmp_path / "index", outcome, other)
+
+    assert rejected.value.category is DenseFailureCategory.INCOMPATIBLE_GENERATION
+
+
+def test_a_host_library_upgrade_does_not_invalidate_an_existing_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source((("alpha passage", _DOC_A, _DOC_A_V1),), _VERSION_ONE)
+    first = _build(tmp_path, source, _DeterministicEmbedder())
+    assert first.manifest.library_version == sqlite3.sqlite_version
+
+    monkeypatch.setattr(sqlite3, "sqlite_version", "99.9.9")
+    upgraded_embedder = _DeterministicEmbedder()
+    second = _build(tmp_path, source, upgraded_embedder)
+
+    # The generation identity is unchanged, so the existing index is reused
+    # rather than rebuilt and re-embedded on a differently patched host.
+    assert second.manifest.generation_id == first.manifest.generation_id
+    assert second.manifest.configuration_digest == first.manifest.configuration_digest
+    assert upgraded_embedder.batches == []
