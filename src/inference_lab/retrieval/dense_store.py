@@ -1,5 +1,7 @@
 """Immutable SQLite generations for corpus-scoped dense retrieval."""
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import heapq
@@ -12,7 +14,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from operator import mul
 from pathlib import Path
-from typing import Iterator, Self, cast
+from typing import Final, Iterator, Self, cast
 from urllib.parse import quote
 
 from inference_lab._fs import (
@@ -389,6 +391,100 @@ def _member_from_payload(payload: JsonObject) -> DenseMemberSelection:
     )
 
 
+_COMPATIBILITY_FIELDS: Final = frozenset(
+    {"configuration", "dimensions", "embedding_profile", "model"}
+)
+_MODEL_FIELDS: Final = frozenset(
+    {
+        "backend_name",
+        "capabilities",
+        "model_name",
+        "model_revision",
+        "supported_operations",
+    }
+)
+_PROFILE_FIELDS: Final = frozenset(
+    {
+        "device_type",
+        "document_prefix",
+        "inference_dtype",
+        "input_normalisation",
+        "l2_normalised",
+        "max_input_tokens",
+        "over_limit_policy",
+        "pooling_strategy",
+        "profile_version",
+        "query_prefix",
+        "tokenizer_id",
+        "tokenizer_revision",
+    }
+)
+_CONFIGURATION_FIELDS: Final = frozenset(
+    {
+        "contract_version",
+        "distance_metric",
+        "format_version",
+        "implementation",
+        "tie_break_policy",
+    }
+)
+
+
+def _decode_backend_metadata(model: JsonObject, dimensions: int) -> BackendMetadata:
+    """Decode the backend identity that produced these vectors."""
+    require_exact_json_fields(model, _MODEL_FIELDS)
+    return BackendMetadata(
+        backend_name=require_json_string(model["backend_name"]),
+        model_name=require_json_string(model["model_name"]),
+        model_revision=require_json_string(model["model_revision"]),
+        supported_operations=tuple(
+            BackendOperation(require_json_string(value))
+            for value in require_json_array(model["supported_operations"])
+        ),
+        capabilities=tuple(
+            BackendCapability(require_json_string(value))
+            for value in require_json_array(model["capabilities"])
+        ),
+        embedding_dimensions=dimensions,
+    )
+
+
+def _decode_embedding_profile(profile: JsonObject) -> EmbeddingProfile:
+    """Decode the runtime preprocessing identity recorded for these vectors."""
+    require_exact_json_fields(profile, _PROFILE_FIELDS)
+    policy = require_optional_json_string(profile["over_limit_policy"])
+    if policy not in (None, "truncate_tail", "reject"):
+        raise ValueError("over_limit_policy names an unsupported policy.")
+    return EmbeddingProfile(
+        profile_version=require_json_string(profile["profile_version"]),
+        tokenizer_id=require_json_string(profile["tokenizer_id"]),
+        tokenizer_revision=require_json_string(profile["tokenizer_revision"]),
+        query_prefix=require_json_string(profile["query_prefix"]),
+        document_prefix=require_json_string(profile["document_prefix"]),
+        pooling_strategy=require_json_string(profile["pooling_strategy"]),
+        input_normalisation=require_json_string(profile["input_normalisation"]),
+        max_input_tokens=require_optional_json_integer(profile["max_input_tokens"]),
+        over_limit_policy=cast(EmbeddingOverLimitPolicy | None, policy),
+        l2_normalised=require_json_boolean(profile["l2_normalised"]),
+        inference_dtype=require_json_string(profile["inference_dtype"]),
+        device_type=require_json_string(profile["device_type"]),
+    )
+
+
+def _decode_index_configuration(config: JsonObject) -> DenseIndexConfiguration:
+    """Decode the versioned settings that govern index interpretation."""
+    require_exact_json_fields(config, _CONFIGURATION_FIELDS)
+    return DenseIndexConfiguration(
+        implementation=require_json_string(config["implementation"]),
+        format_version=require_json_string(config["format_version"]),
+        contract_version=require_json_string(config["contract_version"]),
+        distance_metric=DenseDistanceMetric(
+            require_json_string(config["distance_metric"])
+        ),
+        tie_break_policy=require_json_string(config["tie_break_policy"]),
+    )
+
+
 def _compatibility_from_payload(payload: JsonObject) -> DenseIndexCompatibility:
     try:
         model = payload["model"]
@@ -402,101 +498,13 @@ def _compatibility_from_payload(payload: JsonObject) -> DenseIndexCompatibility:
             raise ValueError(
                 "compatibility must hold model, profile, and configuration objects."
             )
-        require_exact_json_fields(
-            payload,
-            frozenset({"configuration", "dimensions", "embedding_profile", "model"}),
-        )
-        require_exact_json_fields(
-            model,
-            frozenset(
-                {
-                    "backend_name",
-                    "capabilities",
-                    "model_name",
-                    "model_revision",
-                    "supported_operations",
-                }
-            ),
-        )
-        require_exact_json_fields(
-            profile,
-            frozenset(
-                {
-                    "device_type",
-                    "document_prefix",
-                    "inference_dtype",
-                    "input_normalisation",
-                    "l2_normalised",
-                    "max_input_tokens",
-                    "over_limit_policy",
-                    "pooling_strategy",
-                    "profile_version",
-                    "query_prefix",
-                    "tokenizer_id",
-                    "tokenizer_revision",
-                }
-            ),
-        )
-        require_exact_json_fields(
-            config,
-            frozenset(
-                {
-                    "contract_version",
-                    "distance_metric",
-                    "format_version",
-                    "implementation",
-                    "tie_break_policy",
-                }
-            ),
-        )
+        require_exact_json_fields(payload, _COMPATIBILITY_FIELDS)
         dimensions = require_json_integer(payload["dimensions"])
-        raw_operations = tuple(
-            BackendOperation(require_json_string(value))
-            for value in require_json_array(model["supported_operations"])
-        )
-        raw_capabilities = tuple(
-            BackendCapability(require_json_string(value))
-            for value in require_json_array(model["capabilities"])
-        )
-        metadata = BackendMetadata(
-            backend_name=require_json_string(model["backend_name"]),
-            model_name=require_json_string(model["model_name"]),
-            model_revision=require_json_string(model["model_revision"]),
-            supported_operations=raw_operations,
-            capabilities=raw_capabilities,
-            embedding_dimensions=dimensions,
-        )
-        policy = require_optional_json_string(profile["over_limit_policy"])
-        if policy not in (None, "truncate_tail", "reject"):
-            raise ValueError("over_limit_policy names an unsupported policy.")
-        embedding_profile = EmbeddingProfile(
-            profile_version=require_json_string(profile["profile_version"]),
-            tokenizer_id=require_json_string(profile["tokenizer_id"]),
-            tokenizer_revision=require_json_string(profile["tokenizer_revision"]),
-            query_prefix=require_json_string(profile["query_prefix"]),
-            document_prefix=require_json_string(profile["document_prefix"]),
-            pooling_strategy=require_json_string(profile["pooling_strategy"]),
-            input_normalisation=require_json_string(profile["input_normalisation"]),
-            max_input_tokens=require_optional_json_integer(profile["max_input_tokens"]),
-            over_limit_policy=cast(EmbeddingOverLimitPolicy | None, policy),
-            l2_normalised=require_json_boolean(profile["l2_normalised"]),
-            inference_dtype=require_json_string(profile["inference_dtype"]),
-            device_type=require_json_string(profile["device_type"]),
-        )
-        configuration = DenseIndexConfiguration(
-            implementation=require_json_string(config["implementation"]),
-            format_version=require_json_string(config["format_version"]),
-            contract_version=require_json_string(config["contract_version"]),
-            distance_metric=DenseDistanceMetric(
-                require_json_string(config["distance_metric"])
-            ),
-            tie_break_policy=require_json_string(config["tie_break_policy"]),
-        )
         return DenseIndexCompatibility(
-            model_metadata=metadata,
+            model_metadata=_decode_backend_metadata(model, dimensions),
             dimensions=dimensions,
-            embedding_profile=embedding_profile,
-            configuration=configuration,
+            embedding_profile=_decode_embedding_profile(profile),
+            configuration=_decode_index_configuration(config),
         )
     except (KeyError, TypeError, ValueError):
         raise DenseError(DenseFailureCategory.CORRUPT_GENERATION) from None
@@ -777,6 +785,241 @@ class DenseBuildRequest:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class _GenerationTarget:
+    """Resolved durable locations and derived identity for one build."""
+
+    resolved_index_dir: Path
+    dense_root: Path
+    target: Path
+    generation_id: str
+    prepared: tuple[_PreparedChunk, ...]
+    members: tuple[DenseMemberSelection, ...]
+
+
+def _resolve_generation_target(
+    index_dir: Path,
+    request: DenseBuildRequest,
+) -> _GenerationTarget:
+    """Resolve where this build writes and what identity it will carry."""
+    source_manifest = request.source_manifest
+    resolved_index_dir = _resolve_local_paths(
+        index_dir,
+        request.metadata_db_path,
+        request.source_dir,
+    )
+    prepared, members = _prepare_source(source_manifest)
+    generation_id = _derive_generation_id(
+        source_manifest.corpus_id,
+        source_manifest.corpus_version,
+        source_manifest.source_manifest_digest,
+        request.compatibility,
+    )
+    dense_root = resolved_index_dir / DENSE_DIRECTORY_NAME
+    if dense_root.exists() and dense_root.is_symlink():
+        raise DenseError(DenseFailureCategory.INVALID_REQUEST)
+    return _GenerationTarget(
+        resolved_index_dir=resolved_index_dir,
+        dense_root=dense_root,
+        target=dense_root / generation_id,
+        generation_id=generation_id,
+        prepared=prepared,
+        members=members,
+    )
+
+
+def _reuse_published_generation(
+    location: _GenerationTarget,
+    request: DenseBuildRequest,
+) -> DenseIndexBuildOutcome | None:
+    """Return the already-published generation when this build would repeat it."""
+    if not location.target.exists():
+        return None
+    if location.target.is_symlink():
+        raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+    with open_dense_generation(
+        location.resolved_index_dir, location.generation_id
+    ) as generation:
+        if not _generation_matches_selection(
+            generation.manifest,
+            request.source_manifest,
+            request.compatibility,
+            location.prepared,
+            location.members,
+        ):
+            raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+        return DenseIndexBuildOutcome(
+            manifest=generation.manifest,
+            statistics=DenseIndexBuildStatistics(
+                members_processed=len(location.members),
+                chunks_processed=len(location.prepared),
+                reused_vectors=len(location.prepared),
+                embedded_vectors=0,
+                replaced_vectors=0,
+                removed_vectors=0,
+                generation_reused=True,
+            ),
+        )
+
+
+def _open_validated_parent(
+    location: _GenerationTarget,
+    request: DenseBuildRequest,
+) -> DenseGeneration | None:
+    """Open the declared parent, rejecting one that is not the named identity."""
+    parent_reference = request.parent_reference
+    if parent_reference is None:
+        return None
+    parent: DenseGeneration | None = None
+    try:
+        parent = open_dense_generation(
+            location.resolved_index_dir,
+            parent_reference.generation_id,
+        )
+    except DenseError as error:
+        if error.category not in {
+            DenseFailureCategory.CORRUPT_GENERATION,
+            DenseFailureCategory.GENERATION_UNAVAILABLE,
+        }:
+            raise
+    if parent is not None and (
+        parent.manifest.corpus_id != request.source_manifest.corpus_id
+        or parent.manifest.corpus_version != parent_reference.corpus_version
+        or parent.manifest.compatibility.configuration.implementation
+        != parent_reference.implementation
+        or parent.manifest.configuration_digest != parent_reference.configuration_digest
+    ):
+        parent.close()
+        raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
+    return parent
+
+
+def _resolve_reusable_vectors(
+    parent: DenseGeneration | None,
+    prepared: tuple[_PreparedChunk, ...],
+    compatibility: DenseIndexCompatibility,
+) -> dict[RecordId, DenseIndexEntry]:
+    """Return the parent vectors whose candidate is byte-for-byte unchanged."""
+    if (
+        parent is None
+        or parent.manifest.configuration_digest != compatibility.configuration_digest
+    ):
+        return {}
+    proposed_by_id = {item.candidate.record_id: item for item in prepared}
+    reusable: dict[RecordId, DenseIndexEntry] = {}
+    for old_entry in parent.read_entries():
+        new_item = proposed_by_id.get(old_entry.candidate.record_id)
+        if new_item is not None and new_item.candidate == old_entry.candidate:
+            reusable[old_entry.candidate.record_id] = old_entry
+    return reusable
+
+
+def _publish_generation(
+    location: _GenerationTarget,
+    request: DenseBuildRequest,
+    entries: tuple[DenseIndexEntry, ...],
+) -> DenseIndexManifest:
+    """Write, verify, and atomically publish one immutable generation."""
+    location.dense_root.mkdir(parents=True, exist_ok=True)
+    fsync_directory(location.resolved_index_dir)
+    staging = Path(tempfile.mkdtemp(prefix=".dense-staging-", dir=location.dense_root))
+    try:
+        database_path = staging / DENSE_DATABASE_NAME
+        _write_generation_database(
+            database_path,
+            compatibility=request.compatibility,
+            members=location.members,
+            entries=entries,
+            prepared=location.prepared,
+        )
+        manifest = DenseIndexManifest(
+            generation_id=location.generation_id,
+            corpus_id=request.source_manifest.corpus_id,
+            corpus_version=request.source_manifest.corpus_version,
+            source_manifest_digest=request.source_manifest.source_manifest_digest,
+            compatibility=request.compatibility,
+            members=location.members,
+            entry_count=len(entries),
+            database_digest=_sha256_file(database_path),
+            library_version=sqlite3.sqlite_version,
+        )
+        _write_durable(staging / DENSE_MANIFEST_NAME, _manifest_json(manifest))
+        with database_path.open("rb") as database_stream:
+            os.fsync(database_stream.fileno())
+        fsync_directory(staging)
+        with _open_dense_path(staging, location.generation_id) as opened:
+            if opened.manifest != manifest:
+                raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+            if not _generation_matches_selection(
+                opened.manifest,
+                request.source_manifest,
+                request.compatibility,
+                location.prepared,
+                location.members,
+            ) or not _generation_contents_match(
+                opened, location.prepared, request.compatibility
+            ):
+                raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+        try:
+            rename_directory_without_replacement(staging, location.target)
+        except FileExistsError:
+            with open_dense_generation(
+                location.resolved_index_dir, location.generation_id
+            ) as opened:
+                if opened.manifest != manifest:
+                    raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+        fsync_directory(location.dense_root)
+        return manifest
+    finally:
+        if staging.exists():
+            _remove_staging_directory(staging)
+
+
+def _build_statistics(
+    location: _GenerationTarget,
+    parent: DenseGeneration | None,
+    reusable: dict[RecordId, DenseIndexEntry],
+    embedded_count: int,
+) -> DenseIndexBuildStatistics:
+    """Account for the vectors this build reused, replaced, and dropped."""
+    old_entries = () if parent is None else parent.read_entries()
+    replaced_ids: set[RecordId] = set()
+    removed_document_ids: set[DocumentId] = set()
+    if parent is not None:
+        old_by_document = {
+            member.document_id: member.document_version_id
+            for member in parent.manifest.members
+        }
+        new_by_document = {
+            member.document_id: member.document_version_id
+            for member in location.members
+        }
+        replaced_documents = {
+            document_id
+            for document_id, version in old_by_document.items()
+            if document_id in new_by_document
+            and new_by_document[document_id] != version
+        }
+        removed_document_ids = set(old_by_document) - set(new_by_document)
+        replaced_ids = {
+            entry.candidate.record_id
+            for entry in old_entries
+            if entry.candidate.sources[0].document_id in replaced_documents
+        }
+    return DenseIndexBuildStatistics(
+        members_processed=len(location.members),
+        chunks_processed=len(location.prepared),
+        reused_vectors=len(reusable),
+        embedded_vectors=embedded_count,
+        replaced_vectors=len(replaced_ids),
+        removed_vectors=sum(
+            1
+            for entry in old_entries
+            if entry.candidate.sources[0].document_id in removed_document_ids
+        ),
+    )
+
+
 def map_dense_build_failure(error: BaseException) -> FailureMapping:
     """Map dense build failures to the closed profiling vocabulary."""
     if isinstance(error, asyncio.CancelledError):
@@ -855,204 +1098,47 @@ def _build_dense_generation(
     embedder: EmbeddingBackend,
 ) -> DenseIndexBuildOutcome:
     """Build a complete immutable generation from staged canonical chunks."""
-    source_manifest = request.source_manifest
-    compatibility = request.compatibility
-    metadata_db_path = request.metadata_db_path
-    source_dir = request.source_dir
-    parent_reference = request.parent_reference
-    batch_size = request.batch_size
     if not callable(getattr(embedder, "embed", None)):
         raise TypeError("embedder must implement EmbeddingBackend.")
-    if parent_reference is not None:
-        if (
-            parent_reference.component_kind != DENSE_COMPONENT_KIND
-            or parent_reference.state is not ComponentGenerationState.READY
-            or parent_reference.corpus_id != source_manifest.corpus_id
-            or parent_reference.corpus_version == source_manifest.corpus_version
-        ):
-            raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
+    parent_reference = request.parent_reference
+    if parent_reference is not None and (
+        parent_reference.component_kind != DENSE_COMPONENT_KIND
+        or parent_reference.state is not ComponentGenerationState.READY
+        or parent_reference.corpus_id != request.source_manifest.corpus_id
+        or parent_reference.corpus_version == request.source_manifest.corpus_version
+    ):
+        raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
 
-    resolved_index_dir = _resolve_local_paths(
-        index_dir,
-        metadata_db_path,
-        source_dir,
-    )
-    prepared, members = _prepare_source(source_manifest)
-    generation_id = _derive_generation_id(
-        source_manifest.corpus_id,
-        source_manifest.corpus_version,
-        source_manifest.source_manifest_digest,
-        compatibility,
-    )
-    dense_root = resolved_index_dir / DENSE_DIRECTORY_NAME
-    target = dense_root / generation_id
-    if dense_root.exists() and dense_root.is_symlink():
-        raise DenseError(DenseFailureCategory.INVALID_REQUEST)
-    if target.exists():
-        if target.is_symlink():
-            raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-        with open_dense_generation(resolved_index_dir, generation_id) as generation:
-            if not _generation_matches_selection(
-                generation.manifest,
-                source_manifest,
-                compatibility,
-                prepared,
-                members,
-            ):
-                raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-            return DenseIndexBuildOutcome(
-                manifest=generation.manifest,
-                statistics=DenseIndexBuildStatistics(
-                    members_processed=len(members),
-                    chunks_processed=len(prepared),
-                    reused_vectors=len(prepared),
-                    embedded_vectors=0,
-                    replaced_vectors=0,
-                    removed_vectors=0,
-                    generation_reused=True,
-                ),
-            )
+    location = _resolve_generation_target(index_dir, request)
+    published = _reuse_published_generation(location, request)
+    if published is not None:
+        return published
 
-    parent: DenseGeneration | None = None
-    if parent_reference is not None:
-        try:
-            parent = open_dense_generation(
-                resolved_index_dir,
-                parent_reference.generation_id,
-            )
-        except DenseError as error:
-            if error.category not in {
-                DenseFailureCategory.CORRUPT_GENERATION,
-                DenseFailureCategory.GENERATION_UNAVAILABLE,
-            }:
-                raise
-        if parent is not None and (
-            parent.manifest.corpus_id != source_manifest.corpus_id
-            or parent.manifest.corpus_version != parent_reference.corpus_version
-            or parent.manifest.compatibility.configuration.implementation
-            != parent_reference.implementation
-            or parent.manifest.configuration_digest
-            != parent_reference.configuration_digest
-        ):
-            parent.close()
-            raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
-
+    parent = _open_validated_parent(location, request)
     try:
-        reusable: dict[RecordId, DenseIndexEntry] = {}
-        if (
-            parent is not None
-            and parent.manifest.configuration_digest
-            == compatibility.configuration_digest
-        ):
-            proposed_by_id = {item.candidate.record_id: item for item in prepared}
-            for old_entry in parent.read_entries():
-                new_item = proposed_by_id.get(old_entry.candidate.record_id)
-                if new_item is not None and new_item.candidate == old_entry.candidate:
-                    reusable[old_entry.candidate.record_id] = old_entry
-        pending = tuple(
-            item for item in prepared if item.candidate.record_id not in reusable
+        reusable = _resolve_reusable_vectors(
+            parent, location.prepared, request.compatibility
         )
         embedded = _embed_pending(
             embedder,
-            pending,
-            compatibility,
-            batch_size=batch_size,
+            tuple(
+                item
+                for item in location.prepared
+                if item.candidate.record_id not in reusable
+            ),
+            request.compatibility,
+            batch_size=request.batch_size,
         )
         entries = tuple(
             reusable[item.candidate.record_id]
             if item.candidate.record_id in reusable
             else DenseIndexEntry(item.candidate, embedded[item.candidate.record_id])
-            for item in prepared
+            for item in location.prepared
         )
-
-        dense_root.mkdir(parents=True, exist_ok=True)
-        fsync_directory(resolved_index_dir)
-        staging = Path(tempfile.mkdtemp(prefix=".dense-staging-", dir=dense_root))
-        try:
-            database_path = staging / DENSE_DATABASE_NAME
-            _write_generation_database(
-                database_path,
-                compatibility=compatibility,
-                members=members,
-                entries=entries,
-                prepared=prepared,
-            )
-            manifest = DenseIndexManifest(
-                generation_id=generation_id,
-                corpus_id=source_manifest.corpus_id,
-                corpus_version=source_manifest.corpus_version,
-                source_manifest_digest=source_manifest.source_manifest_digest,
-                compatibility=compatibility,
-                members=members,
-                entry_count=len(entries),
-                database_digest=_sha256_file(database_path),
-                library_version=sqlite3.sqlite_version,
-            )
-            manifest_path = staging / DENSE_MANIFEST_NAME
-            _write_durable(manifest_path, _manifest_json(manifest))
-            with database_path.open("rb") as database_stream:
-                os.fsync(database_stream.fileno())
-            fsync_directory(staging)
-            with _open_dense_path(staging, generation_id) as opened:
-                if opened.manifest != manifest:
-                    raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-                if not _generation_matches_selection(
-                    opened.manifest,
-                    source_manifest,
-                    compatibility,
-                    prepared,
-                    members,
-                ) or not _generation_contents_match(opened, prepared, compatibility):
-                    raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-            try:
-                rename_directory_without_replacement(staging, target)
-            except FileExistsError:
-                with open_dense_generation(resolved_index_dir, generation_id) as opened:
-                    if opened.manifest != manifest:
-                        raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-            fsync_directory(dense_root)
-        finally:
-            if staging.exists():
-                _remove_staging_directory(staging)
-
-        old_entries = () if parent is None else parent.read_entries()
-        reused_ids = set(reusable)
-        replaced_ids: set[RecordId] = set()
-        removed_document_ids: set[DocumentId] = set()
-        if parent is not None:
-            old_by_document = {
-                member.document_id: member.document_version_id
-                for member in parent.manifest.members
-            }
-            new_by_document = {
-                member.document_id: member.document_version_id for member in members
-            }
-            replaced_documents = {
-                document_id
-                for document_id, version in old_by_document.items()
-                if document_id in new_by_document
-                and new_by_document[document_id] != version
-            }
-            removed_document_ids = set(old_by_document) - set(new_by_document)
-            replaced_ids = {
-                entry.candidate.record_id
-                for entry in old_entries
-                if entry.candidate.sources[0].document_id in replaced_documents
-            }
+        manifest = _publish_generation(location, request, entries)
         return DenseIndexBuildOutcome(
             manifest=manifest,
-            statistics=DenseIndexBuildStatistics(
-                members_processed=len(members),
-                chunks_processed=len(prepared),
-                reused_vectors=len(reused_ids),
-                embedded_vectors=len(embedded),
-                replaced_vectors=len(replaced_ids),
-                removed_vectors=sum(
-                    1
-                    for entry in old_entries
-                    if entry.candidate.sources[0].document_id in removed_document_ids
-                ),
-            ),
+            statistics=_build_statistics(location, parent, reusable, len(embedded)),
         )
     except DenseError:
         raise
