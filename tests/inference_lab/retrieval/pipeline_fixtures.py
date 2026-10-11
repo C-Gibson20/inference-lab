@@ -44,6 +44,7 @@ from inference_lab.provenance import (
 )
 from inference_lab.retrieval import (
     DENSE_COMPONENT_KIND,
+    DenseBuildRequest,
     DenseGenerationParticipant,
     DenseIndexCompatibility,
     EvidenceTokenisation,
@@ -376,11 +377,13 @@ def publish_corpora(
         lexical = build_lexical_generation(index_dir, manifest)
         dense = build_dense_generation(
             index_dir,
-            manifest,
+            DenseBuildRequest(
+                source_manifest=manifest,
+                compatibility=compatibility(),
+                metadata_db_path=database_path,
+                source_dir=source_dir,
+            ),
             embedder,
-            metadata_db_path=database_path,
-            source_dir=source_dir,
-            compatibility=compatibility(),
         )
         committed: CommitCorpusUpdateOutcome | None = None
         with repository.transaction() as transaction:

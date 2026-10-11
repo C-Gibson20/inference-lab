@@ -12,6 +12,7 @@ BaselineStage = Literal[
     "membership",
     "publication",
     "lexical_index",
+    "dense_index",
     "lexical_retrieval",
     "dense_retrieval",
     "retrieval_fusion",

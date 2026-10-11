@@ -166,6 +166,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "DENSE_SCORE_LABEL",
         "DenseDistanceMetric",
         "DenseError",
+        "DenseBuildRequest",
         "DenseFailureCategory",
         "DenseGeneration",
         "DenseGenerationParticipant",

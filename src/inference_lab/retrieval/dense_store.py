@@ -1,5 +1,6 @@
 """Immutable SQLite generations for corpus-scoped dense retrieval."""
 
+import asyncio
 import hashlib
 import heapq
 import os
@@ -7,7 +8,7 @@ import shutil
 import sqlite3
 import struct
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from operator import mul
 from pathlib import Path
@@ -46,6 +47,7 @@ from inference_lab.ingest import (
     BaselineChunkGenerationManifest,
     deserialise_chunk_set_selection,
 )
+from inference_lab.profiling import FailureMapping, ProfilingContext
 from inference_lab.provenance import (
     CorpusDocumentVersionMembership,
     CorpusId,
@@ -731,38 +733,137 @@ def _embed_pending(
     return vectors
 
 
+@dataclass(frozen=True, slots=True)
+class DenseBuildRequest:
+    """Validated inputs describing one dense generation build."""
+
+    source_manifest: BaselineChunkGenerationManifest
+    compatibility: DenseIndexCompatibility
+    metadata_db_path: Path
+    source_dir: Path
+    parent_reference: ComponentGenerationReference | None = None
+    batch_size: int = _EMBED_BATCH_SIZE
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate that the request can produce a compatible generation."""
+        if not isinstance(self.source_manifest, BaselineChunkGenerationManifest):
+            raise TypeError(
+                "source_manifest must be a BaselineChunkGenerationManifest."
+            )
+        if not isinstance(self.compatibility, DenseIndexCompatibility):
+            raise TypeError("compatibility must be a DenseIndexCompatibility.")
+        for name in ("metadata_db_path", "source_dir"):
+            if not isinstance(getattr(self, name), Path):
+                raise TypeError(f"{name} must be a Path.")
+        if type(self.batch_size) is not int:
+            raise TypeError("batch_size must be an integer.")
+        if self.batch_size <= 0:
+            raise DenseError(DenseFailureCategory.INVALID_REQUEST)
+        configuration = self.compatibility.configuration
+        if (
+            configuration.implementation != DENSE_IMPLEMENTATION
+            or configuration.format_version != DENSE_FORMAT_VERSION
+            or configuration.contract_version != DENSE_CONTRACT_VERSION
+        ):
+            raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
+        if self.parent_reference is not None and not isinstance(
+            self.parent_reference, ComponentGenerationReference
+        ):
+            raise TypeError(
+                "parent_reference must be a ComponentGenerationReference or None."
+            )
+
+
+def map_dense_build_failure(error: BaseException) -> FailureMapping:
+    """Map dense build failures to the closed profiling vocabulary."""
+    if isinstance(error, asyncio.CancelledError):
+        return FailureMapping(
+            failure_category="cancelled",
+            failure_code="stage_cancelled",
+            status="cancelled",
+        )
+    if isinstance(error, DenseError):
+        return FailureMapping(
+            failure_category=(
+                "input"
+                if error.category is DenseFailureCategory.INVALID_REQUEST
+                else "dependency"
+            ),
+            failure_code=error.category.value,
+        )
+    if isinstance(error, StorageError):
+        return FailureMapping(
+            failure_category="dependency",
+            failure_code=error.category.value,
+        )
+    return FailureMapping(
+        failure_category="internal",
+        failure_code="stage_failed",
+    )
+
+
 def build_dense_generation(
     index_dir: Path,
-    source_manifest: BaselineChunkGenerationManifest,
+    request: DenseBuildRequest,
     embedder: EmbeddingBackend,
     *,
-    metadata_db_path: Path,
-    source_dir: Path,
-    compatibility: DenseIndexCompatibility,
-    parent_reference: ComponentGenerationReference | None = None,
-    batch_size: int = _EMBED_BATCH_SIZE,
+    profiling: ProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
+) -> DenseIndexBuildOutcome:
+    """Build or reuse one dense generation with lifecycle profiling."""
+    if not isinstance(request, DenseBuildRequest):
+        raise TypeError("request must be a DenseBuildRequest.")
+    if profiling is not None and not isinstance(profiling, ProfilingContext):
+        raise TypeError("profiling must be a ProfilingContext or None.")
+    if parent_stage_id is not None and not isinstance(parent_stage_id, str):
+        raise TypeError("parent_stage_id must be a string or None.")
+    if not isinstance(profiling_identity, str) or not profiling_identity:
+        raise ValueError("profiling_identity must be a non-empty string.")
+
+    selected_profiling = (
+        profiling if profiling is not None else ProfilingContext.create()
+    )
+    stage_id = selected_profiling.stage_id("dense_index", profiling_identity)
+    outcome: DenseIndexBuildOutcome | None = None
+    with selected_profiling.observed_stage(
+        stage="dense_index",
+        stage_id=stage_id,
+        document_id=None,
+        corpus_id=request.source_manifest.corpus_id.as_str(),
+        corpus_version=request.source_manifest.corpus_version.as_str(),
+        parent_stage_id=parent_stage_id,
+        module="inference_lab.retrieval",
+        failure_mapper=map_dense_build_failure,
+    ) as stage:
+        stage.set_counts(items_processed=0, records_emitted=0)
+        outcome = _build_dense_generation(index_dir, request, embedder)
+        stage.set_counts(
+            items_processed=outcome.statistics.chunks_processed,
+            records_emitted=outcome.manifest.entry_count,
+        )
+    assert outcome is not None
+    return outcome
+
+
+def _build_dense_generation(
+    index_dir: Path,
+    request: DenseBuildRequest,
+    embedder: EmbeddingBackend,
 ) -> DenseIndexBuildOutcome:
     """Build a complete immutable generation from staged canonical chunks."""
-    if not isinstance(source_manifest, BaselineChunkGenerationManifest):
-        raise TypeError("source_manifest must be a BaselineChunkGenerationManifest.")
-    if not isinstance(compatibility, DenseIndexCompatibility):
-        raise TypeError("compatibility must be a DenseIndexCompatibility.")
-    if type(batch_size) is not int:
-        raise TypeError("batch_size must be an integer.")
-    if batch_size <= 0:
-        raise DenseError(DenseFailureCategory.INVALID_REQUEST)
+    source_manifest = request.source_manifest
+    compatibility = request.compatibility
+    metadata_db_path = request.metadata_db_path
+    source_dir = request.source_dir
+    parent_reference = request.parent_reference
+    batch_size = request.batch_size
     if not callable(getattr(embedder, "embed", None)):
         raise TypeError("embedder must implement EmbeddingBackend.")
-    configuration = compatibility.configuration
-    if (
-        configuration.implementation != DENSE_IMPLEMENTATION
-        or configuration.format_version != DENSE_FORMAT_VERSION
-        or configuration.contract_version != DENSE_CONTRACT_VERSION
-    ):
-        raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
     if parent_reference is not None:
-        if not isinstance(parent_reference, ComponentGenerationReference):
-            raise TypeError("parent_reference must be a ComponentGenerationReference.")
         if (
             parent_reference.component_kind != DENSE_COMPONENT_KIND
             or parent_reference.state is not ComponentGenerationState.READY
@@ -1000,19 +1101,19 @@ def select_dense_parent_reference(
 
 def build_dense_generation_for_corpus_update(
     index_dir: Path,
-    source_manifest: BaselineChunkGenerationManifest,
+    request: DenseBuildRequest,
     embedder: EmbeddingBackend,
     repository: MetadataRepository,
     *,
     expected_corpus_version: CorpusVersionId | None,
-    metadata_db_path: Path,
-    source_dir: Path,
-    compatibility: DenseIndexCompatibility,
-    batch_size: int = _EMBED_BATCH_SIZE,
+    profiling: ProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
 ) -> DenseIndexBuildOutcome:
     """Build against the exact expected active parent, if one exists."""
-    if not isinstance(source_manifest, BaselineChunkGenerationManifest):
-        raise TypeError("source_manifest must be a BaselineChunkGenerationManifest.")
+    if not isinstance(request, DenseBuildRequest):
+        raise TypeError("request must be a DenseBuildRequest.")
+    source_manifest = request.source_manifest
     if expected_corpus_version == source_manifest.corpus_version:
         raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
     parent = select_dense_parent_reference(
@@ -1022,13 +1123,11 @@ def build_dense_generation_for_corpus_update(
     )
     return build_dense_generation(
         index_dir,
-        source_manifest,
+        replace(request, parent_reference=parent),
         embedder,
-        metadata_db_path=metadata_db_path,
-        source_dir=source_dir,
-        compatibility=compatibility,
-        parent_reference=parent,
-        batch_size=batch_size,
+        profiling=profiling,
+        parent_stage_id=parent_stage_id,
+        profiling_identity=profiling_identity,
     )
 
 

@@ -283,6 +283,23 @@ become `channel_unavailable`; incompatible generations and invalid requests
 become `invalid_channel_response`; everything else becomes
 `channel_execution_failure`.
 
+### Build instrumentation
+
+The dense build is an observed `dense_index` stage, symmetric with
+`lexical_index`. It reports `items_processed` as the chunks it processed and
+`records_emitted` as the entries the generation holds, and it maps its typed
+failures into the closed profiling vocabulary: an invalid request is `input`,
+a dense or storage dependency failure is `dependency`, cancellation is
+`cancelled`, and anything else is `internal`. Publication passes its own
+profiling context and parent stage, so the dense build appears beneath the
+request stage rather than as an untracked gap between the lexical build and
+publication.
+
+`DenseBuildRequest` carries the validated inputs for one build — source
+manifest, compatibility, storage locations, optional parent reference, and
+batch size — so the builder takes the request, the embedder, and its
+observation arguments only.
+
 ### Storage participation
 
 The dense owner participates in corpus-version publication through
@@ -318,10 +335,6 @@ description of finished work:
 - **Generation opening materialises every entry** to verify declared counts,
   so opening cost still grows with corpus size even though query cost no
   longer does.
-- **No operational logging or stage instrumentation.** The lexical build emits
-  an observed stage; the dense build emits neither logs nor profiling records.
-  The retrieval logging policy applies to this channel and is not yet
-  implemented for it.
 
 ## RET-05 fusion and document deduplication
 

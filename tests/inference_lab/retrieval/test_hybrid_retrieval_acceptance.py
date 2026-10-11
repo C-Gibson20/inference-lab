@@ -22,6 +22,7 @@ from inference_lab.provenance import (
 from inference_lab.retrieval import (
     CandidateKind,
     ChannelScore,
+    DenseBuildRequest,
     DenseGeneration,
     DenseGenerationParticipant,
     DenseIndexCompatibility,
@@ -245,15 +246,17 @@ def test_hybrid_journey_fuses_channels_and_keeps_distinct_family_evidence(
     lexical_outcome = build_lexical_generation(index_dir, source_manifest)
     dense_outcome = build_dense_generation(
         index_dir,
-        source_manifest,
-        embedder,
-        metadata_db_path=tmp_path / "metadata.sqlite3",
-        source_dir=tmp_path / "sources",
-        compatibility=DenseIndexCompatibility(
-            model_metadata=embedder.metadata,
-            dimensions=3,
-            embedding_profile=embedder.profile,
+        DenseBuildRequest(
+            source_manifest=source_manifest,
+            compatibility=DenseIndexCompatibility(
+                model_metadata=embedder.metadata,
+                dimensions=3,
+                embedding_profile=embedder.profile,
+            ),
+            metadata_db_path=tmp_path / "metadata.sqlite3",
+            source_dir=tmp_path / "sources",
         ),
+        embedder,
     )
     with open_lexical_generation(
         index_dir, lexical_outcome.manifest.generation_id

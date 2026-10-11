@@ -30,6 +30,7 @@ from inference_lab.ingest.baseline_publication import (
 from inference_lab.ingest.discovery_results import DiscoveryResult
 from inference_lab.provenance import CorpusDocumentVersionMembership
 from inference_lab.retrieval import (
+    DenseBuildRequest,
     DenseGenerationParticipant,
     LexicalGenerationParticipant,
     build_dense_generation_for_corpus_update,
@@ -327,13 +328,17 @@ class ServingPublicationCoordinator:
         ):
             dense_build = build_dense_generation_for_corpus_update(
                 self._settings.storage.index_dir,
-                chunk_manifest,
+                DenseBuildRequest(
+                    source_manifest=chunk_manifest,
+                    compatibility=request.dense_compatibility,
+                    metadata_db_path=self._settings.storage.metadata_db_path,
+                    source_dir=self._settings.storage.source_dir,
+                ),
                 request.dense_embedder,
                 self._repository,
                 expected_corpus_version=request.expected_corpus_version,
-                metadata_db_path=self._settings.storage.metadata_db_path,
-                source_dir=self._settings.storage.source_dir,
-                compatibility=request.dense_compatibility,
+                profiling=profiling,
+                parent_stage_id=parent_stage_id,
             )
             participants.append(
                 DenseGenerationParticipant(

@@ -22,6 +22,7 @@ from inference_lab.retrieval.dense import (
 )
 from inference_lab.retrieval.dense_retrieval import execute_dense_retrieval
 from inference_lab.retrieval.dense_store import (
+    DenseBuildRequest,
     DenseError,
     DenseFailureCategory,
     DenseGeneration,
@@ -209,6 +210,7 @@ __all__ = [
     "AnyFilter",
     "CandidateKind",
     "ChannelScore",
+    "DenseBuildRequest",
     "DenseDistanceMetric",
     "DenseError",
     "DenseFailureCategory",

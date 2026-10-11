@@ -45,6 +45,7 @@ from inference_lab.provenance import (
 )
 from inference_lab.retrieval import (
     DENSE_COMPONENT_KIND,
+    DenseBuildRequest,
     DenseGenerationParticipant,
     DenseIndexCompatibility,
     execute_dense_retrieval,
@@ -235,11 +236,13 @@ def _publish_corpus(
 
     build_outcome = build_dense_generation(
         index_dir,
-        source_manifest,
+        DenseBuildRequest(
+            source_manifest=source_manifest,
+            compatibility=compatibility,
+            metadata_db_path=metadata_db_path,
+            source_dir=source_dir,
+        ),
         embedder,
-        metadata_db_path=metadata_db_path,
-        source_dir=source_dir,
-        compatibility=compatibility,
     )
     participant = DenseGenerationParticipant(index_dir, build_outcome, source_manifest)
     committed: CommitCorpusUpdateOutcome | None = None
