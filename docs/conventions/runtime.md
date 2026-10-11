@@ -225,9 +225,9 @@ setup and operating limits.
 ## RUN-05 local reranker backend
 
 `LocalRerankerBackend` implements `RerankerBackend` using the provisional,
-revision-pinned BGE-reranker-v2-m3 candidate. It loads only the exact, locally
-verified artefact inventory configured by `models.reranker_path`; it does not
-access a model registry or execute remote model code. It advertises reranking
+revision-pinned BGE-reranker-v2-m3 candidate. It verifies the pinned load-affecting
+artefacts under `models.reranker_path` by digest; it does not access a model
+registry or execute remote model code. It advertises reranking
 and batching only. The backend accepts at most 100 candidates, rejects queries
 over 256 tokens, preserves the query while tail-truncating candidate text to a
 512-token pair limit, and internally batches four pairs. Scores are finite raw
@@ -235,6 +235,33 @@ classifier logits, ordered descending with `candidate_id` as the stable tie
 break. Preprocessing profile version `1.0.0`, resource limits, and the pilot's
 provisional status are documented in
 [`docs/runtime/local-reranker.md`](../runtime/local-reranker.md).
+
+## Shared local-backend policies
+
+Both local model backends follow the same rules, so one cannot drift into a
+different operational contract than the other.
+
+**Artefact verification.** A backend pins the digest of every file that
+affects how its model loads or behaves, and verifies exactly those. Files it
+does not pin — caches, lock files, operator tooling leftovers, documentation
+and images shipped alongside a model — are ignored rather than treated as a
+corrupt inventory, so routine tooling cannot prevent a load. A missing or
+symlinked required artefact, or a digest mismatch, fails the load.
+
+**Declared preprocessing identity.** A backend whose preprocessing affects its
+results must declare `preprocessing_profile_version` in its
+`BackendMetadata`, and that version must equal the one its own profile
+reports. Downstream identities compare this value to tell two otherwise
+identical model revisions apart; a backend that leaves it unset cannot
+participate in a reproducible retrieval identity.
+
+**Release on close.** `close()` drops model and tokeniser references and then
+collects, because a loaded model participates in reference cycles and the
+deployment runs against a fixed 24GB budget.
+
+**Request errors.** A rejected request raises `BackendRequestError` with a
+fixed project-owned message describing the rejected condition. Messages never
+carry request text, candidate content, or dependency detail.
 
 ## Scope boundary
 

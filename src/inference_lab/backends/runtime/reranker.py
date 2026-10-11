@@ -49,35 +49,10 @@ _MAX_QUERY_TOKENS: Final = 256
 _MAX_CANDIDATES: Final = 100
 _INTERNAL_BATCH_SIZE: Final = 4
 _PREPROCESSING_PROFILE_VERSION: Final = "1.0.0"
-_EXPECTED_ARTEFACT_DIGESTS: Final = (
-    (
-        ".gitattributes",
-        "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930",
-    ),
-    (
-        "README.md",
-        "c887aa6dd2598f908bf0582ca7068cc816585c7a1b6a07df305b631ede0cb174",
-    ),
-    (
-        "assets/BEIR-bge-en-v1.5.png",
-        "c1e57bfc0bb87408ac0d5084acce36a26914a2ea19f2f9f3560e71be9d4daef6",
-    ),
-    (
-        "assets/BEIR-e5-mistral.png",
-        "5119f2d1b364f79eaa2954bd5efb4a7e56364ee8748571964d800f85683280c4",
-    ),
-    (
-        "assets/CMTEB-retrieval-bge-zh-v1.5.png",
-        "ce02a58c566da5f733b6928cc968865e4d472c8a276546bfce5d0f4452050ed4",
-    ),
-    (
-        "assets/llama-index.png",
-        "62c4fbdeeb44296da80bdd2f0a7a6b5e44f3492072af84fdf3ed99d01a53e596",
-    ),
-    (
-        "assets/miracl-bge-m3.png",
-        "98f40bf0ba104f3efa52ef76da1434fb776834cdc732e6b29d2550672ea2df1b",
-    ),
+# Only files that change how the model loads or behaves are pinned. Operator
+# tooling and caches add unreferenced files to a model directory, and those
+# must not be able to brick a load.
+_REQUIRED_ARTEFACT_DIGESTS: Final = (
     (
         "config.json",
         "13dcd6c31d9fec9d1d8e158702072f62d7fa7d312a64b9fe057bec9a08cfe41a",
@@ -142,7 +117,7 @@ def _validate_local_path(artefact_dir: str | Path) -> Path:
     if not isinstance(artefact_dir, (str, Path)):
         raise TypeError("artefact_dir must be a local path")
     if not is_local_path_shape(artefact_dir):
-        raise BackendRequestError()
+        raise BackendRequestError("The reranker artefact path is not local.")
     return Path(artefact_dir)
 
 
@@ -156,20 +131,13 @@ def _file_sha256(path: Path) -> str:
 
 
 def _verify_local_artefacts(artefact_dir: Path) -> None:
-    """Require the exact pinned file inventory and digest before loading."""
-    expected = dict(_EXPECTED_ARTEFACT_DIGESTS)
-    actual = {
-        path.relative_to(artefact_dir).as_posix(): path
-        for path in artefact_dir.rglob("*")
-        if path.is_file() and ".cache" not in path.parts
-    }
-    if set(actual) != set(expected) or any(
-        path.is_symlink() for path in actual.values()
-    ):
-        raise ValueError("model artefact inventory does not match the pinned revision")
-    for name, path in actual.items():
-        if _file_sha256(path) != expected[name]:
-            raise ValueError("model artefact digest does not match the pinned revision")
+    """Verify every pinned load-affecting artefact, ignoring other files."""
+    for name, expected_digest in _REQUIRED_ARTEFACT_DIGESTS:
+        path = artefact_dir / name
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("required model artefact is unavailable")
+        if _file_sha256(path) != expected_digest:
+            raise ValueError("model artefact identity does not match")
 
 
 def _prepare_pairs(

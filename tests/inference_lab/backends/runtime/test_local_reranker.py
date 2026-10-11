@@ -473,33 +473,40 @@ def test_backend_failure_logs_omit_query_candidate_and_raw_errors(
     assert records[-1]["failure_category"] == "execution"
 
 
-def test_artifact_verification_checks_full_inventory_and_digests(
+def test_artefact_verification_pins_required_files_and_ignores_others(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    asset_dir = tmp_path / "assets"
-    asset_dir.mkdir()
-    files = {"config.json": b"{}", "assets/model-card.png": b"fixture"}
-    for name, payload in files.items():
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
+    required = {"config.json": b"{}", "tokenizer.json": b"[]"}
+    for name, payload in required.items():
+        (tmp_path / name).write_bytes(payload)
     monkeypatch.setattr(
         reranker,
-        "_EXPECTED_ARTEFACT_DIGESTS",
+        "_REQUIRED_ARTEFACT_DIGESTS",
         tuple(
             (name, hashlib.sha256(payload).hexdigest())
-            for name, payload in sorted(files.items())
+            for name, payload in sorted(required.items())
         ),
     )
 
     reranker._verify_local_artefacts(tmp_path)
-    (tmp_path / "extra.txt").write_text("extra", encoding="utf-8")
-    with pytest.raises(ValueError, match="inventory"):
-        reranker._verify_local_artefacts(tmp_path)
-    (tmp_path / "extra.txt").unlink()
+
+    # Operator tooling and caches leave unreferenced files behind; none of
+    # them may prevent a load.
+    (tmp_path / ".DS_Store").write_bytes(b"\x00")
+    (tmp_path / "model.safetensors.lock").write_text("", encoding="utf-8")
+    cache_dir = tmp_path / ".huggingface"
+    cache_dir.mkdir()
+    (cache_dir / "download.metadata").write_text("x", encoding="utf-8")
+    reranker._verify_local_artefacts(tmp_path)
+
     (tmp_path / "config.json").write_text("changed", encoding="utf-8")
-    with pytest.raises(ValueError, match="digest"):
+    with pytest.raises(ValueError, match="identity"):
+        reranker._verify_local_artefacts(tmp_path)
+
+    (tmp_path / "config.json").write_bytes(required["config.json"])
+    (tmp_path / "tokenizer.json").unlink()
+    with pytest.raises(ValueError, match="unavailable"):
         reranker._verify_local_artefacts(tmp_path)
 
 
