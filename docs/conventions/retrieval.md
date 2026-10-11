@@ -456,6 +456,21 @@ Family handling therefore belongs to the two stages that do know the question:
   aggregation algorithm identity, and visible in the result's uncertainty when
   family membership is incomplete.
 
+### Snapshot resolution and duplicate expansion
+
+Fusion resolves each candidate source span exactly once per request. One
+resolver validates a span's ownership against the pinned snapshot and caches
+the exact location, so the visibility verdict that can fail a channel and the
+location map used to build evidence share a single read rather than resolving
+the same spans twice.
+
+Discovering byte-identical duplicate relationships walks a pre-sorted frontier
+and expands transitively, but stops after `MAX_DUPLICATE_EXPANSION_VERSIONS`
+visited versions. Reaching that bound is reported as
+`duplicate_expansion_truncated` on the `retrieval_fusion_completed` event, so
+a duplicate-heavy corpus yields partial duplicate groups visibly rather than
+silently.
+
 ### Degraded channels and corpus-version mismatch
 
 Channel failures are preserved in the fused result and determine its status
