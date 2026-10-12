@@ -67,6 +67,18 @@ def test_render_report_is_deterministic_and_covers_required_sections(
     assert rendered.index("document_recall_at_10") < rendered.index(
         "passage_recall_at_1"
     )
+    # The cutoff in the row label is the metric's own, not a literal, so a
+    # policy with another document cutoff cannot publish a mislabelled metric.
+    narrower = replace(
+        report,
+        aggregate=replace(
+            report.aggregate,
+            document=replace(report.aggregate.document, cutoff=5),
+        ),
+    )
+    narrowed_render = render_retrieval_report(narrower, run.identity)
+    assert "document_recall_at_5" in narrowed_render
+    assert "document_recall_at_10" not in narrowed_render
     assert rendered.index("passage_recall_at_1") < rendered.index("passage_recall_at_5")
     assert rendered.index("passage_recall_at_5") < rendered.index(
         "passage_recall_at_10"

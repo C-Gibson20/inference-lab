@@ -32,7 +32,13 @@ def test_shipped_operator_artefact_decodes_to_the_approved_gate() -> None:
 
     assert approved.binding.dataset_id == "sarm1-retrieval-question-set"
     assert approved.binding.case_file_checksum.startswith("sha256:")
-    assert approved.policy.minimum_document_recall_at_10 == MetricFraction(9, 10)
+    assert approved.policy.minimum_document_recall == MetricFraction(9, 10)
+    # The cutoff is artefact data carried on the policy, not implied by a
+    # field name, so it must come from the file rather than a constant.
+    assert (
+        approved.policy.document_recall_cutoff
+        == _artefact_payload()["primary_gate"]["cutoff"]
+    )
     assert approved.policy.maximum_failure_rate == MetricFraction(1, 20)
     assert approved.policy.maximum_degraded_rate == MetricFraction(1, 20)
     assert approved.policy.minimum_category_cases == 3

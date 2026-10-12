@@ -48,7 +48,7 @@ def _render_headline(
     """Render the named macro headline metrics in policy order."""
     rows = [
         (
-            "document_recall_at_10",
+            f"document_recall_at_{report.aggregate.document.cutoff}",
             _format_fraction(report.aggregate.document.macro, policy),
         )
     ]
@@ -286,7 +286,10 @@ def _named_metrics(
 ) -> tuple[tuple[str, AggregateMetric], ...]:
     """Return document then passage metrics in canonical cutoff order."""
     return (
-        ("document_recall_at_10", report.aggregate.document),
+        (
+            f"document_recall_at_{report.aggregate.document.cutoff}",
+            report.aggregate.document,
+        ),
         *tuple(
             (f"passage_recall_at_{metric.cutoff}", metric)
             for metric in report.aggregate.passage

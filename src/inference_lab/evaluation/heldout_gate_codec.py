@@ -148,21 +148,24 @@ def _require_binding(payload: JsonObject) -> HeldOutGateBinding:
     )
 
 
-def _require_primary_minimum(payload: JsonObject) -> MetricFraction:
-    """Decode the primary threshold, rejecting any other metric semantics."""
+def _require_primary_gate(payload: JsonObject) -> tuple[MetricFraction, int]:
+    """Decode the primary threshold and its cutoff, rejecting other semantics."""
     primary = require_json_object(payload["primary_gate"])
     require_exact_json_fields(primary, _PRIMARY_GATE_FIELDS)
+    cutoff = require_json_integer(primary["cutoff"])
     if (
         require_json_string(primary["channel"]) != HeldOutChannel.FUSED_PRE_RERANK
         or require_json_string(primary["metric"]) != HELD_OUT_GATE_PRIMARY_METRIC
-        or require_json_integer(primary["cutoff"]) != HELD_OUT_GATE_PRIMARY_CUTOFF
+        or cutoff != HELD_OUT_GATE_PRIMARY_CUTOFF
         or require_json_string(primary["denominator"])
         != HELD_OUT_GATE_PRIMARY_DENOMINATOR
     ):
         raise RetrievalEvaluationContractError(
             "primary_gate must state the supported metric semantics."
         )
-    return _require_fraction(primary["minimum"], "primary_gate.minimum")
+    # The cutoff travels with the policy rather than being implied by a
+    # field name, while the approved value stays pinned here.
+    return _require_fraction(primary["minimum"], "primary_gate.minimum"), cutoff
 
 
 def deserialise_approved_held_out_gate(data: bytes) -> ApprovedHeldOutGate:
@@ -183,10 +186,12 @@ def deserialise_approved_held_out_gate(data: bytes) -> ApprovedHeldOutGate:
         raise RetrievalEvaluationContractError(
             "uncertainty.method names an unsupported method."
         )
+    minimum_document_recall, document_recall_cutoff = _require_primary_gate(payload)
     return ApprovedHeldOutGate(
         binding=_require_binding(payload),
         policy=HeldOutGatePolicy(
-            minimum_document_recall_at_10=_require_primary_minimum(payload),
+            minimum_document_recall=minimum_document_recall,
+            document_recall_cutoff=document_recall_cutoff,
             maximum_failure_rate=_require_fraction(
                 payload["maximum_failure_rate"], "maximum_failure_rate"
             ),
