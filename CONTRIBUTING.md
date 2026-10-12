@@ -2,16 +2,20 @@
 
 ## Branches and commits
 
-Use short branches named `feature/<topic>`, `fix/<topic>`, or
-`experiment/<topic>`. Commits must use the enforced form:
+Use short branches named `feature/<topic>`, `fix/<topic>`,
+`experiment/<topic>`, or `review/<topic>` for work that remediates a recorded
+review. Commits must use the enforced form:
 
 ```text
 [<module>] <type>: <description>
 ```
 
 Valid modules are `ingest`, `retrieval`, `serving`, `runtime`, `storage`,
-`provenance`, `evaluation`, `profiling`, `docs`, and `tooling`. Valid types are
-`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, and `chore`.
+`provenance`, `evaluation`, `profiling`, `docs`, `tooling`, and `src`. Use a
+domain module whenever the change has one; `src` is only for a change that
+genuinely spans several domains, such as a repository-wide rename. Valid types
+are `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, and
+`chore`.
 Add `!` after the type for a breaking change. `feat` produces a minor release;
 `fix` and `perf` produce patch releases; `!` or a `BREAKING CHANGE:` footer
 produces a major release.
