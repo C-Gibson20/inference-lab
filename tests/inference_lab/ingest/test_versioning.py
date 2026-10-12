@@ -1,4 +1,4 @@
-"""Focused ING-01 parser-version and source-span identity contracts."""
+"""Focused parser-version and source-span identity contracts."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""ING-04/PROV-03 golden, invariant, and privacy acceptance for chunking."""
+"""Golden, invariant, and privacy acceptance for chunking and its spans."""
 
 from __future__ import annotations
 

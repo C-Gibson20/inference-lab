@@ -175,7 +175,7 @@ def _open_repository(tmp_path: Path, case: _Case) -> MetadataRepository:
         apply_migrations=True,
     )
     with repository.transaction() as transaction:
-        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "ING-03 faults"))
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "parse faults"))
         transaction.add_document(DocumentIdentity(_DOCUMENT_ID))
         transaction.add_document_version(case.version)
         transaction.add_corpus_document_version_membership(

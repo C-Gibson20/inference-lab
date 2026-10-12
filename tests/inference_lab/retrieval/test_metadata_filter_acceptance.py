@@ -26,7 +26,7 @@ from inference_lab.retrieval import (
 )
 
 
-def test_ret03_registry_accepts_predicates_for_every_supported_field() -> None:
+def test_filter_registry_accepts_predicates_for_every_supported_field() -> None:
     values: dict[str, str | int] = {
         "character-count": 80,
         "document-type": "text/plain",
@@ -70,7 +70,7 @@ def test_ret03_registry_accepts_predicates_for_every_supported_field() -> None:
     assert MetadataFilterOperator.RANGE not in language.supported_operators
 
 
-def test_ret03_predicates_and_boolean_combinations_match_real_field_values() -> None:
+def test_predicates_and_boolean_combinations_match_real_field_values() -> None:
     values: MetadataValues = {
         "character-count": 80,
         "document-type": "text/plain",
@@ -111,7 +111,7 @@ def test_ret03_predicates_and_boolean_combinations_match_real_field_values() -> 
     assert not evaluate_metadata_filter(ExistsFilter("language"), {"language": None})
 
 
-def test_ret03_rejects_unsupported_fields_and_invalid_field_operator_pairs() -> None:
+def test_rejects_unsupported_fields_and_invalid_field_operator_pairs() -> None:
     unsupported = (
         ExactFilter("publication-date", "2024-01-01"),
         ExactFilter("priority-date", "2024-01-01"),
@@ -151,7 +151,7 @@ def test_ret03_rejects_unsupported_fields_and_invalid_field_operator_pairs() -> 
         assert error.value.category is MetadataFilterErrorCategory.SCALAR_TYPE_MISMATCH
 
 
-def test_ret03_validation_is_bounded_private_and_rechecks_its_token() -> None:
+def test_filter_validation_is_bounded_private_and_rechecks_its_token() -> None:
     expression = ExactFilter("language", "en")
     validation = validate_metadata_filter(expression)
     forged = type(validation)(

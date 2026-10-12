@@ -1,4 +1,4 @@
-"""PROV-01 contract journey across every public identifier domain."""
+"""Contract journey across every public identifier domain."""
 
 import itertools
 import uuid

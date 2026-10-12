@@ -1,4 +1,4 @@
-"""Tests for RET-02 lexical contracts and analysis policy."""
+"""Tests for lexical contracts and analysis policy."""
 
 import hashlib
 import json

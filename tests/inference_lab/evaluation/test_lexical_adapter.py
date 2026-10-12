@@ -63,7 +63,7 @@ def _case_for_chunk(case_id: str, question: str, chunk: Chunk) -> dict:
 
 
 def test_real_lexical_generation_scores_hit_and_empty_case(tmp_path: Path) -> None:
-    """The adapter composes published storage, RET-02, and EVAL-03 scoring."""
+    """The adapter composes published storage, lexical retrieval, and scoring."""
     lexical_manifest, first, second = source_manifest()
     repository = SQLiteMetadataRepository.open(
         tmp_path / "metadata.sqlite3", apply_migrations=True
@@ -165,7 +165,7 @@ def test_adapter_rejects_foreign_scope_before_query(tmp_path: Path) -> None:
 def test_adapter_and_serving_facade_find_same_published_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Fresh-process ingest and serving agree with EVAL-03 on one version."""
+    """Fresh-process ingest and serving agree with evaluation on one version."""
     write_config(tmp_path)
     create_script = tmp_path / "create-corpus.py"
     ingest_script = tmp_path / "ingest-and-search.py"

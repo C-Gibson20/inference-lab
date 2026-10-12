@@ -107,7 +107,7 @@ def _repository(
     try:
         with repository.transaction() as transaction:
             for corpus_id in corpora:
-                transaction.add_corpus(CorpusMetadata(corpus_id, "ING-03 isolation"))
+                transaction.add_corpus(CorpusMetadata(corpus_id, "parse isolation"))
             for case in cases:
                 transaction.add_document(DocumentIdentity(case.version.document_id))
                 transaction.add_document_version(case.version)

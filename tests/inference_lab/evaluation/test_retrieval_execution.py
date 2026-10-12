@@ -108,7 +108,7 @@ def result(
     with_hit: bool = False,
     failure: FailureCategory | None = None,
 ) -> EvidenceResult:
-    """Build one bounded RET-01 result for fake adapter behavior."""
+    """Build one bounded retrieval result for fake adapter behaviour."""
     failures = ()
     if failure is not None:
         failures = (RetrievalFailure(failure, retryable=False),)

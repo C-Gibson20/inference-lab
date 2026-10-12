@@ -1,4 +1,4 @@
-"""RUN-02 local-model acceptance for capabilities, limits, cache, and privacy."""
+"""Local fixture-model acceptance for capabilities, limits, cache, and privacy."""
 
 import asyncio
 import json

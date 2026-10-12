@@ -1,4 +1,4 @@
-"""SERV-01/ING-05/RET-02/RET-03 documented API workflow across fresh processes."""
+"""Documented operator API workflow across fresh processes."""
 
 import json
 import subprocess

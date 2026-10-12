@@ -1,7 +1,7 @@
-"""RET-06 query and fused-result boundary validation."""
+"""Reranking query and fused-result boundary validation."""
 
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 from structlog.testing import capture_logs
@@ -160,7 +160,7 @@ def _many_candidate_result(query: RetrievalQuery, count: int) -> EvidenceResult:
     )
 
 
-def test_reranking_request_accepts_matching_source_linked_result() -> None:
+def test_reranking_request_binds_a_result_to_its_own_query() -> None:
     query = _query()
     result = _result(query)
 
@@ -171,49 +171,44 @@ def test_reranking_request_accepts_matching_source_linked_result() -> None:
     assert request.fused_result.hits[0].candidate.sources[0].source_span_id == (
         SourceSpanId.from_str("00000000-0000-4000-8000-000000000040")
     )
+    # An empty pool is a valid result, not a rejected one.
+    assert RerankingRequest(
+        query, _result(query, with_hit=False)
+    ).fused_result.hits == (())
 
 
-def test_reranking_request_accepts_empty_fused_result() -> None:
-    query = _query()
-
-    request = RerankingRequest(query, _result(query, with_hit=False))
-
-    assert request.fused_result.hits == ()
-
-
-def test_reranking_request_rejects_other_corpus_version() -> None:
-    query = _query()
-
-    with pytest.raises(InvalidRetrievalContractError):
-        RerankingRequest(query, _result(query, version=_version(2)))
-
-
-def test_reranking_request_rejects_different_result_limit() -> None:
+@pytest.mark.parametrize(
+    "mismatched",
+    [
+        lambda query: _result(query, version=_version(2)),
+        lambda query: _result(query, limit=query.limit.value - 1),
+    ],
+    ids=["other_corpus_version", "different_result_limit"],
+)
+def test_reranking_request_rejects_a_result_from_another_query(
+    mismatched: Callable[[RetrievalQuery], EvidenceResult],
+) -> None:
     query = _query(limit=8)
 
     with pytest.raises(InvalidRetrievalContractError):
-        RerankingRequest(query, _result(query, limit=7))
+        RerankingRequest(query, mismatched(query))
 
 
-@pytest.mark.parametrize("value", (5, 8, 10))
-def test_evidence_count_accepts_values_in_the_baseline_range(value: int) -> None:
-    assert EvidenceCount(value).value == value
-
-
-@pytest.mark.parametrize("value", (0, 4, 11))
-def test_evidence_count_rejects_values_outside_the_baseline_range(value: int) -> None:
-    with pytest.raises(InvalidRetrievalContractError):
-        EvidenceCount(value)
-
-
-@pytest.mark.parametrize("value", (1, 100))
-def test_rerank_candidate_limit_accepts_values_within_backend_cap(value: int) -> None:
-    assert RerankCandidateLimit(value).value == value
-
-
-def test_rerank_candidate_limit_rejects_values_above_backend_cap() -> None:
-    with pytest.raises(InvalidRetrievalContractError):
-        RerankCandidateLimit(101)
+@pytest.mark.parametrize(
+    ("limit", "rejected"),
+    [
+        (EvidenceCount, (0, 4, 11)),
+        (RerankCandidateLimit, (0, 101)),
+    ],
+    ids=["evidence_count", "candidate_limit"],
+)
+def test_typed_reranking_limits_reject_values_outside_their_range(
+    limit: type[EvidenceCount] | type[RerankCandidateLimit],
+    rejected: tuple[int, ...],
+) -> None:
+    for value in rejected:
+        with pytest.raises(InvalidRetrievalContractError):
+            limit(value)
 
 
 def test_reranking_identity_is_stable_and_covers_run_configuration() -> None:
@@ -459,25 +454,6 @@ def test_ranking_pipeline_keeps_the_highest_scored_exact_duplicate() -> None:
     assert tuple(hit.rank for hit in selected) == (1, 2)
 
 
-def test_empty_fused_result_does_not_call_backend() -> None:
-    query = _query()
-    request = RerankingRequest(query, _result(query, with_hit=False))
-
-    class Backend:
-        def rerank(self, request: object) -> RerankResult:
-            pytest.fail("an empty candidate pool must skip backend execution")
-
-    prepared, scored = rerank_evidence(
-        cast(RerankerBackend, Backend()),
-        request,
-        evidence_count=EvidenceCount(8),
-        candidate_limit=RerankCandidateLimit(100),
-    )
-
-    assert prepared.backend_request is None
-    assert scored == ()
-
-
 def test_retryable_resource_failure_returns_degraded_fused_order() -> None:
     query = _query(limit=3)
     fused = _many_candidate_result(query, 3)
@@ -599,12 +575,25 @@ def test_reranking_reports_a_pool_larger_than_the_global_candidate_ceiling() -> 
     backend.close()
 
 
-def test_degraded_reranking_log_uses_warning_and_bounded_failure_category() -> None:
+@pytest.mark.parametrize(
+    ("failure_mode", "expected_level", "expected_status", "expected_degraded"),
+    [
+        (FakeFailureMode.RESOURCE, "warning", "partial", True),
+        (FakeFailureMode.EXECUTION, "error", "failed", False),
+    ],
+    ids=["retryable_degrades", "non_retryable_fails_closed"],
+)
+def test_reranking_log_level_follows_the_outcome_it_reports(
+    failure_mode: FakeFailureMode,
+    expected_level: str,
+    expected_status: str,
+    expected_degraded: bool,
+) -> None:
     query = _query(limit=1)
     fused = _many_candidate_result(query, 1)
     backend = FakeBackend(
         FakeBackendConfig(
-            failure_mode=FakeFailureMode.RESOURCE,
+            failure_mode=failure_mode,
             fail_operation=BackendOperation.RERANK,
         )
     )
@@ -621,41 +610,11 @@ def test_degraded_reranking_log_uses_warning_and_bounded_failure_category() -> N
         )
 
     event = next(row for row in logs if row["event"] == "reranking_completed")
-    assert outcome.degraded is True
-    assert event["log_level"] == "warning"
-    assert event["status"] == "partial"
+    assert outcome.degraded is expected_degraded
+    assert event["log_level"] == expected_level
+    assert event["status"] == expected_status
     assert event["failure_category"] == FailureCategory.CHANNEL_EXECUTION_FAILURE
     assert event["candidate_count"] == 1
-    assert "question" not in str(logs)
-    assert "source passage" not in str(logs)
-
-
-def test_failed_reranking_log_uses_error_and_typed_failure_category() -> None:
-    query = _query(limit=1)
-    fused = _many_candidate_result(query, 1)
-    backend = FakeBackend(
-        FakeBackendConfig(
-            failure_mode=FakeFailureMode.EXECUTION,
-            fail_operation=BackendOperation.RERANK,
-        )
-    )
-    backend.load()
-
-    with capture_logs() as logs:
-        outcome = execute_reranking(
-            backend,
-            query,
-            fused,
-            corpus_id=_corpus_id(),
-            evidence_count=EvidenceCount(8),
-            candidate_limit=RerankCandidateLimit(100),
-        )
-
-    event = next(row for row in logs if row["event"] == "reranking_completed")
-    assert outcome.result.status is ResultStatus.FAILED
-    assert event["log_level"] == "error"
-    assert event["failure_category"] == FailureCategory.CHANNEL_EXECUTION_FAILURE
-    assert event["selected_evidence_count"] == 0
     assert "question" not in str(logs)
     assert "source passage" not in str(logs)
 

@@ -1,4 +1,4 @@
-"""Acceptance tests for adapting complete ING-02 source inventories."""
+"""Acceptance tests for adapting complete source inventories."""
 
 from dataclasses import replace
 from pathlib import Path

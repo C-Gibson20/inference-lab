@@ -1,4 +1,4 @@
-"""EVAL-02 acceptance for audit reconciliation, privacy, and corpus isolation."""
+"""Acceptance for audit reconciliation, privacy, and corpus isolation."""
 
 from dataclasses import replace
 

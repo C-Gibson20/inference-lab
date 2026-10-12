@@ -287,7 +287,7 @@ def test_failure_values_remain_typed_and_do_not_change_empty_result_semantics() 
     assert failed.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
 
 
-def test_ret01_query_candidate_and_score_boundaries_reject_invalid_values() -> None:
+def test_query_candidate_and_score_boundaries_reject_invalid_values() -> None:
     source = _source(31)
     candidate = RetrievalCandidate(
         RecordId.generate(), CandidateKind.ORIGINAL_PASSAGE, "passage", (source,)
@@ -318,7 +318,7 @@ def test_ret01_query_candidate_and_score_boundaries_reject_invalid_values() -> N
         EvidenceHit(candidate, (lexical, lexical), 1)
 
 
-def test_ret01_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
+def test_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
     version = CorpusVersionId.generate()
     other_version = CorpusVersionId.generate()
     first = RetrievalCandidate(
@@ -363,7 +363,7 @@ def test_ret01_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
         )
 
 
-def test_ret01_query_serialisation_round_trips_nested_filter_shapes() -> None:
+def test_query_serialisation_round_trips_nested_filter_shapes() -> None:
     expression = AllFilter(
         (
             AnyFilter(

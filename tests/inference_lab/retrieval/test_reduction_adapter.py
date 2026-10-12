@@ -1,4 +1,4 @@
-"""RET-07 pinned snapshot integration, provenance mapping, and logging."""
+"""Pinned-snapshot reduction integration, provenance mapping, and logging."""
 
 from __future__ import annotations
 
