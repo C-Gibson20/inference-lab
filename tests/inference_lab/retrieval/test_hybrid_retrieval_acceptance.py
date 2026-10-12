@@ -1,4 +1,4 @@
-"""Phase 6 acceptance for pinned lexical+dense fusion and duplicate handling."""
+"""Composed acceptance journey for hybrid lexical and dense retrieval."""
 
 from dataclasses import replace
 from pathlib import Path

@@ -217,7 +217,7 @@ def _assert_complete_graph(
     )
 
 
-def test_corpus_version_upgrade_preserves_complete_stor_01_graph(
+def test_corpus_version_upgrade_preserves_the_complete_record_graph(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "metadata.sqlite3"

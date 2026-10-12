@@ -243,7 +243,7 @@ def execute_hybrid_retrieval(
             items_processed=sum(channel_counts.values()),
             records_emitted=len(result.hits),
         )
-        failure = _map_result_failure(result)
+        failure = _map_aggregate_failure(result)
         if failure is not None:
             stage.mark_failure(failure)
 
@@ -617,7 +617,7 @@ def _map_fusion_exception(error: BaseException) -> FailureMapping:
     )
 
 
-def _map_result_failure(result: EvidenceResult) -> FailureMapping | None:
+def _map_aggregate_failure(result: EvidenceResult) -> FailureMapping | None:
     """Map failed aggregate results without retaining channel payloads."""
     if result.status is ResultStatus.COMPLETED:
         return None
