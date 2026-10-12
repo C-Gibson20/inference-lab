@@ -131,6 +131,38 @@ of documents per corpus, small query-time context, and stable interactive
 latency — and the specification deliberately does not restate it as an
 implementation rule.
 
+## Lexical match modes
+
+The lexical engine supports four closed modes. Which one a caller selects is a
+retrieval-design decision, not an implementation detail, so every caller states
+it or accepts the documented default.
+
+| Mode | Expression | Use |
+| --- | --- | --- |
+| `any_term` | terms joined by `OR` | Ranked retrieval, including every fused channel |
+| `all_terms` | terms joined by `AND` | A filter: the caller means "all of these" |
+| `exact_phrase` | one quoted phrase | Contiguous terminology |
+| `identifier` | no expression; identifier lookup | DOIs, accessions, patent numbers |
+
+**`any_term` is the default and the only mode a ranked channel should use.**
+BM25 weighting is what separates signal from noise in a ranked result, so
+requiring every term is a filter rather than a ranking choice: a natural
+language question such as "What assay did this paper use?" has no single chunk
+containing all of its tokens, and a conjunctive channel returns nothing. An
+empty channel is worse than a permissive one under reciprocal-rank fusion,
+which consumes ranks only — a weak match at rank 80 contributes
+`1/(60 + 80)`, while a channel with no candidates contributes nothing at all
+and silently reduces hybrid retrieval to its other channel.
+
+Function words are not removed before matching. They do not need to be:
+inverse document frequency already makes a term that appears in nearly every
+chunk nearly weightless, so the analyser stays a pure tokeniser and the
+lexical index configuration digest is unaffected by this policy.
+
+`all_terms` remains available for callers that genuinely want conjunctive
+filtering, and no caller receives it implicitly. Match mode is chosen per
+query and is never recorded in an index generation's identity.
+
 ## RET-04 dense index
 
 The dense channel is a durable, corpus-version-scoped vector index built from

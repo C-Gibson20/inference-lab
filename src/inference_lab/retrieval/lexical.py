@@ -65,9 +65,16 @@ _CONFIGURATION_FIELDS: Final[frozenset[str]] = frozenset(
 
 
 class LexicalMatchMode(StrEnum):
-    """Closed lexical matching modes supported by the baseline."""
+    """Closed lexical matching modes supported by the baseline.
 
-    TERMS = "terms"
+    ``ANY_TERM`` is the recall-oriented mode a ranked channel should use:
+    BM25 weighting separates signal from noise, so requiring every term is a
+    filter rather than a ranking choice. ``ALL_TERMS`` is that filter, for
+    callers that mean "all of these".
+    """
+
+    ANY_TERM = "any_term"
+    ALL_TERMS = "all_terms"
     EXACT_PHRASE = "exact_phrase"
     IDENTIFIER = "identifier"
 
@@ -332,7 +339,7 @@ def escape_fts5_literal(value: str) -> str:
 
 def build_fts5_query(
     text: str,
-    mode: LexicalMatchMode = LexicalMatchMode.TERMS,
+    mode: LexicalMatchMode = LexicalMatchMode.ANY_TERM,
 ) -> str:
     """Build a literal FTS5 expression for terms or exact-phrase matching."""
     if not isinstance(text, str):
@@ -348,7 +355,8 @@ def build_fts5_query(
         raise InvalidLexicalContractError("text must contain an analysable term.")
     if mode is LexicalMatchMode.EXACT_PHRASE:
         return escape_fts5_literal(" ".join(terms))
-    return " AND ".join(escape_fts5_literal(term) for term in terms)
+    operator = " AND " if mode is LexicalMatchMode.ALL_TERMS else " OR "
+    return operator.join(escape_fts5_literal(term) for term in terms)
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,7 +364,7 @@ class LexicalQuery:
     """A retrieval query plus one closed lexical matching mode."""
 
     query: RetrievalQuery
-    mode: LexicalMatchMode = LexicalMatchMode.TERMS
+    mode: LexicalMatchMode = LexicalMatchMode.ANY_TERM
 
     def __post_init__(self) -> None:
         self._validate()

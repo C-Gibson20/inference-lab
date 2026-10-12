@@ -435,7 +435,7 @@ def _normalise_request(
                 "mode must match the supplied LexicalQuery."
             )
         return request.query, request
-    selected_mode = LexicalMatchMode.TERMS if mode is None else mode
+    selected_mode = LexicalMatchMode.ANY_TERM if mode is None else mode
     lexical_query = RetrievalQuery(
         request.text,
         request.corpus_version,
