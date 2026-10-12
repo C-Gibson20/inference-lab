@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import atexit
 import json
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from inference_lab.backends.runtime import LocalRerankerBackend, QwenEmbeddingBackend
@@ -43,17 +44,6 @@ _ROOT = Path(__file__).resolve().parents[3]
 _DATASET_MANIFEST = _ROOT / ".dev/benchmark-authoring/bound-manifest.json"
 _SETUP_RECORD = _ROOT / ".dev/local-evaluation/setup.json"
 _GATE_POLICY = _ROOT / "docs/operator/retrieval-baseline-gate.json"
-_OPEN_RESOURCES: list[object] = []
-
-
-def _close_resources() -> None:
-    for resource in reversed(_OPEN_RESOURCES):
-        close = getattr(resource, "close", None)
-        if callable(close):
-            close()
-
-
-atexit.register(_close_resources)
 
 
 def _load_gate_policy(
@@ -80,7 +70,14 @@ def _load_gate_policy(
     return approved.policy
 
 
-def make_heldout_request() -> HeldOutBaselineRequest:
+@contextmanager
+def make_heldout_request() -> Iterator[HeldOutBaselineRequest]:
+    """Hold the repository and backends open for exactly one baseline run."""
+    with ExitStack() as resources:
+        yield _build_heldout_request(resources)
+
+
+def _build_heldout_request(resources: ExitStack) -> HeldOutBaselineRequest:
     """Assemble all pinned channel identities before executing held-out cases."""
     settings = get_settings()
     dataset = load_dataset(_DATASET_MANIFEST)
@@ -102,13 +99,13 @@ def make_heldout_request() -> HeldOutBaselineRequest:
         source_dir=settings.storage.source_dir,
         apply_migrations=False,
     )
-    _OPEN_RESOURCES.append(repository)
+    resources.callback(repository.close)
     relationships = lexical_relationship_snapshot(repository, corpus_id, corpus_version)
     embedder = QwenEmbeddingBackend(settings.models.embedder_path)
-    _OPEN_RESOURCES.append(embedder)
+    resources.callback(embedder.close)
     embedder.load()
     reranker = LocalRerankerBackend(settings.models.reranker_path)
-    _OPEN_RESOURCES.append(reranker)
+    resources.callback(reranker.close)
     reranker.load()
 
     lexical = LocalLexicalEvaluationAdapter(
