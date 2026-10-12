@@ -1,4 +1,4 @@
-"""EVAL-04 metric aggregation, report repeatability, and logging privacy."""
+"""Held-out metric aggregation, report repeatability, and logging privacy."""
 
 import hashlib
 import json
@@ -374,6 +374,10 @@ def test_report_serialisation_rendering_and_log_are_repeatable_and_payload_free(
     assert not json_bytes.endswith(b"\n\n")
     assert b"What result is recorded for benchmark item" not in json_bytes
     assert "synthetic private evidence text" not in markdown
+    # The crowding evidence must be shown, not only computed, because it is
+    # the trigger condition for family-aware diversity.
+    assert "## Duplicate and family crowding" in markdown
+    assert "Family repeats" in markdown
     payload = json.loads(json_bytes)
     assert payload["gate"]["outcome"] == "pass"
     assert payload["case_count"] == 12
