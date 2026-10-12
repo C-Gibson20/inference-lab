@@ -48,7 +48,7 @@ PASSAGE_RECALL_POLICY_VERSION: Final[str] = "1.0.0"
 DUPLICATE_POLICY_VERSION: Final[str] = "1.0.0"
 FAMILY_POLICY_VERSION: Final[str] = "1.0.0"
 AGGREGATION_POLICY_VERSION: Final[str] = "1.0.0"
-PUBLISHED_ARTIFACT_NAMES: Final[tuple[str, ...]] = (
+PUBLISHED_ARTEFACT_NAMES: Final[tuple[str, ...]] = (
     "run.json",
     "cases.jsonl",
     "report.json",
@@ -1368,7 +1368,7 @@ class RetrievalEvaluationRunIdentity:
 
 
 @dataclass(frozen=True, slots=True)
-class PublishedArtifact:
+class PublishedArtefact:
     """Checksum and size for one required published run artefact."""
 
     name: str
@@ -1380,7 +1380,7 @@ class PublishedArtifact:
 
     def _validate(self) -> None:
         """Validate the bounded artefact inventory entry."""
-        if self.name not in PUBLISHED_ARTIFACT_NAMES:
+        if self.name not in PUBLISHED_ARTEFACT_NAMES:
             raise RetrievalEvaluationContractError(
                 "name is not a required retrieval-evaluation artefact."
             )
@@ -1402,7 +1402,7 @@ class PublishedRetrievalEvaluationManifest:
 
     run_fingerprint: str
     result_digest: str
-    artefacts: tuple[PublishedArtifact, ...]
+    artefacts: tuple[PublishedArtefact, ...]
     schema_version: str = RETRIEVAL_EVALUATION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -1414,13 +1414,13 @@ class PublishedRetrievalEvaluationManifest:
         _require_checksum(self.result_digest, "result_digest")
         _require_semver(self.schema_version, "schema_version")
         artefacts = cast(
-            tuple[PublishedArtifact, ...],
+            tuple[PublishedArtefact, ...],
             _require_tuple(self.artefacts, "artefacts"),
         )
-        if any(not isinstance(artefact, PublishedArtifact) for artefact in artefacts):
-            raise TypeError("artefacts must contain only PublishedArtifact values.")
+        if any(not isinstance(artefact, PublishedArtefact) for artefact in artefacts):
+            raise TypeError("artefacts must contain only PublishedArtefact values.")
         names = tuple(artefact.name for artefact in artefacts)
-        if names != PUBLISHED_ARTIFACT_NAMES:
+        if names != PUBLISHED_ARTEFACT_NAMES:
             raise RetrievalEvaluationContractError(
                 "artefacts must contain the required files in canonical order."
             )

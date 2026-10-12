@@ -305,7 +305,7 @@ def test_held_out_baseline_runs_every_channel_and_republishes_identically(
         "report.md",
     ]
     assert manifest.run_fingerprint == report.contract.fingerprint
-    for artefact in manifest.artifacts:
+    for artefact in manifest.artefacts:
         body = (destination / artefact.name).read_bytes()
         assert artefact.size_bytes == len(body)
         assert artefact.checksum == f"sha256:{hashlib.sha256(body).hexdigest()}"

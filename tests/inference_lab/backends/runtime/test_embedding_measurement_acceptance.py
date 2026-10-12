@@ -87,7 +87,7 @@ def test_benchmark_reports_pinned_memory_and_safe_repeatable_metadata(
     assert inputs["backend_internal_batch_size"] == 2
     model = report["model"]
     assert isinstance(model, dict)
-    assert model["artifact_identity_verified"] is True
+    assert model["artefact_identity_verified"] is True
     assert model["model_revision"] == manifest["revision"]
     profile = report["embedding_profile"]
     assert isinstance(profile, dict)

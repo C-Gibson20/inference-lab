@@ -168,7 +168,7 @@ def run_benchmark(
                 "backend_name": backend.metadata.backend_name,
                 "model_name": backend.metadata.model_name,
                 "model_revision": backend.metadata.model_revision,
-                "artifact_identity_verified": True,
+                "artefact_identity_verified": True,
                 "output_dimensions": output_dimensions,
             },
             "acceptance": {

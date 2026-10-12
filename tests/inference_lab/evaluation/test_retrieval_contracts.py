@@ -6,14 +6,14 @@ from typing import Callable, TypeVar
 import pytest
 
 from inference_lab.evaluation import (
-    PUBLISHED_ARTIFACT_NAMES,
+    PUBLISHED_ARTEFACT_NAMES,
     AggregateMetric,
     AnswerClaim,
     DuplicateDiagnostics,
     DuplicateRelationshipSnapshot,
     EvidenceReference,
     MetricFraction,
-    PublishedArtifact,
+    PublishedArtefact,
     PublishedRetrievalEvaluationManifest,
     RetrievalCaseResult,
     RetrievalComponentIdentity,
@@ -251,7 +251,7 @@ def test_case_result_preserves_empty_partial_and_failed_semantics() -> None:
             hits=(),
             failures=(
                 # The invalid state is intentionally checked at the evaluator boundary.
-                # It must not be confused with RET-01's valid empty result.
+                # It must not be confused with a valid empty retrieval result.
                 SanitisedFailure(failure.category, failure.retryable, failure.channel),
             ),
         )
@@ -324,11 +324,11 @@ def test_run_identity_and_published_manifest_are_configuration_sensitive() -> No
         run_fingerprint=base.run_fingerprint or checksum("run"),
         result_digest=checksum("result"),
         artefacts=tuple(
-            PublishedArtifact(name, index + 1, checksum(name))
-            for index, name in enumerate(PUBLISHED_ARTIFACT_NAMES)
+            PublishedArtefact(name, index + 1, checksum(name))
+            for index, name in enumerate(PUBLISHED_ARTEFACT_NAMES)
         ),
     )
-    assert tuple(item.name for item in manifest.artefacts) == PUBLISHED_ARTIFACT_NAMES
+    assert tuple(item.name for item in manifest.artefacts) == PUBLISHED_ARTEFACT_NAMES
 
 
 def test_aggregate_reconciles_counts_and_metric_applicability() -> None:

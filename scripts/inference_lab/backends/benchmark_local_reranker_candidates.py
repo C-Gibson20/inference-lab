@@ -33,7 +33,7 @@ _FIXTURE = (
     Path(__file__).parents[3] / "benchmarks" / "run-05" / "candidate-fixture.jsonl"
 )
 _MANIFEST = (
-    Path(__file__).parents[3] / "benchmarks" / "run-05" / "artifact-manifest.json"
+    Path(__file__).parents[3] / "benchmarks" / "run-05" / "artefact-manifest.json"
 )
 _MAX_ENCODER_TOKENS = 512
 _MAX_DECODER_BODY_TOKENS = 1024
@@ -250,14 +250,14 @@ def _sha256(path: Path) -> str:
 def _manifest_entry(manifest: dict[str, Any], spec: ModelSpec) -> dict[str, Any]:
     entry = manifest.get(spec.name)
     if not isinstance(entry, dict) or entry.get("revision") != spec.revision:
-        raise ValueError("artifact manifest does not match the pinned candidate")
+        raise ValueError("artefact manifest does not match the pinned candidate")
     files = entry.get("files")
     if not isinstance(files, dict) or not files:
-        raise ValueError("artifact manifest has no file inventory")
+        raise ValueError("artefact manifest has no file inventory")
     return entry
 
 
-def _verify_artifacts(model_dir: Path, entry: dict[str, Any]) -> None:
+def _verify_artefacts(model_dir: Path, entry: dict[str, Any]) -> None:
     """Verify every locally acquired model file against the checked-in manifest."""
     expected = entry["files"]
     actual_files = {
@@ -457,7 +457,7 @@ def _run_one(
     model: torch.nn.Module | None = None
     tokenizer: _Tokenizer | None = None
     try:
-        _verify_artifacts(model_dir, manifest_entry)
+        _verify_artefacts(model_dir, manifest_entry)
         started = time.perf_counter_ns()
         tokenizer, model = _decode_model(spec, model_dir)
         load_ms = (time.perf_counter_ns() - started) / 1_000_000
@@ -589,7 +589,7 @@ def run_pilot(
             "candidate_pairs_per_pass": sum(len(case.candidates) for case in cases),
             "source": "synthetic fixed fixture; no private corpus passages",
         },
-        "artifact_manifest_sha256": _sha256(manifest_path),
+        "artefact_manifest_sha256": _sha256(manifest_path),
         "environment": {
             "python_version": platform.python_version(),
             "platform": platform.platform(),

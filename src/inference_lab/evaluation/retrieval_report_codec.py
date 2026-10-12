@@ -23,7 +23,7 @@ from inference_lab.evaluation.retrieval_contracts import (
     AggregateMetric,
     DuplicateDiagnostics,
     MetricFraction,
-    PublishedArtifact,
+    PublishedArtefact,
     PublishedRetrievalEvaluationManifest,
     RecallMatchRanks,
     RecallMetric,
@@ -59,7 +59,7 @@ from inference_lab.retrieval import (
 
 
 @dataclass(frozen=True, slots=True)
-class RetrievalEvaluationRunArtifact:
+class RetrievalEvaluationRunArtefact:
     """Decoded `run.json` identity and result linkage."""
 
     identity: RetrievalEvaluationRunIdentity
@@ -70,7 +70,7 @@ class RetrievalEvaluationRunArtifact:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate the run artifact fields."""
+        """Validate the run artefact fields."""
         if not isinstance(self.identity, RetrievalEvaluationRunIdentity):
             raise TypeError("identity must be a RetrievalEvaluationRunIdentity.")
         if not isinstance(self.result_digest, str) or not is_sha256_checksum(
@@ -524,43 +524,43 @@ def retrieval_result_digest(run: RetrievalEvaluationRunResult) -> str:
     )
 
 
-def serialise_run_artifact(
+def serialise_run_artefact(
     identity: RetrievalEvaluationRunIdentity,
     result_digest: str,
     limitations: tuple[str, ...] = (),
 ) -> bytes:
     """Return canonical UTF-8 bytes for `run.json`."""
-    artifact = RetrievalEvaluationRunArtifact(identity, result_digest, limitations)
+    artefact = RetrievalEvaluationRunArtefact(identity, result_digest, limitations)
     payload = {
-        "identity": artifact.identity.as_dict(),
-        "result_digest": artifact.result_digest,
-        "limitations": list(artifact.limitations),
+        "identity": artefact.identity.as_dict(),
+        "result_digest": artefact.result_digest,
+        "limitations": list(artefact.limitations),
     }
     return canonical_json_bytes(cast(JsonObject, payload))
 
 
-def deserialise_run_artifact(data: bytes) -> RetrievalEvaluationRunArtifact:
+def deserialise_run_artefact(data: bytes) -> RetrievalEvaluationRunArtefact:
     """Decode and strictly validate canonical `run.json` bytes."""
     payload = _canonical_object(data)
     require_exact_json_fields(
         payload,
         frozenset({"identity", "result_digest", "limitations"}),
     )
-    artifact = RetrievalEvaluationRunArtifact(
+    artefact = RetrievalEvaluationRunArtefact(
         identity=_decode_run_identity(_object(payload["identity"])),
         result_digest=_string(payload["result_digest"]),
         limitations=_validate_limitations(payload["limitations"]),
     )
     if (
-        serialise_run_artifact(
-            artifact.identity,
-            artifact.result_digest,
-            artifact.limitations,
+        serialise_run_artefact(
+            artefact.identity,
+            artefact.result_digest,
+            artefact.limitations,
         )
         != data
     ):
-        raise ValueError("run artifact is not canonical.")
-    return artifact
+        raise ValueError("run artefact is not canonical.")
+    return artefact
 
 
 def serialise_case_results(run: RetrievalEvaluationRunResult) -> bytes:
@@ -694,7 +694,7 @@ def deserialise_retrieval_manifest(
             artefact, frozenset({"name", "size_bytes", "checksum"})
         )
         artefacts.append(
-            PublishedArtifact(
+            PublishedArtefact(
                 name=_string(artefact["name"]),
                 size_bytes=_integer(artefact["size_bytes"]),
                 checksum=_string(artefact["checksum"]),

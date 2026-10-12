@@ -264,7 +264,7 @@ def test_backend_orders_complete_scores_stably_batches_and_applies_top_k(
     assert tuple(item.rank for item in all_results.scored_candidates) == (1, 2, 3, 4, 5)
 
 
-def test_local_backend_adapter_preserves_ret06_source_provenance(
+def test_local_backend_adapter_preserves_reranked_source_provenance(
     loaded_backend: _LoadedBackend,
 ) -> None:
     corpus_id = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
@@ -525,7 +525,7 @@ def test_pinned_artefacts_agree_with_the_committed_candidate_manifest() -> None:
             Path(__file__).parents[4]
             / "benchmarks"
             / "run-05"
-            / "artifact-manifest.json"
+            / "artefact-manifest.json"
         ).read_text(encoding="utf-8")
     )
     candidate = manifest[reranker._MODEL_NAME.removeprefix("BAAI/")]
