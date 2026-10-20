@@ -10,7 +10,11 @@ from uuid import uuid4
 import structlog
 
 from inference_lab._clock import utc_now
-from inference_lab.profiling.contracts import BaselineStage
+from inference_lab.profiling.contracts import (
+    BaselineStage,
+    StageCondition,
+    validate_stage_condition,
+)
 from inference_lab.profiling.emission import (
     ProfilingSink,
     StructuredLogSink,
@@ -36,7 +40,7 @@ class ProfilingContext:
     run_id: str
     sink: ProfilingSink
     request_id: str | None = None
-    condition: str = "uncontrolled"
+    condition: StageCondition = "uncontrolled"
     clock: Clock = time.monotonic_ns
     observed_at_factory: ObservationTimeFactory = utc_now
     module: str = "inference_lab"
@@ -55,8 +59,7 @@ class ProfilingContext:
             not isinstance(self.request_id, str) or not self.request_id
         ):
             raise ValueError("request_id must be a non-empty string or None.")
-        if self.condition not in {"cold", "warm", "uncontrolled"}:
-            raise ValueError("condition must be cold, warm, or uncontrolled.")
+        validate_stage_condition(self.condition)
         if not callable(self.clock):
             raise TypeError("clock must be callable.")
         if not callable(self.observed_at_factory):
@@ -74,7 +77,7 @@ class ProfilingContext:
         run_id_factory: RunIdFactory = _production_run_id,
         sink: ProfilingSink | None = None,
         request_id: str | None = None,
-        condition: str = "uncontrolled",
+        condition: StageCondition = "uncontrolled",
         clock: Clock = time.monotonic_ns,
         observed_at_factory: ObservationTimeFactory = utc_now,
     ) -> Self:
@@ -116,7 +119,7 @@ class ProfilingContext:
             pipeline_stage=stage,
             stage_id=stage_id,
             sink=self.sink,
-            condition=self.condition,  # type: ignore[arg-type]
+            condition=self.condition,
             clock=self.clock,
             observed_at_factory=self.observed_at_factory,
             run_id=self.run_id,
