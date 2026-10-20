@@ -496,7 +496,6 @@ def plan_baseline_membership(
             items_processed=len(outcomes),
             records_emitted=len(plan.changes),
         )
-    assert plan is not None
     return plan
 
 
@@ -619,5 +618,4 @@ def apply_baseline_membership_plan(
             items_processed=len(plan.changes),
             records_emitted=len(persisted),
         )
-    assert persisted is not None
     return persisted

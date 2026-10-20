@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from dataclasses import replace
 from types import TracebackType
-from typing import Protocol, Self, runtime_checkable
+from typing import Literal, Protocol, Self, runtime_checkable
 
 from inference_lab.provenance import (
     ConfigurationIdentity,
@@ -216,7 +216,7 @@ class CorpusSnapshot(Protocol):
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Close the snapshot while preserving any primary exception."""
         ...
 

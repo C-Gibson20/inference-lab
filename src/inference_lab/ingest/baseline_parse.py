@@ -394,7 +394,6 @@ def _publish_parse(
         content = content_result
         source_stage.set_counts(items_processed=1, records_emitted=1)
 
-    assert content is not None
     parser_input: ParserInput | None = None
     outcome: ParseOutcome | None = None
     with profiling.observed_stage(
@@ -421,8 +420,6 @@ def _publish_parse(
         outcome = _run_parser(parser, parser_input, settings=settings)
         parse_stage.set_counts(items_processed=1, records_emitted=1)
 
-    assert parser_input is not None
-    assert outcome is not None
     reconstructed: ReconstructedParseOutcome | None = None
     with profiling.observed_stage(
         stage="parse_persistence",
@@ -463,7 +460,6 @@ def _publish_parse(
             request,
             require_existing=True,
         )
-        assert reconstructed is not None
         persistence_stage.set_counts(items_processed=1, records_emitted=1)
     assert reconstructed is not None
     return _result_from_reconstructed(

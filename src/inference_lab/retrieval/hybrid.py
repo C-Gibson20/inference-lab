@@ -238,7 +238,6 @@ def execute_hybrid_retrieval(
                 FailureCategory.INVALID_CHANNEL_RESPONSE,
             )
 
-        assert result is not None
         stage.set_counts(
             items_processed=sum(channel_counts.values()),
             records_emitted=len(result.hits),
@@ -247,7 +246,6 @@ def execute_hybrid_retrieval(
         if failure is not None:
             stage.mark_failure(failure)
 
-    assert result is not None
     _log_fusion_outcome(
         result,
         corpus_id=corpus_id,

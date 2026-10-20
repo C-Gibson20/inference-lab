@@ -214,7 +214,6 @@ def publish_baseline_generations(
                 first_generation.corpus_version,
             )
             stage.set_counts(items_processed=len(prepared), records_emitted=1)
-    assert published is not None
     return published
 
 
@@ -340,7 +339,6 @@ def build_and_publish_baseline_lexical_generation(
             parent_stage_id=parent_stage_id,
             profiling_identity=profiling_identity,
         )
-    assert published is not None
     return published
 
 
