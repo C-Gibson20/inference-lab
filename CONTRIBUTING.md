@@ -44,7 +44,11 @@ other sensitive content.
 
 ## Pull requests
 
-Keep changes focused, describe the evidence for behavior or performance claims,
-and include tests or evaluation updates when applicable. Before requesting
-review, run the complete validation commands and confirm that local deployment
-data remains local.
+Keep changes focused, describe the evidence for behaviour or performance
+claims, and include tests or evaluation updates when applicable. When a
+change necessarily fixes something owned by another backlog item, say so in
+the description instead of letting it land silently: an unrecorded
+cross-item fix is invisible to the item that owns it, and to anyone later
+asking when the behaviour changed. Before requesting review, run the
+complete validation commands and confirm that local deployment data remains
+local.
