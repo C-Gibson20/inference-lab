@@ -18,7 +18,7 @@ from inference_lab.retrieval import (
     DenseIndexEntry,
     DenseVector,
     dense_retrieval,
-    dense_store,
+    dense_store_reader,
     open_dense_generation,
 )
 from tests.inference_lab.retrieval.test_dense_store import (
@@ -58,7 +58,7 @@ def _hydrations_per_query(
     ) as generation:
         assert generation.manifest.entry_count == size
         hydrated = 0
-        original = dense_store._entry_from_row
+        original = dense_store_reader._entry_from_row
 
         def counting_entry_from_row(
             row: sqlite3.Row, dimensions: int
@@ -67,7 +67,9 @@ def _hydrations_per_query(
             hydrated += 1
             return original(row, dimensions)
 
-        monkeypatch.setattr(dense_store, "_entry_from_row", counting_entry_from_row)
+        monkeypatch.setattr(
+            dense_store_reader, "_entry_from_row", counting_entry_from_row
+        )
         matches = generation.search(DenseVector((1.0, 2.0, 3.0)), limit=_QUERY_LIMIT)
         monkeypatch.undo()
     return hydrated, len(matches)

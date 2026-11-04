@@ -38,7 +38,7 @@ from inference_lab.retrieval import (
     DenseIndexCompatibility,
     DenseVector,
     build_dense_generation,
-    dense_store,
+    dense_store_builder,
     open_dense_generation,
     select_dense_parent_reference,
 )
@@ -572,7 +572,7 @@ def test_embedding_reports_bounded_progress_without_candidate_text(
 ) -> None:
     # Embedding writes nothing until the whole corpus is done, so a long build
     # is otherwise unobservable between stage start and completion.
-    monkeypatch.setattr(dense_store, "_EMBED_PROGRESS_CHUNKS", 1)
+    monkeypatch.setattr(dense_store_builder, "_EMBED_PROGRESS_CHUNKS", 1)
     embedder = _DeterministicEmbedder()
     source = _source(
         (
