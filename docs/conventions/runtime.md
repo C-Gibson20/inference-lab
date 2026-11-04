@@ -272,6 +272,26 @@ deployment runs against a fixed 24GB budget.
 fixed project-owned message describing the rejected condition. Messages never
 carry request text, candidate content, or dependency detail.
 
+**Inference device and dtype.** Both backends load and run on `cpu` in
+`float32`, and both record exactly that in their compatibility profile. This
+is the planned interim, not a limitation to work around: the build order
+reaches a working retrieval stack first and concentrates GPU scheduling,
+residency, and VRAM accounting in the hardware-aware runtime phase, whose
+residency work depends on these backends already existing. A backend therefore
+reports the device and dtype it used; it does not choose them, and neither
+exposes a device or dtype input until that phase adds one with measurements
+behind it.
+
+Two consequences follow, and both are expected rather than defects. Latency,
+throughput, and memory figures recorded before that phase are **CPU
+baselines** and are not comparable with post-migration numbers; they should be
+read as evidence about correctness and relative cost, not as the deployment's
+performance. And because `device_type` and `inference_dtype` are part of the
+embedding profile inside the dense index's `configuration_digest`, moving to
+GPU or to a narrower dtype changes every dense generation's identity and
+requires a full rebuild. Batch that rebuild with the other identity-affecting
+changes rather than paying for it more than once.
+
 ## Scope boundary
 
 The runtime contract layer includes the checked-in, CPU-only local mechanics
