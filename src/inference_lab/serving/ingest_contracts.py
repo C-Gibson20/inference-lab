@@ -135,6 +135,13 @@ class ServingIngestRequest:
 
     def _validate(self) -> None:
         """Validate the serving request before any local state is changed."""
+        self._validate_corpus_target()
+        self._validate_component_inputs()
+        self._validate_chunk_identity()
+        self._validate_discovery_inputs()
+
+    def _validate_corpus_target(self) -> None:
+        """Require a coherent corpus and the versions the run moves between."""
         if not isinstance(self.corpus_id, CorpusId):
             raise TypeError("corpus_id must be a CorpusId.")
         if not isinstance(self.discovery_request, DiscoveryRequest):
@@ -154,6 +161,9 @@ class ServingIngestRequest:
             raise ValueError(
                 "proposed_corpus_version must differ from expected_corpus_version."
             )
+
+    def _validate_component_inputs(self) -> None:
+        """Require the chunking policy and a matched dense embedder pairing."""
         if not isinstance(self.configuration_identity, ConfigurationIdentity):
             raise TypeError("configuration_identity must be a ConfigurationIdentity.")
         if not isinstance(self.chunking_policy, ChunkingPolicy):
@@ -176,6 +186,9 @@ class ServingIngestRequest:
             and self.dense_compatibility.model_metadata != self.dense_embedder.metadata
         ):
             raise ValueError("dense_compatibility must match dense_embedder metadata.")
+
+    def _validate_chunk_identity(self) -> None:
+        """Require the declared identity to match the chunk inputs exactly."""
         if not isinstance(self.tokeniser, ChunkTokeniser):
             raise TypeError("tokeniser must implement ChunkTokeniser.")
         if not isinstance(self.parser_version, type(CURRENT_PARSER_VERSION)):
@@ -193,6 +206,8 @@ class ServingIngestRequest:
         if self.configuration_identity != expected_configuration_identity:
             raise ValueError("configuration_identity does not match chunk inputs.")
 
+    def _validate_discovery_inputs(self) -> None:
+        """Require the registries, filesystems, and allocator discovery needs."""
         if not isinstance(self.excluded_paths, tuple):
             raise TypeError("excluded_paths must be a tuple.")
         if any(not isinstance(path, Path) for path in self.excluded_paths):

@@ -167,6 +167,12 @@ class MemoryMeasurement:
 
     def _validate(self) -> None:
         """Validate measurement types, units, identity, and status rules."""
+        self._validate_subject()
+        self._validate_status_and_value()
+        self._validate_contribution()
+
+    def _validate_subject(self) -> None:
+        """Require the identifiers and the space the measurement describes."""
         _validate_safe_identifier(self.measurement_id, "measurement_id")
         _validate_safe_identifier(self.component_id, "component_id")
         if not isinstance(self.component_role, MemoryComponentRole):
@@ -179,6 +185,9 @@ class MemoryMeasurement:
             raise TypeError("memory_space must be a MemorySpace")
         if self.device_id is not None:
             _validate_safe_identifier(self.device_id, "device_id")
+
+    def _validate_status_and_value(self) -> None:
+        """Require a status the recorded value and device agree with."""
         if not isinstance(self.status, str):
             raise TypeError("status must be a string")
         if self.status not in MEASUREMENT_STATUSES:
@@ -195,6 +204,9 @@ class MemoryMeasurement:
             and self.status == "measured"
         ):
             raise ValueError("measured accelerator memory must identify its device")
+
+    def _validate_contribution(self) -> None:
+        """Require a coherent roll-up relationship and observation time."""
         if not isinstance(self.adapter, MemoryAdapterIdentity):
             raise TypeError("adapter must be MemoryAdapterIdentity")
         if not isinstance(self.contribution_kind, ContributionKind):

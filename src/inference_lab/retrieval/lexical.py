@@ -177,6 +177,13 @@ class LexicalIndexConfiguration:
 
     def _validate(self) -> None:
         """Validate all result-affecting lexical choices."""
+        self._validate_engine()
+        self._validate_analysis_policy()
+        self._validate_bm25_parameters()
+        self._validate_score_exposure()
+
+    def _validate_engine(self) -> None:
+        """Require a supported engine, revision, and index schema version."""
         _validate_slug(self.engine, "engine")
         if not isinstance(self.engine_revision, str) or not self.engine_revision:
             raise InvalidLexicalContractError("engine_revision must be non-empty.")
@@ -186,6 +193,9 @@ class LexicalIndexConfiguration:
         }:
             raise InvalidLexicalContractError("unsupported lexical engine revision.")
         _validate_semantic_version(self.index_schema_version, "index_schema_version")
+
+    def _validate_analysis_policy(self) -> None:
+        """Require the tokeniser and the baseline normalisation policies."""
         if not isinstance(self.fts_tokenizer, str) or not self.fts_tokenizer:
             raise InvalidLexicalContractError("fts_tokenizer must be non-empty.")
         if "\x00" in self.fts_tokenizer:
@@ -209,6 +219,9 @@ class LexicalIndexConfiguration:
             raise InvalidLexicalContractError(
                 "identifier_case_policy must use the baseline binary policy."
             )
+
+    def _validate_bm25_parameters(self) -> None:
+        """Require finite BM25 parameters the selected revision permits."""
         if not isinstance(self.bm25_k1, float) or not math.isfinite(self.bm25_k1):
             raise TypeError("bm25_k1 must be a finite float.")
         if self.engine_revision == LEXICAL_ENGINE_REVISION:
@@ -223,6 +236,9 @@ class LexicalIndexConfiguration:
                 raise InvalidLexicalContractError("SQLite FTS5 fixes bm25_b at 0.75.")
         elif not 0 <= self.bm25_b <= 1:
             raise InvalidLexicalContractError("bm25_b must be between zero and one.")
+
+    def _validate_score_exposure(self) -> None:
+        """Require positive column weights and named score fields."""
         if not isinstance(self.column_weights, tuple):
             raise TypeError("column_weights must be a tuple.")
         if self.engine_revision == LEXICAL_ENGINE_REVISION:
