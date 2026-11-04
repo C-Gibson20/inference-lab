@@ -13,35 +13,19 @@ from inference_lab.evaluation.retrieval_execution import (
 )
 from inference_lab.profiling import ProfilingContext
 from inference_lab.provenance import CorpusId, CorpusVersionId
-from inference_lab.retrieval import FusionPolicy, RetrievalLimit, RetrievalQuery
+from inference_lab.retrieval import (
+    FusionPolicy,
+    InvalidRetrievalContractError,
+    RetrievalLimit,
+    RetrievalQuery,
+)
 from inference_lab.retrieval.reranking import (
     EvidenceCount,
     RerankCandidateLimit,
     RerankingIdentity,
     execute_reranking,
+    reranking_identity_for_backend,
 )
-
-
-def _reranking_identity(
-    backend: RerankerBackend,
-    evidence_count: EvidenceCount,
-    candidate_limit: RerankCandidateLimit,
-) -> RerankingIdentity:
-    """Capture the reranker and limit identity without deployment paths."""
-    metadata = backend.metadata
-    if metadata.preprocessing_profile_version is None:
-        raise RetrievalEvaluationExecutionError("invalid_reranker_identity")
-    try:
-        return RerankingIdentity(
-            backend_name=metadata.backend_name,
-            model_name=metadata.model_name,
-            model_revision=metadata.model_revision,
-            preprocessing_profile_version=metadata.preprocessing_profile_version,
-            evidence_count=evidence_count.value,
-            candidate_limit=candidate_limit.value,
-        )
-    except (TypeError, ValueError):
-        raise RetrievalEvaluationExecutionError("invalid_reranker_identity") from None
 
 
 class LocalRerankedEvaluationAdapter:
@@ -67,9 +51,14 @@ class LocalRerankedEvaluationAdapter:
         self._reranker = reranker
         self._evidence_count = evidence_count
         self._candidate_limit = candidate_limit
-        self._reranking_identity = _reranking_identity(
-            reranker, evidence_count, candidate_limit
-        )
+        try:
+            self._reranking_identity = reranking_identity_for_backend(
+                reranker, evidence_count, candidate_limit
+            )
+        except InvalidRetrievalContractError:
+            raise RetrievalEvaluationExecutionError(
+                "invalid_reranker_identity"
+            ) from None
         fused_identity = fused_adapter.system_identity
         identity_payload = {
             "fused_system_identity": fused_identity.as_dict(),

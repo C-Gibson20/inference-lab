@@ -45,6 +45,9 @@ BaselinePublicationOutcome: TypeAlias = (
     CommitCorpusUpdateOutcome | NoCorpusChangeOutcome
 )
 BaselineChunkPublicationOutcome: TypeAlias = BaselinePublicationOutcome
+# Retrieval owns the lexical index and defines its ComponentKind, but
+# retrieval imports ingest, so importing it here would close a cycle. The
+# equality of the two constants is asserted by the publication tests.
 BASELINE_LEXICAL_COMPONENT_KIND = ComponentKind("lexical-index")
 BASELINE_LEXICAL_REQUIRED_COMPONENT_KINDS = (
     BASELINE_CHUNK_COMPONENT_KIND,

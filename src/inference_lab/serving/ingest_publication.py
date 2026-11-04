@@ -388,7 +388,7 @@ class ServingPublicationCoordinator:
             if not parent.has_required_components(request.required_component_kinds):
                 return False
             proposed_lexical = ComponentGenerationReference(
-                component_kind=ComponentKind(LEXICAL_COMPONENT_KIND),
+                component_kind=LEXICAL_COMPONENT_KIND,
                 generation_id=derive_lexical_generation_id(
                     request.corpus_id,
                     request.proposed_corpus_version,

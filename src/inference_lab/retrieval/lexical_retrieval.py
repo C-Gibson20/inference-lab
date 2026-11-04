@@ -19,7 +19,6 @@ from inference_lab.retrieval.evidence import (
     RetrievalCandidate,
 )
 from inference_lab.retrieval.lexical import (
-    LEXICAL_COMPONENT_KIND,
     LexicalError,
     LexicalFailureCategory,
     LexicalMatchMode,
@@ -32,6 +31,7 @@ from inference_lab.retrieval.lexical_store import (
     map_lexical_failure,
     open_lexical_generation,
 )
+from inference_lab.retrieval.lexical_store_models import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.metadata_adapter import (
     resolve_lexical_candidate_metadata,
 )
@@ -50,11 +50,12 @@ from inference_lab.retrieval.results import (
 )
 from inference_lab.retrieval.values import RetrievalChannel
 from inference_lab.storage import (
-    ComponentGenerationState,
     CorpusSnapshot,
     CorruptStorageError,
     MetadataRepository,
     StorageError,
+    generation_matches_reference,
+    select_ready_component_generation,
 )
 
 
@@ -321,19 +322,13 @@ def _execute_lexical_retrieval(
                     status=ResultStatus.FAILED,
                     failures=(),
                 )
-            references = tuple(
-                generation
-                for generation in selected_snapshot.manifest.component_generations
-                if generation.component_kind.as_str() == LEXICAL_COMPONENT_KIND
+            reference = select_ready_component_generation(
+                selected_snapshot.manifest,
+                LEXICAL_COMPONENT_KIND,
+                corpus_id=corpus_id,
+                corpus_version=query.corpus_version,
             )
-            if len(references) != 1:
-                return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
-            reference = references[0]
-            if (
-                reference.state is not ComponentGenerationState.READY
-                or reference.corpus_id != corpus_id
-                or reference.corpus_version != query.corpus_version
-            ):
+            if reference is None:
                 return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
 
             try:
@@ -343,22 +338,9 @@ def _execute_lexical_retrieval(
                     else open_lexical_generation(index_dir, reference.generation_id)
                 )
                 with generation_context as selected_generation:
-                    if (
-                        selected_generation.manifest.corpus_id != corpus_id
-                        or selected_generation.manifest.corpus_version
-                        != query.corpus_version
-                        or selected_generation.manifest.generation_id
-                        != reference.generation_id
-                        or selected_generation.manifest.implementation
-                        != reference.implementation
-                        or selected_generation.manifest.format_version
-                        != reference.format_version
-                        or selected_generation.manifest.contract_version
-                        != reference.contract_version
-                        or selected_generation.manifest.configuration_digest
-                        != reference.configuration_digest
-                        or selected_generation.manifest.source_manifest_digest
-                        != reference.source_manifest_digest
+                    if not generation_matches_reference(
+                        reference,
+                        selected_generation.manifest.component_generation(),
                     ):
                         return _failed_result(
                             query,

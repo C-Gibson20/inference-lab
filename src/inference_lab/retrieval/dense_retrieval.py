@@ -47,12 +47,12 @@ from inference_lab.retrieval.results import (
 )
 from inference_lab.retrieval.values import RetrievalChannel
 from inference_lab.storage import (
-    ComponentGenerationReference,
-    ComponentGenerationState,
     CorpusSnapshot,
     CorruptStorageError,
     MetadataRepository,
     StorageError,
+    generation_matches_reference,
+    select_ready_component_generation,
 )
 
 
@@ -217,19 +217,13 @@ def _execute_dense_retrieval(
                     failures=(),
                 )
 
-            references = tuple(
-                reference
-                for reference in selected_snapshot.manifest.component_generations
-                if reference.component_kind == DENSE_COMPONENT_KIND
+            reference = select_ready_component_generation(
+                selected_snapshot.manifest,
+                DENSE_COMPONENT_KIND,
+                corpus_id=corpus_id,
+                corpus_version=query.corpus_version,
             )
-            if len(references) != 1:
-                return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
-            reference = references[0]
-            if (
-                reference.state is not ComponentGenerationState.READY
-                or reference.corpus_id != corpus_id
-                or reference.corpus_version != query.corpus_version
-            ):
+            if reference is None:
                 return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
 
             generation_context = (
@@ -238,11 +232,9 @@ def _execute_dense_retrieval(
                 else open_dense_generation(index_dir, reference.generation_id)
             )
             with generation_context as selected_generation:
-                if selected_generation is None or not _generation_matches_reference(
-                    selected_generation,
+                if selected_generation is None or not generation_matches_reference(
                     reference,
-                    corpus_id,
-                    query,
+                    selected_generation.manifest.component_generation(),
                 ):
                     return _failed_result(
                         query,
@@ -345,29 +337,6 @@ def _is_snapshot_reader(snapshot: CorpusSnapshot) -> bool:
     ) and all(
         hasattr(snapshot, property_name)
         for property_name in ("corpus_id", "version", "manifest")
-    )
-
-
-def _generation_matches_reference(
-    generation: DenseGeneration,
-    reference: ComponentGenerationReference,
-    corpus_id: CorpusId,
-    query: RetrievalQuery,
-) -> bool:
-    """Require the opened immutable generation to match its ready reference."""
-    return (
-        generation.manifest.corpus_id == corpus_id
-        and generation.manifest.corpus_version == query.corpus_version
-        and generation.manifest.generation_id == reference.generation_id
-        and generation.manifest.compatibility.configuration.implementation
-        == reference.implementation
-        and generation.manifest.compatibility.configuration.format_version
-        == reference.format_version
-        and generation.manifest.compatibility.configuration.contract_version
-        == reference.contract_version
-        and generation.manifest.configuration_digest == reference.configuration_digest
-        and generation.manifest.source_manifest_digest
-        == reference.source_manifest_digest
     )
 
 

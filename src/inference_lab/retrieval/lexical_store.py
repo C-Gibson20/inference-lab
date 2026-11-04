@@ -38,9 +38,7 @@ from inference_lab.retrieval.lexical_store_builder import (
     _reuse_existing_generation,
 )
 from inference_lab.retrieval.lexical_store_models import (
-    LEXICAL_COMPONENT_KIND as _LEXICAL_COMPONENT_KIND,
-)
-from inference_lab.retrieval.lexical_store_models import (
+    LEXICAL_COMPONENT_KIND,
     LEXICAL_DATABASE_NAME,
     LEXICAL_DIRECTORY_NAME,
     LEXICAL_MANIFEST_NAME,
@@ -98,18 +96,7 @@ def _component_generation_reference(
     """Return the storage reference represented by one lexical manifest."""
     if not isinstance(manifest, LexicalIndexManifest):
         raise TypeError("manifest must be a LexicalIndexManifest.")
-    return ComponentGenerationReference(
-        component_kind=_LEXICAL_COMPONENT_KIND,
-        generation_id=manifest.generation_id,
-        implementation=manifest.implementation,
-        format_version=manifest.format_version,
-        contract_version=manifest.contract_version,
-        configuration_digest=manifest.configuration_digest,
-        source_manifest_digest=manifest.source_manifest_digest,
-        corpus_id=manifest.corpus_id,
-        corpus_version=manifest.corpus_version,
-        state=ComponentGenerationState.PREPARING,
-    )
+    return manifest.component_generation()
 
 
 class LexicalGenerationParticipant:
@@ -140,7 +127,7 @@ class LexicalGenerationParticipant:
                 "or None."
             )
         if expected_parent_reference is not None and (
-            expected_parent_reference.component_kind != _LEXICAL_COMPONENT_KIND
+            expected_parent_reference.component_kind != LEXICAL_COMPONENT_KIND
             or expected_parent_reference.state is not ComponentGenerationState.READY
             or expected_parent_reference.corpus_id != source_manifest.corpus_id
             or expected_parent_reference.corpus_version
@@ -200,7 +187,7 @@ def select_lexical_parent_reference(
             lexical_references = tuple(
                 generation
                 for generation in snapshot.manifest.component_generations
-                if generation.component_kind == _LEXICAL_COMPONENT_KIND
+                if generation.component_kind == LEXICAL_COMPONENT_KIND
             )
             if len(lexical_references) != 1:
                 raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)

@@ -44,6 +44,7 @@ from inference_lab.settings import (
 )
 from inference_lab.storage import (
     ComponentGenerationState,
+    ComponentKind,
     ContentOrigin,
     MetadataRepository,
     StructuralBlockKind,
@@ -82,7 +83,7 @@ class _Snapshot:
         self.manifest = SimpleNamespace(
             component_generations=(
                 SimpleNamespace(
-                    component_kind=SimpleNamespace(as_str=lambda: "lexical-index"),
+                    component_kind=ComponentKind("lexical-index"),
                     state=ComponentGenerationState.READY,
                     corpus_id=CORPUS_ID,
                     corpus_version=corpus_version,

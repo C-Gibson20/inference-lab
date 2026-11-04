@@ -1,6 +1,7 @@
 """Storage-neutral lifecycle contract for version-pinned corpus readers."""
 
 from collections.abc import Iterator
+from dataclasses import replace
 from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
@@ -8,6 +9,7 @@ from inference_lab.provenance import (
     ConfigurationIdentity,
     ContentHash,
     CorpusId,
+    CorpusVersionId,
     DocumentFamilyId,
     DocumentFamilyMembership,
     DocumentId,
@@ -27,7 +29,13 @@ from inference_lab.storage.parse_records import ParseOutcome
 from inference_lab.storage.parsed_records import ParsedRepresentation
 from inference_lab.storage.source_locations import ResolvedSourceSpan
 from inference_lab.storage.source_records import SourceArtefact
-from inference_lab.storage.versioning import CorpusVersion, CorpusVersionManifest
+from inference_lab.storage.versioning import (
+    ComponentGenerationReference,
+    ComponentGenerationState,
+    ComponentKind,
+    CorpusVersion,
+    CorpusVersionManifest,
+)
 
 
 @runtime_checkable
@@ -205,3 +213,53 @@ class CorpusSnapshot(Protocol):
     def close(self) -> None:
         """Release the owned reader idempotently and prevent further use."""
         ...
+
+
+def generation_matches_reference(
+    reference: ComponentGenerationReference,
+    candidate: ComponentGenerationReference,
+) -> bool:
+    """Compare two component references on every field except lifecycle state.
+
+    Callers build ``candidate`` from a durable manifest to confirm that the
+    artefact they opened is the one a committed version named. Comparing whole
+    references rather than selected fields means a new identity field is
+    covered without revisiting each call site.
+    """
+    if not isinstance(reference, ComponentGenerationReference):
+        raise TypeError("reference must be a ComponentGenerationReference.")
+    if not isinstance(candidate, ComponentGenerationReference):
+        raise TypeError("candidate must be a ComponentGenerationReference.")
+    return replace(reference, state=candidate.state) == candidate
+
+
+def select_ready_component_generation(
+    manifest: CorpusVersionManifest,
+    component_kind: ComponentKind,
+    *,
+    corpus_id: CorpusId,
+    corpus_version: CorpusVersionId,
+) -> ComponentGenerationReference | None:
+    """Return the one ready generation of a kind owned by the pinned version.
+
+    Returns ``None`` when the manifest does not name exactly one ready
+    generation of that kind for the corpus and version the caller pinned, so
+    each caller maps the absence onto its own failure contract.
+    """
+    if not isinstance(component_kind, ComponentKind):
+        raise TypeError("component_kind must be a ComponentKind.")
+    references = tuple(
+        reference
+        for reference in manifest.component_generations
+        if reference.component_kind == component_kind
+    )
+    if len(references) != 1:
+        return None
+    reference = references[0]
+    if (
+        reference.state is not ComponentGenerationState.READY
+        or reference.corpus_id != corpus_id
+        or reference.corpus_version != corpus_version
+    ):
+        return None
+    return reference

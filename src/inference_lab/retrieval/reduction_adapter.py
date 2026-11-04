@@ -12,11 +12,11 @@ from inference_lab.ingest import (
 )
 from inference_lab.provenance import CorpusId, CorpusVersionId, RecordId
 from inference_lab.retrieval.evidence import EvidenceSource
-from inference_lab.retrieval.lexical import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.lexical_store import (
     LexicalGeneration,
     LexicalIndexedChunk,
 )
+from inference_lab.retrieval.lexical_store_models import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.metadata_adapter import resolve_lexical_candidate_metadata
 from inference_lab.retrieval.reduction import (
     EvidenceReductionOutcome,
@@ -30,7 +30,11 @@ from inference_lab.retrieval.reduction import (
 )
 from inference_lab.retrieval.results import EvidenceResult
 from inference_lab.settings import RetrievalConfig
-from inference_lab.storage import ComponentGenerationState, CorpusSnapshot
+from inference_lab.storage import (
+    CorpusSnapshot,
+    generation_matches_reference,
+    select_ready_component_generation,
+)
 
 _LOGGER = structlog.get_logger("inference_lab.retrieval")
 
@@ -39,6 +43,7 @@ class EvidenceReductionFailureCategory(StrEnum):
     """Bounded reasons the evidence-reduction boundary could not complete."""
 
     CORPUS_VERSION_MISMATCH = "corpus_version_mismatch"
+    COMPONENT_MISMATCH = "component_mismatch"
     TOKENISER_MISMATCH = "tokeniser_mismatch"
     TOKENISER_UNAVAILABLE = "tokeniser_unavailable"
     INVALID_TOKENISER_OUTPUT = "invalid_tokeniser_output"
@@ -105,30 +110,18 @@ def reduce_retrieval_evidence(
                 EvidenceReductionFailureCategory.CORPUS_VERSION_MISMATCH
             )
         _validate_result_source_versions(snapshot, result)
-        references = tuple(
-            reference
-            for reference in snapshot.manifest.component_generations
-            if reference.component_kind.as_str() == LEXICAL_COMPONENT_KIND
+        reference = select_ready_component_generation(
+            snapshot.manifest,
+            LEXICAL_COMPONENT_KIND,
+            corpus_id=corpus_id,
+            corpus_version=corpus_version,
         )
-        if len(references) != 1:
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.CORPUS_VERSION_MISMATCH
-            )
-        reference = references[0]
         manifest = generation.manifest
-        if (
-            reference.state is not ComponentGenerationState.READY
-            or reference.corpus_id != corpus_id
-            or reference.corpus_version != corpus_version
-            or reference.generation_id != manifest.generation_id
-            or reference.implementation != manifest.implementation
-            or reference.format_version != manifest.format_version
-            or reference.contract_version != manifest.contract_version
-            or reference.configuration_digest != manifest.configuration_digest
-            or reference.source_manifest_digest != manifest.source_manifest_digest
+        if reference is None or not generation_matches_reference(
+            reference, manifest.component_generation()
         ):
             raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.CORPUS_VERSION_MISMATCH
+                EvidenceReductionFailureCategory.COMPONENT_MISMATCH
             )
         if not callable(getattr(tokeniser, "tokenise", None)) or not callable(
             getattr(tokeniser, "count_tokens", None)

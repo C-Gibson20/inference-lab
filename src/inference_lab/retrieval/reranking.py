@@ -439,7 +439,7 @@ def execute_reranking(
     if not callable(getattr(backend, "rerank", None)):
         raise TypeError("backend must implement the reranker contract.")
     started_at = time.perf_counter()
-    identity = _reranking_identity(backend, evidence_count, candidate_limit)
+    identity = reranking_identity_for_backend(backend, evidence_count, candidate_limit)
 
     def finish(
         outcome: RerankingOutcome,
@@ -608,7 +608,7 @@ def _log_reranking_outcome(
     return outcome
 
 
-def _reranking_identity(
+def reranking_identity_for_backend(
     backend: RerankerBackend,
     evidence_count: EvidenceCount,
     candidate_limit: RerankCandidateLimit,

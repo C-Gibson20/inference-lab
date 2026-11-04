@@ -11,6 +11,7 @@ import pytest
 from structlog.testing import capture_logs
 
 from inference_lab.ingest import (
+    BASELINE_LEXICAL_COMPONENT_KIND,
     BaselineChunkGenerationEntry,
     BaselineChunkGenerationManifest,
     BaselineProfilingContext,
@@ -33,6 +34,7 @@ from inference_lab.provenance import (
     HashAlgorithm,
     OutputDigest,
 )
+from inference_lab.retrieval import LEXICAL_COMPONENT_KIND
 from inference_lab.storage import (
     ChunkerVersionRecord,
     ChunkingPolicyRecord,
@@ -950,3 +952,10 @@ def test_sqlite_open_snapshot_remains_pinned_across_next_publication(
         assert active.corpus_version == next_version
     finally:
         repository.close()
+
+
+def test_baseline_lexical_component_kind_matches_the_retrieval_owner() -> None:
+    # Retrieval owns the lexical index and defines its ComponentKind, but
+    # retrieval imports ingest, so ingest cannot import the constant without
+    # closing a cycle. Assert the duplicate cannot drift instead.
+    assert BASELINE_LEXICAL_COMPONENT_KIND == LEXICAL_COMPONENT_KIND
