@@ -356,6 +356,16 @@ def _run_parser(
     return outcome
 
 
+@dataclass(frozen=True, slots=True)
+class _ParseStageIds:
+    """The stage identities one parse attempt emits its records under."""
+
+    source_stage_id: str
+    parse_stage_id: str
+    parse_persistence_stage_id: str
+    parent_stage_id: str | None
+
+
 def _publish_parse(
     repository: BaselineParseRepository,
     request: BaselineParseRequest,
@@ -365,12 +375,13 @@ def _publish_parse(
     filesystem: StableReadFileSystem | None,
     profiling: BaselineProfilingContext,
     document_id: DocumentId,
-    source_stage_id: str,
-    parse_stage_id: str,
-    parse_persistence_stage_id: str,
-    parent_stage_id: str | None,
+    stage_ids: _ParseStageIds,
 ) -> BaselineParseResult:
     """Acquire, parse, publish, and replay one new parse attempt."""
+    source_stage_id = stage_ids.source_stage_id
+    parse_stage_id = stage_ids.parse_stage_id
+    parse_persistence_stage_id = stage_ids.parse_persistence_stage_id
+    parent_stage_id = stage_ids.parent_stage_id
     content: bytes | None = None
     with profiling.observed_stage(
         stage="source_acquisition",
@@ -571,8 +582,10 @@ def execute_baseline_parse(
             filesystem=filesystem,
             profiling=selected_profiling,
             document_id=document_id,
-            source_stage_id=source_stage_id,
-            parse_stage_id=parse_stage_id,
-            parse_persistence_stage_id=parse_persistence_publish_stage_id,
-            parent_stage_id=parent_stage_id,
+            stage_ids=_ParseStageIds(
+                source_stage_id=source_stage_id,
+                parse_stage_id=parse_stage_id,
+                parse_persistence_stage_id=parse_persistence_publish_stage_id,
+                parent_stage_id=parent_stage_id,
+            ),
         )

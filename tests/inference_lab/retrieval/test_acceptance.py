@@ -253,6 +253,22 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "resolve_lexical_candidate_metadata",
         "validate_metadata_filter",
         "select_lexical_parent_reference",
+        "RERANK_DEDUPLICATION_VERSION",
+        "RERANK_POLICY_VERSION",
+        "EvidenceCount",
+        "PreparedReranking",
+        "RerankCandidateLimit",
+        "RerankingIdentity",
+        "RerankingOutcome",
+        "RerankingRequest",
+        "ScoredEvidence",
+        "deduplicate_evidence_hits",
+        "execute_reranking",
+        "map_rerank_result",
+        "prepare_rerank_request",
+        "rank_evidence_hits",
+        "rerank_evidence",
+        "reranking_identity_for_backend",
     }
     assert set(retrieval.__all__) == expected
     assert not hasattr(retrieval, "_filter_payload")

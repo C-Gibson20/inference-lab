@@ -556,6 +556,14 @@ count is a separate downstream maximum; fewer passages may be returned when
 fewer eligible candidates exist. Neither setting changes the RET-01 wire
 schema or makes reranker scores evidence of claim support.
 
+Reranking's vocabulary is part of the retrieval package's contract and is
+exported from `inference_lab.retrieval` alongside the dense, fusion, and
+reduction types. The limits, the request and outcome values, the identity, and
+the execution entry points are all constructed, called, or annotated by
+consumers outside the package, which is what makes a name part of the export
+surface rather than an implementation detail. Consumers therefore import them
+from the package, not from `inference_lab.retrieval.reranking`.
+
 Each RET-06 execution outcome carries a stable `RerankingIdentity` for
 evaluation and replay. It includes backend/model name and revision, the
 backend's semantic preprocessing profile version, both limits, and the RET-06

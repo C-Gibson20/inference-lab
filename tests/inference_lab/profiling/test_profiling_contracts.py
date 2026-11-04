@@ -17,6 +17,7 @@ from inference_lab.profiling import (
     ObservedStage,
     ResourceCategory,
     ResourceMeasurement,
+    StageCorrelation,
     StageTiming,
     emit_record,
 )
@@ -53,8 +54,10 @@ def stage(sink: Sink) -> ObservedStage:
         condition="cold",
         clock=Clock(1_000_000_000, 1_025_000_000),
         observed_at_factory=lambda: NOW,
-        corpus_id="corpus-1",
-        corpus_version="version-1",
+        correlation=StageCorrelation(
+            corpus_id="corpus-1",
+            corpus_version="version-1",
+        ),
     )
 
 

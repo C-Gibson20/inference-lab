@@ -14,8 +14,7 @@ from inference_lab.evaluation.retrieval_contracts import (
     RetrievalEvaluationRunIdentity,
     RetrievalSystemIdentity,
 )
-from inference_lab.retrieval import FusionPolicy
-from inference_lab.retrieval.reranking import RerankingIdentity
+from inference_lab.retrieval import FusionPolicy, RerankingIdentity
 
 HELD_OUT_RUN_CONTRACT_VERSION: Final[str] = "1.0.0"
 HELD_OUT_GATE_POLICY_VERSION: Final[str] = "2.0.0"
