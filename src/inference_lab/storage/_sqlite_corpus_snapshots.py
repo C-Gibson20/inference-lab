@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Final, Self
 
 from inference_lab.provenance import (
     ConfigurationIdentity,
@@ -112,6 +113,13 @@ from inference_lab.storage.versioning import (
     CorpusVersionManifest,
 )
 
+# Resolving evidence provenance touches a small working set of parsed
+# representations per query, so the snapshot keeps that many source-location
+# indexes and evicts the least recently used. The bound keeps snapshot memory
+# independent of corpus size; it is a code-level constant rather than a
+# deployment setting because no deployment has needed to tune it.
+DEFAULT_SOURCE_SPAN_CACHE_ENTRIES: Final = 32
+
 
 @dataclass(frozen=True, slots=True)
 class _SourceSpanIndex:
@@ -177,6 +185,7 @@ class SQLiteCorpusSnapshot:
         source_blob_store: ManagedSourceBlobStore | None,
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId | None,
+        source_span_cache_entries: int = DEFAULT_SOURCE_SPAN_CACHE_ENTRIES,
     ) -> None:
         if not isinstance(database_path, Path):
             raise TypeError("database_path must be a Path.")
@@ -198,6 +207,12 @@ class SQLiteCorpusSnapshot:
             corpus_version, CorpusVersionId
         ):
             raise TypeError("corpus_version must be a CorpusVersionId or None.")
+        if not isinstance(source_span_cache_entries, int) or isinstance(
+            source_span_cache_entries, bool
+        ):
+            raise TypeError("source_span_cache_entries must be an integer.")
+        if source_span_cache_entries <= 0:
+            raise ValueError("source_span_cache_entries must be greater than zero.")
         self._database_path = database_path
         self._busy_timeout_ms = busy_timeout_ms
         self._migrations = migrations
@@ -212,8 +227,21 @@ class SQLiteCorpusSnapshot:
         self._visible_membership_keys: frozenset[
             tuple[DocumentId, DocumentVersionId]
         ] = frozenset()
-        self._source_span_indexes: dict[RecordId, _SourceSpanIndex] = {}
+        self._source_span_indexes: OrderedDict[RecordId, _SourceSpanIndex] = (
+            OrderedDict()
+        )
+        self._source_span_cache_entries = source_span_cache_entries
         self._closed = False
+
+    @property
+    def source_span_cache_entry_count(self) -> int:
+        """Return how many parsed source-location indexes are cached now."""
+        return len(self._source_span_indexes)
+
+    @property
+    def source_span_cache_entries(self) -> int:
+        """Return the maximum parsed source-location indexes held at once."""
+        return self._source_span_cache_entries
 
     @property
     def corpus_id(self) -> CorpusId:
@@ -428,6 +456,10 @@ class SQLiteCorpusSnapshot:
                 raise CorruptStorageError()
             index = _SourceSpanIndex.from_representation(representation)
             self._source_span_indexes[record_id] = index
+            while len(self._source_span_indexes) > self._source_span_cache_entries:
+                self._source_span_indexes.popitem(last=False)
+        else:
+            self._source_span_indexes.move_to_end(record_id)
         location = index.locations.get(source_span_id)
         if location is None:
             raise CorruptStorageError()
@@ -829,6 +861,7 @@ def create_active_corpus_snapshot(
     migrations: tuple[MigrationDefinition, ...],
     source_blob_store: ManagedSourceBlobStore | None,
     corpus_id: CorpusId,
+    source_span_cache_entries: int = DEFAULT_SOURCE_SPAN_CACHE_ENTRIES,
 ) -> SQLiteCorpusSnapshot:
     """Create an unopened owner that will select the active version on entry."""
     if not isinstance(corpus_id, CorpusId):
@@ -841,6 +874,7 @@ def create_active_corpus_snapshot(
         source_blob_store,
         corpus_id,
         None,
+        source_span_cache_entries=source_span_cache_entries,
     )
 
 
@@ -850,6 +884,7 @@ def create_corpus_snapshot(
     source_blob_store: ManagedSourceBlobStore | None,
     corpus_id: CorpusId,
     corpus_version: CorpusVersionId,
+    source_span_cache_entries: int = DEFAULT_SOURCE_SPAN_CACHE_ENTRIES,
 ) -> SQLiteCorpusSnapshot:
     """Create an unopened owner for one explicit historical version."""
     if not isinstance(corpus_id, CorpusId):
@@ -864,4 +899,5 @@ def create_corpus_snapshot(
         source_blob_store,
         corpus_id,
         corpus_version,
+        source_span_cache_entries=source_span_cache_entries,
     )

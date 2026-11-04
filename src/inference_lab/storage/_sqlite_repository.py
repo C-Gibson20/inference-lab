@@ -58,6 +58,7 @@ from inference_lab.storage._sqlite_corpus_memberships import (
     list_corpus_document_version_memberships,
 )
 from inference_lab.storage._sqlite_corpus_snapshots import (
+    DEFAULT_SOURCE_SPAN_CACHE_ENTRIES,
     SQLiteCorpusSnapshot,
     create_active_corpus_snapshot,
     create_corpus_snapshot,
@@ -157,7 +158,7 @@ from inference_lab.storage.versioning import (
 DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES: Final = 10_000
 
 
-def _validate_source_reconciliation_max_entries(
+def _validate_positive_entry_bound(
     max_entries: int,
     *,
     parameter_name: str,
@@ -180,6 +181,7 @@ class SQLiteMetadataRepository:
         source_blob_store: ManagedSourceBlobStore | None = None,
         database_path: Path | None = None,
         source_dir: Path | None = None,
+        source_span_cache_entries: int = DEFAULT_SOURCE_SPAN_CACHE_ENTRIES,
     ) -> None:
         if not isinstance(connection, sqlite3.Connection):
             raise TypeError("connection must be a sqlite3.Connection.")
@@ -187,6 +189,11 @@ class SQLiteMetadataRepository:
             raise TypeError("migrations must be a tuple.")
         if not callable(created_at_factory):
             raise TypeError("created_at_factory must be callable.")
+        _validate_positive_entry_bound(
+            source_span_cache_entries,
+            parameter_name="source_span_cache_entries",
+        )
+        self._source_span_cache_entries = source_span_cache_entries
         if source_blob_store is not None and not isinstance(
             source_blob_store, ManagedSourceBlobStore
         ):
@@ -220,13 +227,14 @@ class SQLiteMetadataRepository:
             DEFAULT_SOURCE_RECONCILIATION_MAX_ENTRIES
         ),
         reconcile_sources: bool = True,
+        source_span_cache_entries: int = DEFAULT_SOURCE_SPAN_CACHE_ENTRIES,
     ) -> Self:
         """Open a validated repository under the explicit schema policy."""
         if not isinstance(path, Path):
             raise TypeError("path must be a Path.")
         if not callable(created_at_factory):
             raise TypeError("created_at_factory must be callable.")
-        _validate_source_reconciliation_max_entries(
+        _validate_positive_entry_bound(
             source_reconciliation_max_entries,
             parameter_name="source_reconciliation_max_entries",
         )
@@ -258,6 +266,7 @@ class SQLiteMetadataRepository:
             source_blob_store=source_blob_store,
             database_path=resolved_database_path,
             source_dir=resolved_source_dir,
+            source_span_cache_entries=source_span_cache_entries,
         )
         if source_blob_store is not None and reconcile_sources:
             try:
@@ -755,6 +764,7 @@ class SQLiteMetadataRepository:
             self._migrations,
             self._source_blob_store,
             corpus_id,
+            self._source_span_cache_entries,
         )
 
     def open_corpus_snapshot(
@@ -771,11 +781,12 @@ class SQLiteMetadataRepository:
             self._source_blob_store,
             corpus_id,
             corpus_version,
+            self._source_span_cache_entries,
         )
 
     def reconcile_source_storage(self, *, max_entries: int) -> None:
         """Remove abandoned staging and report bounded final-blob inventory."""
-        _validate_source_reconciliation_max_entries(
+        _validate_positive_entry_bound(
             max_entries,
             parameter_name="max_entries",
         )

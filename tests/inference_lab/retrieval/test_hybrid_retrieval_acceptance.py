@@ -258,11 +258,11 @@ def test_hybrid_journey_fuses_channels_and_keeps_distinct_family_evidence(
     with open_lexical_generation(
         index_dir, lexical_outcome.manifest.generation_id
     ) as lex:
-        lexical_entries = lex.iter_chunks()
+        lexical_entries = lex.read_chunks()
     with open_dense_generation(
         index_dir, dense_outcome.manifest.generation_id
     ) as dense:
-        dense_entries = dense.iter_entries()
+        dense_entries = dense.read_entries()
 
     lexical_reference = replace(
         LexicalGenerationParticipant(

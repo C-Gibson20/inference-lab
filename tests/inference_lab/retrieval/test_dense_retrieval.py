@@ -306,7 +306,7 @@ def _prepared_query(
         state=ComponentGenerationState.READY,
     )
     with open_dense_generation(index_dir, outcome.manifest.generation_id) as opened:
-        entries = opened.iter_entries()
+        entries = opened.read_entries()
     snapshot = _Snapshot(CORPUS_ID, _VERSION, reference, entries)
     return _Repository(snapshot), snapshot, embedder, index_dir
 
@@ -847,6 +847,6 @@ def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new
     assert rebuilt.statistics.reused_vectors == 0
     assert old_database.read_bytes() == old_database_bytes
     with open_dense_generation(index_dir, rebuilt.manifest.generation_id) as opened:
-        assert tuple(entry.candidate.content for entry in opened.iter_entries()) == (
+        assert tuple(entry.candidate.content for entry in opened.read_entries()) == (
             "alpha passage",
         )

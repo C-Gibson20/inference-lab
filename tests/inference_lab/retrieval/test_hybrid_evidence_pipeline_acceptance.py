@@ -207,6 +207,13 @@ def test_hybrid_evidence_pipeline_survives_restart_and_reuses_indexes(
                     RetrievalConfig(),
                     token_budget_override=budget,
                 )
+            # Resolving provenance for every retained passage must not grow
+            # snapshot memory past its declared bound.
+            assert (
+                snapshot.source_span_cache_entry_count
+                <= snapshot.source_span_cache_entries
+            )
+            assert snapshot.source_span_cache_entry_count > 0
 
         assert reduction is not None
         assert reduction.corpus_version == SELECTED_VERSION

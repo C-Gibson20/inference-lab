@@ -146,7 +146,7 @@ indexes are outside this contract.
 | --- | --- |
 | `ComponentKind` | `dense-index` |
 | Implementation | `sqlite-flat` |
-| Format version | `1.0.0` |
+| Format version | `2.0.0` |
 | Contract version | `1.0.0` |
 | Distance metric | `cosine` |
 | Tie-break policy | `record-id-ascending` |
@@ -162,6 +162,14 @@ over-limit policy, L2 normalisation, dtype, device type, dimension, distance
 metric, tie-break policy, or the format and contract versions produces a
 different, incompatible generation. Compatibility fields are path-free; model
 and backend names are validated as non-path identifiers.
+
+The host index library version is deliberately **not** part of that digest.
+It is recorded on the manifest as `library_version`, which satisfies the
+backup policy's requirement that each index record its library version while
+keeping an unrelated SQLite upgrade from invalidating every generation or
+preventing a build on another machine. Nothing rejects a generation because
+the reading host reports a different library version; the format, contract,
+and database integrity checks decide whether it can be read.
 
 A generation ID is `"dense-"` followed by the SHA-256 of the canonical JSON of
 the compatibility digest, `corpus_id`, `corpus_version`, and the chunk
@@ -185,8 +193,17 @@ with no sidecar journal. It holds a `members` table of selected document
 versions with their chunk-set selection digests and chunk counts, and an
 `entries` table of one row per chunk carrying its record identity, owning
 document and version, ordinal, exact chunk text, canonical source links, and
-vector blob. Vectors are packed little-endian with one IEEE-754 **double** per
-dimension; `manifest.json` records the SHA-256 of the complete database file.
+vector blob. Vectors are stored L2-normalised and packed little-endian with
+one IEEE-754 **single** per dimension, so a stored vector is unit-length and
+query scoring is a dot product rather than a cosine with two recomputed norms.
+Single precision is what the embedding backend produces, so this discards no
+information the index ever held, and it halves the blob. `manifest.json`
+records the SHA-256 of the complete database file.
+
+Format version `2.0.0` introduced this layout. `format_version` is part of the
+configuration digest, so a generation written as `1.0.0` double-precision data
+is rejected on open and must be rebuilt; because the digest feeds the
+generation ID, the rebuilt generation has a new identity.
 
 Manifest members are unique and ordered by `document_id`. The mutable
 `active` link of any component must never be a reader selection mechanism:
@@ -220,9 +237,25 @@ is caught before it can contaminate results.
 Candidates are scored by cosine similarity, clamped to `[-1.0, 1.0]`, and
 ordered by descending similarity with ascending canonical `RecordId` as the
 only tie-break. Zero vectors are invalid for cosine and are rejected at
-construction. When the query carries a metadata filter, the predicate is
+construction.
+
+`DenseGeneration.search` performs that ranking without materialising the
+index. It streams `(record_id, vector)` rows, scores each against the
+unit-length query as a dot product, keeps only a heap of the requested size,
+and then hydrates content, source links, and vectors for the ranked winners
+alone. The query vector is normalised once per query rather than per
+candidate, so the reported similarity is a true cosine for a query of any
+magnitude. Per-query hydration is therefore bounded by the requested limit and
+not by corpus size; `read_entries` remains the full-materialisation reader
+used by incremental reuse and registration validation, which legitimately need
+every entry; its name says so rather than implying a lazy iterator. When the query carries a metadata filter, the predicate is
 evaluated in exact dense rank order before the requested limit is applied, so
-filtering never reorders surviving candidates.
+filtering never reorders surviving candidates. Because that evaluation happens
+before the limit, the channel ranks a bounded candidate window of
+`FILTERED_WINDOW_FACTOR` times the requested limit and doubles that window,
+capped at the generation's entry count, until enough candidates survive. The
+ranking is a total deterministic order, so a wider window only extends the
+previous one and the result is identical to ranking the whole generation.
 
 ### Incremental reuse
 
@@ -258,7 +291,21 @@ returns a strict boolean and confirms that the registered reference is exactly
 the one derived from the manifest, that staged membership matches the chunk
 source manifest entry for entry, that each document version's persisted
 chunk-set selection still matches, and that the durable generation reopens by
-ID and matches its inputs. A database commit failure may leave an
+ID and matches the identities it recorded.
+
+The validator's boolean is a *verdict about the data*, never a report about
+the system's availability. A storage failure while reading chunk-set
+selections, or an unavailable generation, propagates so publication records a
+retryable availability failure; returning `False` there would be recorded as a
+permanent conflict. The lexical owner draws the same distinction through its
+own error type.
+
+Comparing a published generation against its inputs uses the identities both
+sides already recorded — corpus, source-manifest digest, configuration digest,
+membership, and entry count — and the caller passes membership it has already
+derived rather than having it re-derived. The full entry-by-entry comparison
+runs only where it proves a fresh write, immediately after staging and before
+publication. A database commit failure may leave an
 unreferenced immutable generation; it is unreachable through any committed
 manifest, and the dense owner retains cleanup responsibility under a future
 retention policy.
@@ -268,21 +315,13 @@ retention policy.
 These are known gaps, recorded here so the contract is not read as a
 description of finished work:
 
-- **Query cost grows with corpus size.** Opening a generation materialises
-  every entry to verify declared counts, and scoring materialises every
-  vector again. With a metadata filter, candidate provenance is also resolved
-  for every entry rather than for a bounded window. This breaches the bounded
-  candidate provenance rule above.
+- **Generation opening materialises every entry** to verify declared counts,
+  so opening cost still grows with corpus size even though query cost no
+  longer does.
 - **No operational logging or stage instrumentation.** The lexical build emits
   an observed stage; the dense build emits neither logs nor profiling records.
   The retrieval logging policy applies to this channel and is not yet
   implemented for it.
-- **`library_version` defaults to the host SQLite version** and participates
-  in the configuration digest, so an unrelated SQLite upgrade invalidates
-  existing generations and blocks cross-machine builds. The library version
-  belongs in recorded compatibility metadata, not in the reuse identity.
-- **Vectors are stored as doubles** although the backend produces single
-  precision, doubling index size for no additional precision.
 
 ## RET-05 fusion and document deduplication
 

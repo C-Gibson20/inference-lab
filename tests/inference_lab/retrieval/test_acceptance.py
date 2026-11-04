@@ -186,6 +186,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "build_dense_generation",
         "build_dense_generation_for_corpus_update",
         "open_dense_generation",
+        "l2_normalised",
         "rank_dense_entries",
         "reduce_evidence",
         "reduce_retrieval_evidence",

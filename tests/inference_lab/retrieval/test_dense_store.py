@@ -1,10 +1,12 @@
 """Persistent dense generation build, reuse, and publication seam tests."""
 
 import hashlib
+import math
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -31,6 +33,7 @@ from inference_lab.retrieval import (
     DenseFailureCategory,
     DenseGenerationParticipant,
     DenseIndexCompatibility,
+    DenseVector,
     build_dense_generation,
     open_dense_generation,
     select_dense_parent_reference,
@@ -40,6 +43,8 @@ from inference_lab.storage import (
     ComponentGenerationReference,
     ComponentGenerationState,
     MetadataRepository,
+    RepositoryUnavailableError,
+    StorageError,
 )
 from tests.inference_lab.retrieval.lexical_fixtures import (
     CORPUS_ID,
@@ -223,8 +228,12 @@ def test_full_generation_reopens_and_registration_validator_checks_membership(
         tmp_path / "index",
         outcome.manifest.generation_id,
     ) as generation:
-        entries = generation.iter_entries()
+        entries = generation.read_entries()
         assert len(entries) == 2
+        # Stored vectors are unit-length so query scoring is a dot product.
+        for entry in entries:
+            norm = math.sqrt(sum(value * value for value in entry.vector.values))
+            assert norm == pytest.approx(1.0, abs=1e-6)
         assert generation.member_selections() == outcome.manifest.members
         assert (
             generation.manifest.source_manifest_digest == source.source_manifest_digest
@@ -331,7 +340,7 @@ def test_incremental_build_reuses_matching_chunks_and_tracks_changes(
     with open_dense_generation(
         tmp_path / "index", child.manifest.generation_id
     ) as opened:
-        assert len(opened.iter_entries()) == 3
+        assert len(opened.read_entries()) == 3
 
     removal_source = _source((("stable passage", _DOC_A, _DOC_A_V1),), _VERSION_THREE)
     child_reference = replace(
@@ -363,7 +372,7 @@ def test_empty_generation_is_valid_and_does_not_call_embedder(tmp_path: Path) ->
     with open_dense_generation(
         tmp_path / "index", outcome.manifest.generation_id
     ) as opened:
-        assert opened.iter_entries() == ()
+        assert opened.read_entries() == ()
 
 
 def test_embedding_failure_leaves_no_generation_and_suppresses_backend_message(
@@ -401,3 +410,150 @@ def test_backend_metadata_must_match_the_full_compatibility_identity(
 
     assert raised.value.category is DenseFailureCategory.INCOMPATIBLE_GENERATION
     assert not (tmp_path / "index" / "dense").exists()
+
+
+def test_search_scores_exact_cosines_for_a_query_of_any_magnitude(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    source = _source(
+        (
+            ("alpha passage", _DOC_A, _DOC_A_V1),
+            ("beta passage", _DOC_B, _DOC_B_V1),
+        ),
+        _VERSION_ONE,
+    )
+    outcome = _build(tmp_path, source, embedder)
+
+    with open_dense_generation(
+        tmp_path / "index",
+        outcome.manifest.generation_id,
+    ) as generation:
+        target = generation.read_entries()[0]
+        # A query parallel to a stored vector scores exactly 1.0 even though
+        # the query itself is not unit-length.
+        scaled = DenseVector(tuple(value * 7.5 for value in target.vector.values))
+
+        matches = generation.search(scaled, limit=2)
+
+        assert matches[0].candidate.record_id == target.candidate.record_id
+        assert matches[0].cosine_similarity == pytest.approx(1.0, abs=1e-6)
+        assert (matches[0].rank, matches[1].rank) == (1, 2)
+        assert matches[1].cosine_similarity < matches[0].cosine_similarity
+        # A tighter limit truncates the same order rather than reordering it.
+        assert generation.search(scaled, limit=1) == matches[:1]
+
+
+def test_search_breaks_equal_similarities_by_record_identity(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    source = _source(
+        (
+            ("identical passage", _DOC_A, _DOC_A_V1),
+            ("identical passage", _DOC_B, _DOC_B_V1),
+        ),
+        _VERSION_ONE,
+    )
+    outcome = _build(tmp_path, source, embedder)
+
+    with open_dense_generation(
+        tmp_path / "index",
+        outcome.manifest.generation_id,
+    ) as generation:
+        entries = generation.read_entries()
+        assert entries[0].vector.values == entries[1].vector.values
+
+        matches = generation.search(DenseVector(entries[0].vector.values), limit=2)
+
+        assert matches[0].cosine_similarity == pytest.approx(
+            matches[1].cosine_similarity
+        )
+        assert [match.candidate.record_id.as_str() for match in matches] == sorted(
+            entry.candidate.record_id.as_str() for entry in entries
+        )
+        # The single-result query keeps the same winner as the full ranking.
+        assert generation.search(DenseVector(entries[0].vector.values), limit=1) == (
+            matches[0],
+        )
+
+
+def test_unavailable_storage_is_not_reported_as_a_generation_mismatch(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    source = _source((("alpha passage", _DOC_A, _DOC_A_V1),), _VERSION_ONE)
+    outcome = _build(tmp_path, source, embedder)
+    participant = DenseGenerationParticipant(tmp_path / "index", outcome, source)
+    reference = outcome.manifest.component_generation()
+    memberships = tuple(entry.membership for entry in source.entries)
+
+    class _UnavailableReader:
+        def get_chunk_set_selection(self, *_: object) -> ChunkSetSelectionRecord | None:
+            raise RepositoryUnavailableError()
+
+    validator = participant.build_validator(cast(Any, _UnavailableReader()))
+
+    # Reporting False here would be recorded as a permanent conflict rather
+    # than a retryable availability failure.
+    with pytest.raises(StorageError):
+        validator.validate_component_generation(reference, memberships)
+
+
+def test_a_genuine_membership_mismatch_is_still_reported_as_false(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    source = _source(
+        (
+            ("alpha passage", _DOC_A, _DOC_A_V1),
+            ("beta passage", _DOC_B, _DOC_B_V1),
+        ),
+        _VERSION_ONE,
+    )
+    outcome = _build(tmp_path, source, embedder)
+    participant = DenseGenerationParticipant(tmp_path / "index", outcome, source)
+    validator = participant.build_validator(_ChunkReader(source))
+    memberships = tuple(entry.membership for entry in source.entries)
+
+    assert (
+        validator.validate_component_generation(
+            outcome.manifest.component_generation(), memberships[:-1]
+        )
+        is False
+    )
+
+
+def test_a_generation_built_from_another_source_manifest_is_rejected(
+    tmp_path: Path,
+) -> None:
+    embedder = _DeterministicEmbedder()
+    published = _source((("alpha passage", _DOC_A, _DOC_A_V1),), _VERSION_ONE)
+    other = _source((("beta passage", _DOC_B, _DOC_B_V1),), _VERSION_ONE)
+    outcome = _build(tmp_path, published, embedder)
+
+    # Claiming a source manifest the published generation was not built from
+    # is rejected before any validator can report it as a mere mismatch.
+    with pytest.raises(DenseError) as rejected:
+        DenseGenerationParticipant(tmp_path / "index", outcome, other)
+
+    assert rejected.value.category is DenseFailureCategory.INCOMPATIBLE_GENERATION
+
+
+def test_a_host_library_upgrade_does_not_invalidate_an_existing_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source((("alpha passage", _DOC_A, _DOC_A_V1),), _VERSION_ONE)
+    first = _build(tmp_path, source, _DeterministicEmbedder())
+    assert first.manifest.library_version == sqlite3.sqlite_version
+
+    monkeypatch.setattr(sqlite3, "sqlite_version", "99.9.9")
+    upgraded_embedder = _DeterministicEmbedder()
+    second = _build(tmp_path, source, upgraded_embedder)
+
+    # The generation identity is unchanged, so the existing index is reused
+    # rather than rebuilt and re-embedded on a differently patched host.
+    assert second.manifest.generation_id == first.manifest.generation_id
+    assert second.manifest.configuration_digest == first.manifest.configuration_digest
+    assert upgraded_embedder.batches == []

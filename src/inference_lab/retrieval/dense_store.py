@@ -1,6 +1,7 @@
 """Immutable SQLite generations for corpus-scoped dense retrieval."""
 
 import hashlib
+import heapq
 import os
 import shutil
 import sqlite3
@@ -8,8 +9,9 @@ import struct
 import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
+from operator import mul
 from pathlib import Path
-from typing import Self, cast
+from typing import Iterator, Self, cast
 from urllib.parse import quote
 
 from inference_lab._fs import (
@@ -29,7 +31,7 @@ from inference_lab._json import (
     require_optional_json_integer,
     require_optional_json_string,
 )
-from inference_lab._validation import paths_overlap
+from inference_lab._validation import is_path_free_identifier, paths_overlap
 from inference_lab.backends.runtime import (
     BackendCapability,
     BackendMetadata,
@@ -62,8 +64,10 @@ from inference_lab.retrieval.dense import (
     DenseIndexCompatibility,
     DenseIndexConfiguration,
     DenseIndexEntry,
+    DenseIndexMatch,
     DenseVector,
     InvalidDenseContractError,
+    l2_normalised,
 )
 from inference_lab.retrieval.errors import RetrievalOperationalError
 from inference_lab.retrieval.evidence import (
@@ -86,6 +90,7 @@ DENSE_DATABASE_NAME = "vectors.sqlite3"
 DENSE_MANIFEST_NAME = "manifest.json"
 DENSE_DATABASE_USER_VERSION = 1
 _EMBED_BATCH_SIZE = 32
+_VECTOR_VALUE_BYTES = 4
 
 
 class DenseFailureCategory(StrEnum):
@@ -147,6 +152,7 @@ class DenseIndexManifest:
     members: tuple[DenseMemberSelection, ...]
     entry_count: int
     database_digest: str
+    library_version: str
 
     def __post_init__(self) -> None:
         self._validate()
@@ -180,6 +186,13 @@ class DenseIndexManifest:
         if type(self.entry_count) is not int or self.entry_count < 0:
             raise ValueError("entry_count must be a non-negative integer.")
         _validate_sha256(self.database_digest, "database_digest")
+        # Recorded for restore decisions only; deliberately outside the
+        # configuration digest so a host library upgrade cannot invalidate
+        # an otherwise reusable generation.
+        if not isinstance(self.library_version, str) or not self.library_version:
+            raise ValueError("library_version must be a non-empty string.")
+        if not is_path_free_identifier(self.library_version):
+            raise ValueError("library_version must not be a local path.")
 
     @property
     def configuration_digest(self) -> str:
@@ -216,6 +229,7 @@ class DenseIndexManifest:
             "entry_count": self.entry_count,
             "format_version": DENSE_FORMAT_VERSION,
             "generation_id": self.generation_id,
+            "library_version": self.library_version,
             "members": [
                 {
                     "chunk_count": item.chunk_count,
@@ -317,6 +331,7 @@ def _read_manifest(path: Path) -> DenseIndexManifest:
                     "entry_count",
                     "format_version",
                     "generation_id",
+                    "library_version",
                     "members",
                     "source_manifest_digest",
                 }
@@ -326,16 +341,16 @@ def _read_manifest(path: Path) -> DenseIndexManifest:
             raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
         raw_compatibility = payload["compatibility"]
         if not isinstance(raw_compatibility, dict):
-            raise ValueError
+            raise ValueError("manifest compatibility must be an object.")
         compatibility = _compatibility_from_payload(raw_compatibility)
         raw_members = payload["members"]
         if not isinstance(raw_members, list):
-            raise ValueError
+            raise ValueError("manifest members must be an array.")
         members = tuple(
             _member_from_payload(item) for item in raw_members if isinstance(item, dict)
         )
         if len(members) != len(raw_members):
-            raise ValueError
+            raise ValueError("every manifest member must be an object.")
         return DenseIndexManifest(
             generation_id=require_json_string(payload["generation_id"]),
             corpus_id=CorpusId.from_str(require_json_string(payload["corpus_id"])),
@@ -348,6 +363,7 @@ def _read_manifest(path: Path) -> DenseIndexManifest:
             compatibility=compatibility,
             members=members,
             entry_count=require_json_integer(payload["entry_count"]),
+            library_version=require_json_string(payload["library_version"]),
             database_digest=require_json_string(payload["database_digest"]),
         )
     except (OSError, KeyError, TypeError, ValueError, AttributeError):
@@ -381,7 +397,9 @@ def _compatibility_from_payload(payload: JsonObject) -> DenseIndexCompatibility:
             or not isinstance(profile, dict)
             or not isinstance(config, dict)
         ):
-            raise ValueError
+            raise ValueError(
+                "compatibility must hold model, profile, and configuration objects."
+            )
         require_exact_json_fields(
             payload,
             frozenset({"configuration", "dimensions", "embedding_profile", "model"}),
@@ -425,7 +443,6 @@ def _compatibility_from_payload(payload: JsonObject) -> DenseIndexCompatibility:
                     "distance_metric",
                     "format_version",
                     "implementation",
-                    "library_version",
                     "tie_break_policy",
                 }
             ),
@@ -449,7 +466,7 @@ def _compatibility_from_payload(payload: JsonObject) -> DenseIndexCompatibility:
         )
         policy = require_optional_json_string(profile["over_limit_policy"])
         if policy not in (None, "truncate_tail", "reject"):
-            raise ValueError
+            raise ValueError("over_limit_policy names an unsupported policy.")
         embedding_profile = EmbeddingProfile(
             profile_version=require_json_string(profile["profile_version"]),
             tokenizer_id=require_json_string(profile["tokenizer_id"]),
@@ -466,7 +483,6 @@ def _compatibility_from_payload(payload: JsonObject) -> DenseIndexCompatibility:
         )
         configuration = DenseIndexConfiguration(
             implementation=require_json_string(config["implementation"]),
-            library_version=require_json_string(config["library_version"]),
             format_version=require_json_string(config["format_version"]),
             contract_version=require_json_string(config["contract_version"]),
             distance_metric=DenseDistanceMetric(
@@ -651,8 +667,8 @@ def _write_generation_database(
                         for source in entry.candidate.sources
                     ]
                     vector = struct.pack(
-                        f"<{compatibility.dimensions}d",
-                        *entry.vector.values,
+                        f"<{compatibility.dimensions}f",
+                        *l2_normalised(entry.vector).values,
                     )
                     connection.execute(
                         "INSERT INTO entries VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -742,7 +758,6 @@ def build_dense_generation(
         configuration.implementation != DENSE_IMPLEMENTATION
         or configuration.format_version != DENSE_FORMAT_VERSION
         or configuration.contract_version != DENSE_CONTRACT_VERSION
-        or configuration.library_version != sqlite3.sqlite_version
     ):
         raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
     if parent_reference is not None:
@@ -776,7 +791,13 @@ def build_dense_generation(
         if target.is_symlink():
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
         with open_dense_generation(resolved_index_dir, generation_id) as generation:
-            if not _generation_matches(generation, source_manifest, compatibility):
+            if not _generation_matches_selection(
+                generation.manifest,
+                source_manifest,
+                compatibility,
+                prepared,
+                members,
+            ):
                 raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
             return DenseIndexBuildOutcome(
                 manifest=generation.manifest,
@@ -823,7 +844,7 @@ def build_dense_generation(
             == compatibility.configuration_digest
         ):
             proposed_by_id = {item.candidate.record_id: item for item in prepared}
-            for old_entry in parent.iter_entries():
+            for old_entry in parent.read_entries():
                 new_item = proposed_by_id.get(old_entry.candidate.record_id)
                 if new_item is not None and new_item.candidate == old_entry.candidate:
                     reusable[old_entry.candidate.record_id] = old_entry
@@ -864,6 +885,7 @@ def build_dense_generation(
                 members=members,
                 entry_count=len(entries),
                 database_digest=_sha256_file(database_path),
+                library_version=sqlite3.sqlite_version,
             )
             manifest_path = staging / DENSE_MANIFEST_NAME
             _write_durable(manifest_path, _manifest_json(manifest))
@@ -873,7 +895,13 @@ def build_dense_generation(
             with _open_dense_path(staging, generation_id) as opened:
                 if opened.manifest != manifest:
                     raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-                if not _generation_matches(opened, source_manifest, compatibility):
+                if not _generation_matches_selection(
+                    opened.manifest,
+                    source_manifest,
+                    compatibility,
+                    prepared,
+                    members,
+                ) or not _generation_contents_match(opened, prepared, compatibility):
                     raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
             try:
                 rename_directory_without_replacement(staging, target)
@@ -886,7 +914,7 @@ def build_dense_generation(
             if staging.exists():
                 _remove_staging_directory(staging)
 
-        old_entries = () if parent is None else parent.iter_entries()
+        old_entries = () if parent is None else parent.read_entries()
         reused_ids = set(reusable)
         replaced_ids: set[RecordId] = set()
         removed_document_ids: set[DocumentId] = set()
@@ -1028,8 +1056,13 @@ class DenseGeneration:
         manifest: DenseIndexManifest,
     ) -> None:
         self._connection = connection
-        self.manifest = manifest
+        self._manifest = manifest
         self._closed = False
+
+    @property
+    def manifest(self) -> DenseIndexManifest:
+        """Return the immutable manifest this generation was opened by."""
+        return self._manifest
 
     def __enter__(self) -> Self:
         if self._closed:
@@ -1045,7 +1078,7 @@ class DenseGeneration:
             self._connection.close()
             self._closed = True
 
-    def iter_entries(self) -> tuple[DenseIndexEntry, ...]:
+    def read_entries(self) -> tuple[DenseIndexEntry, ...]:
         """Return all candidates and vectors in deterministic source order."""
         self._require_open()
         try:
@@ -1064,6 +1097,68 @@ class DenseGeneration:
             raise
         except (sqlite3.Error, TypeError, ValueError, KeyError, struct.error):
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION) from None
+
+    def search(
+        self,
+        query_vector: DenseVector,
+        *,
+        limit: int,
+    ) -> tuple[DenseIndexMatch, ...]:
+        """Return the best matches without materialising the whole index."""
+        if not isinstance(query_vector, DenseVector):
+            raise TypeError("query_vector must be a DenseVector.")
+        if type(limit) is not int:
+            raise TypeError("limit must be an integer.")
+        if limit <= 0:
+            raise DenseError(DenseFailureCategory.INVALID_REQUEST)
+        self._require_open()
+        dimensions = self.manifest.compatibility.dimensions
+        if len(query_vector.values) != dimensions:
+            raise DenseError(DenseFailureCategory.INVALID_REQUEST)
+        try:
+            unit_query = l2_normalised(query_vector).values
+            ranked = heapq.nsmallest(
+                limit,
+                self._stream_similarities(unit_query, dimensions),
+                key=lambda scored: (-scored[0], scored[1]),
+            )
+            return tuple(
+                DenseIndexMatch(
+                    candidate=self._require_entry(record_id).candidate,
+                    cosine_similarity=max(-1.0, min(1.0, similarity)),
+                    rank=rank,
+                )
+                for rank, (similarity, record_id) in enumerate(ranked, start=1)
+            )
+        except DenseError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError, KeyError, struct.error):
+            raise DenseError(DenseFailureCategory.CORRUPT_GENERATION) from None
+
+    def _stream_similarities(
+        self,
+        unit_query: tuple[float, ...],
+        dimensions: int,
+    ) -> Iterator[tuple[float, str]]:
+        """Score every stored vector without holding more than one row."""
+        expected_bytes = dimensions * _VECTOR_VALUE_BYTES
+        for record_id, vector_bytes in self._connection.execute(
+            "SELECT record_id, vector FROM entries"
+        ):
+            stored = bytes(vector_bytes)
+            if len(stored) != expected_bytes:
+                raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+            # Stored vectors are unit-length, so cosine similarity is the
+            # dot product with the unit query.
+            values = struct.unpack(f"<{dimensions}f", stored)
+            yield sum(map(mul, unit_query, values)), record_id
+
+    def _require_entry(self, record_id: str) -> DenseIndexEntry:
+        """Hydrate one ranked record, rejecting a generation that lost it."""
+        entry = self.get_entry(RecordId.from_str(record_id))
+        if entry is None:
+            raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
+        return entry
 
     def get_entry(self, record_id: RecordId) -> DenseIndexEntry | None:
         """Return one vector record by its immutable identity."""
@@ -1115,26 +1210,42 @@ class DenseGeneration:
             raise DenseError(DenseFailureCategory.GENERATION_UNAVAILABLE)
 
 
-def _generation_matches(
-    generation: DenseGeneration,
+def _generation_matches_source(
+    manifest: DenseIndexManifest,
     source_manifest: BaselineChunkGenerationManifest,
     compatibility: DenseIndexCompatibility,
 ) -> bool:
-    if (
-        generation.manifest.corpus_id != source_manifest.corpus_id
-        or generation.manifest.corpus_version != source_manifest.corpus_version
-        or generation.manifest.source_manifest_digest
-        != source_manifest.source_manifest_digest
-        or generation.manifest.configuration_digest
-        != compatibility.configuration_digest
-    ):
-        return False
-    prepared, members = _prepare_source(source_manifest)
-    if generation.manifest.members != members or generation.manifest.entry_count != len(
-        prepared
-    ):
-        return False
-    actual = {entry.candidate.record_id: entry for entry in generation.iter_entries()}
+    """Compare recorded identities without re-deriving the source selections."""
+    return (
+        manifest.corpus_id == source_manifest.corpus_id
+        and manifest.corpus_version == source_manifest.corpus_version
+        and manifest.source_manifest_digest == source_manifest.source_manifest_digest
+        and manifest.configuration_digest == compatibility.configuration_digest
+    )
+
+
+def _generation_matches_selection(
+    manifest: DenseIndexManifest,
+    source_manifest: BaselineChunkGenerationManifest,
+    compatibility: DenseIndexCompatibility,
+    prepared: tuple[_PreparedChunk, ...],
+    members: tuple[DenseMemberSelection, ...],
+) -> bool:
+    """Compare identities and the already-derived membership of one build."""
+    return (
+        _generation_matches_source(manifest, source_manifest, compatibility)
+        and manifest.members == members
+        and manifest.entry_count == len(prepared)
+    )
+
+
+def _generation_contents_match(
+    generation: DenseGeneration,
+    prepared: tuple[_PreparedChunk, ...],
+    compatibility: DenseIndexCompatibility,
+) -> bool:
+    """Verify every written candidate, used where a fresh write is proved."""
+    actual = {entry.candidate.record_id: entry for entry in generation.read_entries()}
     return all(
         (entry := actual.get(item.candidate.record_id)) is not None
         and entry.candidate == item.candidate
@@ -1144,13 +1255,16 @@ def _generation_matches(
 
 
 def _entry_from_row(row: sqlite3.Row, dimensions: int) -> DenseIndexEntry:
+    # The messages below describe the defect for a maintainer reading a
+    # traceback; every one is converted to a bounded corrupt-generation
+    # failure before it can cross the boundary.
     try:
         source_object = load_json_object(bytes(row[5]))
         if not isinstance(source_object, dict) or set(source_object) != {"sources"}:
-            raise ValueError
+            raise ValueError("stored source links must hold exactly one sources key.")
         source_payload = source_object["sources"]
         if not isinstance(source_payload, list):
-            raise ValueError
+            raise ValueError("stored source links must be an array.")
         sources = tuple(
             EvidenceSource(
                 document_id=DocumentId.from_str(
@@ -1167,7 +1281,7 @@ def _entry_from_row(row: sqlite3.Row, dimensions: int) -> DenseIndexEntry:
             if isinstance(item, dict)
         )
         if len(sources) != len(source_payload):
-            raise ValueError
+            raise ValueError("every stored source link must be an object.")
         candidate = RetrievalCandidate(
             record_id=RecordId.from_str(row[0]),
             kind=CandidateKind.ORIGINAL_PASSAGE,
@@ -1175,9 +1289,9 @@ def _entry_from_row(row: sqlite3.Row, dimensions: int) -> DenseIndexEntry:
             sources=sources,
         )
         vector_bytes = bytes(row[6])
-        if len(vector_bytes) != dimensions * 8:
-            raise ValueError
-        vector = DenseVector(struct.unpack(f"<{dimensions}d", vector_bytes))
+        if len(vector_bytes) != dimensions * _VECTOR_VALUE_BYTES:
+            raise ValueError("stored vector width does not match the index.")
+        vector = DenseVector(struct.unpack(f"<{dimensions}f", vector_bytes))
         document_id = DocumentId.from_str(row[1])
         document_version_id = DocumentVersionId.from_str(row[2])
         if (
@@ -1191,7 +1305,7 @@ def _entry_from_row(row: sqlite3.Row, dimensions: int) -> DenseIndexEntry:
                 for source in sources
             )
         ):
-            raise ValueError
+            raise ValueError("stored row lineage disagrees with its source links.")
         return DenseIndexEntry(candidate, vector)
     except (TypeError, ValueError, IndexError, KeyError, struct.error):
         raise DenseError(DenseFailureCategory.CORRUPT_GENERATION) from None
@@ -1244,7 +1358,7 @@ def _open_dense_path(path: Path, expected_generation_id: str) -> DenseGeneration
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
         generation = DenseGeneration(connection, manifest)
         members = generation.member_selections()
-        entries = generation.iter_entries()
+        entries = generation.read_entries()
         if members != manifest.members or len(entries) != manifest.entry_count:
             generation.close()
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
@@ -1379,10 +1493,18 @@ class DenseGenerationValidator:
                 self._index_dir,
                 self._manifest.generation_id,
             ) as opened:
-                return _generation_matches(
-                    opened,
+                if opened.manifest != self._manifest:
+                    return False
+                return _generation_matches_source(
+                    opened.manifest,
                     self._source_manifest,
                     self._manifest.compatibility,
                 )
-        except (DenseError, StorageError, OSError, TypeError, ValueError):
+        except DenseError as error:
+            # An availability failure is not a mismatch verdict, so it must
+            # reach the adapter rather than being reported as a conflict.
+            if error.category is DenseFailureCategory.GENERATION_UNAVAILABLE:
+                raise
+            return False
+        except (OSError, TypeError, ValueError):
             return False

@@ -3,7 +3,6 @@
 import hashlib
 import math
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Protocol
@@ -22,7 +21,7 @@ from inference_lab.storage import ComponentKind
 
 DENSE_COMPONENT_KIND: Final[ComponentKind] = ComponentKind("dense-index")
 DENSE_IMPLEMENTATION: Final[str] = "sqlite-flat"
-DENSE_FORMAT_VERSION: Final[str] = "1.0.0"
+DENSE_FORMAT_VERSION: Final[str] = "2.0.0"
 DENSE_CONTRACT_VERSION: Final[str] = "1.0.0"
 DENSE_SCORE_LABEL: Final[str] = "cosine_similarity"
 _SHA256_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{64}$")
@@ -77,7 +76,6 @@ class DenseIndexConfiguration:
     """Versioned, path-free settings that affect index interpretation."""
 
     implementation: str = DENSE_IMPLEMENTATION
-    library_version: str = field(default_factory=lambda: sqlite3.sqlite_version)
     format_version: str = DENSE_FORMAT_VERSION
     contract_version: str = DENSE_CONTRACT_VERSION
     distance_metric: DenseDistanceMetric = DenseDistanceMetric.COSINE
@@ -89,10 +87,6 @@ class DenseIndexConfiguration:
     def _validate(self) -> None:
         """Validate that the configuration is consistent with the dense contract."""
         _validate_slug(self.implementation, "implementation")
-        _path_free_identifier(
-            _validate_non_empty_string(self.library_version, "library_version"),
-            "library_version",
-        )
         _validate_semantic_version(self.format_version, "format_version")
         _validate_semantic_version(self.contract_version, "contract_version")
         if not isinstance(self.distance_metric, DenseDistanceMetric):
@@ -109,7 +103,6 @@ class DenseIndexConfiguration:
             "distance_metric": self.distance_metric.value,
             "format_version": self.format_version,
             "implementation": self.implementation,
-            "library_version": self.library_version,
             "tie_break_policy": self.tie_break_policy,
         }
 
@@ -217,6 +210,16 @@ class DenseVector:
                 raise InvalidDenseContractError("vector values must be finite.")
         if not any(value != 0 for value in self.values):
             raise InvalidDenseContractError("cosine vectors must not be zero vectors.")
+
+
+def l2_normalised(vector: DenseVector) -> DenseVector:
+    """Return the unit-length form used for stored and compared vectors."""
+    if not isinstance(vector, DenseVector):
+        raise TypeError("vector must be a DenseVector.")
+    norm = math.sqrt(sum(value * value for value in vector.values))
+    if not math.isfinite(norm) or norm == 0.0:
+        raise InvalidDenseContractError("vectors must have a positive finite norm.")
+    return DenseVector(tuple(value / norm for value in vector.values))
 
 
 @dataclass(frozen=True, slots=True)

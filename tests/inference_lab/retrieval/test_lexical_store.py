@@ -1230,7 +1230,7 @@ def test_compatible_parent_diff_reuses_adds_replaces_and_removes_chunks(
     assert child.manifest.generation_id != parent.manifest.generation_id
 
     with open_lexical_generation(tmp_path, child.manifest.generation_id) as generation:
-        assert {chunk.content for chunk in generation.iter_chunks()} == {
+        assert {chunk.content for chunk in generation.read_chunks()} == {
             "unchanged",
             "new version",
             "inserted",
@@ -1303,7 +1303,7 @@ def test_parent_diff_reuses_unchanged_chunk_rows_inside_changed_member(
     assert child.statistics.removed_chunks == 1
     assert child.statistics.inserted_chunks == 0
     with open_lexical_generation(tmp_path, child.manifest.generation_id) as generation:
-        assert {chunk.content for chunk in generation.iter_chunks()} == {
+        assert {chunk.content for chunk in generation.read_chunks()} == {
             "one two ",
             "three five",
         }

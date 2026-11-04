@@ -129,7 +129,7 @@ def _run_with_test_embedder(tmp_path: Path) -> dict[str, object]:
             with open_dense_generation(
                 settings.storage.index_dir, dense_reference.generation_id
             ) as generation:
-                source_reference = generation.iter_entries()[0].candidate.sources[0]
+                source_reference = generation.read_entries()[0].candidate.sources[0]
             assert source_reference is not None
             adapter = LocalDenseEvaluationAdapter(
                 repository,

@@ -57,8 +57,13 @@ class LexicalGeneration:
         manifest: LexicalIndexManifest,
     ) -> None:
         self._connection = connection
-        self.manifest = manifest
+        self._manifest = manifest
         self._closed = False
+
+    @property
+    def manifest(self) -> LexicalIndexManifest:
+        """Return the immutable manifest this generation was opened by."""
+        return self._manifest
 
     def __enter__(self) -> LexicalGeneration:
         return self
@@ -72,7 +77,7 @@ class LexicalGeneration:
             self._connection.close()
             self._closed = True
 
-    def iter_chunks(self) -> tuple[LexicalIndexedChunk, ...]:
+    def read_chunks(self) -> tuple[LexicalIndexedChunk, ...]:
         """Return all indexed chunks in deterministic document/ordinal order."""
         self._require_open()
         try:
