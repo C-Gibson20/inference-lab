@@ -178,6 +178,18 @@ the complete backup invalid.
 Restore is permitted only when the metadata schema and every included index are
 compatible, migratable, or safely rebuildable from canonical records.
 
+Dense-index compatibility covers the whole embedding profile, not the model
+alone. Pooling strategy, prefixes, input normalisation, token limit, tokeniser
+revision, inference dtype, and device type all form part of a generation's
+reuse identity, so restoring onto different inference hardware can require a
+rebuild even when the model is unchanged.
+
+A rebuild must be planned rather than assumed cheap. Embedding dominates its
+cost and scales with corpus token volume: an 18-document corpus of 2,524 chunks
+and 1.19 million tokens takes about 27 minutes at the 731 tokens per second
+measured for a 0.6B-parameter embedder on CPU. Record the expected embedding
+time for the deployed corpus and embedder.
+
 ### Source-data backup
 
 Original documents are managed by a separate source-data backup or availability
