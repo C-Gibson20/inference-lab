@@ -140,8 +140,10 @@ class HeldOutChannelSummary:
     actual_item_count_total: int
     document_recall: AggregateMetric
     passage_recall: AggregateMetric
-    recall_interval_lower: MetricFraction | None
-    recall_interval_upper: MetricFraction | None
+    document_recall_interval_lower: MetricFraction | None
+    document_recall_interval_upper: MetricFraction | None
+    passage_recall_interval_lower: MetricFraction | None
+    passage_recall_interval_upper: MetricFraction | None
     failed_case_count: int
     degraded_case_count: int
     no_result_case_count: int
@@ -259,8 +261,18 @@ class HeldOutChannelSummary:
             "actual_item_count_total": self.actual_item_count_total,
             "document_recall": self.document_recall.as_dict(),
             "passage_recall": self.passage_recall.as_dict(),
-            "recall_interval_lower": _fraction_dict(self.recall_interval_lower),
-            "recall_interval_upper": _fraction_dict(self.recall_interval_upper),
+            "document_recall_interval_lower": _fraction_dict(
+                self.document_recall_interval_lower
+            ),
+            "document_recall_interval_upper": _fraction_dict(
+                self.document_recall_interval_upper
+            ),
+            "passage_recall_interval_lower": _fraction_dict(
+                self.passage_recall_interval_lower
+            ),
+            "passage_recall_interval_upper": _fraction_dict(
+                self.passage_recall_interval_upper
+            ),
             "failed_case_count": self.failed_case_count,
             "degraded_case_count": self.degraded_case_count,
             "no_result_case_count": self.no_result_case_count,
@@ -602,6 +614,13 @@ def _summarise_channel(
     passage = _aggregate_recall(passage_metrics, results, passage_cutoff)
     matched, relevant = _fraction_sum(document_metrics)
     point = MetricFraction(matched, relevant) if relevant else None
+    passage_matched, passage_relevant = _fraction_sum(passage_metrics)
+    passage_point = (
+        MetricFraction(passage_matched, passage_relevant) if passage_relevant else None
+    )
+    # One seed for both metrics, so each replicate resamples the same leakage
+    # groups and the two intervals stay comparable.
+    interval_seed = f"{contract.fingerprint}:{channel.value}:overall"
     lower, upper = _bootstrap_interval(
         tuple(
             (
@@ -611,7 +630,18 @@ def _summarise_channel(
             for case, metric in zip(observations, document_metrics, strict=True)
         ),
         policy=contract.gate_policy,
-        seed=f"{contract.fingerprint}:{channel.value}:overall",
+        seed=interval_seed,
+    )
+    passage_lower, passage_upper = _bootstrap_interval(
+        tuple(
+            (
+                case.leakage_group_id,
+                metric.value if metric is not None else None,
+            )
+            for case, metric in zip(observations, passage_metrics, strict=True)
+        ),
+        policy=contract.gate_policy,
+        seed=interval_seed,
     )
     categories: list[HeldOutCategoryCoverage] = []
     for question_type in QUESTION_TYPES:
@@ -631,6 +661,10 @@ def _summarise_channel(
     # Retain the measured point in the interval contract even for an empty
     # result population; the gate sees null when the gold denominator is zero.
     if point is not None and (lower is None or upper is None):
+        raise RetrievalEvaluationContractError(
+            "bootstrap interval is unavailable for an applicable recall metric."
+        )
+    if passage_point is not None and (passage_lower is None or passage_upper is None):
         raise RetrievalEvaluationContractError(
             "bootstrap interval is unavailable for an applicable recall metric."
         )
@@ -683,8 +717,10 @@ def _summarise_channel(
         actual_item_count_total=sum(len(item.hits) for item in results),
         document_recall=document,
         passage_recall=passage,
-        recall_interval_lower=lower,
-        recall_interval_upper=upper,
+        document_recall_interval_lower=lower,
+        document_recall_interval_upper=upper,
+        passage_recall_interval_lower=passage_lower,
+        passage_recall_interval_upper=passage_upper,
         failed_case_count=sum(item.status is ResultStatus.FAILED for item in results),
         degraded_case_count=sum(item.degraded for item in entries),
         no_result_case_count=sum(item.is_empty for item in results),
@@ -805,9 +841,16 @@ def build_held_out_baseline_report(
         policy=contract.gate_policy,
         observations=HeldOutGateObservations(
             categories=gate_summary.categories,
+            overall_passage_recall=gate_summary.passage_recall.micro,
+            overall_passage_interval_lower=(gate_summary.passage_recall_interval_lower),
+            overall_passage_interval_upper=(gate_summary.passage_recall_interval_upper),
             overall_document_recall=gate_summary.document_recall.micro,
-            overall_recall_interval_lower=gate_summary.recall_interval_lower,
-            overall_recall_interval_upper=gate_summary.recall_interval_upper,
+            overall_document_interval_lower=(
+                gate_summary.document_recall_interval_lower
+            ),
+            overall_document_interval_upper=(
+                gate_summary.document_recall_interval_upper
+            ),
             case_count=len(observations),
             failed_case_count=gate_summary.failed_case_count,
             degraded_case_count=gate_summary.degraded_case_count,

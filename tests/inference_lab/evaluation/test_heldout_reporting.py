@@ -122,6 +122,8 @@ def _contract(case_ids: tuple[str, ...]) -> HeldOutRunContract:
     return HeldOutRunContract(
         evaluation_identity=base_identity,
         gate_policy=HeldOutGatePolicy(
+            minimum_passage_recall=MetricFraction(1, 2),
+            passage_recall_cutoff=10,
             minimum_document_recall=MetricFraction(1, 1),
             document_recall_cutoff=10,
             maximum_failure_rate=MetricFraction(0, 1),
@@ -168,6 +170,7 @@ def _observation_fixture(
     *,
     fail_metadata_case: str | None = None,
     degrade_dense_case: str | None = None,
+    passage_miss_case: str | None = None,
 ) -> tuple[HeldOutCaseObservation, ...]:
     cases = tuple(
         coverage_case(
@@ -236,6 +239,14 @@ def _observation_fixture(
                     ),
                 )
             elif should_hit:
+                # A span outside the relevant set keeps the document match and
+                # loses the passage match, which is the only way the two recall
+                # metrics diverge.
+                span_id = (
+                    _uuid(900_000 + ordinal)
+                    if passage_miss_case == case.case_id
+                    else cast(str, evidence.source_span_id)
+                )
                 hits = (
                     EvidenceHit(
                         candidate=RetrievalCandidate(
@@ -250,9 +261,7 @@ def _observation_fixture(
                                     DocumentVersionId.from_str(
                                         cast(str, evidence.document_version_id)
                                     ),
-                                    SourceSpanId.from_str(
-                                        cast(str, evidence.source_span_id)
-                                    ),
+                                    SourceSpanId.from_str(span_id),
                                 ),
                             ),
                         ),
@@ -304,10 +313,12 @@ def _report(
     *,
     fail_metadata_case: str | None = None,
     degrade_dense_case: str | None = None,
+    passage_miss_case: str | None = None,
 ):
     observations = _observation_fixture(
         fail_metadata_case=fail_metadata_case,
         degrade_dense_case=degrade_dense_case,
+        passage_miss_case=passage_miss_case,
     )
     return build_held_out_baseline_report(
         _contract(tuple(item.case_id for item in observations)), observations
@@ -337,6 +348,25 @@ def test_aggregate_reports_candidate_and_final_recall_at_their_cutoffs() -> None
     assert comparison.paired_case_count == 6
     assert comparison.ties == 6
     assert comparison.non_applicable_case_count == 6
+
+
+def test_passage_recall_and_its_interval_are_measured_independently() -> None:
+    report = _report(passage_miss_case="case-001")
+    fused = next(
+        item
+        for item in report.channel_summaries
+        if item.channel is HeldOutChannel.FUSED_PRE_RERANK
+    )
+
+    # The case retrieves its relevant document at an irrelevant span, so the
+    # document metric saturates while the passage metric and its bootstrap
+    # interval both register the miss.
+    assert fused.document_recall.micro == MetricFraction(6, 6)
+    assert fused.document_recall_interval_lower == MetricFraction(1, 1)
+    assert fused.document_recall_interval_upper == MetricFraction(1, 1)
+    assert fused.passage_recall.micro == MetricFraction(5, 6)
+    assert fused.passage_recall_interval_lower == MetricFraction(1, 2)
+    assert fused.passage_recall_interval_upper == MetricFraction(1, 1)
 
 
 def test_failures_degradation_no_results_and_channel_pairs_are_retained() -> None:

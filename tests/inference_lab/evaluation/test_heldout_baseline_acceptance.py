@@ -150,6 +150,8 @@ def _contract(
     return HeldOutRunContract(
         evaluation_identity=identity,
         gate_policy=HeldOutGatePolicy(
+            minimum_passage_recall=MetricFraction(1, 2),
+            passage_recall_cutoff=10,
             minimum_document_recall=MetricFraction(1, 1),
             document_recall_cutoff=10,
             maximum_failure_rate=MetricFraction(0, 1),

@@ -41,7 +41,7 @@ from inference_lab.settings import get_settings
 from inference_lab.storage import open_metadata_repository
 
 _ROOT = Path(__file__).resolve().parents[3]
-_DATASET_MANIFEST = _ROOT / ".dev/benchmark-authoring/bound-manifest-1.4.0.json"
+_BENCHMARK_DIR = _ROOT / ".dev/benchmark-authoring"
 _SETUP_RECORD = _ROOT / ".dev/local-evaluation/setup.json"
 _GATE_POLICY = _ROOT / "docs/operator/retrieval-baseline-gate.json"
 
@@ -77,19 +77,28 @@ def make_heldout_request() -> Iterator[HeldOutBaselineRequest]:
         yield _build_heldout_request(resources)
 
 
+def _bound_manifest(setup: dict[str, object]) -> Path:
+    """Locate the bound manifest for the dataset version the setup declares."""
+    version = setup.get("bound_dataset_version")
+    if not isinstance(version, str) or not version:
+        raise ValueError("local setup must declare its bound dataset version")
+    return _BENCHMARK_DIR / f"bound-manifest-{version}.json"
+
+
 def _build_heldout_request(resources: ExitStack) -> HeldOutBaselineRequest:
     """Assemble all pinned channel identities before executing held-out cases."""
     settings = get_settings()
-    dataset = load_dataset(_DATASET_MANIFEST)
+    setup = json.loads(_SETUP_RECORD.read_text(encoding="utf-8"))
+    dataset = load_dataset(_bound_manifest(setup))
     validate_final_benchmark(dataset.cases)
     manifest = dataset.manifest
     corpus_id = CorpusId.from_str(manifest.corpus_id)
     corpus_version = CorpusVersionId.from_str(manifest.corpus_version)
-    setup = json.loads(_SETUP_RECORD.read_text(encoding="utf-8"))
     if (
         setup.get("status") != "ready"
         or setup.get("corpus_id") != corpus_id.as_str()
         or setup.get("proposed_corpus_version") != corpus_version.as_str()
+        or setup.get("bound_dataset_version") != manifest.dataset_version
     ):
         raise ValueError("local setup and bound benchmark corpus identities differ")
     gate_policy = _load_gate_policy(dataset, corpus_id, corpus_version)

@@ -32,12 +32,15 @@ def test_shipped_operator_artefact_decodes_to_the_approved_gate() -> None:
 
     assert approved.binding.dataset_id == "sarm1-retrieval-question-set"
     assert approved.binding.case_file_checksum.startswith("sha256:")
+    assert approved.policy.minimum_passage_recall == MetricFraction(1, 3)
     assert approved.policy.minimum_document_recall == MetricFraction(9, 10)
-    # The cutoff is artefact data carried on the policy, not implied by a
+    # Each cutoff is artefact data carried on the policy, not implied by a
     # field name, so it must come from the file rather than a constant.
+    payload = _artefact_payload()
+    assert approved.policy.passage_recall_cutoff == payload["primary_gate"]["cutoff"]
     assert (
         approved.policy.document_recall_cutoff
-        == _artefact_payload()["primary_gate"]["cutoff"]
+        == payload["document_recall_floor"]["cutoff"]
     )
     assert approved.policy.maximum_failure_rate == MetricFraction(1, 20)
     assert approved.policy.maximum_degraded_rate == MetricFraction(1, 20)
@@ -46,7 +49,7 @@ def test_shipped_operator_artefact_decodes_to_the_approved_gate() -> None:
     assert approved.policy.confidence_level_percent == 95
     assert approved.policy.bootstrap_replicates == 10000
     assert approved.policy.uncertainty_method == HELD_OUT_UNCERTAINTY_METHOD
-    assert approved.policy.rationale.startswith("The product acceptance floor")
+    assert approved.policy.rationale.startswith("Passage recall at cutoff 10")
 
 
 def _without_rationale(payload: dict[str, Any]) -> None:
@@ -62,7 +65,7 @@ def _with_unknown_coverage_field(payload: dict[str, Any]) -> None:
 
 
 def _with_future_schema_version(payload: dict[str, Any]) -> None:
-    payload["schema_version"] = "2.0.0"
+    payload["schema_version"] = "3.0.0"
 
 
 def _with_development_split(payload: dict[str, Any]) -> None:
@@ -97,6 +100,18 @@ def _with_impossible_threshold(payload: dict[str, Any]) -> None:
     payload["primary_gate"]["minimum"] = {"numerator": 11, "denominator": 10}
 
 
+def _with_document_metric_as_the_gate(payload: dict[str, Any]) -> None:
+    payload["primary_gate"]["metric"] = "document_recall"
+
+
+def _without_the_document_floor(payload: dict[str, Any]) -> None:
+    del payload["document_recall_floor"]
+
+
+def _with_a_relaxed_floor_cutoff(payload: dict[str, Any]) -> None:
+    payload["document_recall_floor"]["cutoff"] = 100
+
+
 @pytest.mark.parametrize(
     ("corrupt", "expected_error"),
     [
@@ -112,6 +127,9 @@ def _with_impossible_threshold(payload: dict[str, Any]) -> None:
         (_with_string_threshold, JsonStructureError),
         (_with_unprefixed_checksum, RetrievalEvaluationContractError),
         (_with_impossible_threshold, RetrievalEvaluationContractError),
+        (_with_document_metric_as_the_gate, RetrievalEvaluationContractError),
+        (_without_the_document_floor, JsonFieldsError),
+        (_with_a_relaxed_floor_cutoff, RetrievalEvaluationContractError),
     ],
     ids=lambda value: value.__name__.lstrip("_") if callable(value) else value.__name__,
 )

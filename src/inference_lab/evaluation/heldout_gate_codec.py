@@ -25,9 +25,14 @@ from inference_lab.evaluation.retrieval_contracts import (
     RetrievalEvaluationContractError,
 )
 
-HELD_OUT_GATE_PRIMARY_METRIC: Final[str] = "document_recall"
+HELD_OUT_GATE_PRIMARY_METRIC: Final[str] = "passage_recall"
 HELD_OUT_GATE_PRIMARY_CUTOFF: Final[int] = 10
 HELD_OUT_GATE_PRIMARY_DENOMINATOR: Final[str] = (
+    "all relevant passage targets, including failed and empty outcomes"
+)
+HELD_OUT_GATE_FLOOR_METRIC: Final[str] = "document_recall"
+HELD_OUT_GATE_FLOOR_CUTOFF: Final[int] = 10
+HELD_OUT_GATE_FLOOR_DENOMINATOR: Final[str] = (
     "all relevant document targets, including failed and empty outcomes"
 )
 HELD_OUT_GATE_SPLIT: Final[str] = "held_out"
@@ -39,6 +44,7 @@ _ROOT_FIELDS: Final = frozenset(
         "corpus",
         "split",
         "primary_gate",
+        "document_recall_floor",
         "maximum_failure_rate",
         "maximum_degraded_rate",
         "category_coverage",
@@ -50,7 +56,7 @@ _DATASET_FIELDS: Final = frozenset(
     {"id", "version", "schema_version", "case_file_checksum"}
 )
 _CORPUS_FIELDS: Final = frozenset({"id", "version"})
-_PRIMARY_GATE_FIELDS: Final = frozenset(
+_THRESHOLD_FIELDS: Final = frozenset(
     {"channel", "metric", "cutoff", "minimum", "denominator"}
 )
 _COVERAGE_FIELDS: Final = frozenset({"minimum_cases", "minimum_leakage_groups"})
@@ -148,24 +154,30 @@ def _require_binding(payload: JsonObject) -> HeldOutGateBinding:
     )
 
 
-def _require_primary_gate(payload: JsonObject) -> tuple[MetricFraction, int]:
-    """Decode the primary threshold and its cutoff, rejecting other semantics."""
-    primary = require_json_object(payload["primary_gate"])
-    require_exact_json_fields(primary, _PRIMARY_GATE_FIELDS)
-    cutoff = require_json_integer(primary["cutoff"])
+def _require_threshold(
+    payload: JsonObject,
+    field_name: str,
+    *,
+    metric: str,
+    cutoff_value: int,
+    denominator: str,
+) -> tuple[MetricFraction, int]:
+    """Decode one threshold and its cutoff, rejecting other semantics."""
+    threshold = require_json_object(payload[field_name])
+    require_exact_json_fields(threshold, _THRESHOLD_FIELDS)
+    cutoff = require_json_integer(threshold["cutoff"])
     if (
-        require_json_string(primary["channel"]) != HeldOutChannel.FUSED_PRE_RERANK
-        or require_json_string(primary["metric"]) != HELD_OUT_GATE_PRIMARY_METRIC
-        or cutoff != HELD_OUT_GATE_PRIMARY_CUTOFF
-        or require_json_string(primary["denominator"])
-        != HELD_OUT_GATE_PRIMARY_DENOMINATOR
+        require_json_string(threshold["channel"]) != HeldOutChannel.FUSED_PRE_RERANK
+        or require_json_string(threshold["metric"]) != metric
+        or cutoff != cutoff_value
+        or require_json_string(threshold["denominator"]) != denominator
     ):
         raise RetrievalEvaluationContractError(
-            "primary_gate must state the supported metric semantics."
+            f"{field_name} must state the supported metric semantics."
         )
     # The cutoff travels with the policy rather than being implied by a
     # field name, while the approved value stays pinned here.
-    return _require_fraction(primary["minimum"], "primary_gate.minimum"), cutoff
+    return _require_fraction(threshold["minimum"], f"{field_name}.minimum"), cutoff
 
 
 def deserialise_approved_held_out_gate(data: bytes) -> ApprovedHeldOutGate:
@@ -186,10 +198,25 @@ def deserialise_approved_held_out_gate(data: bytes) -> ApprovedHeldOutGate:
         raise RetrievalEvaluationContractError(
             "uncertainty.method names an unsupported method."
         )
-    minimum_document_recall, document_recall_cutoff = _require_primary_gate(payload)
+    minimum_passage_recall, passage_recall_cutoff = _require_threshold(
+        payload,
+        "primary_gate",
+        metric=HELD_OUT_GATE_PRIMARY_METRIC,
+        cutoff_value=HELD_OUT_GATE_PRIMARY_CUTOFF,
+        denominator=HELD_OUT_GATE_PRIMARY_DENOMINATOR,
+    )
+    minimum_document_recall, document_recall_cutoff = _require_threshold(
+        payload,
+        "document_recall_floor",
+        metric=HELD_OUT_GATE_FLOOR_METRIC,
+        cutoff_value=HELD_OUT_GATE_FLOOR_CUTOFF,
+        denominator=HELD_OUT_GATE_FLOOR_DENOMINATOR,
+    )
     return ApprovedHeldOutGate(
         binding=_require_binding(payload),
         policy=HeldOutGatePolicy(
+            minimum_passage_recall=minimum_passage_recall,
+            passage_recall_cutoff=passage_recall_cutoff,
             minimum_document_recall=minimum_document_recall,
             document_recall_cutoff=document_recall_cutoff,
             maximum_failure_rate=_require_fraction(
