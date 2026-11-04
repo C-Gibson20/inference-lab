@@ -14,15 +14,13 @@ from inference_lab.evaluation.retrieval_execution import (
 from inference_lab.profiling import ProfilingContext
 from inference_lab.provenance import CorpusId, CorpusVersionId
 from inference_lab.retrieval import (
+    EvidenceCount,
     FusionPolicy,
     InvalidRetrievalContractError,
-    RetrievalLimit,
-    RetrievalQuery,
-)
-from inference_lab.retrieval.reranking import (
-    EvidenceCount,
     RerankCandidateLimit,
     RerankingIdentity,
+    RetrievalLimit,
+    RetrievalQuery,
     execute_reranking,
     reranking_identity_for_backend,
 )

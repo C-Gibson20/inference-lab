@@ -36,8 +36,11 @@ Use Ruff’s 88-character formatting and keep imports/lint rules clean. Ruff
 enforces docstrings on public source modules, classes, and functions. Comments
 should explain non-obvious reasoning, not restate code. The coverage floor
 configured in `pyproject.toml` is a regression tripwire, not a target: do not
-add tests solely to raise it. Behaviour is gated by the acceptance journeys
-described in `docs/plans/test-suite.md`. Focused test runs may omit `--cov`.
+add tests solely to raise it. Behaviour is gated by complete acceptance
+journeys rather than by a test count: add a journey before adding contract
+tests, delete a test whose behaviour a journey already observes, and keep a
+standalone test only for a pure algorithm, a contract, or a failure boundary
+no journey can reach. Focused test runs may omit `--cov`.
 Use `structlog` inside `inference_lab`; use standard-library `logging` only for
 dependencies and process-level handlers. Do not log documents, queries, or
 other sensitive content.
