@@ -12,6 +12,7 @@ from inference_lab.profiling._validation import is_snake_case
 from inference_lab.profiling.contracts import (
     BaselineStage,
     StageCondition,
+    StageCorrelation,
     validate_baseline_stage,
     validate_stage_condition,
 )
@@ -126,12 +127,7 @@ class ObservedStage:
         condition: StageCondition = "uncontrolled",
         clock: Callable[[], int],
         observed_at_factory: Callable[[], datetime],
-        run_id: str | None = None,
-        request_id: str | None = None,
-        document_id: str | None = None,
-        corpus_id: str | None = None,
-        corpus_version: str | None = None,
-        parent_stage_id: str | None = None,
+        correlation: StageCorrelation | None = None,
         failure_mapper: FailureMapper | None = None,
     ) -> None:
         """Configure an observed stage without starting it."""
@@ -155,12 +151,7 @@ class ObservedStage:
             emit=sink.emit,
             clock=clock,
             observed_at_factory=observed_at_factory,
-            run_id=run_id,
-            request_id=request_id,
-            document_id=document_id,
-            corpus_id=corpus_id,
-            corpus_version=corpus_version,
-            parent_stage_id=parent_stage_id,
+            correlation=correlation,
             condition=condition,
         )
         self._failure: FailureMapping | None = None

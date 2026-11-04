@@ -80,10 +80,6 @@ max-statements = 80
 "tests/inference_lab/ingest/test_identity_isolation_acceptance.py" = ["PLR0915"]
 "tests/inference_lab/storage/test_persistent_index_systems_acceptance.py" = ["PLR0915"]
 "src/inference_lab/ingest/_chunk_identity.py" = ["PLR0913"]
-"src/inference_lab/ingest/_chunk_windows.py" = ["PLR0913"]
-"src/inference_lab/ingest/baseline_parse.py" = ["PLR0913"]
-"src/inference_lab/profiling/observed.py" = ["PLR0913"]
-"src/inference_lab/profiling/timing.py" = ["PLR0913"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

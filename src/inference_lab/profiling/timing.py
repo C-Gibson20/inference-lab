@@ -15,7 +15,11 @@ from inference_lab.profiling._validation import (
     validate_optional_correlation,
     validate_utc_datetime,
 )
-from inference_lab.profiling.contracts import StageCondition, validate_stage_condition
+from inference_lab.profiling.contracts import (
+    StageCondition,
+    StageCorrelation,
+    validate_stage_condition,
+)
 from inference_lab.profiling.types import LogLevel
 from inference_lab.profiling.versioning import (
     CURRENT_RECORD_SCHEMA_VERSION,
@@ -170,12 +174,7 @@ class StageTimer:
         emit: RecordEmitter,
         clock: Clock = time.monotonic_ns,
         observed_at_factory: ObservationTimeFactory = utc_now,
-        run_id: str | None = None,
-        request_id: str | None = None,
-        document_id: str | None = None,
-        corpus_id: str | None = None,
-        corpus_version: str | None = None,
-        parent_stage_id: str | None = None,
+        correlation: StageCorrelation | None = None,
         condition: StageCondition = "uncontrolled",
     ) -> None:
         """Configure a timer without starting the stage."""
@@ -195,27 +194,13 @@ class StageTimer:
         validate_optional_correlation(stage_id, "stage_id")
         if not stage_id:
             raise ValueError("stage_id must be a non-empty correlation value")
-        for field_name, value in (
-            ("run_id", run_id),
-            ("request_id", request_id),
-            ("document_id", document_id),
-            ("corpus_id", corpus_id),
-            ("corpus_version", corpus_version),
-            ("parent_stage_id", parent_stage_id),
-        ):
-            validate_optional_correlation(value, field_name)
 
         self._pipeline_stage = pipeline_stage
         self._stage_id = stage_id
         self._emit = emit
         self._clock = clock
         self._observed_at_factory = observed_at_factory
-        self._run_id = run_id
-        self._request_id = request_id
-        self._document_id = document_id
-        self._corpus_id = corpus_id
-        self._corpus_version = corpus_version
-        self._parent_stage_id = parent_stage_id
+        self._correlation = StageCorrelation() if correlation is None else correlation
         self._condition: StageCondition = validated_condition
         self._start_ns: int | None = None
         self._items_processed: int | None = None
@@ -237,27 +222,27 @@ class StageTimer:
     @property
     def run_id(self) -> str | None:
         """Return the optional run correlation ID."""
-        return self._run_id
+        return self._correlation.run_id
 
     @property
     def request_id(self) -> str | None:
         """Return the optional request correlation ID."""
-        return self._request_id
+        return self._correlation.request_id
 
     @property
     def document_id(self) -> str | None:
         """Return the optional document correlation ID."""
-        return self._document_id
+        return self._correlation.document_id
 
     @property
     def corpus_id(self) -> str | None:
         """Return the optional corpus correlation ID."""
-        return self._corpus_id
+        return self._correlation.corpus_id
 
     @property
     def corpus_version(self) -> str | None:
         """Return the optional corpus-version correlation ID."""
-        return self._corpus_version
+        return self._correlation.corpus_version
 
     @property
     def observed_at_factory(self) -> ObservationTimeFactory:
@@ -364,11 +349,11 @@ class StageTimer:
                 self._records_emitted if event == "stage_completed" else None
             ),
             status=status,
-            run_id=self._run_id,
-            request_id=self._request_id,
-            document_id=self._document_id,
-            corpus_id=self._corpus_id,
-            corpus_version=self._corpus_version,
-            parent_stage_id=self._parent_stage_id,
+            run_id=self._correlation.run_id,
+            request_id=self._correlation.request_id,
+            document_id=self._correlation.document_id,
+            corpus_id=self._correlation.corpus_id,
+            corpus_version=self._correlation.corpus_version,
+            parent_stage_id=self._correlation.parent_stage_id,
             condition=self._condition,
         )

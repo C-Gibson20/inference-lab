@@ -6,6 +6,7 @@ from inference_lab.profiling.contracts import (
     STAGE_CONDITIONS,
     BaselineStage,
     StageCondition,
+    StageCorrelation,
     validate_baseline_stage,
     validate_stage_condition,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "ResourceCategory",
     "ResourceMeasurement",
     "StageCondition",
+    "StageCorrelation",
     "StageTimer",
     "StageTiming",
     "StructuredLogSink",

@@ -13,6 +13,7 @@ from inference_lab._clock import utc_now
 from inference_lab.profiling.contracts import (
     BaselineStage,
     StageCondition,
+    StageCorrelation,
     validate_stage_condition,
 )
 from inference_lab.profiling.emission import (
@@ -122,12 +123,14 @@ class ProfilingContext:
             condition=self.condition,
             clock=self.clock,
             observed_at_factory=self.observed_at_factory,
-            run_id=self.run_id,
-            request_id=self.request_id,
-            document_id=document_id,
-            corpus_id=corpus_id,
-            corpus_version=corpus_version,
-            parent_stage_id=parent_stage_id,
+            correlation=StageCorrelation(
+                run_id=self.run_id,
+                request_id=self.request_id,
+                document_id=document_id,
+                corpus_id=corpus_id,
+                corpus_version=corpus_version,
+                parent_stage_id=parent_stage_id,
+            ),
             failure_mapper=(
                 self.failure_mapper if failure_mapper is None else failure_mapper
             ),
