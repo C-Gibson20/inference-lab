@@ -1597,11 +1597,11 @@ def _open_dense_path(path: Path, expected_generation_id: str) -> DenseGeneration
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
         generation = DenseGeneration(connection, manifest)
         members = generation.member_selections()
-        entries = generation.read_entries()
-        if members != manifest.members or len(entries) != manifest.entry_count:
+        entry_count = connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+        if members != manifest.members or entry_count != manifest.entry_count:
             generation.close()
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-        if sum(member.chunk_count for member in members) != len(entries):
+        if sum(member.chunk_count for member in members) != entry_count:
             generation.close()
             raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
         member_counts = {
