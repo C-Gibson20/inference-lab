@@ -29,6 +29,8 @@ from inference_lab.settings import EvidenceDiversityPolicy
 EVIDENCE_SEPARATOR = "\n\n"
 REDUCTION_POLICY_VERSION = "1.0.0"
 REDUCTION_ACCOUNTING_VERSION = "1.0.0"
+# A merge across a clip point shifts the joined count by about one token.
+PREFIX_CONFIRMATION_BOUNDARIES = 2
 
 
 class EvidenceTokeniserFailureCategory(StrEnum):
@@ -635,24 +637,60 @@ def _longest_fitting_prefix(
     hit: EvidenceHit,
     ranges: tuple[EvidenceTextSourceRange, ...],
 ) -> tuple[tuple[str, tuple[EvidenceTextSourceRange, ...], int] | None, bool]:
-    """Try safe token boundaries longest-first against the complete joined text."""
+    """Find the longest safe token boundary whose joined text fits the budget."""
     text = hit.candidate.content
     tokenisation = _tokenise(request.tokeniser, text)
-    boundaries = sorted({offset.end for offset in tokenisation.offsets}, reverse=True)
+    boundaries = sorted(
+        end
+        for end in {offset.end for offset in tokenisation.offsets}
+        if 0 < end < len(text)
+    )
+    if not boundaries:
+        return None, False
+    retained_texts = [item.text for item in retained]
+    counted: dict[int, int] = {}
+
+    def joined_count(index: int) -> int:
+        """Count the joined text ending at one boundary, measuring it once."""
+        if index not in counted:
+            counted[index] = _count_joined(
+                request.tokeniser, [*retained_texts, text[: boundaries[index]]]
+            )
+        return counted[index]
+
+    # Extending a prefix never lowers its count, so the fitting boundaries form
+    # a run at the start of this list and its end can be bisected.
+    low, high, last_fitting = 0, len(boundaries) - 1, -1
+    while low <= high:
+        middle = (low + high) // 2
+        if joined_count(middle) <= request.token_budget:
+            last_fitting = middle
+            low = middle + 1
+        else:
+            high = middle - 1
+    # That ordering is measured, not guaranteed: a merge could hide a longer fit.
+    for index in range(
+        last_fitting + 1,
+        min(len(boundaries), last_fitting + 1 + PREFIX_CONFIRMATION_BOUNDARIES),
+    ):
+        if joined_count(index) <= request.token_budget:
+            last_fitting = index
+
     has_safe_prefix = False
-    for end in boundaries:
-        if end <= 0 or end >= len(text):
-            continue
-        clipped = _clip_source_ranges(ranges, end)
+    for index in range(last_fitting, -1, -1):
+        clipped = _clip_source_ranges(ranges, boundaries[index])
         if clipped is None:
             continue
         has_safe_prefix = True
-        prefix = text[:end]
-        token_count = _count_joined(
-            request.tokeniser, [*(item.text for item in retained), prefix]
-        )
+        token_count = joined_count(index)
         if token_count <= request.token_budget:
-            return (prefix, clipped, token_count), True
+            return (text[: boundaries[index]], clipped, token_count), True
+    if not has_safe_prefix:
+        # A budget drop and an unusable source map are different failures.
+        has_safe_prefix = any(
+            _clip_source_ranges(ranges, boundaries[index]) is not None
+            for index in range(last_fitting + 1, len(boundaries))
+        )
     return None, has_safe_prefix
 
 
