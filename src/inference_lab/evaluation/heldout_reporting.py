@@ -18,6 +18,7 @@ from inference_lab.evaluation.heldout_gate import (
     HeldOutGateObservations,
     HeldOutGateOutcome,
     HeldOutGatePolicy,
+    HeldOutGateReason,
     HeldOutRunContract,
     evaluate_held_out_gate,
 )
@@ -839,7 +840,7 @@ def build_held_out_baseline_report(
     selected_reasons = list(gate_reasons)
     if final_measurement_incomplete:
         selected_limitations.append("final_evidence_recall_incomplete")
-        selected_reasons.append("incomplete_final_evidence_measurement")
+        selected_reasons.append(HeldOutGateReason.INCOMPLETE_FINAL_EVIDENCE_MEASUREMENT)
         gate_outcome = HeldOutGateOutcome.INCONCLUSIVE
     if len(selected_limitations) != len(set(selected_limitations)):
         raise RetrievalEvaluationContractError("limitations must be unique.")
@@ -928,6 +929,37 @@ def render_held_out_baseline_report(report: HeldOutBaselineReport) -> str:
                     interval=interval,
                 )
             )
+    lines.extend(
+        (
+            "",
+            "## Duplicate and family crowding",
+            "",
+            "These counts are the evidence for whether family-aware diversity is",
+            "needed. A repeat excess near zero means crowding is not occurring.",
+            "",
+            "| Channel | Raw hits | Distinct records | Distinct documents |"
+            " Duplicate groups | Families | Document repeats | Byte-identical"
+            " repeats | Family repeats |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        )
+    )
+    for summary in report.channel_summaries:
+        totals = dict(summary.duplicate_diagnostic_totals)
+        lines.append(
+            "| {channel} | {raw} | {records} | {documents} | {groups} |"
+            " {families} | {document_repeats} | {identical_repeats} |"
+            " {family_repeats} |".format(
+                channel=summary.channel.value,
+                raw=totals.get("raw_hit_count", 0),
+                records=totals.get("distinct_record_count", 0),
+                documents=totals.get("distinct_document_count", 0),
+                groups=totals.get("distinct_duplicate_group_count", 0),
+                families=totals.get("distinct_family_count", 0),
+                document_repeats=totals.get("exact_document_repeat_excess", 0),
+                identical_repeats=totals.get("byte_identical_group_repeat_excess", 0),
+                family_repeats=totals.get("family_member_repeat_excess", 0),
+            )
+        )
     lines.extend(
         (
             "",

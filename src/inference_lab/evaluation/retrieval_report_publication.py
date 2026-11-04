@@ -14,22 +14,22 @@ from inference_lab._fs import (
 )
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.retrieval_contracts import (
-    PUBLISHED_ARTIFACT_NAMES,
-    PublishedArtifact,
+    PUBLISHED_ARTEFACT_NAMES,
+    PublishedArtefact,
     PublishedRetrievalEvaluationManifest,
 )
 from inference_lab.evaluation.retrieval_execution import RetrievalEvaluationRunResult
 from inference_lab.evaluation.retrieval_report_codec import (
-    RetrievalEvaluationRunArtifact,
+    RetrievalEvaluationRunArtefact,
     deserialise_case_results,
     deserialise_retrieval_manifest,
     deserialise_retrieval_report,
-    deserialise_run_artifact,
+    deserialise_run_artefact,
     retrieval_result_digest,
     serialise_case_results,
     serialise_retrieval_manifest,
     serialise_retrieval_report,
-    serialise_run_artifact,
+    serialise_run_artefact,
 )
 from inference_lab.evaluation.retrieval_report_contracts import (
     RetrievalEvaluationReport,
@@ -85,7 +85,7 @@ def publish_retrieval_evaluation(
         limitations=limitations,
     )
     artefact_bytes = {
-        "run.json": serialise_run_artifact(
+        "run.json": serialise_run_artefact(
             run.identity,
             result_digest,
             limitations,
@@ -107,7 +107,7 @@ def publish_retrieval_evaluation(
                 suffix=".staging",
             )
         )
-        for name in PUBLISHED_ARTIFACT_NAMES:
+        for name in PUBLISHED_ARTEFACT_NAMES:
             atomic_write(staging_path / name, artefact_bytes[name])
         atomic_write(staging_path / "manifest.json", manifest_bytes)
         _verify_staged_files(
@@ -140,7 +140,7 @@ def load_published_retrieval_evaluation(
     destination = validate_local_path(destination, field_name="destination")
     if not destination.is_dir() or destination.is_symlink():
         raise ValueError("destination must identify a published evaluation directory.")
-    expected_names = {*PUBLISHED_ARTIFACT_NAMES, "manifest.json"}
+    expected_names = {*PUBLISHED_ARTEFACT_NAMES, "manifest.json"}
     actual_names = {path.name for path in destination.iterdir()}
     if actual_names != expected_names:
         raise ValueError("published evaluation directory has an invalid inventory.")
@@ -157,24 +157,24 @@ def load_published_retrieval_evaluation(
             raise ValueError("published evaluation artefact checksum mismatch.")
         artefact_contents[artefact.name] = content
 
-    run_artifact: RetrievalEvaluationRunArtifact = deserialise_run_artifact(
+    run_artefact: RetrievalEvaluationRunArtefact = deserialise_run_artefact(
         artefact_contents["run.json"]
     )
     cases = deserialise_case_results(
         artefact_contents["cases.jsonl"],
-        run_artifact.identity,
+        run_artefact.identity,
     )
     report = deserialise_retrieval_report(artefact_contents["report.json"])
     if (
         report.run_fingerprint != manifest.run_fingerprint
         or report.result_digest != manifest.result_digest
-        or run_artifact.identity.run_fingerprint != manifest.run_fingerprint
-        or run_artifact.result_digest != manifest.result_digest
+        or run_artefact.identity.run_fingerprint != manifest.run_fingerprint
+        or run_artefact.result_digest != manifest.result_digest
         or report.aggregate.case_count != len(cases)
     ):
         raise ValueError("published evaluation identities do not reconcile.")
     run = RetrievalEvaluationRunResult(
-        identity=run_artifact.identity,
+        identity=run_artefact.identity,
         case_results=cases,
         aggregate=report.aggregate,
     )
@@ -189,7 +189,7 @@ def _build_manifest(
     artefact_bytes: dict[str, bytes],
 ) -> PublishedRetrievalEvaluationManifest:
     """Build the ordered checksum and size inventory for publication."""
-    if tuple(artefact_bytes) != PUBLISHED_ARTIFACT_NAMES:
+    if tuple(artefact_bytes) != PUBLISHED_ARTEFACT_NAMES:
         raise ValueError("publication artefacts are not in canonical order.")
     if not isinstance(run.identity.run_fingerprint, str):
         raise ValueError("run identity must contain a fingerprint.")
@@ -197,12 +197,12 @@ def _build_manifest(
         run_fingerprint=run.identity.run_fingerprint,
         result_digest=result_digest,
         artefacts=tuple(
-            PublishedArtifact(
+            PublishedArtefact(
                 name=name,
                 size_bytes=len(artefact_bytes[name]),
                 checksum=_sha256(artefact_bytes[name]),
             )
-            for name in PUBLISHED_ARTIFACT_NAMES
+            for name in PUBLISHED_ARTEFACT_NAMES
         ),
     )
 
@@ -216,13 +216,13 @@ def _verify_staged_files(
     manifest_bytes: bytes,
 ) -> None:
     """Verify bytes, checksums, and public readers before promotion."""
-    for name in (*PUBLISHED_ARTIFACT_NAMES, "manifest.json"):
+    for name in (*PUBLISHED_ARTEFACT_NAMES, "manifest.json"):
         path = staging_path / name
         expected = manifest_bytes if name == "manifest.json" else artefact_bytes[name]
         if path.read_bytes() != expected:
             raise OSError("staged retrieval evaluation bytes changed")
 
-    restored_run = deserialise_run_artifact((staging_path / "run.json").read_bytes())
+    restored_run = deserialise_run_artefact((staging_path / "run.json").read_bytes())
     restored_cases = deserialise_case_results(
         (staging_path / "cases.jsonl").read_bytes(),
         run.identity,

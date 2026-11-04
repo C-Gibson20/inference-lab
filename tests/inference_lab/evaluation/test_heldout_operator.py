@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from runpy import run_path
@@ -55,7 +56,9 @@ def _install_report_runner(
 ) -> None:
     runner = cast(FunctionType, namespace["_run"])
     runner_globals = cast(dict[str, object], runner.__globals__)
-    runner_globals["_load_request"] = lambda _: _request(report)
+    # The factory protocol is a context manager so the run owns the lifetime
+    # of the resources it opens.
+    runner_globals["_load_request"] = lambda _: nullcontext(_request(report))
     runner_globals["run_held_out_baseline"] = lambda *args, **kwargs: report
 
 

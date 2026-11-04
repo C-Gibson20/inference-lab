@@ -1,4 +1,4 @@
-"""STOR-01/STOR-02/ING-03 end-to-end source-persistence acceptance."""
+"""End-to-end source-persistence acceptance across corpora and restarts."""
 
 import hashlib
 import json

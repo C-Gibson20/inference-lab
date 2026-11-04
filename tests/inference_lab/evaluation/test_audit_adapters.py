@@ -1,4 +1,4 @@
-"""Focused EVAL-02 missing-parse observation behavior."""
+"""Focused missing-parse audit observation behaviour."""
 
 from inference_lab.evaluation import (
     AuditMissingReason,

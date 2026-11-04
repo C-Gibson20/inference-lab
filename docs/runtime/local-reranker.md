@@ -29,7 +29,7 @@ caches, lock files, and download metadata in a model directory; none of those
 may prevent a load. Model and tokeniser loading both set
 `local_files_only=True` and `trust_remote_code=False`.
 
-[`benchmarks/run-05/artifact-manifest.json`](../../benchmarks/run-05/artifact-manifest.json)
+[`benchmarks/run-05/artefact-manifest.json`](../../benchmarks/run-05/artefact-manifest.json)
 records the complete acquired file list for all three candidates compared in
 the RUN-05 pilot, so it is a superset of the pinned set for the deployed
 candidate. It is descriptive, not consulted at load time. A test asserts that

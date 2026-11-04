@@ -955,7 +955,7 @@ def test_pr3_failed_publication_keeps_active_version_and_leaves_orphan_unreachab
         repository.close()
 
 
-def test_stor03_reference_and_validator_require_exact_reopenable_generation(
+def test_reference_and_validator_require_an_exact_reopenable_generation(
     tmp_path: Path,
 ) -> None:
     source_manifest, _, _ = lexical_fixtures.source_manifest()
@@ -989,7 +989,7 @@ def test_stor03_reference_and_validator_require_exact_reopenable_generation(
     )
 
 
-def test_stor03_validator_rejects_checksum_corruption_without_disclosure(
+def test_validator_rejects_checksum_corruption_without_disclosure(
     tmp_path: Path,
 ) -> None:
     source_manifest, _, _ = lexical_fixtures.source_manifest()

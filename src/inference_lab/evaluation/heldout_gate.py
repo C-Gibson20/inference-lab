@@ -22,6 +22,21 @@ HELD_OUT_GATE_POLICY_VERSION: Final[str] = "1.0.0"
 HELD_OUT_UNCERTAINTY_METHOD: Final[str] = "leakage-cluster-bootstrap"
 
 
+class HeldOutGateReason(StrEnum):
+    """Closed set of reasons a held-out gate records with its verdict."""
+
+    MISSING_QUESTION_CATEGORIES = "missing_question_categories"
+    UNDERPOWERED_QUESTION_CATEGORIES = "underpowered_question_categories"
+    INCOMPLETE_CATEGORY_MEASUREMENT = "incomplete_category_measurement"
+    MISSING_ANSWERABILITY_STATUS = "missing_answerability_status"
+    INCOMPLETE_PRIMARY_METRIC = "incomplete_primary_metric"
+    FAILURE_RATE_EXCEEDS_POLICY = "failure_rate_exceeds_policy"
+    DEGRADED_RATE_EXCEEDS_POLICY = "degraded_rate_exceeds_policy"
+    PRIMARY_METRIC_BELOW_MINIMUM = "primary_metric_below_minimum"
+    PRIMARY_METRIC_UNCERTAIN_AT_THRESHOLD = "primary_metric_uncertain_at_threshold"
+    INCOMPLETE_FINAL_EVIDENCE_MEASUREMENT = "incomplete_final_evidence_measurement"
+
+
 class HeldOutGateOutcome(StrEnum):
     """Conservative outcome of a frozen held-out retrieval gate."""
 
@@ -536,7 +551,7 @@ def evaluate_held_out_gate(
     *,
     policy: HeldOutGatePolicy,
     observations: HeldOutGateObservations,
-) -> tuple[HeldOutGateOutcome, tuple[str, ...]]:
+) -> tuple[HeldOutGateOutcome, tuple[HeldOutGateReason, ...]]:
     """Apply a fixed gate policy while preserving uncertainty and missing coverage."""
     if not isinstance(policy, HeldOutGatePolicy):
         raise TypeError("policy must be a HeldOutGatePolicy.")
@@ -550,18 +565,18 @@ def evaluate_held_out_gate(
 
 
 _INCONCLUSIVE_REASONS: Final = (
-    "missing_question_categories",
-    "underpowered_question_categories",
-    "incomplete_category_measurement",
-    "incomplete_primary_metric",
-    "missing_answerability_status",
+    HeldOutGateReason.MISSING_QUESTION_CATEGORIES,
+    HeldOutGateReason.UNDERPOWERED_QUESTION_CATEGORIES,
+    HeldOutGateReason.INCOMPLETE_CATEGORY_MEASUREMENT,
+    HeldOutGateReason.INCOMPLETE_PRIMARY_METRIC,
+    HeldOutGateReason.MISSING_ANSWERABILITY_STATUS,
 )
 
 
 def _coverage_reasons(
     policy: HeldOutGatePolicy,
     observations: HeldOutGateObservations,
-) -> list[str]:
+) -> list[HeldOutGateReason]:
     """Report every way this run is too thin to conclude anything."""
     categories = observations.categories
     by_type = {coverage.question_type: coverage for coverage in categories}
@@ -570,22 +585,22 @@ def _coverage_reasons(
         for question_type in QUESTION_TYPES
         if question_type not in by_type
     )
-    reasons: list[str] = []
+    reasons: list[HeldOutGateReason] = []
     if missing_categories:
-        reasons.append("missing_question_categories")
+        reasons.append(HeldOutGateReason.MISSING_QUESTION_CATEGORIES)
     if any(
         coverage.case_count < policy.minimum_category_cases
         or coverage.leakage_group_count < policy.minimum_category_leakage_groups
         for coverage in categories
     ):
-        reasons.append("underpowered_question_categories")
+        reasons.append(HeldOutGateReason.UNDERPOWERED_QUESTION_CATEGORIES)
     if any(
         coverage.document_recall is None
         or coverage.recall_interval_lower is None
         or coverage.recall_interval_upper is None
         for coverage in categories
     ):
-        reasons.append("incomplete_category_measurement")
+        reasons.append(HeldOutGateReason.INCOMPLETE_CATEGORY_MEASUREMENT)
     if categories and not missing_categories:
         answerable_count = sum(
             coverage.answerable_case_count for coverage in categories
@@ -594,40 +609,40 @@ def _coverage_reasons(
             coverage.expected_abstention_case_count for coverage in categories
         )
         if answerable_count == 0 or expected_abstention_count == 0:
-            reasons.append("missing_answerability_status")
+            reasons.append(HeldOutGateReason.MISSING_ANSWERABILITY_STATUS)
     if observations.primary_metric_incomplete:
-        reasons.append("incomplete_primary_metric")
+        reasons.append(HeldOutGateReason.INCOMPLETE_PRIMARY_METRIC)
     return reasons
 
 
 def _rate_reasons(
     policy: HeldOutGatePolicy,
     observations: HeldOutGateObservations,
-) -> list[str]:
+) -> list[HeldOutGateReason]:
     """Report failure and degradation rates that breach the approved policy."""
-    reasons: list[str] = []
+    reasons: list[HeldOutGateReason] = []
     if _fraction_less(
         policy.maximum_failure_rate,
         MetricFraction(observations.failed_case_count, observations.case_count),
     ):
-        reasons.append("failure_rate_exceeds_policy")
+        reasons.append(HeldOutGateReason.FAILURE_RATE_EXCEEDS_POLICY)
     if _fraction_less(
         policy.maximum_degraded_rate,
         MetricFraction(observations.degraded_case_count, observations.case_count),
     ):
-        reasons.append("degraded_rate_exceeds_policy")
+        reasons.append(HeldOutGateReason.DEGRADED_RATE_EXCEEDS_POLICY)
     return reasons
 
 
 def _gate_verdict(
     policy: HeldOutGatePolicy,
     observations: HeldOutGateObservations,
-    reasons: list[str],
+    reasons: list[HeldOutGateReason],
 ) -> HeldOutGateOutcome:
     """Decide the verdict, appending any primary-metric reason it establishes."""
     if (
-        "failure_rate_exceeds_policy" in reasons
-        or "degraded_rate_exceeds_policy" in reasons
+        HeldOutGateReason.FAILURE_RATE_EXCEEDS_POLICY in reasons
+        or HeldOutGateReason.DEGRADED_RATE_EXCEEDS_POLICY in reasons
     ):
         return HeldOutGateOutcome.REJECT
     if any(reason in reasons for reason in _INCONCLUSIVE_REASONS):
@@ -636,9 +651,9 @@ def _gate_verdict(
     lower = observations.overall_recall_interval_lower
     minimum = policy.minimum_document_recall_at_10
     if upper is not None and _fraction_less(upper, minimum):
-        reasons.append("primary_metric_below_minimum")
+        reasons.append(HeldOutGateReason.PRIMARY_METRIC_BELOW_MINIMUM)
         return HeldOutGateOutcome.REJECT
     if lower is not None and _fraction_less(lower, minimum):
-        reasons.append("primary_metric_uncertain_at_threshold")
+        reasons.append(HeldOutGateReason.PRIMARY_METRIC_UNCERTAIN_AT_THRESHOLD)
         return HeldOutGateOutcome.INCONCLUSIVE
     return HeldOutGateOutcome.PASS

@@ -1,4 +1,4 @@
-"""RET-04 two-corpus publication, restart, and generation-isolation acceptance."""
+"""Two-corpus dense publication, restart, and generation-isolation acceptance."""
 
 from __future__ import annotations
 

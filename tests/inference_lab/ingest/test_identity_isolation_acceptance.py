@@ -1,4 +1,4 @@
-"""ING-02/PROV-02/STOR-01 acceptance for identity replay and corpus isolation."""
+"""Acceptance for document identity replay and corpus isolation."""
 
 import os
 from pathlib import Path

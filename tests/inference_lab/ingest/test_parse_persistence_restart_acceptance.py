@@ -224,7 +224,7 @@ def _seed_and_publish(case: _Case, tmp_path: Path) -> tuple[Path, Path, Path]:
     )
     try:
         with repository.transaction() as transaction:
-            transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "ING-03 restart"))
+            transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "parse restart"))
             transaction.add_document(DocumentIdentity(source.document_id))
             transaction.add_document_version(version)
             transaction.add_corpus_document_version_membership(

@@ -1,4 +1,4 @@
-"""ING-02/PROV-02/STOR-01 cold-process source-continuity acceptance."""
+"""Cold-process source-continuity acceptance for document identity."""
 
 from pathlib import Path
 

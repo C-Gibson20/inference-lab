@@ -21,7 +21,7 @@ class AuditReportManifest:
     report_id: str
     input_digest: str
     report_digest: str
-    artifacts: tuple[tuple[str, str], ...]
+    artefacts: tuple[tuple[str, str], ...]
 
     def __post_init__(self) -> None:
         self._validate()
@@ -33,15 +33,15 @@ class AuditReportManifest:
         for value in (self.report_id, self.input_digest, self.report_digest):
             if not isinstance(value, str) or not _is_sha256(value):
                 raise ValueError("manifest identities must be SHA-256 values.")
-        if self.artifacts != tuple(sorted(self.artifacts)):
-            raise ValueError("manifest artifacts must be ordered.")
-        if len(self.artifacts) != len({name for name, _ in self.artifacts}):
-            raise ValueError("manifest artifacts must be unique.")
-        for name, checksum in self.artifacts:
+        if self.artefacts != tuple(sorted(self.artefacts)):
+            raise ValueError("manifest artefacts must be ordered.")
+        if len(self.artefacts) != len({name for name, _ in self.artefacts}):
+            raise ValueError("manifest artefacts must be unique.")
+        for name, checksum in self.artefacts:
             if not isinstance(name, str) or not name:
-                raise ValueError("manifest artifact names must be non-empty strings.")
+                raise ValueError("manifest artefact names must be non-empty strings.")
             if not _is_sha256(checksum):
-                raise ValueError("manifest artifact checksums must be SHA-256 values.")
+                raise ValueError("manifest artefact checksums must be SHA-256 values.")
 
 
 def build_audit_report_manifest(
@@ -69,7 +69,7 @@ def build_audit_report_manifest(
         report_id=report.report_id,
         input_digest=report.input_digest,
         report_digest=json_digest,
-        artifacts=(
+        artefacts=(
             ("report.json", json_digest),
             ("report.md", _sha256(markdown_bytes)),
         ),

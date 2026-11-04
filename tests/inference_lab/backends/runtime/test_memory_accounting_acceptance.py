@@ -83,7 +83,7 @@ def _snapshot(
     )
 
 
-def test_run03_observations_roll_up_to_attributed_budget_headroom() -> None:
+def test_memory_observations_roll_up_to_attributed_budget_headroom() -> None:
     weights = _measurement(
         "weights", "generator", MemoryComponentRole.GENERATOR, "model_weights", 700
     )
@@ -117,7 +117,7 @@ def test_run03_observations_roll_up_to_attributed_budget_headroom() -> None:
     assert current.run_id == "run-1"
 
 
-def test_run03_unavailable_observation_makes_budget_indeterminate() -> None:
+def test_unavailable_observation_makes_the_budget_indeterminate() -> None:
     measured = _measurement(
         "weights", "generator", MemoryComponentRole.GENERATOR, "model_weights", 700
     )
@@ -158,7 +158,7 @@ def test_run03_unavailable_observation_makes_budget_indeterminate() -> None:
     assert comparison.measured_bytes == 700
 
 
-def test_run03_snapshot_round_trips_and_rejects_malformed_measurement() -> None:
+def test_memory_snapshot_round_trips_and_rejects_malformed_measurement() -> None:
     weights = _measurement(
         "weights",
         "generator",
@@ -185,7 +185,7 @@ def test_run03_snapshot_round_trips_and_rejects_malformed_measurement() -> None:
         deserialise_memory_snapshot(json.dumps(malformed).encode())
 
 
-def test_run03_emits_safe_measurement_and_budget_records() -> None:
+def test_memory_accounting_emits_safe_measurement_and_budget_records() -> None:
     stream = StringIO()
     configure_logging(LoggingConfig(level="DEBUG", format="json"), stream=stream)
     measurement = _measurement(

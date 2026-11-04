@@ -1,4 +1,4 @@
-"""Compact ING-05 contracts; full stage behavior lives in ingest acceptance."""
+"""Compact baseline contracts; full stage behaviour lives in ingest acceptance."""
 
 from pathlib import Path
 
@@ -96,7 +96,7 @@ def _unchanged_outcome() -> BaselineDocumentOutcome:
     )
 
 
-def test_ing05_request_and_stage_identity_are_corpus_scoped_and_closed() -> None:
+def test_request_and_stage_identity_are_corpus_scoped_and_closed() -> None:
     request = _request(expected_corpus_version=None)
     assert request.expected_corpus_version is None
     assert "/private/input" not in repr(request)
@@ -141,7 +141,7 @@ def test_ing05_request_and_stage_identity_are_corpus_scoped_and_closed() -> None
             _request(max_concurrent_documents=concurrency)  # type: ignore[arg-type]
 
 
-def test_ing05_failures_keep_bounded_stage_scope_and_retryability() -> None:
+def test_document_failures_keep_bounded_stage_scope_and_retryability() -> None:
     parse_failure = BaselineFailure(
         stage=BaselineStage.PARSE,
         category=BaselineFailureCategory.PARSE_FAILED,
@@ -183,7 +183,7 @@ def test_ing05_failures_keep_bounded_stage_scope_and_retryability() -> None:
         BaselineFailure(**(fields | {"retryable": 1}))  # type: ignore[arg-type]
 
 
-def test_ing05_document_outcomes_distinguish_reuse_unsupported_and_failure() -> None:
+def test_document_outcomes_distinguish_reuse_unsupported_and_failure() -> None:
     unchanged = _unchanged_outcome()
     unsupported = BaselineDocumentOutcome(
         ordinal=1,
@@ -250,7 +250,7 @@ def test_ing05_document_outcomes_distinguish_reuse_unsupported_and_failure() -> 
         )
 
 
-def test_ing05_summaries_reconcile_document_failures_and_publication_state() -> None:
+def test_summaries_reconcile_document_failures_and_publication_state() -> None:
     completed = BaselineIngestSummary(
         corpus_id=_CORPUS_ID,
         proposed_corpus_version=_PROPOSED_VERSION,
@@ -305,7 +305,7 @@ def test_ing05_summaries_reconcile_document_failures_and_publication_state() -> 
         )
 
 
-def test_ing05_public_api_preserves_corpus_and_proposal_identity() -> None:
+def test_ingest_public_api_preserves_corpus_and_proposal_identity() -> None:
     from inference_lab import ingest
 
     public_names = (

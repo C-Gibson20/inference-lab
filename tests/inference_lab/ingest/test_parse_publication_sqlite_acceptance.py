@@ -1,4 +1,4 @@
-"""ING-03/STOR-02 SQLite acceptance for replay, conflict, and supersession."""
+"""SQLite acceptance for parse replay, conflict, and supersession."""
 
 import hashlib
 from contextlib import contextmanager
@@ -78,7 +78,7 @@ def _case(tmp_path: Path) -> Iterator[_Case]:
         content_hash=content_hash,
     )
     with repository.transaction() as transaction:
-        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "ING-03 acceptance"))
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "parse acceptance"))
         transaction.add_document(DocumentIdentity(source.document_id))
         transaction.add_document_version(version)
         transaction.add_corpus_document_version_membership(

@@ -167,11 +167,13 @@ def test_configuration_rejects_missing_invalid_unknown_and_overlapping_values(
 
     invalid_evidence_count = copy.deepcopy(valid)
     invalid_evidence_count["retrieval"]["evidence_count"] = 11  # type: ignore[index]
-    cases.append(("evidence count above RET-06 maximum", invalid_evidence_count))
+    cases.append(("evidence count above the supported maximum", invalid_evidence_count))
 
     invalid_candidate_limit = copy.deepcopy(valid)
     invalid_candidate_limit["retrieval"]["candidate_limit"] = 101  # type: ignore[index]
-    cases.append(("reranker candidate limit above RUN-05 cap", invalid_candidate_limit))
+    cases.append(
+        ("reranker candidate limit above the backend cap", invalid_candidate_limit)
+    )
 
     boolean_candidate_limit = copy.deepcopy(valid)
     boolean_candidate_limit["retrieval"]["candidate_limit"] = True  # type: ignore[index]

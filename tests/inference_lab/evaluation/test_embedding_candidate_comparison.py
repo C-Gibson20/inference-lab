@@ -1,4 +1,4 @@
-"""Tests for RUN-04 candidate comparison scoring."""
+"""Tests for embedding candidate comparison scoring."""
 
 import torch
 

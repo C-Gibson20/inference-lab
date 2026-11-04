@@ -145,7 +145,14 @@ The new directory contains exactly:
 - `report.json`: exact aggregate metrics and reconciliation counts;
 - `report.md`: deterministic human-readable metrics, identities, diagnostics,
   and limitations; and
-- `manifest.json`: sizes and SHA-256 checksums for those four artefacts.
+- `manifest.json`: sizes and SHA-256 checksums for those four artefacts. Its
+  `schema_version` is `2.0.0`; version `1.0.0` named the artefact array
+  `artifacts` and is rejected rather than read.
+
+The gate verdict's `outcome_reasons` are a **closed set**, enumerated by
+`HeldOutGateReason`. A reader may switch on them exhaustively, and adding a
+reason is a schema change to the report contract rather than a free-text
+addition.
 
 The destination must be absent. Publication stages and validates every file,
 flushes file and directory metadata, and atomically promotes the complete

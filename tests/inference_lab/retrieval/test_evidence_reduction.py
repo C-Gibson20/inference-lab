@@ -1,4 +1,4 @@
-"""RET-07 deterministic evidence reduction and provenance contracts."""
+"""Deterministic evidence reduction and provenance contracts."""
 
 from dataclasses import dataclass, replace
 
@@ -202,7 +202,7 @@ def test_unmapped_oversize_item_is_reported_and_does_not_break_budget() -> None:
     assert outcome.token_count == 0
 
 
-def test_item_ceiling_and_deterministic_order_follow_ret06_rank() -> None:
+def test_item_ceiling_and_deterministic_order_follow_the_reranked_rank() -> None:
     hits = (_hit(1, "first"), _hit(2, "second"), _hit(3, "third"))
 
     first = reduce_evidence(_request(hits, token_budget=10, item_budget=2))

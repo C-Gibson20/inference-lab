@@ -1,4 +1,4 @@
-"""ING-05/STOR-03/PROF-02 acceptance for baseline generation publication."""
+"""Acceptance for baseline generation publication and its observed stages."""
 
 import hashlib
 import sqlite3

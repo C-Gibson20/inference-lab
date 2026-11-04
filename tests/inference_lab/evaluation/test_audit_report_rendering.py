@@ -1,4 +1,4 @@
-"""EVAL-02 rendered report acceptance."""
+"""Rendered audit report acceptance."""
 
 from inference_lab.evaluation import render_audit_report
 

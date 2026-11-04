@@ -3,7 +3,7 @@
 This directory records the local candidate comparison for RUN-05 PR1. Model
 weights and tokenizer files are stored outside the repository under
 `~/Models/inference-lab/run05-candidates/`; only their identities and SHA-256
-digests are checked in. `artifact-manifest.json` lists every acquired file,
+digests are checked in. `artefact-manifest.json` lists every acquired file,
 including the MiniCPM custom model code. The runner verifies the full file
 inventory and hashes before loading any candidate.
 
@@ -62,7 +62,7 @@ one warmup pass and three measured passes on CPU with an internal batch size of
 environment, quality metrics, latency, throughput,
 and RUN-03 memory observations in
 [`results/candidate-comparison.json`](results/candidate-comparison.json).
-The JSON records the digest of `artifact-manifest.json`; that manifest contains
+The JSON records the digest of `artefact-manifest.json`; that manifest contains
 the SHA-256 digest for each local file, avoiding a second copy of the inventory
 in the results file.
 

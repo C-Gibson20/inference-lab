@@ -1,4 +1,4 @@
-"""EVAL-02 report validation through publication invariants."""
+"""Audit report validation through publication invariants."""
 
 from collections.abc import Callable
 from dataclasses import replace

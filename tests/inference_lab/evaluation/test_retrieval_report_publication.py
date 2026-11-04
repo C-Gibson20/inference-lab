@@ -11,7 +11,7 @@ from inference_lab.evaluation import (
     deserialise_case_results,
     deserialise_retrieval_manifest,
     deserialise_retrieval_report,
-    deserialise_run_artifact,
+    deserialise_run_artefact,
     publish_retrieval_evaluation,
     retrieval_result_digest,
 )
@@ -44,7 +44,7 @@ def test_publish_writes_and_reopens_complete_immutable_bundle(tmp_path: Path) ->
         "run.json",
     )
     assert (
-        deserialise_run_artifact((destination / "run.json").read_bytes()).identity
+        deserialise_run_artefact((destination / "run.json").read_bytes()).identity
         == run.identity
     )
     assert (
