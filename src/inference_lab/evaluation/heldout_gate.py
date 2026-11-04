@@ -18,7 +18,7 @@ from inference_lab.retrieval import FusionPolicy
 from inference_lab.retrieval.reranking import RerankingIdentity
 
 HELD_OUT_RUN_CONTRACT_VERSION: Final[str] = "1.0.0"
-HELD_OUT_GATE_POLICY_VERSION: Final[str] = "1.0.0"
+HELD_OUT_GATE_POLICY_VERSION: Final[str] = "2.0.0"
 HELD_OUT_UNCERTAINTY_METHOD: Final[str] = "leakage-cluster-bootstrap"
 
 
@@ -29,11 +29,13 @@ class HeldOutGateReason(StrEnum):
     UNDERPOWERED_QUESTION_CATEGORIES = "underpowered_question_categories"
     INCOMPLETE_CATEGORY_MEASUREMENT = "incomplete_category_measurement"
     MISSING_ANSWERABILITY_STATUS = "missing_answerability_status"
-    INCOMPLETE_PRIMARY_METRIC = "incomplete_primary_metric"
+    INCOMPLETE_PASSAGE_RECALL = "incomplete_passage_recall"
+    INCOMPLETE_DOCUMENT_RECALL = "incomplete_document_recall"
     FAILURE_RATE_EXCEEDS_POLICY = "failure_rate_exceeds_policy"
     DEGRADED_RATE_EXCEEDS_POLICY = "degraded_rate_exceeds_policy"
-    PRIMARY_METRIC_BELOW_MINIMUM = "primary_metric_below_minimum"
-    PRIMARY_METRIC_UNCERTAIN_AT_THRESHOLD = "primary_metric_uncertain_at_threshold"
+    PASSAGE_RECALL_BELOW_MINIMUM = "passage_recall_below_minimum"
+    PASSAGE_RECALL_UNCERTAIN_AT_THRESHOLD = "passage_recall_uncertain_at_threshold"
+    DOCUMENT_RECALL_FLOOR_BREACHED = "document_recall_floor_breached"
     INCOMPLETE_FINAL_EVIDENCE_MEASUREMENT = "incomplete_final_evidence_measurement"
 
 
@@ -252,9 +254,15 @@ class HeldOutRunContract:
 class HeldOutGatePolicy:
     """Immutable thresholds fixed before opening held-out results.
 
+    Passage recall is the gated metric: it decides the verdict. Document recall
+    is a floor, breached only when a channel retrieves almost nothing, so it
+    separates a dark channel from a quality regression.
+
     Deliberately has no defaults: a run must state its threshold and rationale.
     """
 
+    minimum_passage_recall: MetricFraction
+    passage_recall_cutoff: int
     minimum_document_recall: MetricFraction
     document_recall_cutoff: int
     maximum_failure_rate: MetricFraction
@@ -273,6 +281,7 @@ class HeldOutGatePolicy:
     def _validate(self) -> None:
         """Reject incomplete, unsupported, or mutable policy inputs."""
         for name in (
+            "minimum_passage_recall",
             "minimum_document_recall",
             "maximum_failure_rate",
             "maximum_degraded_rate",
@@ -280,6 +289,7 @@ class HeldOutGatePolicy:
             if not isinstance(getattr(self, name), MetricFraction):
                 raise TypeError(f"{name} must be a MetricFraction.")
         for name in (
+            "passage_recall_cutoff",
             "document_recall_cutoff",
             "minimum_category_cases",
             "minimum_category_leakage_groups",
@@ -317,6 +327,8 @@ class HeldOutGatePolicy:
         """Return the complete policy identity for inclusion in a run record."""
         return {
             "version": self.version,
+            "passage_recall_cutoff": self.passage_recall_cutoff,
+            "minimum_passage_recall": self.minimum_passage_recall.as_dict(),
             "document_recall_cutoff": self.document_recall_cutoff,
             "minimum_document_recall": (self.minimum_document_recall.as_dict()),
             "maximum_failure_rate": self.maximum_failure_rate.as_dict(),
@@ -456,9 +468,12 @@ class HeldOutGateObservations:
     """The measured held-out outcome that a gate policy is applied to."""
 
     categories: tuple[HeldOutCategoryCoverage, ...]
+    overall_passage_recall: MetricFraction | None
+    overall_passage_interval_lower: MetricFraction | None
+    overall_passage_interval_upper: MetricFraction | None
     overall_document_recall: MetricFraction | None
-    overall_recall_interval_lower: MetricFraction | None
-    overall_recall_interval_upper: MetricFraction | None
+    overall_document_interval_lower: MetricFraction | None
+    overall_document_interval_upper: MetricFraction | None
     case_count: int
     failed_case_count: int
     degraded_case_count: int
@@ -518,33 +533,51 @@ class HeldOutGateObservations:
             raise RetrievalEvaluationContractError("overall counts do not reconcile.")
 
     def _validate_metrics(self) -> None:
-        """Require a consistent primary metric and uncertainty interval."""
+        """Require consistent gated and floor metrics with their intervals."""
         for name in (
+            "overall_passage_recall",
+            "overall_passage_interval_lower",
+            "overall_passage_interval_upper",
             "overall_document_recall",
-            "overall_recall_interval_lower",
-            "overall_recall_interval_upper",
+            "overall_document_interval_lower",
+            "overall_document_interval_upper",
         ):
             value = getattr(self, name)
             if value is not None and not isinstance(value, MetricFraction):
                 raise TypeError(f"{name} must be a MetricFraction or None.")
-        lower = self.overall_recall_interval_lower
-        upper = self.overall_recall_interval_upper
-        if (lower is None) != (upper is None):
-            raise RetrievalEvaluationContractError(
-                "overall recall interval bounds must be supplied together."
-            )
-        if lower is not None and upper is not None and _fraction_less(upper, lower):
-            raise RetrievalEvaluationContractError(
-                "overall recall interval lower bound must not exceed its upper bound."
-            )
+        for lower, upper in (
+            (self.overall_passage_interval_lower, self.overall_passage_interval_upper),
+            (
+                self.overall_document_interval_lower,
+                self.overall_document_interval_upper,
+            ),
+        ):
+            if (lower is None) != (upper is None):
+                raise RetrievalEvaluationContractError(
+                    "overall recall interval bounds must be supplied together."
+                )
+            if lower is not None and upper is not None and _fraction_less(upper, lower):
+                raise RetrievalEvaluationContractError(
+                    "overall recall interval lower bound must not exceed its upper "
+                    "bound."
+                )
 
     @property
-    def primary_metric_incomplete(self) -> bool:
-        """Return whether the primary metric or its interval is missing."""
+    def passage_recall_incomplete(self) -> bool:
+        """Return whether the gated metric or its interval is missing."""
+        return (
+            self.overall_passage_recall is None
+            or self.overall_passage_interval_lower is None
+            or self.overall_passage_interval_upper is None
+        )
+
+    @property
+    def document_recall_incomplete(self) -> bool:
+        """Return whether the floor metric or its interval is missing."""
         return (
             self.overall_document_recall is None
-            or self.overall_recall_interval_lower is None
-            or self.overall_recall_interval_upper is None
+            or self.overall_document_interval_lower is None
+            or self.overall_document_interval_upper is None
         )
 
 
@@ -569,7 +602,8 @@ _INCONCLUSIVE_REASONS: Final = (
     HeldOutGateReason.MISSING_QUESTION_CATEGORIES,
     HeldOutGateReason.UNDERPOWERED_QUESTION_CATEGORIES,
     HeldOutGateReason.INCOMPLETE_CATEGORY_MEASUREMENT,
-    HeldOutGateReason.INCOMPLETE_PRIMARY_METRIC,
+    HeldOutGateReason.INCOMPLETE_PASSAGE_RECALL,
+    HeldOutGateReason.INCOMPLETE_DOCUMENT_RECALL,
     HeldOutGateReason.MISSING_ANSWERABILITY_STATUS,
 )
 
@@ -611,8 +645,10 @@ def _coverage_reasons(
         )
         if answerable_count == 0 or expected_abstention_count == 0:
             reasons.append(HeldOutGateReason.MISSING_ANSWERABILITY_STATUS)
-    if observations.primary_metric_incomplete:
-        reasons.append(HeldOutGateReason.INCOMPLETE_PRIMARY_METRIC)
+    if observations.passage_recall_incomplete:
+        reasons.append(HeldOutGateReason.INCOMPLETE_PASSAGE_RECALL)
+    if observations.document_recall_incomplete:
+        reasons.append(HeldOutGateReason.INCOMPLETE_DOCUMENT_RECALL)
     return reasons
 
 
@@ -648,13 +684,35 @@ def _gate_verdict(
         return HeldOutGateOutcome.REJECT
     if any(reason in reasons for reason in _INCONCLUSIVE_REASONS):
         return HeldOutGateOutcome.INCONCLUSIVE
-    upper = observations.overall_recall_interval_upper
-    lower = observations.overall_recall_interval_lower
-    minimum = policy.minimum_document_recall
-    if upper is not None and _fraction_less(upper, minimum):
-        reasons.append(HeldOutGateReason.PRIMARY_METRIC_BELOW_MINIMUM)
+    reasons.extend(_metric_reasons(policy, observations))
+    if (
+        HeldOutGateReason.DOCUMENT_RECALL_FLOOR_BREACHED in reasons
+        or HeldOutGateReason.PASSAGE_RECALL_BELOW_MINIMUM in reasons
+    ):
         return HeldOutGateOutcome.REJECT
-    if lower is not None and _fraction_less(lower, minimum):
-        reasons.append(HeldOutGateReason.PRIMARY_METRIC_UNCERTAIN_AT_THRESHOLD)
+    if HeldOutGateReason.PASSAGE_RECALL_UNCERTAIN_AT_THRESHOLD in reasons:
         return HeldOutGateOutcome.INCONCLUSIVE
     return HeldOutGateOutcome.PASS
+
+
+def _metric_reasons(
+    policy: HeldOutGatePolicy,
+    observations: HeldOutGateObservations,
+) -> list[HeldOutGateReason]:
+    """Report the gated metric and the floor against their fixed thresholds."""
+    reasons: list[HeldOutGateReason] = []
+    # The floor has no uncertain branch. It exists to catch a channel that has
+    # gone dark, so it fires only when even the optimistic bound falls short.
+    document_upper = observations.overall_document_interval_upper
+    if document_upper is not None and _fraction_less(
+        document_upper, policy.minimum_document_recall
+    ):
+        reasons.append(HeldOutGateReason.DOCUMENT_RECALL_FLOOR_BREACHED)
+    minimum = policy.minimum_passage_recall
+    upper = observations.overall_passage_interval_upper
+    lower = observations.overall_passage_interval_lower
+    if upper is not None and _fraction_less(upper, minimum):
+        reasons.append(HeldOutGateReason.PASSAGE_RECALL_BELOW_MINIMUM)
+    elif lower is not None and _fraction_less(lower, minimum):
+        reasons.append(HeldOutGateReason.PASSAGE_RECALL_UNCERTAIN_AT_THRESHOLD)
+    return reasons

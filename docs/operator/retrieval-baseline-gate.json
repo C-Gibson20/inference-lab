@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "dataset": {
     "id": "sarm1-retrieval-question-set",
     "version": "1.4.0",
@@ -12,6 +12,16 @@
   },
   "split": "held_out",
   "primary_gate": {
+    "channel": "fused_pre_rerank",
+    "metric": "passage_recall",
+    "cutoff": 10,
+    "minimum": {
+      "numerator": 1,
+      "denominator": 3
+    },
+    "denominator": "all relevant passage targets, including failed and empty outcomes"
+  },
+  "document_recall_floor": {
     "channel": "fused_pre_rerank",
     "metric": "document_recall",
     "cutoff": 10,
@@ -38,5 +48,5 @@
     "confidence_level_percent": 95,
     "replicates": 10000
   },
-  "rationale": "The product acceptance floor is at least nine of ten relevant document targets retrieved within the first ten fused candidates. The development split retrieved all 20 of 20 relevant document targets with no failed or degraded fused cases, so this floor is attainable on the pinned sample without using held-out outcomes. A 5% maximum for failures and degraded cases allows at most one in twenty while retaining those cases in the denominator. Requiring three cases from three leakage groups prevents singleton categories from being treated as conclusive; sparse categories must leave the overall gate inconclusive. Dataset 1.4.0 re-binds the identical 50 cases to corpus version 3 after the dense index was rebuilt for storage format 2.0.0; document versions, source spans, and chunk count are unchanged, so every threshold above is carried over verbatim from the 1.3.0 approval rather than chosen against any 1.4.0 result."
+  "rationale": "Passage recall at cutoff 10 is the gated metric. Document recall at the same cutoff is retained as a floor: every channel now returns 24 of 24 relevant document targets, so the metric can no longer fail on quality and a breach would mean a channel has stopped returning results at all, which is worth distinguishing at a glance from a quality regression. The passage threshold is one relevant passage target in three, selected on the development split: 20 cases returned 11 of 21 relevant passage targets within the first ten fused candidates, with a 95% leakage-cluster-bootstrap interval of 0.364 to 0.700. Those 20 cases form only 5 leakage groups, and the bootstrap resamples groups rather than cases, so the interval is wide and the gate reports inconclusive whenever its lower bound falls below the minimum. Any threshold above 0.364 would therefore have been inconclusive on the split used to choose it; one third is the largest simple fraction below that bound with margin. It is a floor set by the resolution of this sample rather than a statement of target quality, and it should be raised once the question set supports more than five leakage groups. The passage figures of the 1.4.0 held-out run were already reported under the previous document-gated policy, so this approval is not blind with respect to that run; a blind confirmation requires a later dataset version. A 5% maximum for failures and degraded cases allows at most one in twenty while retaining those cases in the denominator. Requiring three cases from three leakage groups prevents singleton categories from being treated as conclusive; sparse categories must leave the overall gate inconclusive. Dataset 1.4.0 binds 50 cases to corpus version 1493b36a after the dense index was rebuilt for storage format 2.0.0."
 }

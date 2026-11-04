@@ -841,9 +841,16 @@ def build_held_out_baseline_report(
         policy=contract.gate_policy,
         observations=HeldOutGateObservations(
             categories=gate_summary.categories,
+            overall_passage_recall=gate_summary.passage_recall.micro,
+            overall_passage_interval_lower=(gate_summary.passage_recall_interval_lower),
+            overall_passage_interval_upper=(gate_summary.passage_recall_interval_upper),
             overall_document_recall=gate_summary.document_recall.micro,
-            overall_recall_interval_lower=(gate_summary.document_recall_interval_lower),
-            overall_recall_interval_upper=(gate_summary.document_recall_interval_upper),
+            overall_document_interval_lower=(
+                gate_summary.document_recall_interval_lower
+            ),
+            overall_document_interval_upper=(
+                gate_summary.document_recall_interval_upper
+            ),
             case_count=len(observations),
             failed_case_count=gate_summary.failed_case_count,
             degraded_case_count=gate_summary.degraded_case_count,

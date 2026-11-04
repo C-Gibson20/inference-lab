@@ -36,7 +36,9 @@ from inference_lab.retrieval.reranking import RerankingIdentity
 
 def _policy() -> HeldOutGatePolicy:
     return HeldOutGatePolicy(
-        minimum_document_recall=MetricFraction(8, 10),
+        minimum_passage_recall=MetricFraction(8, 10),
+        passage_recall_cutoff=10,
+        minimum_document_recall=MetricFraction(9, 10),
         document_recall_cutoff=10,
         maximum_failure_rate=MetricFraction(1, 20),
         maximum_degraded_rate=MetricFraction(1, 10),
@@ -158,6 +160,9 @@ def _decide(
     recall: MetricFraction | None = MetricFraction(9, 10),
     lower: MetricFraction | None = MetricFraction(85, 100),
     upper: MetricFraction | None = MetricFraction(95, 100),
+    document_recall: MetricFraction | None = MetricFraction(1, 1),
+    document_lower: MetricFraction | None = MetricFraction(1, 1),
+    document_upper: MetricFraction | None = MetricFraction(1, 1),
     failed: int = 0,
     degraded: int = 0,
 ) -> tuple[HeldOutGateOutcome, tuple[str, ...]]:
@@ -175,9 +180,12 @@ def _decide(
         policy=_policy(),
         observations=HeldOutGateObservations(
             categories=selected_categories,
-            overall_document_recall=recall,
-            overall_recall_interval_lower=lower,
-            overall_recall_interval_upper=upper,
+            overall_passage_recall=recall,
+            overall_passage_interval_lower=lower,
+            overall_passage_interval_upper=upper,
+            overall_document_recall=document_recall,
+            overall_document_interval_lower=document_lower,
+            overall_document_interval_upper=document_upper,
             case_count=2 * len(QUESTION_TYPES),
             failed_case_count=failed,
             degraded_case_count=degraded,
@@ -194,9 +202,11 @@ def test_policy_persists_thresholds_rationale_and_uncertainty_identity() -> None
         HELD_OUT_RUN_CONTRACT_VERSION
     )
     assert policy.as_dict() == {
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "passage_recall_cutoff": 10,
+        "minimum_passage_recall": {"numerator": 8, "denominator": 10},
         "document_recall_cutoff": 10,
-        "minimum_document_recall": {"numerator": 8, "denominator": 10},
+        "minimum_document_recall": {"numerator": 9, "denominator": 10},
         "maximum_failure_rate": {"numerator": 1, "denominator": 20},
         "maximum_degraded_rate": {"numerator": 1, "denominator": 10},
         "minimum_category_cases": 2,
@@ -258,7 +268,7 @@ def test_gate_rejects_when_upper_bound_is_below_minimum() -> None:
     )
 
     assert outcome is HeldOutGateOutcome.REJECT
-    assert "primary_metric_below_minimum" in reasons
+    assert "passage_recall_below_minimum" in reasons
 
 
 def test_gate_is_inconclusive_for_crossing_interval_or_missing_coverage() -> None:
@@ -271,9 +281,34 @@ def test_gate_is_inconclusive_for_crossing_interval_or_missing_coverage() -> Non
     )
 
     assert crossing is HeldOutGateOutcome.INCONCLUSIVE
-    assert "primary_metric_uncertain_at_threshold" in crossing_reasons
+    assert "passage_recall_uncertain_at_threshold" in crossing_reasons
     assert missing is HeldOutGateOutcome.INCONCLUSIVE
     assert "missing_question_categories" in missing_reasons
+
+
+def test_gate_reports_a_dark_channel_as_a_floor_breach() -> None:
+    outcome, reasons = _decide(
+        document_recall=MetricFraction(0, 24),
+        document_lower=MetricFraction(0, 1),
+        document_upper=MetricFraction(0, 1),
+    )
+
+    assert outcome is HeldOutGateOutcome.REJECT
+    assert "document_recall_floor_breached" in reasons
+
+
+def test_gate_passes_a_saturated_floor_while_failing_the_gated_metric() -> None:
+    # The state this policy exists for: documents cannot discriminate, so the
+    # verdict must come from passage recall alone.
+    outcome, reasons = _decide(
+        recall=MetricFraction(1, 2),
+        lower=MetricFraction(4, 10),
+        upper=MetricFraction(6, 10),
+    )
+
+    assert outcome is HeldOutGateOutcome.REJECT
+    assert "passage_recall_below_minimum" in reasons
+    assert "document_recall_floor_breached" not in reasons
 
 
 def test_gate_rejects_failure_rate_over_the_fixed_limit() -> None:
@@ -352,7 +387,9 @@ def test_category_contract_rejects_incoherent_population_and_interval() -> None:
 def test_policy_rejects_unreasoned_thresholds_and_unsupported_uncertainty() -> None:
     with pytest.raises(RetrievalEvaluationContractError, match="rationale"):
         HeldOutGatePolicy(
-            minimum_document_recall=MetricFraction(8, 10),
+            minimum_passage_recall=MetricFraction(8, 10),
+            passage_recall_cutoff=10,
+            minimum_document_recall=MetricFraction(9, 10),
             document_recall_cutoff=10,
             maximum_failure_rate=MetricFraction(1, 20),
             maximum_degraded_rate=MetricFraction(1, 10),

@@ -122,6 +122,8 @@ def _contract(case_ids: tuple[str, ...]) -> HeldOutRunContract:
     return HeldOutRunContract(
         evaluation_identity=base_identity,
         gate_policy=HeldOutGatePolicy(
+            minimum_passage_recall=MetricFraction(1, 2),
+            passage_recall_cutoff=10,
             minimum_document_recall=MetricFraction(1, 1),
             document_recall_cutoff=10,
             maximum_failure_rate=MetricFraction(0, 1),
