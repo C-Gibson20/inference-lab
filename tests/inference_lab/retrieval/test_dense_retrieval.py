@@ -47,6 +47,7 @@ from inference_lab.provenance import (
     RecordId,
 )
 from inference_lab.retrieval import (
+    DenseBuildRequest,
     DenseIndexCompatibility,
     execute_dense_retrieval,
 )
@@ -295,11 +296,13 @@ def _prepared_query(
     index_dir = tmp_path / "index"
     outcome = build_dense_generation(
         index_dir,
-        source_manifest,
+        DenseBuildRequest(
+            source_manifest=source_manifest,
+            compatibility=compatibility,
+            metadata_db_path=tmp_path / "metadata.sqlite3",
+            source_dir=tmp_path / "sources",
+        ),
         embedder,
-        metadata_db_path=tmp_path / "metadata.sqlite3",
-        source_dir=tmp_path / "sources",
-        compatibility=compatibility,
     )
     reference = replace(
         outcome.manifest.component_generation(),
@@ -427,15 +430,17 @@ def test_query_against_empty_generation_completes_without_embedding(
     )
     outcome = build_dense_generation(
         tmp_path / "index",
-        source,
-        embedder,
-        metadata_db_path=tmp_path / "metadata.sqlite3",
-        source_dir=tmp_path / "sources",
-        compatibility=DenseIndexCompatibility(
-            model_metadata=embedder.metadata,
-            dimensions=3,
-            embedding_profile=embedder.profile,
+        DenseBuildRequest(
+            source_manifest=source,
+            compatibility=DenseIndexCompatibility(
+                model_metadata=embedder.metadata,
+                dimensions=3,
+                embedding_profile=embedder.profile,
+            ),
+            metadata_db_path=tmp_path / "metadata.sqlite3",
+            source_dir=tmp_path / "sources",
         ),
+        embedder,
     )
     reference = replace(
         outcome.manifest.component_generation(),
@@ -671,11 +676,13 @@ def test_RET_04_committed_dense_generation_reopens_and_corruption_fails_closed(
     )
     outcome = build_dense_generation(
         index_dir,
-        source_manifest,
+        DenseBuildRequest(
+            source_manifest=source_manifest,
+            compatibility=compatibility,
+            metadata_db_path=database_path,
+            source_dir=source_dir,
+        ),
         embedder,
-        metadata_db_path=database_path,
-        source_dir=source_dir,
-        compatibility=compatibility,
     )
     from inference_lab.retrieval import DenseGenerationParticipant
 
@@ -803,12 +810,12 @@ def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new
         dimensions=3,
         embedding_profile=rebuilding_embedder.profile,
     )
-    build_arguments = {
-        "expected_corpus_version": _VERSION,
-        "metadata_db_path": tmp_path / "metadata.sqlite3",
-        "source_dir": tmp_path / "sources",
-        "compatibility": compatibility,
-    }
+    build_request = DenseBuildRequest(
+        source_manifest=proposed_manifest,
+        compatibility=compatibility,
+        metadata_db_path=tmp_path / "metadata.sqlite3",
+        source_dir=tmp_path / "sources",
+    )
     generation_ids_before = {
         generation_path.name for generation_path in (index_dir / "dense").iterdir()
     }
@@ -817,10 +824,10 @@ def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new
     with pytest.raises(DenseError) as failure:
         build_dense_generation_for_corpus_update(
             index_dir,
-            proposed_manifest,
+            build_request,
             rebuilding_embedder,
             cast(MetadataRepository, repository),
-            **build_arguments,
+            expected_corpus_version=_VERSION,
         )
 
     assert failure.value.category is DenseFailureCategory.EMBEDDING_FAILURE
@@ -836,10 +843,10 @@ def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new
     rebuilding_embedder.fail = False
     rebuilt = build_dense_generation_for_corpus_update(
         index_dir,
-        proposed_manifest,
+        build_request,
         rebuilding_embedder,
         cast(MetadataRepository, repository),
-        **build_arguments,
+        expected_corpus_version=_VERSION,
     )
 
     assert rebuilt.manifest.generation_id != active_reference.generation_id

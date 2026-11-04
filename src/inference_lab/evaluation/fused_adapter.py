@@ -20,6 +20,7 @@ from inference_lab.retrieval import (
     DENSE_COMPONENT_KIND,
     FUSION_DEDUPLICATION_VERSION,
     LEXICAL_COMPONENT_KIND,
+    BorrowedRetrievalState,
     DenseError,
     DenseGeneration,
     FusionPolicy,
@@ -280,9 +281,11 @@ class LocalFusedEvaluationAdapter:
                         policy=self._policy,
                         profiling=profiling,
                         profiling_identity=profiling_identity,
-                        snapshot=snapshot,
-                        lexical_generation=lexical_generation,
-                        dense_generation=dense_generation,
+                        borrowed=BorrowedRetrievalState(
+                            snapshot=snapshot,
+                            lexical_generation=lexical_generation,
+                            dense_generation=dense_generation,
+                        ),
                     )
             except (DenseError, LexicalError):
                 raise RetrievalEvaluationExecutionError(

@@ -103,6 +103,7 @@ def test_all_retrieval_channels_share_one_provenance_preserving_envelope() -> No
 
 def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
     expected = {
+        "BorrowedRetrievalState",
         "CandidateKind",
         "ChannelScore",
         "EvidenceHit",
@@ -111,6 +112,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "EvidenceReductionExecutionError",
         "EvidenceReductionFailure",
         "EvidenceReductionFailureCategory",
+        "EvidenceReductionOverrides",
         "EvidenceReductionIdentity",
         "EvidenceReductionOutcome",
         "EvidenceReductionRequest",
@@ -166,6 +168,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "DENSE_SCORE_LABEL",
         "DenseDistanceMetric",
         "DenseError",
+        "DenseBuildRequest",
         "DenseFailureCategory",
         "DenseGeneration",
         "DenseGenerationParticipant",

@@ -9,7 +9,11 @@ from typing import Any, cast
 
 import pytest
 
-from inference_lab.provenance import DocumentId, DocumentVersionId
+from inference_lab.provenance import (
+    CorpusVersionId,
+    DocumentId,
+    DocumentVersionId,
+)
 from inference_lab.retrieval import (
     DenseIndexEntry,
     DenseVector,
@@ -165,3 +169,105 @@ def test_a_selective_filter_tops_the_window_up_without_overshooting(
     assert limits == sorted(limits)
     assert limits[-1] == 100
     assert len(limits) > 1
+
+
+def test_hybrid_resolves_each_candidate_span_once_at_the_aggregation_layer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from inference_lab.retrieval import RetrievalLimit, RetrievalQuery
+    from inference_lab.retrieval.hybrid import execute_hybrid_retrieval
+    from inference_lab.storage import _sqlite_corpus_snapshots as snapshots
+    from inference_lab.storage import open_metadata_repository
+    from tests.inference_lab.retrieval.pipeline_fixtures import (
+        PipelineEmbedder,
+        publish_corpora,
+    )
+
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "index"
+    published = publish_corpora(
+        database_path, source_dir, index_dir, PipelineEmbedder()
+    )
+    corpus_id = next(iter(published))
+    resolved: list[object] = []
+    original = snapshots.SQLiteCorpusSnapshot.resolve_source_span
+
+    def counting_resolve(self: object, source_span_id: object) -> object:
+        resolved.append(source_span_id)
+        return original(self, source_span_id)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        snapshots.SQLiteCorpusSnapshot, "resolve_source_span", counting_resolve
+    )
+    repository = open_metadata_repository(database_path, source_dir=source_dir)
+    try:
+        corpus_version: CorpusVersionId | None = None
+        with repository.open_active_corpus_snapshot(corpus_id) as snapshot:
+            corpus_version = snapshot.version.corpus_version
+        assert corpus_version is not None
+        resolved.clear()
+        result = execute_hybrid_retrieval(
+            repository,
+            index_dir,
+            corpus_id,
+            RetrievalQuery("alpha", corpus_version, RetrievalLimit(5)),
+            PipelineEmbedder(),
+        )
+    finally:
+        repository.close()
+
+    assert result.hits
+    distinct = {
+        source.source_span_id for hit in result.hits for source in hit.candidate.sources
+    }
+    # A channel executor validates its own candidates and the aggregator
+    # resolves them once more; a third pass would mean duplicated work.
+    assert len(resolved) <= 2 * len(distinct)
+
+
+def test_a_bounded_duplicate_expansion_is_reported_rather_than_silent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from structlog.testing import capture_logs
+
+    from inference_lab.retrieval import RetrievalLimit, RetrievalQuery, hybrid
+    from inference_lab.storage import open_metadata_repository
+    from tests.inference_lab.retrieval.pipeline_fixtures import (
+        PipelineEmbedder,
+        publish_corpora,
+    )
+
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "index"
+    published = publish_corpora(
+        database_path, source_dir, index_dir, PipelineEmbedder()
+    )
+    corpus_id = next(iter(published))
+    # Force the bound with a corpus small enough to walk entirely otherwise.
+    monkeypatch.setattr(hybrid, "MAX_DUPLICATE_EXPANSION_VERSIONS", 1)
+    repository = open_metadata_repository(database_path, source_dir=source_dir)
+    try:
+        corpus_version: CorpusVersionId | None = None
+        with repository.open_active_corpus_snapshot(corpus_id) as snapshot:
+            corpus_version = snapshot.version.corpus_version
+        assert corpus_version is not None
+        with capture_logs() as logs:
+            result = hybrid.execute_hybrid_retrieval(
+                repository,
+                index_dir,
+                corpus_id,
+                RetrievalQuery("alpha", corpus_version, RetrievalLimit(5)),
+                PipelineEmbedder(),
+            )
+    finally:
+        repository.close()
+
+    assert result.hits
+    completion = next(
+        row for row in logs if row["event"] == "retrieval_fusion_completed"
+    )
+    assert completion["duplicate_expansion_truncated"] is True

@@ -7,11 +7,13 @@ import pytest
 from inference_lab.backends.runtime import FakeFailureMode
 from inference_lab.provenance import CorpusId
 from inference_lab.retrieval import (
+    DenseBuildRequest,
     DenseError,
     DenseFailureCategory,
     EvidenceHit,
     EvidenceReductionAction,
     EvidenceReductionOutcome,
+    EvidenceReductionOverrides,
     FusionPolicy,
     ResultStatus,
     RetrievalChannel,
@@ -205,7 +207,7 @@ def test_hybrid_evidence_pipeline_survives_restart_and_reuses_indexes(
                     reranked.result,
                     tokeniser,
                     RetrievalConfig(),
-                    token_budget_override=budget,
+                    overrides=EvidenceReductionOverrides(token_budget=budget),
                 )
             # Resolving provenance for every retained passage must not grow
             # snapshot memory past its declared bound.
@@ -242,11 +244,13 @@ def test_hybrid_evidence_pipeline_survives_restart_and_reuses_indexes(
         lexical_replay = build_lexical_generation(index_dir, manifest)
         dense_replay = build_dense_generation(
             index_dir,
-            manifest,
+            DenseBuildRequest(
+                source_manifest=manifest,
+                compatibility=compatibility(),
+                metadata_db_path=database_path,
+                source_dir=source_dir,
+            ),
             replay_embedder,
-            metadata_db_path=database_path,
-            source_dir=source_dir,
-            compatibility=compatibility(),
         )
         assert lexical_replay.statistics.database_reused, corpus_id.as_str()
         assert dense_replay.statistics.generation_reused, corpus_id.as_str()
@@ -309,11 +313,13 @@ def test_publishing_onto_an_emptied_generation_directory_fails_closed(
     # Reuse is the normal outcome for an unchanged build.
     reused = build_dense_generation(
         index_dir,
-        manifest,
+        DenseBuildRequest(
+            source_manifest=manifest,
+            compatibility=compatibility(),
+            metadata_db_path=database_path,
+            source_dir=source_dir,
+        ),
         PipelineEmbedder(),
-        metadata_db_path=database_path,
-        source_dir=source_dir,
-        compatibility=compatibility(),
     )
     assert reused.statistics.generation_reused
 
@@ -325,11 +331,13 @@ def test_publishing_onto_an_emptied_generation_directory_fails_closed(
     with pytest.raises(DenseError) as failure:
         build_dense_generation(
             index_dir,
-            manifest,
+            DenseBuildRequest(
+                source_manifest=manifest,
+                compatibility=compatibility(),
+                metadata_db_path=database_path,
+                source_dir=source_dir,
+            ),
             PipelineEmbedder(),
-            metadata_db_path=database_path,
-            source_dir=source_dir,
-            compatibility=compatibility(),
         )
     assert failure.value.category == DenseFailureCategory.CORRUPT_GENERATION
     assert generation_dir.exists()

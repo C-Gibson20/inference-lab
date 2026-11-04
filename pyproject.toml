@@ -89,9 +89,7 @@ max-statements = 80
 "src/inference_lab/profiling/timing.py" = ["PLR0913"]
 "src/inference_lab/retrieval/dense_retrieval.py" = ["C901", "PLR0912"]
 "src/inference_lab/retrieval/dense_store.py" = ["C901", "PLR0912", "PLR0915"]
-"src/inference_lab/retrieval/hybrid.py" = ["PLR0913"]
 "src/inference_lab/retrieval/lexical.py" = ["C901", "PLR0912"]
-"src/inference_lab/retrieval/reduction_adapter.py" = ["C901", "PLR0912"]
 "src/inference_lab/serving/ingest_contracts.py" = ["C901", "PLR0912"]
 
 [tool.ruff.lint.flake8-tidy-imports]

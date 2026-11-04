@@ -283,6 +283,23 @@ become `channel_unavailable`; incompatible generations and invalid requests
 become `invalid_channel_response`; everything else becomes
 `channel_execution_failure`.
 
+### Build instrumentation
+
+The dense build is an observed `dense_index` stage, symmetric with
+`lexical_index`. It reports `items_processed` as the chunks it processed and
+`records_emitted` as the entries the generation holds, and it maps its typed
+failures into the closed profiling vocabulary: an invalid request is `input`,
+a dense or storage dependency failure is `dependency`, cancellation is
+`cancelled`, and anything else is `internal`. Publication passes its own
+profiling context and parent stage, so the dense build appears beneath the
+request stage rather than as an untracked gap between the lexical build and
+publication.
+
+`DenseBuildRequest` carries the validated inputs for one build — source
+manifest, compatibility, storage locations, optional parent reference, and
+batch size — so the builder takes the request, the embedder, and its
+observation arguments only.
+
 ### Storage participation
 
 The dense owner participates in corpus-version publication through
@@ -318,10 +335,6 @@ description of finished work:
 - **Generation opening materialises every entry** to verify declared counts,
   so opening cost still grows with corpus size even though query cost no
   longer does.
-- **No operational logging or stage instrumentation.** The lexical build emits
-  an observed stage; the dense build emits neither logs nor profiling records.
-  The retrieval logging policy applies to this channel and is not yet
-  implemented for it.
 
 ## RET-05 fusion and document deduplication
 
@@ -443,6 +456,21 @@ Family handling therefore belongs to the two stages that do know the question:
   aggregation algorithm identity, and visible in the result's uncertainty when
   family membership is incomplete.
 
+### Snapshot resolution and duplicate expansion
+
+Fusion resolves each candidate source span exactly once per request. One
+resolver validates a span's ownership against the pinned snapshot and caches
+the exact location, so the visibility verdict that can fail a channel and the
+location map used to build evidence share a single read rather than resolving
+the same spans twice.
+
+Discovering byte-identical duplicate relationships walks a pre-sorted frontier
+and expands transitively, but stops after `MAX_DUPLICATE_EXPANSION_VERSIONS`
+visited versions. Reaching that bound is reported as
+`duplicate_expansion_truncated` on the `retrieval_fusion_completed` event, so
+a duplicate-heavy corpus yields partial duplicate groups visibly rather than
+silently.
+
 ### Degraded channels and corpus-version mismatch
 
 Channel failures are preserved in the fused result and determine its status
@@ -536,6 +564,16 @@ result, or generation disagree about the corpus version;
 and `component_mismatch` when a ready component is not the generation that was
 opened. A missing index and a stale index need different operator responses, so
 they are never reported as the same cause.
+
+The lexical and dense generations of one corpus version are built from the
+same `BaselineChunkGenerationManifest`, so their record sets are identical by
+construction. Reduction relies on that: it maps a candidate's source ranges
+through the lexical generation whatever channel retrieved it. A result
+candidate the lexical generation does not hold therefore means the two
+component generations disagree despite claiming the same source manifest, and
+it fails closed with `component_record_sets_disagree`. It must never be
+treated as a merely unmappable candidate, because that would silently drop a
+dense-only passage at the budget instead of truncating it.
 
 Reduction failures name the cause the operator must act on. An item evicted
 because the token budget is exhausted is recorded as `dropped_budget` even when

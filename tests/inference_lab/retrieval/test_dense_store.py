@@ -29,6 +29,7 @@ from inference_lab.provenance import (
     DocumentVersionId,
 )
 from inference_lab.retrieval import (
+    DenseBuildRequest,
     DenseError,
     DenseFailureCategory,
     DenseGenerationParticipant,
@@ -195,12 +196,14 @@ def _build(
 ):
     return build_dense_generation(
         tmp_path / "index",
-        source,
+        DenseBuildRequest(
+            source_manifest=source,
+            compatibility=_compatibility(embedder),
+            metadata_db_path=tmp_path / "metadata.sqlite3",
+            source_dir=tmp_path / "sources",
+            parent_reference=parent,
+        ),
         embedder,
-        metadata_db_path=tmp_path / "metadata.sqlite3",
-        source_dir=tmp_path / "sources",
-        compatibility=_compatibility(embedder),
-        parent_reference=parent,
     )
 
 

@@ -46,6 +46,7 @@ from inference_lab.provenance import (
 )
 from inference_lab.retrieval import (
     DENSE_COMPONENT_KIND,
+    DenseBuildRequest,
     DenseGenerationParticipant,
     DenseIndexCompatibility,
     EvidenceResult,
@@ -464,11 +465,13 @@ def _publish_fixture(
         lexical = build_lexical_generation(index_dir, manifest)
         dense = build_dense_generation(
             index_dir,
-            manifest,
+            DenseBuildRequest(
+                source_manifest=manifest,
+                compatibility=compatibility,
+                metadata_db_path=database_path,
+                source_dir=source_dir,
+            ),
             embedder,
-            metadata_db_path=database_path,
-            source_dir=source_dir,
-            compatibility=compatibility,
         )
         participants = (
             LexicalGenerationParticipant(index_dir, lexical, manifest),
@@ -512,11 +515,13 @@ def _publish_fixture(
         lexical_replay = build_lexical_generation(index_dir, manifest)
         dense_replay = build_dense_generation(
             index_dir,
-            manifest,
+            DenseBuildRequest(
+                source_manifest=manifest,
+                compatibility=compatibility,
+                metadata_db_path=database_path,
+                source_dir=source_dir,
+            ),
             embedder,
-            metadata_db_path=database_path,
-            source_dir=source_dir,
-            compatibility=compatibility,
         )
         assert lexical_replay.statistics.database_reused
         assert dense_replay.statistics.generation_reused
@@ -696,13 +701,15 @@ def test_incremental_update_reuses_unchanged_work_and_keeps_active_version_on_fa
         )
         dense_outcome = build_dense_generation_for_corpus_update(
             index_dir,
-            source_manifest,
+            DenseBuildRequest(
+                source_manifest=source_manifest,
+                compatibility=compatibility,
+                metadata_db_path=database_path,
+                source_dir=source_dir,
+            ),
             embedder,
             repository,
             expected_corpus_version=VERSION_A,
-            metadata_db_path=database_path,
-            source_dir=source_dir,
-            compatibility=compatibility,
         )
         assert lexical_outcome.statistics.database_reused
         assert lexical_outcome.statistics.reused_chunks == 1
@@ -1057,13 +1064,15 @@ def test_pinned_readers_remain_coherent_during_publication(
                     )
                     dense_outcome = build_dense_generation_for_corpus_update(
                         index_dir,
-                        source_manifest,
+                        DenseBuildRequest(
+                            source_manifest=source_manifest,
+                            compatibility=compatibility,
+                            metadata_db_path=database_path,
+                            source_dir=source_dir,
+                        ),
                         embedder,
                         repository,
                         expected_corpus_version=VERSION_A,
-                        metadata_db_path=database_path,
-                        source_dir=source_dir,
-                        compatibility=compatibility,
                     )
                     lexical = LexicalGenerationParticipant(
                         index_dir,
@@ -1364,11 +1373,13 @@ def test_superseded_preparing_generation_is_replaced_before_sealing(
                 index_dir,
                 build_dense_generation(
                     index_dir,
-                    manifest,
+                    DenseBuildRequest(
+                        source_manifest=manifest,
+                        compatibility=compatibility,
+                        metadata_db_path=database_path,
+                        source_dir=source_dir,
+                    ),
                     embedder,
-                    metadata_db_path=database_path,
-                    source_dir=source_dir,
-                    compatibility=compatibility,
                 ),
                 manifest,
             )
