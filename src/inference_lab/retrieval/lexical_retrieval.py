@@ -263,7 +263,6 @@ def execute_lexical_retrieval(
                     )
                 else:
                     metadata_stage.mark_failure(_map_metadata_result_failure(result))
-        assert result is not None
         # SQLite FTS5 does not expose a cheap, reliable count of candidates
         # examined by its scorer; leave items_processed unavailable rather than
         # performing a second payload-bearing scan.
@@ -271,7 +270,6 @@ def execute_lexical_retrieval(
         failure = _map_result_failure(result)
         if failure is not None:
             stage.mark_failure(failure)
-    assert result is not None
     return result
 
 

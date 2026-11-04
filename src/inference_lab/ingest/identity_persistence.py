@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Final, Protocol, Self
+from typing import Final, Literal, Protocol, Self
 
 from structlog.contextvars import bound_contextvars
 
@@ -51,7 +51,7 @@ class IdentityPersistenceTransaction(
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool: ...
+    ) -> Literal[False]: ...
 
 
 class IdentityPersistenceRepository(Protocol):

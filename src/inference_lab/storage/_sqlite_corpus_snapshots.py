@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Final, Self
+from typing import Final, Literal, Self
 
 from inference_lab.provenance import (
     ConfigurationIdentity,
@@ -727,7 +727,7 @@ class SQLiteCorpusSnapshot:
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Close the reader without replacing a primary exception."""
         del exception_type, traceback
         try:

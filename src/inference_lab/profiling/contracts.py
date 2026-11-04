@@ -31,7 +31,7 @@ def validate_baseline_stage(value: object) -> BaselineStage:
         raise TypeError("pipeline_stage must be a string")
     if value not in BASELINE_STAGES:
         raise ValueError("pipeline_stage must be a supported baseline stage")
-    return value  # type: ignore[return-value]
+    return value
 
 
 def validate_stage_condition(value: object) -> StageCondition:
@@ -40,4 +40,4 @@ def validate_stage_condition(value: object) -> StageCondition:
         raise TypeError("condition must be a string")
     if value not in STAGE_CONDITIONS:
         raise ValueError("condition must be cold, warm, or uncontrolled")
-    return value  # type: ignore[return-value]
+    return value

@@ -508,5 +508,4 @@ def build_lexical_generation(
             items_processed=outcome.statistics.chunks_processed,
             records_emitted=outcome.manifest.chunk_count,
         )
-    assert outcome is not None
     return outcome

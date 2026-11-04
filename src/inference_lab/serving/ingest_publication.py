@@ -133,7 +133,6 @@ class ServingPublicationCoordinator:
             outcome = transaction.begin_baseline_manifest(
                 baseline_manifest_to_record(expected)
             )
-        assert outcome is not None
         return BaselineIngestManifest(
             corpus_id=outcome.manifest.corpus_id,
             proposed_corpus_version=outcome.manifest.proposed_corpus_version,

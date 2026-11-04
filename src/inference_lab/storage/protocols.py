@@ -3,7 +3,7 @@
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, Self, runtime_checkable
+from typing import Literal, Protocol, Self, runtime_checkable
 
 from inference_lab.provenance import (
     ConfigurationIdentity,
@@ -633,7 +633,7 @@ class MetadataTransaction(MetadataReader, MetadataWriter, ChunkSetWriter, Protoc
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Commit on success or roll back while preserving primary failures."""
         ...
 
