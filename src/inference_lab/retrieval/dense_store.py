@@ -15,7 +15,14 @@ from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
 )
-from inference_lab.retrieval.dense import DENSE_COMPONENT_KIND, DenseIndexEntry
+from inference_lab.retrieval.dense import (
+    DENSE_COMPONENT_KIND,
+    DenseError,
+    DenseFailureCategory,
+    DenseIndexBuildOutcome,
+    DenseIndexEntry,
+    DenseIndexManifest,
+)
 from inference_lab.retrieval.dense_store_builder import (
     DenseBuildRequest,
     _build_statistics,
@@ -26,14 +33,6 @@ from inference_lab.retrieval.dense_store_builder import (
     _resolve_generation_target,
     _resolve_reusable_vectors,
     _reuse_published_generation,
-)
-from inference_lab.retrieval.dense_store_models import (
-    DenseError,
-    DenseFailureCategory,
-    DenseIndexBuildOutcome,
-    DenseIndexBuildStatistics,  # noqa: F401 - retained package re-export
-    DenseIndexManifest,
-    DenseMemberSelection,  # noqa: F401 - retained package re-export
 )
 from inference_lab.retrieval.dense_store_reader import (
     DenseGeneration,  # noqa: F401 - retained package re-export

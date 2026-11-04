@@ -22,8 +22,12 @@ from inference_lab.retrieval.dense import (
     DENSE_CONTRACT_VERSION,
     DENSE_FORMAT_VERSION,
     DENSE_IMPLEMENTATION,
+    DenseError,
+    DenseFailureCategory,
     DenseIndexEntry,
+    DenseIndexManifest,
     DenseIndexMatch,
+    DenseMemberSelection,
     DenseVector,
     l2_normalised,
 )
@@ -34,10 +38,6 @@ from inference_lab.retrieval.dense_store_models import (
     DENSE_DATABASE_USER_VERSION,
     DENSE_DIRECTORY_NAME,
     DENSE_MANIFEST_NAME,
-    DenseError,
-    DenseFailureCategory,
-    DenseIndexManifest,
-    DenseMemberSelection,
 )
 from inference_lab.retrieval.evidence import (
     CandidateKind,

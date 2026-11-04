@@ -33,12 +33,10 @@ from inference_lab.provenance import (
 from inference_lab.retrieval.dense import (
     DENSE_FORMAT_VERSION,
     DenseDistanceMetric,
-    DenseIndexCompatibility,
-    DenseIndexConfiguration,
-)
-from inference_lab.retrieval.dense_store_models import (
     DenseError,
     DenseFailureCategory,
+    DenseIndexCompatibility,
+    DenseIndexConfiguration,
     DenseIndexManifest,
     DenseMemberSelection,
 )
