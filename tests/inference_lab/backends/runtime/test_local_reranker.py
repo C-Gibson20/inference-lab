@@ -514,3 +514,26 @@ def test_configured_candidate_ceiling_matches_the_backend_hard_cap() -> None:
     # The settings ceiling exists because of this backend's cap. Settings is a
     # dependency-free leaf and cannot import the backend, so assert equality.
     assert MAX_RERANK_CANDIDATES == _MAX_CANDIDATES
+
+
+def test_pinned_artefacts_agree_with_the_committed_candidate_manifest() -> None:
+    # The backend source is the authority for what may load. The benchmark
+    # manifest describes the same acquired revision, so every digest the
+    # backend pins must match it, and a drift in either direction is a defect.
+    manifest = json.loads(
+        (
+            Path(__file__).parents[4]
+            / "benchmarks"
+            / "run-05"
+            / "artifact-manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    candidate = manifest[reranker._MODEL_NAME.removeprefix("BAAI/")]
+
+    assert candidate["revision"] == reranker._MODEL_REVISION
+    recorded = candidate["files"]
+    pinned = dict(reranker._REQUIRED_ARTEFACT_DIGESTS)
+    assert set(pinned) <= set(recorded), (
+        "the backend pins a file the acquired revision does not contain"
+    )
+    assert {name: recorded[name] for name in pinned} == pinned
