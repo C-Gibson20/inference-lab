@@ -805,7 +805,7 @@ def build_held_out_baseline_report(
         policy=contract.gate_policy,
         observations=HeldOutGateObservations(
             categories=gate_summary.categories,
-            overall_document_recall_at_10=gate_summary.document_recall.micro,
+            overall_document_recall=gate_summary.document_recall.micro,
             overall_recall_interval_lower=gate_summary.recall_interval_lower,
             overall_recall_interval_upper=gate_summary.recall_interval_upper,
             case_count=len(observations),

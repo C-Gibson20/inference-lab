@@ -255,7 +255,8 @@ class HeldOutGatePolicy:
     Deliberately has no defaults: a run must state its threshold and rationale.
     """
 
-    minimum_document_recall_at_10: MetricFraction
+    minimum_document_recall: MetricFraction
+    document_recall_cutoff: int
     maximum_failure_rate: MetricFraction
     maximum_degraded_rate: MetricFraction
     minimum_category_cases: int
@@ -272,13 +273,14 @@ class HeldOutGatePolicy:
     def _validate(self) -> None:
         """Reject incomplete, unsupported, or mutable policy inputs."""
         for name in (
-            "minimum_document_recall_at_10",
+            "minimum_document_recall",
             "maximum_failure_rate",
             "maximum_degraded_rate",
         ):
             if not isinstance(getattr(self, name), MetricFraction):
                 raise TypeError(f"{name} must be a MetricFraction.")
         for name in (
+            "document_recall_cutoff",
             "minimum_category_cases",
             "minimum_category_leakage_groups",
             "bootstrap_replicates",
@@ -315,9 +317,8 @@ class HeldOutGatePolicy:
         """Return the complete policy identity for inclusion in a run record."""
         return {
             "version": self.version,
-            "minimum_document_recall_at_10": (
-                self.minimum_document_recall_at_10.as_dict()
-            ),
+            "document_recall_cutoff": self.document_recall_cutoff,
+            "minimum_document_recall": (self.minimum_document_recall.as_dict()),
             "maximum_failure_rate": self.maximum_failure_rate.as_dict(),
             "maximum_degraded_rate": self.maximum_degraded_rate.as_dict(),
             "minimum_category_cases": self.minimum_category_cases,
@@ -455,7 +456,7 @@ class HeldOutGateObservations:
     """The measured held-out outcome that a gate policy is applied to."""
 
     categories: tuple[HeldOutCategoryCoverage, ...]
-    overall_document_recall_at_10: MetricFraction | None
+    overall_document_recall: MetricFraction | None
     overall_recall_interval_lower: MetricFraction | None
     overall_recall_interval_upper: MetricFraction | None
     case_count: int
@@ -519,7 +520,7 @@ class HeldOutGateObservations:
     def _validate_metrics(self) -> None:
         """Require a consistent primary metric and uncertainty interval."""
         for name in (
-            "overall_document_recall_at_10",
+            "overall_document_recall",
             "overall_recall_interval_lower",
             "overall_recall_interval_upper",
         ):
@@ -541,7 +542,7 @@ class HeldOutGateObservations:
     def primary_metric_incomplete(self) -> bool:
         """Return whether the primary metric or its interval is missing."""
         return (
-            self.overall_document_recall_at_10 is None
+            self.overall_document_recall is None
             or self.overall_recall_interval_lower is None
             or self.overall_recall_interval_upper is None
         )
@@ -649,7 +650,7 @@ def _gate_verdict(
         return HeldOutGateOutcome.INCONCLUSIVE
     upper = observations.overall_recall_interval_upper
     lower = observations.overall_recall_interval_lower
-    minimum = policy.minimum_document_recall_at_10
+    minimum = policy.minimum_document_recall
     if upper is not None and _fraction_less(upper, minimum):
         reasons.append(HeldOutGateReason.PRIMARY_METRIC_BELOW_MINIMUM)
         return HeldOutGateOutcome.REJECT

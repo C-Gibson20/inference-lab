@@ -149,6 +149,12 @@ The new directory contains exactly:
   `schema_version` is `2.0.0`; version `1.0.0` named the artefact array
   `artifacts` and is rejected rather than read.
 
+The gate policy carries its own `document_recall_cutoff`; the threshold field
+is `minimum_document_recall` and no field name implies a cutoff. A policy
+serialised before version `2.0.0` named it `minimum_document_recall_at_10` and
+is not accepted. Rendered metric labels derive their cutoff from the metric,
+so a report cannot publish a recall@5 row labelled `@10`.
+
 The gate verdict's `outcome_reasons` are a **closed set**, enumerated by
 `HeldOutGateReason`. A reader may switch on them exhaustively, and adding a
 reason is a schema change to the report contract rather than a free-text

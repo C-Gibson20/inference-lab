@@ -36,7 +36,8 @@ from inference_lab.retrieval.reranking import RerankingIdentity
 
 def _policy() -> HeldOutGatePolicy:
     return HeldOutGatePolicy(
-        minimum_document_recall_at_10=MetricFraction(8, 10),
+        minimum_document_recall=MetricFraction(8, 10),
+        document_recall_cutoff=10,
         maximum_failure_rate=MetricFraction(1, 20),
         maximum_degraded_rate=MetricFraction(1, 10),
         minimum_category_cases=2,
@@ -174,7 +175,7 @@ def _decide(
         policy=_policy(),
         observations=HeldOutGateObservations(
             categories=selected_categories,
-            overall_document_recall_at_10=recall,
+            overall_document_recall=recall,
             overall_recall_interval_lower=lower,
             overall_recall_interval_upper=upper,
             case_count=2 * len(QUESTION_TYPES),
@@ -194,7 +195,8 @@ def test_policy_persists_thresholds_rationale_and_uncertainty_identity() -> None
     )
     assert policy.as_dict() == {
         "version": "1.0.0",
-        "minimum_document_recall_at_10": {"numerator": 8, "denominator": 10},
+        "document_recall_cutoff": 10,
+        "minimum_document_recall": {"numerator": 8, "denominator": 10},
         "maximum_failure_rate": {"numerator": 1, "denominator": 20},
         "maximum_degraded_rate": {"numerator": 1, "denominator": 10},
         "minimum_category_cases": 2,
@@ -350,7 +352,8 @@ def test_category_contract_rejects_incoherent_population_and_interval() -> None:
 def test_policy_rejects_unreasoned_thresholds_and_unsupported_uncertainty() -> None:
     with pytest.raises(RetrievalEvaluationContractError, match="rationale"):
         HeldOutGatePolicy(
-            minimum_document_recall_at_10=MetricFraction(8, 10),
+            minimum_document_recall=MetricFraction(8, 10),
+            document_recall_cutoff=10,
             maximum_failure_rate=MetricFraction(1, 20),
             maximum_degraded_rate=MetricFraction(1, 10),
             minimum_category_cases=2,
