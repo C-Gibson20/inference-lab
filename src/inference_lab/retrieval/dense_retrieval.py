@@ -16,6 +16,7 @@ from inference_lab.provenance import CorpusId
 from inference_lab.retrieval.dense import (
     DENSE_COMPONENT_KIND,
     DENSE_SCORE_LABEL,
+    DenseIndexCompatibility,
     DenseIndexMatch,
     DenseVector,
     InvalidDenseContractError,
@@ -246,57 +247,12 @@ def _execute_dense_retrieval(
                 if selected_generation.manifest.entry_count == 0:
                     return _completed_result(query, selected_snapshot, ())
 
-                try:
-                    response = embedder.embed(
-                        EmbeddingRequest(
-                            input_texts=(query.text,),
-                            options=EmbeddingOptions(
-                                dimensions=(
-                                    selected_generation.manifest.compatibility.dimensions
-                                ),
-                                normalise=(
-                                    selected_generation.manifest.compatibility.embedding_profile.l2_normalised
-                                ),
-                            ),
-                            purpose="query",
-                        )
-                    )
-                except BackendError as error:
-                    # The backend owns retryability; a request or protocol
-                    # error must not be reported as worth retrying.
-                    return _failed_result(
-                        query,
-                        FailureCategory.CHANNEL_EXECUTION_FAILURE,
-                        retryable=error.retryable,
-                    )
-                except Exception:
-                    return _failed_result(
-                        query,
-                        FailureCategory.CHANNEL_EXECUTION_FAILURE,
-                    )
-
-                compatibility = selected_generation.manifest.compatibility
-                if (
-                    response.model_metadata != compatibility.model_metadata
-                    or response.embedding_profile != compatibility.embedding_profile
-                    or len(response.vectors) != 1
-                ):
-                    return _failed_result(
-                        query,
-                        FailureCategory.INVALID_CHANNEL_RESPONSE,
-                    )
-                try:
-                    query_vector = DenseVector(tuple(response.vectors[0]))
-                except (TypeError, ValueError, InvalidDenseContractError):
-                    return _failed_result(
-                        query,
-                        FailureCategory.INVALID_CHANNEL_RESPONSE,
-                    )
-                if len(query_vector.values) != compatibility.dimensions:
-                    return _failed_result(
-                        query,
-                        FailureCategory.INVALID_CHANNEL_RESPONSE,
-                    )
+                embedded = _embed_query_vector(
+                    embedder, query, selected_generation.manifest.compatibility
+                )
+                if isinstance(embedded, EvidenceResult):
+                    return embedded
+                query_vector = embedded
 
                 entry_count = selected_generation.manifest.entry_count
                 if entry_count == 0:
@@ -369,6 +325,49 @@ def _ranked_hits_within_budget(
         if len(hits) == query.limit.value or window >= entry_count:
             return hits
         window = min(entry_count, window * 2)
+
+
+def _embed_query_vector(
+    embedder: EmbeddingBackend,
+    query: RetrievalQuery,
+    compatibility: DenseIndexCompatibility,
+) -> DenseVector | EvidenceResult:
+    """Embed the query, or return the bounded failure that stops this channel."""
+    try:
+        response = embedder.embed(
+            EmbeddingRequest(
+                input_texts=(query.text,),
+                options=EmbeddingOptions(
+                    dimensions=compatibility.dimensions,
+                    normalise=compatibility.embedding_profile.l2_normalised,
+                ),
+                purpose="query",
+            )
+        )
+    except BackendError as error:
+        # The backend owns retryability; a request or protocol error must not
+        # be reported as worth retrying.
+        return _failed_result(
+            query,
+            FailureCategory.CHANNEL_EXECUTION_FAILURE,
+            retryable=error.retryable,
+        )
+    except Exception:
+        return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
+
+    if (
+        response.model_metadata != compatibility.model_metadata
+        or response.embedding_profile != compatibility.embedding_profile
+        or len(response.vectors) != 1
+    ):
+        return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
+    try:
+        query_vector = DenseVector(tuple(response.vectors[0]))
+    except (TypeError, ValueError, InvalidDenseContractError):
+        return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
+    if len(query_vector.values) != compatibility.dimensions:
+        return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
+    return query_vector
 
 
 def _build_hits(
