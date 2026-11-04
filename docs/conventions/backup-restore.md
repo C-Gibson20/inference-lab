@@ -68,7 +68,7 @@ manifest must never collapse the set into a fictitious global corpus version.
 - Ensure all indexes for the selected corpus version are committed and durable
   before capture completes.
 - Permit read-only queries to continue during backup creation.
-- Finalize a backup only after all components are captured, validated, and
+- Finalise a backup only after all components are captured, validated, and
   recorded in the manifest.
 
 ### Invalid backups

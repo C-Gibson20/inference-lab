@@ -52,8 +52,10 @@ from inference_lab.retrieval import (
     DenseGenerationParticipant,
     DenseIndexCompatibility,
     EvidenceResult,
+    FailureCategory,
     LexicalGenerationParticipant,
     LexicalQuery,
+    ResultStatus,
     RetrievalLimit,
     RetrievalQuery,
     build_dense_generation,
@@ -62,6 +64,14 @@ from inference_lab.retrieval import (
     build_lexical_generation_for_corpus_update,
     execute_dense_retrieval,
     execute_lexical_retrieval,
+)
+from inference_lab.retrieval.dense_store import (
+    DENSE_DATABASE_NAME,
+    DENSE_DIRECTORY_NAME,
+)
+from inference_lab.retrieval.lexical_store_models import (
+    LEXICAL_DATABASE_NAME,
+    LEXICAL_DIRECTORY_NAME,
 )
 from inference_lab.storage import (
     ChunkSetSelectionRecord,
@@ -1283,4 +1293,322 @@ def test_pinned_readers_remain_coherent_during_publication(
                 )
     finally:
         published.set()
+        repository.close()
+
+
+class _IncompatibleEmbeddingFixture(_EmbeddingFixture):
+    """Return valid vectors under a different pinned model revision."""
+
+    metadata = BackendMetadata(
+        backend_name="persistent-index-fixture",
+        model_name="persistent-index-fixture",
+        model_revision="2",
+        supported_operations=(BackendOperation.EMBED,),
+        capabilities=(),
+        embedding_dimensions=3,
+    )
+
+
+def _truncate(path: Path) -> None:
+    """Damage a published component file without removing it."""
+    assert path.is_file()
+    path.write_bytes(b"")
+
+
+def test_corrupt_or_incompatible_components_fail_closed_without_losing_the_view(
+    tmp_path: Path,
+) -> None:
+    """One damaged component fails closed while the rest of the view still serves."""
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "indexes"
+    versions, _, generation_ids, _ = _publish_fixture(
+        database_path,
+        source_dir,
+        index_dir,
+    )
+
+    def lexical(corpus_id: CorpusId, term: str) -> EvidenceResult:
+        query = RetrievalQuery(term, versions[corpus_id], RetrievalLimit(5))
+        return execute_lexical_retrieval(
+            repository, index_dir, corpus_id, LexicalQuery(query)
+        )
+
+    def dense(
+        corpus_id: CorpusId,
+        term: str,
+        embedder: _EmbeddingFixture | None = None,
+    ) -> EvidenceResult:
+        query = RetrievalQuery(term, versions[corpus_id], RetrievalLimit(5))
+        return execute_dense_retrieval(
+            repository,
+            index_dir,
+            corpus_id,
+            query,
+            embedder or _EmbeddingFixture(),
+        )
+
+    def categories(result: EvidenceResult) -> set[FailureCategory]:
+        return {failure.category for failure in result.failures}
+
+    repository = open_metadata_repository(database_path, source_dir=source_dir)
+    try:
+        # Both channels serve both corpora before anything is damaged.
+        for corpus_id in (_CORPUS_A, _CORPUS_B):
+            assert lexical(corpus_id, "common").status is ResultStatus.COMPLETED
+            assert dense(corpus_id, "common").hits
+
+        # An embedder that no longer matches the published compatibility must
+        # fail closed rather than return vectors from a different model.
+        incompatible = dense(_CORPUS_A, "common", _IncompatibleEmbeddingFixture())
+        assert incompatible.status is ResultStatus.FAILED
+        assert not incompatible.hits
+        assert categories(incompatible) == {FailureCategory.INVALID_CHANNEL_RESPONSE}
+        assert lexical(_CORPUS_A, "common").hits, (
+            "an incompatible embedder must not disturb the lexical channel"
+        )
+
+        # Corrupting one corpus's dense database contains the failure: that
+        # channel fails closed, its lexical channel still serves, and the other
+        # corpus is untouched.
+        _truncate(
+            index_dir
+            / DENSE_DIRECTORY_NAME
+            / generation_ids[f"{_CORPUS_A.as_str()}:{DENSE_COMPONENT_KIND.as_str()}"]
+            / DENSE_DATABASE_NAME
+        )
+        corrupt_dense = dense(_CORPUS_A, "common")
+        assert corrupt_dense.status is ResultStatus.FAILED
+        assert not corrupt_dense.hits
+        assert categories(corrupt_dense) == {FailureCategory.CHANNEL_UNAVAILABLE}
+        assert lexical(_CORPUS_A, "common").hits
+        assert dense(_CORPUS_B, "common").hits
+
+        # Corrupting the lexical database of the same corpus leaves the other
+        # corpus serving both channels and the metadata view intact.
+        _truncate(
+            index_dir
+            / LEXICAL_DIRECTORY_NAME
+            / generation_ids[f"{_CORPUS_A.as_str()}:lexical-index"]
+            / LEXICAL_DATABASE_NAME
+        )
+        corrupt_lexical = lexical(_CORPUS_A, "common")
+        assert corrupt_lexical.status is ResultStatus.FAILED
+        assert not corrupt_lexical.hits
+        assert categories(corrupt_lexical) == {FailureCategory.CHANNEL_UNAVAILABLE}
+        assert lexical(_CORPUS_B, "common").hits
+        assert dense(_CORPUS_B, "common").hits
+
+        # Damaged index files never invalidate the published corpus version.
+        with repository.open_corpus_snapshot(
+            _CORPUS_A, versions[_CORPUS_A]
+        ) as snapshot:
+            assert len(snapshot.manifest.document_memberships) == 3
+            assert snapshot.version.corpus_version == versions[_CORPUS_A]
+    finally:
+        repository.close()
+
+
+def _staged_generations(
+    repository: MetadataRepository,
+) -> dict[str, ComponentGenerationReference]:
+    """Read the staged component generations of corpus A's open proposal."""
+    return {
+        reference.component_kind.as_str(): reference
+        for reference in repository.list_corpus_update_component_generations(
+            _CORPUS_A, _VERSION_A2
+        )
+    }
+
+
+def test_superseded_preparing_generation_is_replaced_before_sealing(
+    tmp_path: Path,
+) -> None:
+    """A rebuilt component replaces its staged predecessor under compare-and-set."""
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "indexes"
+    versions, _, generation_ids, _ = _publish_fixture(
+        database_path,
+        source_dir,
+        index_dir,
+    )
+
+    # The proposal removes one inherited member, so the sealed manifest is a
+    # genuine change rather than a no-op republication of the active version.
+    members = tuple(
+        (
+            CorpusDocumentVersionMembership(_CORPUS_A, document_id, version_id),
+            _make_selection(_CORPUS_A, document_id, version_id, text),
+        )
+        for document_id, version_id, text in (_DOCUMENTS[0], _DOCUMENTS[1])
+    )
+    removed = CorpusDocumentVersionMembership(
+        _CORPUS_A, _DOCUMENTS[3][0], _DOCUMENTS[3][1]
+    )
+    # The superseded candidate was built before the last member was staged, so
+    # it carries a different source-manifest digest and generation identity.
+    superseded_manifest = _build_source_manifest(_CORPUS_A, _VERSION_A2, members[:1])
+    complete_manifest = _build_source_manifest(_CORPUS_A, _VERSION_A2, members)
+    assert (
+        superseded_manifest.source_manifest_digest
+        != complete_manifest.source_manifest_digest
+    )
+
+    embedder = _EmbeddingFixture()
+    compatibility = DenseIndexCompatibility(
+        model_metadata=embedder.metadata,
+        dimensions=3,
+        embedding_profile=embedder.profile,
+    )
+    repository = open_metadata_repository(database_path, source_dir=source_dir)
+    try:
+
+        def dense_participant(
+            manifest: BaselineChunkGenerationManifest,
+        ) -> DenseGenerationParticipant:
+            return DenseGenerationParticipant(
+                index_dir,
+                build_dense_generation(
+                    index_dir,
+                    manifest,
+                    embedder,
+                    metadata_db_path=database_path,
+                    source_dir=source_dir,
+                    compatibility=compatibility,
+                ),
+                manifest,
+            )
+
+        superseded = dense_participant(superseded_manifest)
+        complete = dense_participant(complete_manifest)
+        lexical = LexicalGenerationParticipant(
+            index_dir,
+            build_lexical_generation(index_dir, complete_manifest),
+            complete_manifest,
+        )
+        assert (
+            superseded.component_generation().generation_id
+            != complete.component_generation().generation_id
+        )
+
+        # Staging is its own unit of work. A failed operation makes a
+        # transaction rollback-only, so each rejected replacement below runs in
+        # a separate transaction and must leave the staged update usable.
+        staged: ComponentGenerationReference | None = None
+        with repository.transaction() as transaction:
+            transaction.begin_corpus_update(
+                _CORPUS_A,
+                _VERSION_A2,
+                expected_corpus_version=versions[_CORPUS_A],
+                required_component_kinds=(
+                    ComponentKind("lexical-index"),
+                    DENSE_COMPONENT_KIND,
+                ),
+            )
+            transaction.remove_corpus_update_document_membership(
+                _CORPUS_A, _VERSION_A2, removed
+            )
+            transaction.register_corpus_update_component_generation(
+                _CORPUS_A,
+                _VERSION_A2,
+                lexical.component_generation(),
+                validator=lexical.build_validator(repository),
+            )
+            staged = transaction.register_corpus_update_component_generation(
+                _CORPUS_A,
+                _VERSION_A2,
+                superseded.component_generation(),
+                validator=_AcceptingValidator(),
+            )
+        assert staged is not None
+        baseline = _staged_generations(repository)
+        assert baseline[DENSE_COMPONENT_KIND.as_str()] == staged
+
+        # Replacing against an expectation that is not the staged reference is a
+        # conflict, so one writer cannot overwrite another writer's candidate.
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.replace_corpus_update_component_generation(
+                    _CORPUS_A,
+                    _VERSION_A2,
+                    complete.component_generation(),
+                    complete.component_generation(),
+                    validator=complete.build_validator(repository),
+                )
+
+        # A rejected replacement must leave the staged candidates untouched.
+        assert _staged_generations(repository) == baseline, (
+            "a stale expected reference must not partially mutate staged component state"
+        )
+
+        # A replacement must keep the component kind it supersedes.
+        with pytest.raises(StorageConflictError):
+            with repository.transaction() as transaction:
+                transaction.replace_corpus_update_component_generation(
+                    _CORPUS_A,
+                    _VERSION_A2,
+                    staged,
+                    lexical.component_generation(),
+                    validator=lexical.build_validator(repository),
+                )
+
+        # A rejected replacement must leave the staged candidates untouched.
+        assert _staged_generations(repository) == baseline, (
+            "a mismatched component kind must not partially mutate staged component state"
+        )
+
+        committed: CommitCorpusUpdateOutcome | None = None
+        with repository.transaction() as transaction:
+            replaced = transaction.replace_corpus_update_component_generation(
+                _CORPUS_A,
+                _VERSION_A2,
+                staged,
+                complete.component_generation(),
+                validator=complete.build_validator(repository),
+            )
+            assert replaced.state is ComponentGenerationState.READY
+            assert (
+                replaced.generation_id == complete.component_generation().generation_id
+            )
+            # Exact replay of the same replacement is a no-op.
+            assert (
+                transaction.replace_corpus_update_component_generation(
+                    _CORPUS_A,
+                    _VERSION_A2,
+                    staged,
+                    complete.component_generation(),
+                    validator=complete.build_validator(repository),
+                )
+                == replaced
+            )
+            transaction.seal_corpus_update(_CORPUS_A, _VERSION_A2)
+            committed = transaction.commit_corpus_update(_CORPUS_A, _VERSION_A2)
+
+        assert committed is not None
+        published = {
+            reference.component_kind.as_str(): reference.generation_id
+            for reference in committed.manifest.component_generations
+        }
+        assert (
+            published[DENSE_COMPONENT_KIND.as_str()]
+            == complete.component_generation().generation_id
+        ), "the sealed version must name the replacement, not its predecessor"
+        assert (
+            published[DENSE_COMPONENT_KIND.as_str()]
+            != superseded.component_generation().generation_id
+        )
+        assert (
+            published[DENSE_COMPONENT_KIND.as_str()]
+            != generation_ids[f"{_CORPUS_A.as_str()}:{DENSE_COMPONENT_KIND.as_str()}"]
+        )
+
+        # The replacement is the generation that actually serves queries.
+        query = RetrievalQuery("orchid", _VERSION_A2, RetrievalLimit(5))
+        result = execute_dense_retrieval(
+            repository, index_dir, _CORPUS_A, query, _EmbeddingFixture()
+        )
+        assert result.status is ResultStatus.COMPLETED
+        assert result.hits
+    finally:
         repository.close()
