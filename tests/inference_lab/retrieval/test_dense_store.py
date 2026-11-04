@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from structlog.testing import capture_logs
 
 from inference_lab.backends.runtime import (
     BackendCapability,
@@ -36,6 +37,7 @@ from inference_lab.retrieval import (
     DenseIndexCompatibility,
     DenseVector,
     build_dense_generation,
+    dense_store,
     open_dense_generation,
     select_dense_parent_reference,
 )
@@ -561,3 +563,42 @@ def test_a_host_library_upgrade_does_not_invalidate_an_existing_generation(
     assert second.manifest.generation_id == first.manifest.generation_id
     assert second.manifest.configuration_digest == first.manifest.configuration_digest
     assert upgraded_embedder.batches == []
+
+
+def test_embedding_reports_bounded_progress_without_candidate_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Embedding writes nothing until the whole corpus is done, so a long build
+    # is otherwise unobservable between stage start and completion.
+    monkeypatch.setattr(dense_store, "_EMBED_PROGRESS_CHUNKS", 1)
+    embedder = _DeterministicEmbedder()
+    source = _source(
+        (
+            ("alpha passage", _DOC_A, _DOC_A_V1),
+            ("beta passage", _DOC_B, _DOC_B_V1),
+        ),
+        _VERSION_ONE,
+    )
+
+    with capture_logs() as logs:
+        build_dense_generation(
+            tmp_path / "index",
+            DenseBuildRequest(
+                source_manifest=source,
+                compatibility=_compatibility(embedder),
+                metadata_db_path=tmp_path / "metadata.sqlite3",
+                source_dir=tmp_path / "sources",
+                batch_size=1,
+            ),
+            embedder,
+        )
+
+    progress = [row for row in logs if row["event"] == "dense_index_embedding_progress"]
+    assert progress, "a long embedding step must report progress"
+    assert [row["embedded_count"] for row in progress] == [1, 2]
+    assert all(row["pending_count"] == 2 for row in progress)
+    assert all(row["reused_count"] == 0 for row in progress)
+    assert all(row["corpus_version"] == _VERSION_ONE.as_str() for row in progress)
+    assert "alpha passage" not in repr(progress)
+    assert "beta passage" not in repr(progress)

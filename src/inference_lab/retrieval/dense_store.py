@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Final, Iterator, Self, cast
 from urllib.parse import quote
 
+import structlog
+
 from inference_lab._fs import (
     fsync_directory,
     rename_directory_without_replacement,
@@ -93,8 +95,13 @@ DENSE_DIRECTORY_NAME = "dense"
 DENSE_DATABASE_NAME = "vectors.sqlite3"
 DENSE_MANIFEST_NAME = "manifest.json"
 DENSE_DATABASE_USER_VERSION = 1
+_LOGGER = structlog.get_logger("inference_lab.retrieval")
 _EMBED_BATCH_SIZE = 32
 _VECTOR_VALUE_BYTES = 4
+# Embedding a corpus is the longest single step in a build and writes nothing
+# until it finishes, so it reports progress at this cadence. The interval
+# bounds the record count for a large corpus while still showing movement.
+_EMBED_PROGRESS_CHUNKS: Final = 250
 
 
 class DenseFailureCategory(StrEnum):
@@ -705,14 +712,38 @@ def _write_generation_database(
         raise DenseError(DenseFailureCategory.EXECUTION_FAILURE) from None
 
 
+def _log_embedding_progress(
+    source_manifest: BaselineChunkGenerationManifest,
+    *,
+    embedded: int,
+    pending: int,
+    reused: int,
+) -> None:
+    """Report embedding progress with counts only and no candidate content."""
+    _LOGGER.info(
+        "dense_index_embedding_progress",
+        module="inference_lab.retrieval",
+        pipeline_stage="dense_index",
+        document_id=None,
+        corpus_id=source_manifest.corpus_id.as_str(),
+        corpus_version=source_manifest.corpus_version.as_str(),
+        embedded_count=embedded,
+        pending_count=pending,
+        reused_count=reused,
+    )
+
+
 def _embed_pending(
     embedder: EmbeddingBackend,
     pending: tuple[_PreparedChunk, ...],
     compatibility: DenseIndexCompatibility,
     *,
     batch_size: int,
+    source_manifest: BaselineChunkGenerationManifest | None = None,
+    reused: int = 0,
 ) -> dict[RecordId, DenseVector]:
     vectors: dict[RecordId, DenseVector] = {}
+    reported = 0
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
         try:
@@ -742,6 +773,24 @@ def _embed_pending(
             if len(vector.values) != compatibility.dimensions:
                 raise DenseError(DenseFailureCategory.INCOMPATIBLE_GENERATION)
             vectors[item.candidate.record_id] = vector
+        if (
+            source_manifest is not None
+            and len(vectors) - reported >= _EMBED_PROGRESS_CHUNKS
+        ):
+            reported = len(vectors)
+            _log_embedding_progress(
+                source_manifest,
+                embedded=reported,
+                pending=len(pending),
+                reused=reused,
+            )
+    if source_manifest is not None and pending and reported != len(vectors):
+        _log_embedding_progress(
+            source_manifest,
+            embedded=len(vectors),
+            pending=len(pending),
+            reused=reused,
+        )
     return vectors
 
 
@@ -1132,6 +1181,8 @@ def _build_dense_generation(
             ),
             request.compatibility,
             batch_size=request.batch_size,
+            source_manifest=request.source_manifest,
+            reused=len(reusable),
         )
         entries = tuple(
             reusable[item.candidate.record_id]

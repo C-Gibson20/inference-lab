@@ -327,6 +327,15 @@ profiling context and parent stage, so the dense build appears beneath the
 request stage rather than as an untracked gap between the lexical build and
 publication.
 
+Embedding is by far the longest step in a build — on the pinned 18-document
+corpus it is 0.27 seconds of lexical indexing against 27.8 **minutes** of
+embedding — and it writes nothing until every pending chunk is embedded. It
+therefore emits `dense_index_embedding_progress` every
+`_EMBED_PROGRESS_CHUNKS` chunks and once at the end, carrying embedded,
+pending and reused counts and no candidate content. The lexical build is
+stage-level only because it has no inference step and completes in
+milliseconds; progress records there would be noise.
+
 `DenseBuildRequest` carries the validated inputs for one build — source
 manifest, compatibility, storage locations, optional parent reference, and
 batch size — so the builder takes the request, the embedder, and its
