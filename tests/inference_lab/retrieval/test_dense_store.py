@@ -1,6 +1,7 @@
 """Persistent dense generation build, reuse, and publication seam tests."""
 
 import hashlib
+import json
 import math
 import sqlite3
 from dataclasses import replace
@@ -37,7 +38,7 @@ from inference_lab.retrieval import (
     DenseIndexCompatibility,
     DenseVector,
     build_dense_generation,
-    dense_store,
+    dense_store_builder,
     open_dense_generation,
     select_dense_parent_reference,
 )
@@ -571,7 +572,7 @@ def test_embedding_reports_bounded_progress_without_candidate_text(
 ) -> None:
     # Embedding writes nothing until the whole corpus is done, so a long build
     # is otherwise unobservable between stage start and completion.
-    monkeypatch.setattr(dense_store, "_EMBED_PROGRESS_CHUNKS", 1)
+    monkeypatch.setattr(dense_store_builder, "_EMBED_PROGRESS_CHUNKS", 1)
     embedder = _DeterministicEmbedder()
     source = _source(
         (
@@ -602,3 +603,31 @@ def test_embedding_reports_bounded_progress_without_candidate_text(
     assert all(row["corpus_version"] == _VERSION_ONE.as_str() for row in progress)
     assert "alpha passage" not in repr(progress)
     assert "beta passage" not in repr(progress)
+
+
+def test_a_manifest_entry_count_disagreeing_with_the_database_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """Reject a generation whose declared entry count is not what it stores."""
+    embedder = _DeterministicEmbedder()
+    source = _source(
+        (
+            ("alpha passage", _DOC_A, _DOC_A_V1),
+            ("beta passage", _DOC_B, _DOC_B_V1),
+        ),
+        _VERSION_ONE,
+    )
+    outcome = _build(tmp_path, source, embedder)
+    generation_dir = tmp_path / "index" / "dense" / outcome.manifest.generation_id
+    manifest_path = generation_dir / "manifest.json"
+
+    # The manifest carries the database digest, so it is the only half of the
+    # pair a tamper can change without the digest check firing first.
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["entry_count"] == 2
+    payload["entry_count"] = 1
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DenseError) as error:
+        open_dense_generation(tmp_path / "index", outcome.manifest.generation_id)
+    assert error.value.category is DenseFailureCategory.CORRUPT_GENERATION

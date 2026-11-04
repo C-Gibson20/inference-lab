@@ -63,7 +63,7 @@ from inference_lab.retrieval import (
     execute_dense_retrieval,
     execute_lexical_retrieval,
 )
-from inference_lab.retrieval.dense_store import (
+from inference_lab.retrieval.dense_store_models import (
     DENSE_DATABASE_NAME,
     DENSE_DIRECTORY_NAME,
 )
