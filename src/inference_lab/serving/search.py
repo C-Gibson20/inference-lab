@@ -189,7 +189,7 @@ class ServingSearchRunner:
         snapshot: CorpusSnapshot,
         profiling: ProfilingContext,
     ) -> ServingSearchResult:
-        """Run RET-02 and validate every returned identity before conversion."""
+        """Run lexical retrieval and validate each returned identity."""
         selected_version = snapshot.version.corpus_version
         if request.corpus_version is not None and (
             selected_version != request.corpus_version
@@ -260,7 +260,7 @@ class ServingSearchRunner:
         generation: LexicalGeneration,
         evidence: EvidenceResult,
     ) -> ServingSearchResult:
-        """Convert a successful RET-01 result into the serving contract."""
+        """Convert a successful retrieval result into the serving contract."""
         if not isinstance(evidence, EvidenceResult):
             raise ServingSearchError(
                 ServingSearchFailureCategory.INVALID_RETRIEVAL_RESULT
@@ -385,7 +385,7 @@ def _raise_profiled_failure(
     profiling: ProfilingContext,
     error: ServingSearchError,
 ) -> NoReturn:
-    """Emit one failed serving stage for work that cannot reach RET-02."""
+    """Emit one failed serving stage for work that cannot reach lexical retrieval."""
     with profiling.observed_stage(
         stage="serving",
         stage_id=profiling.stage_id("serving", "request"),

@@ -844,7 +844,7 @@ class SQLiteMetadataTransaction:
         corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[KnownSourceSpan, ...]:
-        """Return a version's validated PROV-03 source-span catalogue."""
+        """Return a version's validated derived-record source-span catalogue."""
         return self._execute(
             list_known_source_spans,
             corpus_id,

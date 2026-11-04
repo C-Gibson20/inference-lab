@@ -1,7 +1,5 @@
 """Deployment-local adapter for pinned fused retrieval with reranking."""
 
-from __future__ import annotations
-
 import hashlib
 
 from inference_lab._json import canonical_json_bytes

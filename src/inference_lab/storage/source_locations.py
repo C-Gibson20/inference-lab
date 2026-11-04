@@ -188,7 +188,7 @@ class SourceLocation:
             raise ValueError("a bounding_box requires a page_number.")
 
     def as_known_source_span(self) -> KnownSourceSpan:
-        """Convert this location to the PROV-03 source catalogue contract."""
+        """Convert this location to the derived-record source catalogue contract."""
         return KnownSourceSpan(
             document_version_id=self.document_version_id,
             source_span_id=self.source_span_id,
@@ -225,7 +225,7 @@ class ResolvedSourceSpan:
             )
 
     def as_known_source_span(self) -> KnownSourceSpan:
-        """Return this resolution as a PROV-03 catalogue entry."""
+        """Return this resolution as a source catalogue entry."""
         return self.location.as_known_source_span()
 
 

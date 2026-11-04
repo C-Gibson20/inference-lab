@@ -91,7 +91,7 @@ class ServingSearchRequest:
             raise TypeError("mode must be a LexicalMatchMode.")
 
     def retrieval_query(self, corpus_version: CorpusVersionId) -> RetrievalQuery:
-        """Build the RET-01 query after serving selects its version."""
+        """Build the retrieval query after serving selects its version."""
         if not isinstance(corpus_version, CorpusVersionId):
             raise TypeError("corpus_version must be a CorpusVersionId.")
         return RetrievalQuery(
@@ -102,7 +102,7 @@ class ServingSearchRequest:
         )
 
     def lexical_query(self, corpus_version: CorpusVersionId) -> LexicalQuery:
-        """Build the RET-02 request for the selected version."""
+        """Build the lexical request for the selected version."""
         return LexicalQuery(self.retrieval_query(corpus_version), self.mode)
 
 

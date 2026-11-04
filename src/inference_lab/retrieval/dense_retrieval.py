@@ -1,7 +1,5 @@
 """Pinned-snapshot execution for the dense retrieval channel."""
 
-from __future__ import annotations
-
 from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType
@@ -81,7 +79,7 @@ def _failed_result(
 
 
 def _map_dense_failure(error: DenseError) -> FailureCategory:
-    """Map the dense store's bounded failures into RET-01's result vocabulary."""
+    """Map the dense store's bounded failures into the shared result vocabulary."""
     if error.category in {
         DenseFailureCategory.GENERATION_UNAVAILABLE,
         DenseFailureCategory.CORRUPT_GENERATION,
@@ -145,7 +143,6 @@ def execute_dense_retrieval(
         profiling if profiling is not None else ProfilingContext.create()
     )
     stage_id = selected_profiling.stage_id("dense_retrieval", profiling_identity)
-    result: EvidenceResult | None = None
     with selected_profiling.observed_stage(
         stage="dense_retrieval",
         stage_id=stage_id,
@@ -168,8 +165,7 @@ def execute_dense_retrieval(
         failure = _map_result_failure(result)
         if failure is not None:
             stage.mark_failure(failure)
-    assert result is not None
-    return result
+        return result
 
 
 def _execute_dense_retrieval(
@@ -182,12 +178,7 @@ def _execute_dense_retrieval(
     snapshot: CorpusSnapshot | None = None,
     generation: DenseGeneration | None = None,
 ) -> EvidenceResult:
-    """Execute one dense query against a single pinned corpus snapshot.
-
-    Supplied snapshot and generation handles are borrowed and remain owned by
-    their caller.  Filters are evaluated in exact dense rank order before the
-    requested result limit is applied.
-    """
+    """Execute one dense query; supplied handles stay owned by the caller."""
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
         raise TypeError("repository must provide corpus snapshots.")
     if not isinstance(index_dir, Path):
@@ -386,7 +377,7 @@ def _build_hits(
     matches: tuple[DenseIndexMatch, ...],
     validation: MetadataFilterValidation | None,
 ) -> tuple[EvidenceHit, ...]:
-    """Filter ranked candidates through the pinned snapshot and build RET-01 hits."""
+    """Filter ranked candidates through the pinned snapshot and build retrieval hits."""
     hits: list[EvidenceHit] = []
     for match in matches:
         _validate_candidate_snapshot_links(snapshot, match.candidate)
@@ -439,7 +430,7 @@ def _candidate_metadata_values(
     snapshot: CorpusSnapshot,
     candidate: RetrievalCandidate,
 ) -> MetadataValues:
-    """Resolve RET-03 metadata from canonical records visible in the snapshot."""
+    """Resolve registered metadata from canonical records visible in the snapshot."""
     source = candidate.sources[0]
     source_artefact = snapshot.get_source_artefact(source.document_version_id)
     if source_artefact is None or (

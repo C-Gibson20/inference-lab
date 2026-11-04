@@ -87,7 +87,7 @@ def _failed_result(
 
 
 def _map_lexical_failure(error: LexicalError) -> FailureCategory:
-    """Map one bounded lexical failure to RET-01's channel vocabulary."""
+    """Map one bounded lexical failure to the shared channel vocabulary."""
     if error.category in {
         LexicalFailureCategory.GENERATION_UNAVAILABLE,
         LexicalFailureCategory.CORRUPT_GENERATION,
@@ -99,7 +99,7 @@ def _map_lexical_failure(error: LexicalError) -> FailureCategory:
 
 
 def _map_result_failure(result: EvidenceResult) -> FailureMapping | None:
-    """Map a returned RET-01 failure to the shared profiling vocabulary."""
+    """Map a returned retrieval failure to the shared profiling vocabulary."""
     if result.status is not ResultStatus.FAILED:
         return None
     if not result.failures:
@@ -180,12 +180,7 @@ def execute_lexical_retrieval(
     snapshot: CorpusSnapshot | None = None,
     generation: LexicalGeneration | None = None,
 ) -> EvidenceResult:
-    """Execute one lexical query and instrument its bounded retrieval stage.
-
-    Supplied snapshot and generation handles are borrowed, never closed here.
-    This lets serving use one pinned version and one validated lexical handle
-    through retrieval and source-location resolution.
-    """
+    """Execute one lexical query; supplied handles stay owned by the caller."""
     if profiling is not None and not isinstance(profiling, ProfilingContext):
         raise TypeError("profiling must be a ProfilingContext or None.")
     if parent_stage_id is not None and not isinstance(parent_stage_id, str):
@@ -445,7 +440,7 @@ def _normalise_request(
     request: LexicalQuery | RetrievalQuery,
     mode: LexicalMatchMode | None,
 ) -> tuple[RetrievalQuery, LexicalQuery]:
-    """Keep the public query envelope separate from the RET-02 request."""
+    """Keep the public query envelope separate from the lexical request."""
     if isinstance(request, LexicalQuery):
         if mode is not None and mode is not request.mode:
             raise InvalidRetrievalContractError(

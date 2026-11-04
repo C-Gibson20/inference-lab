@@ -1,7 +1,5 @@
 """Single-snapshot execution and validation for hybrid retrieval."""
 
-from __future__ import annotations
-
 from collections.abc import Hashable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -86,12 +84,7 @@ def execute_hybrid_retrieval(
     lexical_generation: LexicalGeneration | None = None,
     dense_generation: DenseGeneration | None = None,
 ) -> EvidenceResult:
-    """Execute lexical and dense retrieval against one pinned corpus snapshot.
-
-    Channel failures remain visible in the returned RET-01 outcome. Candidate
-    source links are revalidated against the shared snapshot before fusion;
-    metadata predicates are applied by each channel before its result limit.
-    """
+    """Execute lexical and dense retrieval against one pinned snapshot."""
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
         raise TypeError("repository must provide the metadata repository contract.")
     if not isinstance(index_dir, Path):

@@ -68,6 +68,17 @@ def is_local_path_shape(value: object) -> bool:
     return _URI_SCHEME_PATTERN.match(raw_path) is None
 
 
+def is_path_free_identifier(value: object) -> bool:
+    """Return whether a value is free of local-path shapes."""
+    if not isinstance(value, str):
+        return False
+    return not (
+        value.startswith(("/", "\\", "~"))
+        or "://" in value
+        or (len(value) >= 3 and value[1] == ":" and value[2] in ("/", "\\"))
+    )
+
+
 def is_canonical_semantic_version(value: object) -> bool:
     """Return whether a value is a canonical Semantic Version string."""
     return (

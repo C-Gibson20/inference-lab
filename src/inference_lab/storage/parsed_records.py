@@ -325,7 +325,7 @@ class ParsedRepresentation:
         )
 
     def known_source_spans(self) -> tuple[KnownSourceSpan, ...]:
-        """Return the complete PROV-03-compatible source-span catalogue."""
+        """Return the complete lineage-compatible source-span catalogue."""
         return tuple(
             location.as_known_source_span() for location in self.source_locations
         )

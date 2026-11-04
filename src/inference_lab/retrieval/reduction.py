@@ -1,7 +1,5 @@
 """Deterministic, source-preserving reduction of retrieved evidence."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 from collections.abc import Mapping
@@ -349,7 +347,7 @@ class EvidenceReductionIdentity:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReductionRequest:
-    """Reduce one RET-06 result for exactly one corpus and version."""
+    """Reduce one reranked result for exactly one corpus and version."""
 
     corpus_id: CorpusId
     corpus_version: CorpusVersionId

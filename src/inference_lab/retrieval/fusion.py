@@ -89,14 +89,7 @@ def fuse_evidence_results(
     policy: FusionPolicy | None = None,
     candidate_deduplication_key: Callable[[RetrievalCandidate], Hashable] | None = None,
 ) -> EvidenceResult:
-    """Fuse lexical and dense result envelopes using weighted reciprocal ranks.
-
-    Candidates sharing a ``RecordId`` are merged while retaining all distinct
-    source links and one contribution from each channel. Explicit metadata
-    predicates are applied by channel execution; they are not a ranked channel.
-    An optional stable key collapses duplicate evidence after ranking; the query
-    limit is applied after deduplication.
-    """
+    """Fuse lexical and dense envelopes using weighted reciprocal ranks."""
     if not isinstance(query, RetrievalQuery):
         raise TypeError("query must be a RetrievalQuery.")
     if not isinstance(channel_results, Mapping):
@@ -195,6 +188,11 @@ def fuse_evidence_results(
     )
 
 
+def _require_ranked_channel(policy: FusionPolicy, channel: RetrievalChannel) -> None:
+    """Reject a channel that the fusion policy cannot weight."""
+    policy.weight_for(channel)
+
+
 def _validate_channel_results(
     query: RetrievalQuery,
     channel_results: Mapping[RetrievalChannel, EvidenceResult],
@@ -205,7 +203,7 @@ def _validate_channel_results(
     for channel, result in channel_results.items():
         if not isinstance(channel, RetrievalChannel):
             raise TypeError("channel result keys must be RetrievalChannel values.")
-        policy.weight_for(channel)
+        _require_ranked_channel(policy, channel)
         if not isinstance(result, EvidenceResult):
             raise TypeError("channel results must contain EvidenceResult values.")
         if result.requested_limit != query.limit:

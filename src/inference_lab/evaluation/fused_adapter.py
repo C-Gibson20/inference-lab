@@ -1,7 +1,5 @@
 """Deployment-local adapter for pinned lexical+dense retrieval fusion."""
 
-from __future__ import annotations
-
 import hashlib
 from pathlib import Path
 

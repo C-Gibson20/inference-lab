@@ -1,7 +1,5 @@
 """Compose local retrieval adapters for a frozen channel baseline."""
 
-from __future__ import annotations
-
 import hashlib
 from dataclasses import replace
 from types import MappingProxyType

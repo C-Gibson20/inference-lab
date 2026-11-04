@@ -1,7 +1,5 @@
 """Versioned contracts and deterministic ranking for dense retrieval."""
 
-from __future__ import annotations
-
 import hashlib
 import math
 import re
@@ -11,7 +9,11 @@ from enum import StrEnum
 from typing import Final, Protocol
 
 from inference_lab._json import JsonObject, canonical_json_bytes
-from inference_lab._validation import is_canonical_semantic_version, is_lowercase_slug
+from inference_lab._validation import (
+    is_canonical_semantic_version,
+    is_lowercase_slug,
+    is_path_free_identifier,
+)
 from inference_lab.backends.runtime import BackendMetadata, EmbeddingProfile
 from inference_lab.provenance import CorpusId, CorpusVersionId
 from inference_lab.retrieval.evidence import RetrievalCandidate
@@ -65,11 +67,7 @@ def _validate_slug(value: object, field_name: str) -> str:
 
 
 def _path_free_identifier(value: str, field_name: str) -> str:
-    if (
-        value.startswith(("/", "\\", "~"))
-        or "://" in value
-        or (len(value) >= 3 and value[1] == ":" and value[2] in ("/", "\\"))
-    ):
+    if not is_path_free_identifier(value):
         raise InvalidDenseContractError(f"{field_name} must not be a local path.")
     return value
 
@@ -284,7 +282,7 @@ class DenseIndexBuildRequest:
 
 @dataclass(frozen=True, slots=True)
 class DenseIndexQuery:
-    """Pair a RET-01 query with its query-purpose vector and compatibility."""
+    """Pair a retrieval query with its query-purpose vector and compatibility."""
 
     query: RetrievalQuery
     query_vector: DenseVector

@@ -41,6 +41,7 @@ line-length = 88
 [tool.ruff.lint]
 select = [
     "ANN401",
+    "C901",
     "D100",
     "D101",
     "D102",
@@ -53,12 +54,45 @@ select = [
     "E9",
     "F",
     "I",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
     "RUF022",
     "TID252",
 ]
 
+# Complexity thresholds are regression tripwires, not targets. They sit just
+# above ordinary code so a new oversized function fails review, and the files
+# listed below are the known decomposition backlog rather than an allowance to
+# add more. Remove an entry when its function is split; do not add entries.
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+[tool.ruff.lint.pylint]
+max-args = 10
+max-branches = 20
+max-statements = 80
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D101", "D102", "D103", "D104"]
+"tests/inference_lab/evaluation/test_audit_golden_matrix.py" = ["PLR0913"]
+"tests/inference_lab/ingest/test_baseline_publication_acceptance.py" = ["PLR0915"]
+"tests/inference_lab/ingest/test_identity_isolation_acceptance.py" = ["PLR0915"]
+"tests/inference_lab/storage/test_persistent_index_systems_acceptance.py" = ["PLR0915"]
+"src/inference_lab/backends/runtime/_memory_values.py" = ["C901", "PLR0912"]
+"src/inference_lab/evaluation/heldout_gate.py" = ["C901", "PLR0912"]
+"src/inference_lab/ingest/_chunk_identity.py" = ["PLR0913"]
+"src/inference_lab/ingest/_chunk_windows.py" = ["PLR0913"]
+"src/inference_lab/ingest/baseline_execution.py" = ["C901"]
+"src/inference_lab/ingest/baseline_parse.py" = ["PLR0913"]
+"src/inference_lab/profiling/observed.py" = ["PLR0913"]
+"src/inference_lab/profiling/timing.py" = ["PLR0913"]
+"src/inference_lab/retrieval/dense_retrieval.py" = ["C901", "PLR0912"]
+"src/inference_lab/retrieval/dense_store.py" = ["C901", "PLR0912", "PLR0915"]
+"src/inference_lab/retrieval/hybrid.py" = ["PLR0913"]
+"src/inference_lab/retrieval/lexical.py" = ["C901", "PLR0912"]
+"src/inference_lab/retrieval/reduction_adapter.py" = ["C901", "PLR0912"]
+"src/inference_lab/serving/ingest_contracts.py" = ["C901", "PLR0912"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

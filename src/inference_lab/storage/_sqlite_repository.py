@@ -563,7 +563,7 @@ class SQLiteMetadataRepository:
         corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[KnownSourceSpan, ...]:
-        """Return a version's validated PROV-03 source-span catalogue."""
+        """Return a version's validated derived-record source-span catalogue."""
         return list_known_source_spans(
             self._connection_or_raise(),
             corpus_id,

@@ -305,7 +305,7 @@ class QwenEmbeddingBackend:
         )
 
     def measure_memory(self) -> tuple[MemoryMeasurement, ...]:
-        """Return inspectable model tensor memory for the optional RUN-03 contract."""
+        """Report inspectable model tensor memory for memory accounting."""
         adapter = PyTorchMemoryCalibrationAdapter(
             cast(torch.nn.Module | None, self._model),
             component_id="embedder",

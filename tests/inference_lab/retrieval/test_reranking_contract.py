@@ -773,3 +773,30 @@ def test_execute_reranking_deduplicates_exact_source_evidence_by_rank() -> None:
     assert outcome.result.hits[0].contributions == first.contributions
     assert outcome.result.hits[0].rank == 1
     backend.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("backend_name", "/opt/backends/reranker"),
+        ("model_name", "~/models/bge-reranker-v2-m3"),
+        ("model_revision", "https://example.invalid/revision"),
+    ],
+)
+def test_reranking_identity_rejects_a_deployment_path(field: str, value: str) -> None:
+    # The identity digest is logged with every reranking run, so a deployment
+    # path must never become part of it.
+    identities = {
+        "backend_name": "transformers-local",
+        "model_name": "BAAI/bge-reranker-v2-m3",
+        "model_revision": "revision-1",
+    } | {field: value}
+    with pytest.raises(InvalidRetrievalContractError):
+        RerankingIdentity(
+            backend_name=identities["backend_name"],
+            model_name=identities["model_name"],
+            model_revision=identities["model_revision"],
+            preprocessing_profile_version="1.0.0",
+            evidence_count=8,
+            candidate_limit=100,
+        )

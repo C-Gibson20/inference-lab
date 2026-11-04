@@ -108,7 +108,7 @@ def begin_baseline_lexical_corpus_update(
     *,
     expected_corpus_version: CorpusVersionId | None,
 ) -> BeginCorpusUpdateOutcome:
-    """Begin a Phase 5 update that requires chunks and lexical retrieval."""
+    """Begin an update that requires chunk and lexical components."""
     return begin_baseline_corpus_update(
         transaction,
         corpus_id,
@@ -225,7 +225,7 @@ def publish_baseline_lexical_generations(
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
 ) -> BaselinePublicationOutcome:
-    """Publish chunks and lexical generations as one Phase 5 update."""
+    """Publish chunks and lexical generations as one corpus-version update."""
     if not isinstance(manifest, BaselineChunkGenerationManifest):
         raise TypeError("manifest must be a BaselineChunkGenerationManifest.")
     generation = lexical_participant.component_generation()

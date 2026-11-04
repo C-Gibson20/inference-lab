@@ -92,7 +92,7 @@ def list_known_source_spans(
     corpus_id: CorpusId,
     document_version_id: DocumentVersionId,
 ) -> tuple[KnownSourceSpan, ...]:
-    """Return a validated PROV-03 catalogue in canonical source-span order."""
+    """Return a validated catalogue in canonical source-span order."""
     representations = list_parsed_representations(
         connection,
         corpus_id,
