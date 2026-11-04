@@ -400,6 +400,7 @@ _MODEL_FIELDS: Final = frozenset(
         "capabilities",
         "model_name",
         "model_revision",
+        "preprocessing_profile_version",
         "supported_operations",
     }
 )
@@ -437,6 +438,9 @@ def _decode_backend_metadata(model: JsonObject, dimensions: int) -> BackendMetad
         backend_name=require_json_string(model["backend_name"]),
         model_name=require_json_string(model["model_name"]),
         model_revision=require_json_string(model["model_revision"]),
+        preprocessing_profile_version=require_optional_json_string(
+            model["preprocessing_profile_version"]
+        ),
         supported_operations=tuple(
             BackendOperation(require_json_string(value))
             for value in require_json_array(model["supported_operations"])

@@ -113,6 +113,7 @@ class _QueryEmbedder:
             supported_operations=(BackendOperation.EMBED,),
             capabilities=(),
             embedding_dimensions=3,
+            preprocessing_profile_version="1.0.0",
         )
         self.profile = EmbeddingProfile(
             profile_version="1.0.0",

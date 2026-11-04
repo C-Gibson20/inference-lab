@@ -97,7 +97,7 @@ class LocalLexicalEvaluationAdapter:
         corpus_id: CorpusId,
         corpus_version: CorpusVersionId,
         *,
-        mode: LexicalMatchMode = LexicalMatchMode.TERMS,
+        mode: LexicalMatchMode = LexicalMatchMode.ANY_TERM,
     ) -> None:
         if not isinstance(index_dir, Path):
             raise TypeError("index_dir must be a Path.")

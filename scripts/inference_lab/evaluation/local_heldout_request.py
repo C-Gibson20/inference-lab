@@ -41,7 +41,7 @@ from inference_lab.settings import get_settings
 from inference_lab.storage import open_metadata_repository
 
 _ROOT = Path(__file__).resolve().parents[3]
-_DATASET_MANIFEST = _ROOT / ".dev/benchmark-authoring/bound-manifest.json"
+_DATASET_MANIFEST = _ROOT / ".dev/benchmark-authoring/bound-manifest-1.4.0.json"
 _SETUP_RECORD = _ROOT / ".dev/local-evaluation/setup.json"
 _GATE_POLICY = _ROOT / "docs/operator/retrieval-baseline-gate.json"
 

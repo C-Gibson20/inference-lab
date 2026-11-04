@@ -174,6 +174,12 @@ class DenseIndexCompatibility:
                 ],
                 "model_name": self.model_metadata.model_name,
                 "model_revision": self.model_metadata.model_revision,
+                # Preprocessing that affects vectors is part of the reuse
+                # identity, so a backend declaring a profile version must have
+                # it persisted rather than silently dropped.
+                "preprocessing_profile_version": (
+                    self.model_metadata.preprocessing_profile_version
+                ),
                 "supported_operations": [
                     item.value for item in self.model_metadata.supported_operations
                 ],

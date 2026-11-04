@@ -63,7 +63,7 @@ class ServingSearchRequest:
     limit: int
     corpus_version: CorpusVersionId | None = None
     filter: FilterExpression | None = None
-    mode: LexicalMatchMode = LexicalMatchMode.TERMS
+    mode: LexicalMatchMode = LexicalMatchMode.ANY_TERM
 
     def __post_init__(self) -> None:
         self._validate()

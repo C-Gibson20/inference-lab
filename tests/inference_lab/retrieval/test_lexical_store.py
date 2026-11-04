@@ -676,16 +676,21 @@ def test_pr4_query_keeps_payloads_out_of_observability_surfaces(
             )
 
         assert result.status.value == "completed"
-        assert result.hits == ()
         assert result.failures == ()
-        safe_surfaces = (repr(result), repr(sink.records), repr(logs))
+        # Disjunctive matching means this query does retrieve the passage, so
+        # the result carries its content to the caller by design. The
+        # observability surfaces must still disclose nothing.
+        assert result.hits
+        assert chunk_marker in repr(result)
+        observability_surfaces = (repr(sink.records), repr(logs))
         for marker in (
             query_marker,
             chunk_marker,
             identifier_marker,
             str(tmp_path),
         ):
-            assert all(marker not in surface for surface in safe_surfaces)
+            assert all(marker not in surface for surface in observability_surfaces)
+        assert query_marker not in repr(result)
 
         database = (
             tmp_path

@@ -341,3 +341,38 @@ def test_publishing_onto_an_emptied_generation_directory_fails_closed(
         )
     assert failure.value.category == DenseFailureCategory.CORRUPT_GENERATION
     assert generation_dir.exists()
+
+
+def test_a_natural_language_question_is_answered_by_both_channels(
+    tmp_path: Path,
+) -> None:
+    """Fusion receives ranked candidates from lexical as well as dense."""
+    database_path = tmp_path / "metadata.sqlite3"
+    source_dir = tmp_path / "sources"
+    index_dir = tmp_path / "index"
+    publish_corpora(database_path, source_dir, index_dir, PipelineEmbedder())
+    repository = open_metadata_repository(database_path, source_dir=source_dir)
+    try:
+        fused = execute_hybrid_retrieval(
+            repository,
+            index_dir,
+            SELECTED_CORPUS,
+            # A question, not an exact-term lookup: no single chunk contains
+            # every token, so conjunctive matching would retrieve nothing and
+            # fusion would silently degrade to one channel.
+            RetrievalQuery(
+                "What assay did this paper use?",
+                SELECTED_VERSION,
+                RetrievalLimit(5),
+            ),
+            PipelineEmbedder(),
+        )
+    finally:
+        repository.close()
+
+    assert fused.hits
+    contributing = {
+        contribution.channel for hit in fused.hits for contribution in hit.contributions
+    }
+    assert RetrievalChannel.LEXICAL in contributing
+    assert RetrievalChannel.DENSE in contributing
