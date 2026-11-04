@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Self, cast
 from urllib.parse import quote
 
+from inference_lab._fs import (
+    fsync_directory,
+    rename_directory_without_replacement,
+)
 from inference_lab._json import (
     JsonObject,
     JsonValue,
@@ -853,7 +857,7 @@ def build_dense_generation(
         )
 
         dense_root.mkdir(parents=True, exist_ok=True)
-        _fsync_directory(resolved_index_dir)
+        fsync_directory(resolved_index_dir)
         staging = Path(tempfile.mkdtemp(prefix=".dense-staging-", dir=dense_root))
         try:
             database_path = staging / DENSE_DATABASE_NAME
@@ -878,19 +882,19 @@ def build_dense_generation(
             _write_durable(manifest_path, _manifest_json(manifest))
             with database_path.open("rb") as database_stream:
                 os.fsync(database_stream.fileno())
-            _fsync_directory(staging)
+            fsync_directory(staging)
             with _open_dense_path(staging, generation_id) as opened:
                 if opened.manifest != manifest:
                     raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
                 if not _generation_matches(opened, source_manifest, compatibility):
                     raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
             try:
-                os.rename(staging, target)
+                rename_directory_without_replacement(staging, target)
             except FileExistsError:
                 with open_dense_generation(resolved_index_dir, generation_id) as opened:
                     if opened.manifest != manifest:
                         raise DenseError(DenseFailureCategory.CORRUPT_GENERATION)
-            _fsync_directory(dense_root)
+            fsync_directory(dense_root)
         finally:
             if staging.exists():
                 _remove_staging_directory(staging)
@@ -1026,14 +1030,6 @@ def _remove_staging_directory(path: Path) -> None:
         shutil.rmtree(path)
     except OSError:
         pass
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 class DenseGeneration:

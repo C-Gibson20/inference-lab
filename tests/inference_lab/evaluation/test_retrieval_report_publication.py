@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from inference_lab._fs import rename_directory_without_replacement
 from inference_lab.evaluation import (
     RetrievalEvaluationPublicationError,
     deserialise_case_results,
@@ -15,7 +16,6 @@ from inference_lab.evaluation import (
     retrieval_result_digest,
 )
 from inference_lab.evaluation.retrieval_report_publication import (
-    _rename_directory_without_replacement,
     atomic_write,
 )
 
@@ -124,11 +124,11 @@ def test_publish_preserves_competing_destination_at_atomic_boundary(
 
     def publish_after_competitor(source: Path, target: Path) -> None:
         destination.mkdir()
-        _rename_directory_without_replacement(source, target)
+        rename_directory_without_replacement(source, target)
 
     monkeypatch.setattr(
         "inference_lab.evaluation.retrieval_report_publication."
-        "_rename_directory_without_replacement",
+        "rename_directory_without_replacement",
         publish_after_competitor,
     )
 

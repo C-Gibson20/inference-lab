@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from inference_lab._fs import rename_directory_without_replacement
 from inference_lab.evaluation import (
     AuditErrorCategory,
     AuditPublicationError,
@@ -16,7 +17,6 @@ from inference_lab.evaluation import (
     render_audit_report,
 )
 from inference_lab.evaluation.audit_report_publication import (
-    _rename_directory_without_replacement,
     atomic_write,
 )
 
@@ -116,11 +116,11 @@ def test_publish_cleans_staging_after_publication_failure(
     def fail_publication(source: Path, target: Path) -> None:
         if Path(target) == destination:
             raise OSError("publication failed")
-        _rename_directory_without_replacement(source, target)
+        rename_directory_without_replacement(source, target)
 
     monkeypatch.setattr(
         "inference_lab.evaluation.audit_report_publication."
-        "_rename_directory_without_replacement",
+        "rename_directory_without_replacement",
         fail_publication,
     )
 
@@ -166,11 +166,11 @@ def test_publish_preserves_empty_competing_destination_at_atomic_boundary(
 
     def publish_after_competitor(source: Path, target: Path) -> None:
         destination.mkdir()
-        _rename_directory_without_replacement(source, target)
+        rename_directory_without_replacement(source, target)
 
     monkeypatch.setattr(
         "inference_lab.evaluation.audit_report_publication."
-        "_rename_directory_without_replacement",
+        "rename_directory_without_replacement",
         publish_after_competitor,
     )
 

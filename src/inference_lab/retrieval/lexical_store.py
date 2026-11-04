@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
 
+from inference_lab._fs import (
+    fsync_directory,
+    fsync_tree_directories,
+    rename_directory_without_replacement,
+)
 from inference_lab.ingest import (
     BaselineChunkGenerationManifest,
 )
@@ -421,8 +425,9 @@ def _build_lexical_generation(
             expected_generation_id=generation_id,
         )
         staged_generation.close()
+        fsync_tree_directories(staging_dir)
         try:
-            os.rename(staging_dir, target_dir)
+            rename_directory_without_replacement(staging_dir, target_dir)
         except FileExistsError:
             return _reuse_existing_generation(
                 target_dir,
@@ -430,6 +435,7 @@ def _build_lexical_generation(
                 configuration=configuration,
                 generation_id=generation_id,
             )
+        fsync_directory(lexical_dir)
         return LexicalIndexBuildOutcome(
             manifest=manifest,
             statistics=statistics,
