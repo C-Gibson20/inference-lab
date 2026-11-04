@@ -1,4 +1,4 @@
-"""ING-05/STOR-03 cold-process recovery and privacy acceptance."""
+"""Cold-process baseline recovery and privacy acceptance."""
 
 import sqlite3
 from dataclasses import dataclass

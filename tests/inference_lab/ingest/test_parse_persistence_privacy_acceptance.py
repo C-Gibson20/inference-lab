@@ -92,7 +92,7 @@ def _open_repository(case: _Case) -> MetadataRepository:
         ),
     )
     with repository.transaction() as transaction:
-        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "ING-03 privacy"))
+        transaction.add_corpus(CorpusMetadata(_CORPUS_ID, "parse privacy"))
         transaction.add_document(DocumentIdentity(source.document_id))
         transaction.add_document_version(version)
         transaction.add_corpus_document_version_membership(

@@ -145,7 +145,20 @@ The new directory contains exactly:
 - `report.json`: exact aggregate metrics and reconciliation counts;
 - `report.md`: deterministic human-readable metrics, identities, diagnostics,
   and limitations; and
-- `manifest.json`: sizes and SHA-256 checksums for those four artefacts.
+- `manifest.json`: sizes and SHA-256 checksums for those four artefacts. Its
+  `schema_version` is `2.0.0`; version `1.0.0` named the artefact array
+  `artifacts` and is rejected rather than read.
+
+The gate policy carries its own `document_recall_cutoff`; the threshold field
+is `minimum_document_recall` and no field name implies a cutoff. A policy
+serialised before version `2.0.0` named it `minimum_document_recall_at_10` and
+is not accepted. Rendered metric labels derive their cutoff from the metric,
+so a report cannot publish a recall@5 row labelled `@10`.
+
+The gate verdict's `outcome_reasons` are a **closed set**, enumerated by
+`HeldOutGateReason`. A reader may switch on them exhaustively, and adding a
+reason is a schema change to the report contract rather than a free-text
+addition.
 
 The destination must be absent. Publication stages and validates every file,
 flushes file and directory metadata, and atomically promotes the complete
@@ -199,6 +212,22 @@ The comparison target must be a complete published bundle. Missing files,
 unknown inventory entries, malformed JSON, checksum mismatches, mixed
 identities, and inconsistent result digests fail closed with the fixed generic
 runner error.
+
+### The approved gate policy artefact
+
+`docs/operator/retrieval-baseline-gate.json` records the thresholds approved
+before any held-out result was opened. It is decoded by
+`deserialise_approved_held_out_gate`, which rejects unknown or missing fields,
+an unsupported `schema_version`, any split other than `held_out`, any primary
+metric semantics other than fused pre-rerank `document_recall@10` over all
+relevant targets, an unapproved uncertainty method, and a malformed case-file
+checksum. Relaxing a threshold therefore requires editing the artefact in a
+reviewable change; it cannot be widened by adding a field the reader ignores.
+
+The artefact also names the dataset and corpus it was approved against. A run
+loads it only when that binding equals the local benchmark exactly, so an
+approved policy can never be applied to a different dataset version, case file,
+or corpus version.
 
 For the pinned local corpus, the checked-in held-out request factory reads the
 ignored bound benchmark and setup record. Run it from the local evaluation

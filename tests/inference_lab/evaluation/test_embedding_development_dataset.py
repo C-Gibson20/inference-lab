@@ -1,4 +1,4 @@
-"""Validate RUN-04 development queries against their corpus manifest."""
+"""Validate development queries against their corpus manifest."""
 
 import hashlib
 import json

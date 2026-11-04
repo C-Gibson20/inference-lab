@@ -12,6 +12,7 @@ from inference_lab.profiling._validation import is_snake_case
 from inference_lab.profiling.contracts import (
     BaselineStage,
     StageCondition,
+    StageCorrelation,
     validate_baseline_stage,
     validate_stage_condition,
 )
@@ -126,12 +127,7 @@ class ObservedStage:
         condition: StageCondition = "uncontrolled",
         clock: Callable[[], int],
         observed_at_factory: Callable[[], datetime],
-        run_id: str | None = None,
-        request_id: str | None = None,
-        document_id: str | None = None,
-        corpus_id: str | None = None,
-        corpus_version: str | None = None,
-        parent_stage_id: str | None = None,
+        correlation: StageCorrelation | None = None,
         failure_mapper: FailureMapper | None = None,
     ) -> None:
         """Configure an observed stage without starting it."""
@@ -155,12 +151,7 @@ class ObservedStage:
             emit=sink.emit,
             clock=clock,
             observed_at_factory=observed_at_factory,
-            run_id=run_id,
-            request_id=request_id,
-            document_id=document_id,
-            corpus_id=corpus_id,
-            corpus_version=corpus_version,
-            parent_stage_id=parent_stage_id,
+            correlation=correlation,
             condition=condition,
         )
         self._failure: FailureMapping | None = None
@@ -179,7 +170,7 @@ class ObservedStage:
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Emit terminal and failure records without masking stage failures."""
         if not self._entered:
             raise RuntimeError("ObservedStage must be entered before it can exit")
@@ -214,12 +205,7 @@ class ObservedStage:
         )
 
     def mark_success(self) -> None:
-        """Mark a returned success, reuse, empty result, or no-change result.
-
-        These outcomes intentionally share the successful timing status. Their
-        domain-specific distinction is represented by the caller's counts and
-        result contract rather than by a second profiling schema.
-        """
+        """Mark a returned success, reuse, empty result, or no-change result."""
         self._require_active()
         if self._failure is not None:
             raise RuntimeError("a stage cannot be marked successful after failure")

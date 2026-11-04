@@ -1,4 +1,4 @@
-"""Phase 6 acceptance for pinned lexical+dense fusion and duplicate handling."""
+"""Composed acceptance journey for hybrid lexical and dense retrieval."""
 
 from dataclasses import replace
 from pathlib import Path
@@ -20,8 +20,10 @@ from inference_lab.provenance import (
     SourceSpanId,
 )
 from inference_lab.retrieval import (
+    BorrowedRetrievalState,
     CandidateKind,
     ChannelScore,
+    DenseBuildRequest,
     DenseGeneration,
     DenseGenerationParticipant,
     DenseIndexCompatibility,
@@ -213,7 +215,7 @@ def test_hybrid_fails_closed_when_pinned_snapshot_version_differs() -> None:
         CORPUS_ID,
         query,
         _QueryEmbedder(),
-        snapshot=cast(CorpusSnapshot, snapshot),
+        borrowed=BorrowedRetrievalState(snapshot=cast(CorpusSnapshot, snapshot)),
     )
 
     assert result.status is ResultStatus.FAILED
@@ -245,24 +247,26 @@ def test_hybrid_journey_fuses_channels_and_keeps_distinct_family_evidence(
     lexical_outcome = build_lexical_generation(index_dir, source_manifest)
     dense_outcome = build_dense_generation(
         index_dir,
-        source_manifest,
-        embedder,
-        metadata_db_path=tmp_path / "metadata.sqlite3",
-        source_dir=tmp_path / "sources",
-        compatibility=DenseIndexCompatibility(
-            model_metadata=embedder.metadata,
-            dimensions=3,
-            embedding_profile=embedder.profile,
+        DenseBuildRequest(
+            source_manifest=source_manifest,
+            compatibility=DenseIndexCompatibility(
+                model_metadata=embedder.metadata,
+                dimensions=3,
+                embedding_profile=embedder.profile,
+            ),
+            metadata_db_path=tmp_path / "metadata.sqlite3",
+            source_dir=tmp_path / "sources",
         ),
+        embedder,
     )
     with open_lexical_generation(
         index_dir, lexical_outcome.manifest.generation_id
     ) as lex:
-        lexical_entries = lex.iter_chunks()
+        lexical_entries = lex.read_chunks()
     with open_dense_generation(
         index_dir, dense_outcome.manifest.generation_id
     ) as dense:
-        dense_entries = dense.iter_entries()
+        dense_entries = dense.read_entries()
 
     lexical_reference = replace(
         LexicalGenerationParticipant(
@@ -303,9 +307,11 @@ def test_hybrid_journey_fuses_channels_and_keeps_distinct_family_evidence(
                 query,
                 embedder,
                 policy=FusionPolicy(),
-                snapshot=cast(CorpusSnapshot, snapshot),
-                lexical_generation=cast(LexicalGeneration, lexical_generation),
-                dense_generation=cast(DenseGeneration, dense_generation),
+                borrowed=BorrowedRetrievalState(
+                    snapshot=cast(CorpusSnapshot, snapshot),
+                    lexical_generation=cast(LexicalGeneration, lexical_generation),
+                    dense_generation=cast(DenseGeneration, dense_generation),
+                ),
             )
 
     assert result.status.value == "completed"
@@ -406,7 +412,7 @@ def test_hybrid_discards_a_foreign_channel_candidate_and_keeps_safe_partial_hits
         CORPUS_ID,
         query,
         _QueryEmbedder(),
-        snapshot=cast(CorpusSnapshot, snapshot),
+        borrowed=BorrowedRetrievalState(snapshot=cast(CorpusSnapshot, snapshot)),
     )
 
     assert result.status is ResultStatus.PARTIAL

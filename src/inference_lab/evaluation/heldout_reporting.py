@@ -1,7 +1,5 @@
 """Aggregate, compare, serialise, and observe frozen held-out retrieval runs."""
 
-from __future__ import annotations
-
 import hashlib
 from collections import defaultdict
 from dataclasses import dataclass
@@ -17,8 +15,10 @@ from inference_lab.evaluation.cases import QUESTION_TYPES, QuestionType
 from inference_lab.evaluation.heldout_gate import (
     HeldOutCategoryCoverage,
     HeldOutChannel,
+    HeldOutGateObservations,
     HeldOutGateOutcome,
     HeldOutGatePolicy,
+    HeldOutGateReason,
     HeldOutRunContract,
     evaluate_held_out_gate,
 )
@@ -44,7 +44,7 @@ _CHANNEL_COMPARISON_PAIRS: Final[tuple[tuple[HeldOutChannel, HeldOutChannel], ..
 
 @dataclass(frozen=True, slots=True)
 class HeldOutChannelCaseResult:
-    """One sanitised channel result, retaining RET-06 degradation state."""
+    """One sanitised channel result, retaining reranker degradation state."""
 
     channel: HeldOutChannel
     result: RetrievalCaseResult
@@ -67,7 +67,7 @@ class HeldOutChannelCaseResult:
         if self.channel is HeldOutChannel.FUSED_RERANKED:
             if len(self.result.hits) > 10:
                 raise RetrievalEvaluationContractError(
-                    "reranked evidence must respect the RET-06 evidence limit."
+                    "reranked evidence must respect the configured evidence limit."
                 )
         elif self.result.requested_limit < _CANDIDATE_CUTOFF:
             raise RetrievalEvaluationContractError(
@@ -140,8 +140,10 @@ class HeldOutChannelSummary:
     actual_item_count_total: int
     document_recall: AggregateMetric
     passage_recall: AggregateMetric
-    recall_interval_lower: MetricFraction | None
-    recall_interval_upper: MetricFraction | None
+    document_recall_interval_lower: MetricFraction | None
+    document_recall_interval_upper: MetricFraction | None
+    passage_recall_interval_lower: MetricFraction | None
+    passage_recall_interval_upper: MetricFraction | None
     failed_case_count: int
     degraded_case_count: int
     no_result_case_count: int
@@ -259,8 +261,18 @@ class HeldOutChannelSummary:
             "actual_item_count_total": self.actual_item_count_total,
             "document_recall": self.document_recall.as_dict(),
             "passage_recall": self.passage_recall.as_dict(),
-            "recall_interval_lower": _fraction_dict(self.recall_interval_lower),
-            "recall_interval_upper": _fraction_dict(self.recall_interval_upper),
+            "document_recall_interval_lower": _fraction_dict(
+                self.document_recall_interval_lower
+            ),
+            "document_recall_interval_upper": _fraction_dict(
+                self.document_recall_interval_upper
+            ),
+            "passage_recall_interval_lower": _fraction_dict(
+                self.passage_recall_interval_lower
+            ),
+            "passage_recall_interval_upper": _fraction_dict(
+                self.passage_recall_interval_upper
+            ),
             "failed_case_count": self.failed_case_count,
             "degraded_case_count": self.degraded_case_count,
             "no_result_case_count": self.no_result_case_count,
@@ -339,7 +351,7 @@ class HeldOutPairedComparison:
 
 @dataclass(frozen=True, slots=True)
 class HeldOutBaselineReport:
-    """Aggregate-only, reproducible result of an EVAL-04 held-out run."""
+    """Aggregate-only, reproducible result of a held-out baseline run."""
 
     contract: HeldOutRunContract
     case_count: int
@@ -602,6 +614,13 @@ def _summarise_channel(
     passage = _aggregate_recall(passage_metrics, results, passage_cutoff)
     matched, relevant = _fraction_sum(document_metrics)
     point = MetricFraction(matched, relevant) if relevant else None
+    passage_matched, passage_relevant = _fraction_sum(passage_metrics)
+    passage_point = (
+        MetricFraction(passage_matched, passage_relevant) if passage_relevant else None
+    )
+    # One seed for both metrics, so each replicate resamples the same leakage
+    # groups and the two intervals stay comparable.
+    interval_seed = f"{contract.fingerprint}:{channel.value}:overall"
     lower, upper = _bootstrap_interval(
         tuple(
             (
@@ -611,7 +630,18 @@ def _summarise_channel(
             for case, metric in zip(observations, document_metrics, strict=True)
         ),
         policy=contract.gate_policy,
-        seed=f"{contract.fingerprint}:{channel.value}:overall",
+        seed=interval_seed,
+    )
+    passage_lower, passage_upper = _bootstrap_interval(
+        tuple(
+            (
+                case.leakage_group_id,
+                metric.value if metric is not None else None,
+            )
+            for case, metric in zip(observations, passage_metrics, strict=True)
+        ),
+        policy=contract.gate_policy,
+        seed=interval_seed,
     )
     categories: list[HeldOutCategoryCoverage] = []
     for question_type in QUESTION_TYPES:
@@ -631,6 +661,10 @@ def _summarise_channel(
     # Retain the measured point in the interval contract even for an empty
     # result population; the gate sees null when the gold denominator is zero.
     if point is not None and (lower is None or upper is None):
+        raise RetrievalEvaluationContractError(
+            "bootstrap interval is unavailable for an applicable recall metric."
+        )
+    if passage_point is not None and (passage_lower is None or passage_upper is None):
         raise RetrievalEvaluationContractError(
             "bootstrap interval is unavailable for an applicable recall metric."
         )
@@ -683,8 +717,10 @@ def _summarise_channel(
         actual_item_count_total=sum(len(item.hits) for item in results),
         document_recall=document,
         passage_recall=passage,
-        recall_interval_lower=lower,
-        recall_interval_upper=upper,
+        document_recall_interval_lower=lower,
+        document_recall_interval_upper=upper,
+        passage_recall_interval_lower=passage_lower,
+        passage_recall_interval_upper=passage_upper,
         failed_case_count=sum(item.status is ResultStatus.FAILED for item in results),
         degraded_case_count=sum(item.degraded for item in entries),
         no_result_case_count=sum(item.is_empty for item in results),
@@ -699,7 +735,7 @@ def _document_metric_at(
     result: RetrievalCaseResult,
     cutoff: int,
 ) -> MetricFraction | None:
-    """Calculate document recall from EVAL-03 target ranks at one cutoff."""
+    """Calculate document recall from scored target ranks at one cutoff."""
     if not result.document_match_ranks:
         return None
     return MetricFraction(
@@ -803,13 +839,22 @@ def build_held_out_baseline_report(
     )
     gate_outcome, gate_reasons = evaluate_held_out_gate(
         policy=contract.gate_policy,
-        categories=gate_summary.categories,
-        overall_document_recall_at_10=gate_summary.document_recall.micro,
-        overall_recall_interval_lower=gate_summary.recall_interval_lower,
-        overall_recall_interval_upper=gate_summary.recall_interval_upper,
-        case_count=len(observations),
-        failed_case_count=gate_summary.failed_case_count,
-        degraded_case_count=gate_summary.degraded_case_count,
+        observations=HeldOutGateObservations(
+            categories=gate_summary.categories,
+            overall_passage_recall=gate_summary.passage_recall.micro,
+            overall_passage_interval_lower=(gate_summary.passage_recall_interval_lower),
+            overall_passage_interval_upper=(gate_summary.passage_recall_interval_upper),
+            overall_document_recall=gate_summary.document_recall.micro,
+            overall_document_interval_lower=(
+                gate_summary.document_recall_interval_lower
+            ),
+            overall_document_interval_upper=(
+                gate_summary.document_recall_interval_upper
+            ),
+            case_count=len(observations),
+            failed_case_count=gate_summary.failed_case_count,
+            degraded_case_count=gate_summary.degraded_case_count,
+        ),
     )
     candidate_document_denominator = gate_summary.document_recall.relevant_target_count
     candidate_passage_denominator = gate_summary.passage_recall.relevant_target_count
@@ -838,7 +883,7 @@ def build_held_out_baseline_report(
     selected_reasons = list(gate_reasons)
     if final_measurement_incomplete:
         selected_limitations.append("final_evidence_recall_incomplete")
-        selected_reasons.append("incomplete_final_evidence_measurement")
+        selected_reasons.append(HeldOutGateReason.INCOMPLETE_FINAL_EVIDENCE_MEASUREMENT)
         gate_outcome = HeldOutGateOutcome.INCONCLUSIVE
     if len(selected_limitations) != len(set(selected_limitations)):
         raise RetrievalEvaluationContractError("limitations must be unique.")
@@ -927,6 +972,37 @@ def render_held_out_baseline_report(report: HeldOutBaselineReport) -> str:
                     interval=interval,
                 )
             )
+    lines.extend(
+        (
+            "",
+            "## Duplicate and family crowding",
+            "",
+            "These counts are the evidence for whether family-aware diversity is",
+            "needed. A repeat excess near zero means crowding is not occurring.",
+            "",
+            "| Channel | Raw hits | Distinct records | Distinct documents |"
+            " Duplicate groups | Families | Document repeats | Byte-identical"
+            " repeats | Family repeats |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        )
+    )
+    for summary in report.channel_summaries:
+        totals = dict(summary.duplicate_diagnostic_totals)
+        lines.append(
+            "| {channel} | {raw} | {records} | {documents} | {groups} |"
+            " {families} | {document_repeats} | {identical_repeats} |"
+            " {family_repeats} |".format(
+                channel=summary.channel.value,
+                raw=totals.get("raw_hit_count", 0),
+                records=totals.get("distinct_record_count", 0),
+                documents=totals.get("distinct_document_count", 0),
+                groups=totals.get("distinct_duplicate_group_count", 0),
+                families=totals.get("distinct_family_count", 0),
+                document_repeats=totals.get("exact_document_repeat_excess", 0),
+                identical_repeats=totals.get("byte_identical_group_repeat_excess", 0),
+                family_repeats=totals.get("family_member_repeat_excess", 0),
+            )
+        )
     lines.extend(
         (
             "",

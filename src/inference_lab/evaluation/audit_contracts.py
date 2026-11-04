@@ -109,7 +109,7 @@ class AuditParseFailure:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate failure metadata using the ING-01 failure policy."""
+        """Validate failure metadata using the parser failure policy."""
         ParserFailure(
             category=self.category,
             severity=self.severity,
@@ -120,7 +120,7 @@ class AuditParseFailure:
 
     @classmethod
     def from_ingest(cls, failure: ParserFailure) -> "AuditParseFailure":
-        """Copy only bounded failure fields from ING-01."""
+        """Copy only bounded parser failure fields."""
         if not isinstance(failure, ParserFailure):
             raise TypeError("failure must be a ParserFailure.")
         return cls(
@@ -300,7 +300,7 @@ class AuditParseEvidence:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate the sanitised equivalent of ING-01 outcome invariants."""
+        """Validate the sanitised equivalent of parse-outcome invariants."""
         if not isinstance(self.status, str) or self.status not in {
             "succeeded",
             "completed_with_recoverable_failures",
@@ -330,7 +330,7 @@ class AuditParseEvidence:
 
     @classmethod
     def from_ingest(cls, outcome: ParseOutcome) -> "AuditParseEvidence":
-        """Project an ING-01 outcome into payload-free audit-owned values."""
+        """Project a parse outcome into payload-free audit-owned values."""
         if not isinstance(outcome, ParseOutcome):
             raise TypeError("outcome must be a ParseOutcome.")
         return cls(
@@ -513,7 +513,7 @@ class AuditSourceFormatCoverage:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class AuditSourceInventory:
-    """Store sanitised ING-02 intake aggregates for one audit corpus."""
+    """Store sanitised source-intake aggregates for one audit corpus."""
 
     corpus_id: CorpusId
     policy: DiscoveryPolicy
@@ -591,7 +591,7 @@ class AuditSourceInventory:
         classification: ClassificationInventory,
         discovery: DiscoveryResult,
     ) -> "AuditSourceInventory":
-        """Adapt ING-02 values and discard locators and source metadata."""
+        """Adapt discovery values and discard locators and source metadata."""
         _validate_ingest_source_evidence(classification, discovery)
         return cls(
             corpus_id=discovery.corpus_id,

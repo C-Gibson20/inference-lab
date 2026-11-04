@@ -1,13 +1,12 @@
 """Pinned-snapshot execution for the dense retrieval channel."""
 
-from __future__ import annotations
-
 from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType
-from typing import cast
+from typing import Final, cast
 
 from inference_lab.backends.runtime import (
+    BackendError,
     EmbeddingBackend,
     EmbeddingOptions,
     EmbeddingRequest,
@@ -17,10 +16,10 @@ from inference_lab.provenance import CorpusId
 from inference_lab.retrieval.dense import (
     DENSE_COMPONENT_KIND,
     DENSE_SCORE_LABEL,
+    DenseIndexCompatibility,
     DenseIndexMatch,
     DenseVector,
     InvalidDenseContractError,
-    rank_dense_entries,
 )
 from inference_lab.retrieval.dense_store import (
     DenseError,
@@ -49,13 +48,19 @@ from inference_lab.retrieval.results import (
 )
 from inference_lab.retrieval.values import RetrievalChannel
 from inference_lab.storage import (
-    ComponentGenerationReference,
-    ComponentGenerationState,
     CorpusSnapshot,
     CorruptStorageError,
     MetadataRepository,
     StorageError,
+    generation_matches_reference,
+    select_ready_component_generation,
 )
+
+# A metadata predicate is applied after ranking but before the result limit,
+# so the first ranked window is this multiple of the limit. A window that does
+# not yield enough surviving candidates doubles until it reaches the whole
+# generation, which keeps the common case bounded without losing a match.
+FILTERED_WINDOW_FACTOR: Final = 4
 
 
 def _failed_result(
@@ -81,7 +86,7 @@ def _failed_result(
 
 
 def _map_dense_failure(error: DenseError) -> FailureCategory:
-    """Map the dense store's bounded failures into RET-01's result vocabulary."""
+    """Map the dense store's bounded failures into the shared result vocabulary."""
     if error.category in {
         DenseFailureCategory.GENERATION_UNAVAILABLE,
         DenseFailureCategory.CORRUPT_GENERATION,
@@ -145,7 +150,6 @@ def execute_dense_retrieval(
         profiling if profiling is not None else ProfilingContext.create()
     )
     stage_id = selected_profiling.stage_id("dense_retrieval", profiling_identity)
-    result: EvidenceResult | None = None
     with selected_profiling.observed_stage(
         stage="dense_retrieval",
         stage_id=stage_id,
@@ -168,8 +172,7 @@ def execute_dense_retrieval(
         failure = _map_result_failure(result)
         if failure is not None:
             stage.mark_failure(failure)
-    assert result is not None
-    return result
+        return result
 
 
 def _execute_dense_retrieval(
@@ -182,12 +185,7 @@ def _execute_dense_retrieval(
     snapshot: CorpusSnapshot | None = None,
     generation: DenseGeneration | None = None,
 ) -> EvidenceResult:
-    """Execute one dense query against a single pinned corpus snapshot.
-
-    Supplied snapshot and generation handles are borrowed and remain owned by
-    their caller.  Filters are evaluated in exact dense rank order before the
-    requested result limit is applied.
-    """
+    """Execute one dense query; supplied handles stay owned by the caller."""
     if not callable(getattr(repository, "open_corpus_snapshot", None)):
         raise TypeError("repository must provide corpus snapshots.")
     if not isinstance(index_dir, Path):
@@ -218,27 +216,17 @@ def _execute_dense_retrieval(
             if selected_snapshot.corpus_id != corpus_id:
                 return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
             if selected_snapshot.version.corpus_version != query.corpus_version:
-                return EvidenceResult.from_query(
-                    query,
-                    observed_corpus_version=selected_snapshot.version.corpus_version,
-                    hits=(),
-                    status=ResultStatus.FAILED,
-                    failures=(),
+                return EvidenceResult.corpus_version_mismatch(
+                    query, selected_snapshot.version.corpus_version
                 )
 
-            references = tuple(
-                reference
-                for reference in selected_snapshot.manifest.component_generations
-                if reference.component_kind == DENSE_COMPONENT_KIND
+            reference = select_ready_component_generation(
+                selected_snapshot.manifest,
+                DENSE_COMPONENT_KIND,
+                corpus_id=corpus_id,
+                corpus_version=query.corpus_version,
             )
-            if len(references) != 1:
-                return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
-            reference = references[0]
-            if (
-                reference.state is not ComponentGenerationState.READY
-                or reference.corpus_id != corpus_id
-                or reference.corpus_version != query.corpus_version
-            ):
+            if reference is None:
                 return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
 
             generation_context = (
@@ -247,11 +235,9 @@ def _execute_dense_retrieval(
                 else open_dense_generation(index_dir, reference.generation_id)
             )
             with generation_context as selected_generation:
-                if selected_generation is None or not _generation_matches_reference(
-                    selected_generation,
+                if selected_generation is None or not generation_matches_reference(
                     reference,
-                    corpus_id,
-                    query,
+                    selected_generation.manifest.component_generation(),
                 ):
                     return _failed_result(
                         query,
@@ -261,82 +247,38 @@ def _execute_dense_retrieval(
                 if selected_generation.manifest.entry_count == 0:
                     return _completed_result(query, selected_snapshot, ())
 
-                try:
-                    response = embedder.embed(
-                        EmbeddingRequest(
-                            input_texts=(query.text,),
-                            options=EmbeddingOptions(
-                                dimensions=(
-                                    selected_generation.manifest.compatibility.dimensions
-                                ),
-                                normalise=(
-                                    selected_generation.manifest.compatibility.embedding_profile.l2_normalised
-                                ),
-                            ),
-                            purpose="query",
-                        )
-                    )
-                except Exception:
-                    return _failed_result(
-                        query,
-                        FailureCategory.CHANNEL_EXECUTION_FAILURE,
-                        retryable=True,
-                    )
+                embedded = _embed_query_vector(
+                    embedder, query, selected_generation.manifest.compatibility
+                )
+                if isinstance(embedded, EvidenceResult):
+                    return embedded
+                query_vector = embedded
 
-                compatibility = selected_generation.manifest.compatibility
-                if (
-                    response.model_metadata != compatibility.model_metadata
-                    or response.embedding_profile != compatibility.embedding_profile
-                    or len(response.vectors) != 1
-                ):
-                    return _failed_result(
-                        query,
-                        FailureCategory.INVALID_CHANNEL_RESPONSE,
-                    )
-                try:
-                    query_vector = DenseVector(tuple(response.vectors[0]))
-                except (TypeError, ValueError, InvalidDenseContractError):
-                    return _failed_result(
-                        query,
-                        FailureCategory.INVALID_CHANNEL_RESPONSE,
-                    )
-                if len(query_vector.values) != compatibility.dimensions:
-                    return _failed_result(
-                        query,
-                        FailureCategory.INVALID_CHANNEL_RESPONSE,
-                    )
-
-                entries = selected_generation.iter_entries()
-                if not entries:
+                entry_count = selected_generation.manifest.entry_count
+                if entry_count == 0:
                     return _completed_result(query, selected_snapshot, ())
-                ranking_limit = (
-                    len(entries)
-                    if validation is not None
-                    else min(query.limit.value, len(entries))
-                )
-                matches = rank_dense_entries(
-                    entries,
-                    query_vector,
-                    limit=ranking_limit,
-                )
-                hits = _build_hits(
+                hits = _ranked_hits_within_budget(
+                    selected_generation,
                     query,
                     selected_snapshot,
-                    matches,
+                    query_vector,
                     validation,
+                    entry_count=entry_count,
                 )
                 return _completed_result(query, selected_snapshot, hits)
     except InvalidMetadataFilterError:
         return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
     except DenseError as error:
-        return _failed_result(query, _map_dense_failure(error))
+        return _failed_result(
+            query, _map_dense_failure(error), retryable=error.retryable
+        )
     except StorageError as error:
         category = (
             FailureCategory.CHANNEL_EXECUTION_FAILURE
             if validation is not None and isinstance(error, CorruptStorageError)
             else FailureCategory.CHANNEL_UNAVAILABLE
         )
-        return _failed_result(query, category)
+        return _failed_result(query, category, retryable=error.retryable)
     except (AttributeError, OSError, TypeError, ValueError, KeyError, IndexError):
         return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
 
@@ -357,27 +299,75 @@ def _is_snapshot_reader(snapshot: CorpusSnapshot) -> bool:
     )
 
 
-def _generation_matches_reference(
+def _ranked_hits_within_budget(
     generation: DenseGeneration,
-    reference: ComponentGenerationReference,
-    corpus_id: CorpusId,
     query: RetrievalQuery,
-) -> bool:
-    """Require the opened immutable generation to match its ready reference."""
-    return (
-        generation.manifest.corpus_id == corpus_id
-        and generation.manifest.corpus_version == query.corpus_version
-        and generation.manifest.generation_id == reference.generation_id
-        and generation.manifest.compatibility.configuration.implementation
-        == reference.implementation
-        and generation.manifest.compatibility.configuration.format_version
-        == reference.format_version
-        and generation.manifest.compatibility.configuration.contract_version
-        == reference.contract_version
-        and generation.manifest.configuration_digest == reference.configuration_digest
-        and generation.manifest.source_manifest_digest
-        == reference.source_manifest_digest
-    )
+    snapshot: CorpusSnapshot,
+    query_vector: DenseVector,
+    validation: MetadataFilterValidation | None,
+    *,
+    entry_count: int,
+) -> tuple[EvidenceHit, ...]:
+    """Rank a bounded candidate window, topping it up until the limit is met."""
+    if validation is None:
+        return _build_hits(
+            query,
+            snapshot,
+            generation.search(query_vector, limit=min(query.limit.value, entry_count)),
+            validation,
+        )
+    # A predicate is evaluated before the limit, so widen the window
+    # deterministically instead of ranking the whole generation at once.
+    window = min(entry_count, query.limit.value * FILTERED_WINDOW_FACTOR)
+    while True:
+        matches = generation.search(query_vector, limit=window)
+        hits = _build_hits(query, snapshot, matches, validation)
+        if len(hits) == query.limit.value or window >= entry_count:
+            return hits
+        window = min(entry_count, window * 2)
+
+
+def _embed_query_vector(
+    embedder: EmbeddingBackend,
+    query: RetrievalQuery,
+    compatibility: DenseIndexCompatibility,
+) -> DenseVector | EvidenceResult:
+    """Embed the query, or return the bounded failure that stops this channel."""
+    try:
+        response = embedder.embed(
+            EmbeddingRequest(
+                input_texts=(query.text,),
+                options=EmbeddingOptions(
+                    dimensions=compatibility.dimensions,
+                    normalise=compatibility.embedding_profile.l2_normalised,
+                ),
+                purpose="query",
+            )
+        )
+    except BackendError as error:
+        # The backend owns retryability; a request or protocol error must not
+        # be reported as worth retrying.
+        return _failed_result(
+            query,
+            FailureCategory.CHANNEL_EXECUTION_FAILURE,
+            retryable=error.retryable,
+        )
+    except Exception:
+        return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
+
+    if (
+        response.model_metadata != compatibility.model_metadata
+        or response.embedding_profile != compatibility.embedding_profile
+        or len(response.vectors) != 1
+    ):
+        return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
+    try:
+        query_vector = DenseVector(tuple(response.vectors[0]))
+    except (TypeError, ValueError, InvalidDenseContractError):
+        return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
+    if len(query_vector.values) != compatibility.dimensions:
+        return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
+    return query_vector
 
 
 def _build_hits(
@@ -386,7 +376,7 @@ def _build_hits(
     matches: tuple[DenseIndexMatch, ...],
     validation: MetadataFilterValidation | None,
 ) -> tuple[EvidenceHit, ...]:
-    """Filter ranked candidates through the pinned snapshot and build RET-01 hits."""
+    """Filter ranked candidates through the pinned snapshot and build retrieval hits."""
     hits: list[EvidenceHit] = []
     for match in matches:
         _validate_candidate_snapshot_links(snapshot, match.candidate)
@@ -439,7 +429,7 @@ def _candidate_metadata_values(
     snapshot: CorpusSnapshot,
     candidate: RetrievalCandidate,
 ) -> MetadataValues:
-    """Resolve RET-03 metadata from canonical records visible in the snapshot."""
+    """Resolve registered metadata from canonical records visible in the snapshot."""
     source = candidate.sources[0]
     source_artefact = snapshot.get_source_artefact(source.document_version_id)
     if source_artefact is None or (

@@ -17,14 +17,24 @@ then configure `models.reranker_path` in the deployment's uncommitted
 `config.toml` to point at that directory. The backend does not download files,
 resolve a repository ID, run remote model code, or fall back to a registry.
 
-Before and after loading, the backend verifies the exact file inventory and
-SHA-256 digests for the model, tokenizer, configuration, repository card, and
-included repository assets recorded in
-[`benchmarks/run-05/artifact-manifest.json`](../../benchmarks/run-05/artifact-manifest.json).
-Missing, changed, symlinked, or unexpected files fail closed. Model and
-tokenizer loading both set `local_files_only=True` and
-`trust_remote_code=False`. Hugging Face's `.cache` metadata directory is
-excluded from the artefact inventory.
+Before and after loading, the backend verifies the SHA-256 digest of every
+file that affects how the model loads or behaves: the model weights, the
+tokeniser and its configuration, and the model configuration. That pinned set
+is declared in the backend source, which is the single authority for what may
+load. A missing, symlinked, or altered pinned file fails closed.
+
+Files the backend does not pin are ignored. The repository card and its
+included assets do not affect loading, and operator tooling routinely leaves
+caches, lock files, and download metadata in a model directory; none of those
+may prevent a load. Model and tokeniser loading both set
+`local_files_only=True` and `trust_remote_code=False`.
+
+[`benchmarks/run-05/artefact-manifest.json`](../../benchmarks/run-05/artefact-manifest.json)
+records the complete acquired file list for all three candidates compared in
+the RUN-05 pilot, so it is a superset of the pinned set for the deployed
+candidate. It is descriptive, not consulted at load time. A test asserts that
+the revision and every pinned digest agree with that manifest, so the two
+cannot drift apart silently.
 
 ## Request and ranking behaviour
 

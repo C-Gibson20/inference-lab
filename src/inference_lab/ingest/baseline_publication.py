@@ -45,6 +45,9 @@ BaselinePublicationOutcome: TypeAlias = (
     CommitCorpusUpdateOutcome | NoCorpusChangeOutcome
 )
 BaselineChunkPublicationOutcome: TypeAlias = BaselinePublicationOutcome
+# Retrieval owns the lexical index and defines its ComponentKind, but
+# retrieval imports ingest, so importing it here would close a cycle. The
+# equality of the two constants is asserted by the publication tests.
 BASELINE_LEXICAL_COMPONENT_KIND = ComponentKind("lexical-index")
 BASELINE_LEXICAL_REQUIRED_COMPONENT_KINDS = (
     BASELINE_CHUNK_COMPONENT_KIND,
@@ -108,7 +111,7 @@ def begin_baseline_lexical_corpus_update(
     *,
     expected_corpus_version: CorpusVersionId | None,
 ) -> BeginCorpusUpdateOutcome:
-    """Begin a Phase 5 update that requires chunks and lexical retrieval."""
+    """Begin an update that requires chunk and lexical components."""
     return begin_baseline_corpus_update(
         transaction,
         corpus_id,
@@ -211,7 +214,6 @@ def publish_baseline_generations(
                 first_generation.corpus_version,
             )
             stage.set_counts(items_processed=len(prepared), records_emitted=1)
-    assert published is not None
     return published
 
 
@@ -225,7 +227,7 @@ def publish_baseline_lexical_generations(
     parent_stage_id: str | None = None,
     profiling_identity: str = "request",
 ) -> BaselinePublicationOutcome:
-    """Publish chunks and lexical generations as one Phase 5 update."""
+    """Publish chunks and lexical generations as one corpus-version update."""
     if not isinstance(manifest, BaselineChunkGenerationManifest):
         raise TypeError("manifest must be a BaselineChunkGenerationManifest.")
     generation = lexical_participant.component_generation()
@@ -337,7 +339,6 @@ def build_and_publish_baseline_lexical_generation(
             parent_stage_id=parent_stage_id,
             profiling_identity=profiling_identity,
         )
-    assert published is not None
     return published
 
 

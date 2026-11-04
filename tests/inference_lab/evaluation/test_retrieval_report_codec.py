@@ -8,19 +8,19 @@ import pytest
 
 from inference_lab._json import canonical_json_bytes
 from inference_lab.evaluation import (
-    PublishedArtifact,
+    PublishedArtefact,
     PublishedRetrievalEvaluationManifest,
     RetrievalEvaluationReport,
     deserialise_case_results,
     deserialise_retrieval_manifest,
     deserialise_retrieval_report,
-    deserialise_run_artifact,
+    deserialise_run_artefact,
     retrieval_result_digest,
     run_retrieval_evaluation,
     serialise_case_results,
     serialise_retrieval_manifest,
     serialise_retrieval_report,
-    serialise_run_artifact,
+    serialise_run_artefact,
 )
 
 from .test_retrieval_execution import (  # noqa: TID252
@@ -46,7 +46,7 @@ def evaluation_run(tmp_path: Path):
     )
 
 
-def test_all_canonical_artifacts_round_trip_without_payload_text(
+def test_all_canonical_artefacts_round_trip_without_payload_text(
     tmp_path: Path,
 ) -> None:
     """All strict codecs preserve safe values and omit question content."""
@@ -56,7 +56,7 @@ def test_all_canonical_artifacts_round_trip_without_payload_text(
     run_fingerprint = run.identity.run_fingerprint
     limitations = ("fixture adapter returns bounded synthetic results",)
 
-    run_bytes = serialise_run_artifact(
+    run_bytes = serialise_run_artefact(
         run.identity,
         result_digest,
         limitations,
@@ -73,7 +73,7 @@ def test_all_canonical_artifacts_round_trip_without_payload_text(
         run_fingerprint=run_fingerprint,
         result_digest=result_digest,
         artefacts=tuple(
-            PublishedArtifact(name, index + 1, checksum(name))
+            PublishedArtefact(name, index + 1, checksum(name))
             for index, name in enumerate(
                 ("run.json", "cases.jsonl", "report.json", "report.md")
             )
@@ -81,8 +81,8 @@ def test_all_canonical_artifacts_round_trip_without_payload_text(
     )
     manifest_bytes = serialise_retrieval_manifest(manifest)
 
-    assert deserialise_run_artifact(run_bytes).identity == run.identity
-    assert deserialise_run_artifact(run_bytes).result_digest == result_digest
+    assert deserialise_run_artefact(run_bytes).identity == run.identity
+    assert deserialise_run_artefact(run_bytes).result_digest == result_digest
     assert deserialise_case_results(cases_bytes, run.identity) == run.case_results
     assert deserialise_retrieval_report(report_bytes) == report
     assert deserialise_retrieval_manifest(manifest_bytes) == manifest
@@ -98,7 +98,7 @@ def test_readers_reject_unknown_duplicate_and_noncanonical_json(
 ) -> None:
     """Readers reject structural ambiguity before constructing contracts."""
     run = evaluation_run(tmp_path)
-    run_bytes = serialise_run_artifact(run.identity, retrieval_result_digest(run))
+    run_bytes = serialise_run_artefact(run.identity, retrieval_result_digest(run))
 
     duplicate_key = (
         b'{"identity":{},"identity":{},"limitations":[],"result_digest":"'
@@ -106,16 +106,16 @@ def test_readers_reject_unknown_duplicate_and_noncanonical_json(
         + b'"}\n'
     )
     with pytest.raises(ValueError, match="duplicate"):
-        deserialise_run_artifact(duplicate_key)
+        deserialise_run_artefact(duplicate_key)
 
     payload = json.loads(run_bytes)
     payload["unknown"] = True
     unknown_field = canonical_json_bytes(payload)
     with pytest.raises(ValueError, match="fields do not match"):
-        deserialise_run_artifact(unknown_field)
+        deserialise_run_artefact(unknown_field)
 
     with pytest.raises(ValueError, match="canonical"):
-        deserialise_run_artifact(run_bytes.replace(b"\n", b" \n", 1))
+        deserialise_run_artefact(run_bytes.replace(b"\n", b" \n", 1))
 
 
 def test_case_reader_rejects_identity_order_and_trailing_newline_errors(

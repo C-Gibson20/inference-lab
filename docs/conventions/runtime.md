@@ -225,9 +225,9 @@ setup and operating limits.
 ## RUN-05 local reranker backend
 
 `LocalRerankerBackend` implements `RerankerBackend` using the provisional,
-revision-pinned BGE-reranker-v2-m3 candidate. It loads only the exact, locally
-verified artefact inventory configured by `models.reranker_path`; it does not
-access a model registry or execute remote model code. It advertises reranking
+revision-pinned BGE-reranker-v2-m3 candidate. It verifies the pinned load-affecting
+artefacts under `models.reranker_path` by digest; it does not access a model
+registry or execute remote model code. It advertises reranking
 and batching only. The backend accepts at most 100 candidates, rejects queries
 over 256 tokens, preserves the query while tail-truncating candidate text to a
 512-token pair limit, and internally batches four pairs. Scores are finite raw
@@ -235,6 +235,62 @@ classifier logits, ordered descending with `candidate_id` as the stable tie
 break. Preprocessing profile version `1.0.0`, resource limits, and the pilot's
 provisional status are documented in
 [`docs/runtime/local-reranker.md`](../runtime/local-reranker.md).
+
+## Shared local-backend policies
+
+`QwenEmbeddingBackend` (RUN-04) and `LocalRerankerBackend` (RUN-05) follow the
+same rules, so one cannot drift into a different operational contract than the
+other. The RUN-02 fixture backend is deliberately stricter and is described
+with its own section above.
+
+**Artefact verification.** A backend pins the digest of every file that
+affects how its model loads or behaves, and verifies exactly those. Files it
+does not pin — caches, lock files, operator tooling leftovers, documentation
+and images shipped alongside a model — are ignored rather than treated as a
+corrupt inventory, so routine tooling cannot prevent a load. A missing or
+symlinked required artefact, or a digest mismatch, fails the load. The
+fixture backend keeps an exact-inventory check instead, because its directory
+is project-owned test data rather than an operator-managed model download.
+
+Where a pinned set is also recorded outside the backend — the RUN-05
+candidate-comparison manifest under `benchmarks/` — a test asserts the two
+agree on the revision and on every pinned digest, so a descriptive copy
+cannot drift from the authority.
+
+**Declared preprocessing identity.** A backend whose preprocessing affects its
+results must declare `preprocessing_profile_version` in its
+`BackendMetadata`, and that version must equal the one its own profile
+reports. Downstream identities compare this value to tell two otherwise
+identical model revisions apart; a backend that leaves it unset cannot
+participate in a reproducible retrieval identity.
+
+**Release on close.** `close()` drops model and tokeniser references and then
+collects, because a loaded model participates in reference cycles and the
+deployment runs against a fixed 24GB budget.
+
+**Request errors.** A rejected request raises `BackendRequestError` with a
+fixed project-owned message describing the rejected condition. Messages never
+carry request text, candidate content, or dependency detail.
+
+**Inference device and dtype.** Both backends load and run on `cpu` in
+`float32`, and both record exactly that in their compatibility profile. This
+is the planned interim, not a limitation to work around: the build order
+reaches a working retrieval stack first and concentrates GPU scheduling,
+residency, and VRAM accounting in the hardware-aware runtime phase, whose
+residency work depends on these backends already existing. A backend therefore
+reports the device and dtype it used; it does not choose them, and neither
+exposes a device or dtype input until that phase adds one with measurements
+behind it.
+
+Two consequences follow, and both are expected rather than defects. Latency,
+throughput, and memory figures recorded before that phase are **CPU
+baselines** and are not comparable with post-migration numbers; they should be
+read as evidence about correctness and relative cost, not as the deployment's
+performance. And because `device_type` and `inference_dtype` are part of the
+embedding profile inside the dense index's `configuration_digest`, moving to
+GPU or to a narrower dtype changes every dense generation's identity and
+requires a full rebuild. Batch that rebuild with the other identity-affecting
+changes rather than paying for it more than once.
 
 ## Scope boundary
 

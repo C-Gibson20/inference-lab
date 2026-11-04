@@ -87,7 +87,13 @@ Results are scoped to one corpus version:
 - `failed` has no hits and at least one typed failure.
 
 Every result retains the query's `requested_limit` and must contain no more
-hits than that limit. A corpus-version mismatch fails closed: an unscoped
+hits than that limit. A stage that detects a mismatch returns
+`EvidenceResult.corpus_version_mismatch(query, observed)`, which rejects an
+observed version equal to the requested one so a matching version can never
+report a mismatch. `from_query` keeps the same override as a backstop for a
+stage that does not check, and discards any hits it was given.
+
+A corpus-version mismatch fails closed: an unscoped
 mismatch requires a failed, hit-free result, while a channel-scoped mismatch
 may appear in a partial aggregate only when none of its hits contains a score
 contribution from that channel. Failure values expose only a bounded category,
@@ -105,10 +111,440 @@ Cross-corpus or federated retrieval is outside this contract and the first
 build. Comparing corpora requires separate queries and results; callers must
 not combine their hits into a result labelled as one corpus version.
 
+### Bounded candidate provenance
+
+Resolving a candidate's source links is a per-candidate cost, so a channel
+must keep that cost bounded by its result limit rather than by the size of the
+selected corpus version. A channel may resolve and revalidate provenance for
+the candidates it is about to expose, and it may reuse validated
+source-location indexes for the lifetime of one pinned snapshot. It must not
+repeatedly deserialise a complete parsed representation for each ranked chunk,
+resolve provenance for every indexed record in order to apply a predicate, or
+carry cached source data across snapshot lifetimes.
+
+A predicate that must be evaluated before the result limit still bounds its
+work: it reduces a bounded candidate window and tops that window up
+deterministically, rather than ranking and resolving the whole generation.
+
+This requirement derives from the specification's product decision — thousands
+of documents per corpus, small query-time context, and stable interactive
+latency — and the specification deliberately does not restate it as an
+implementation rule.
+
+## Lexical match modes
+
+The lexical engine supports four closed modes. Which one a caller selects is a
+retrieval-design decision, not an implementation detail, so every caller states
+it or accepts the documented default.
+
+| Mode | Expression | Use |
+| --- | --- | --- |
+| `any_term` | terms joined by `OR` | Ranked retrieval, including every fused channel |
+| `all_terms` | terms joined by `AND` | A filter: the caller means "all of these" |
+| `exact_phrase` | one quoted phrase | Contiguous terminology |
+| `identifier` | no expression; identifier lookup | DOIs, accessions, patent numbers |
+
+**`any_term` is the default and the only mode a ranked channel should use.**
+BM25 weighting is what separates signal from noise in a ranked result, so
+requiring every term is a filter rather than a ranking choice: a natural
+language question such as "What assay did this paper use?" has no single chunk
+containing all of its tokens, and a conjunctive channel returns nothing. An
+empty channel is worse than a permissive one under reciprocal-rank fusion,
+which consumes ranks only — a weak match at rank 80 contributes
+`1/(60 + 80)`, while a channel with no candidates contributes nothing at all
+and silently reduces hybrid retrieval to its other channel.
+
+Function words are not removed before matching. They do not need to be:
+inverse document frequency already makes a term that appears in nearly every
+chunk nearly weightless, so the analyser stays a pure tokeniser and the
+lexical index configuration digest is unaffected by this policy.
+
+`all_terms` remains available for callers that genuinely want conjunctive
+filtering, and no caller receives it implicitly. Match mode is chosen per
+query and is never recorded in an index generation's identity.
+
+## RET-04 dense index
+
+The dense channel is a durable, corpus-version-scoped vector index built from
+the same canonical chunks the lexical channel indexes. It is an **exact flat
+scan**, not an approximate-nearest-neighbour index: the declared
+implementation is `sqlite-flat` and every query scores every entry in the
+selected generation. Approximate search, quantised vectors, and partitioned
+indexes are outside this contract.
+
+### Component identity and compatibility
+
+| Field | Value |
+| --- | --- |
+| `ComponentKind` | `dense-index` |
+| Implementation | `sqlite-flat` |
+| Format version | `2.0.0` |
+| Contract version | `1.0.0` |
+| Distance metric | `cosine` |
+| Tie-break policy | `record-id-ascending` |
+| Score semantics label | `cosine_similarity` |
+
+`DenseIndexCompatibility` is the complete answer to "may these vectors be
+reused?". It pairs the backend's `BackendMetadata`, the returned output
+dimension, and the runtime `EmbeddingProfile` with the versioned
+`DenseIndexConfiguration`. Its `configuration_digest` is the SHA-256 of the
+canonical JSON of all four, so any change to tokeniser identity or revision,
+query or document prefix, pooling, input normalisation, token limit or
+over-limit policy, L2 normalisation, dtype, device type, dimension, distance
+metric, tie-break policy, or the format and contract versions produces a
+different, incompatible generation. Compatibility fields are path-free; model
+and backend names are validated as non-path identifiers.
+
+The host index library version is deliberately **not** part of that digest.
+It is recorded on the manifest as `library_version`, which satisfies the
+backup policy's requirement that each index record its library version while
+keeping an unrelated SQLite upgrade from invalidating every generation or
+preventing a build on another machine. Nothing rejects a generation because
+the reading host reports a different library version; the format, contract,
+and database integrity checks decide whether it can be read.
+
+A generation ID is `"dense-"` followed by the SHA-256 of the canonical JSON of
+the compatibility digest, `corpus_id`, `corpus_version`, and the chunk
+`source_manifest_digest` — 70 characters, with no path, corpus name, or
+payload content. Two builds with identical inputs therefore derive the same
+immutable identity, which is what makes an interrupted build safe to repeat.
+
+### Durable layout
+
+A generation is a directory under `storage.index_dir`:
+
+```text
+<index_dir>/dense/<generation_id>/
+  vectors.sqlite3    # PRAGMA user_version = 1
+  manifest.json      # canonical, path-free DenseIndexManifest payload
+```
+
+The database is written with `foreign_keys = ON`, `journal_mode = DELETE`, and
+`synchronous = FULL` so a published generation is a single self-contained file
+with no sidecar journal. It holds a `members` table of selected document
+versions with their chunk-set selection digests and chunk counts, and an
+`entries` table of one row per chunk carrying its record identity, owning
+document and version, ordinal, exact chunk text, canonical source links, and
+vector blob. Vectors are stored L2-normalised and packed little-endian with
+one IEEE-754 **single** per dimension, so a stored vector is unit-length and
+query scoring is a dot product rather than a cosine with two recomputed norms.
+Single precision is what the embedding backend produces, so this discards no
+information the index ever held, and it halves the blob. `manifest.json`
+records the SHA-256 of the complete database file.
+
+Format version `2.0.0` introduced this layout. `format_version` is part of the
+configuration digest, so a generation written as `1.0.0` double-precision data
+is rejected on open and must be rebuilt; because the digest feeds the
+generation ID, the rebuilt generation has a new identity.
+
+Manifest members are unique and ordered by `document_id`. The mutable
+`active` link of any component must never be a reader selection mechanism:
+readers open a generation only by the ID recorded in a committed corpus-version
+manifest.
+
+### Opening and validation
+
+`open_dense_generation` rejects a symlinked directory or artefact, a manifest
+whose generation ID does not match the requested one, a manifest declaring a
+different implementation, format, or contract version, a database whose
+SHA-256 does not match the manifest, a failed `integrity_check`, an unexpected
+`user_version`, a failed `foreign_key_check`, member rows that disagree with
+the manifest, and per-document entry counts that disagree with declared chunk
+counts. The connection is opened read-only and immutable.
+
+Query execution additionally requires exactly one ready `dense-index`
+reference in the pinned snapshot manifest, owned by the selected corpus and
+version, whose implementation, format, contract, configuration, and
+source-manifest digests all match the opened manifest.
+
+### Query execution
+
+The query text is embedded through the runtime embedding boundary with
+`purpose="query"`, the dimension recorded in the generation's compatibility,
+and the normalisation recorded in its embedding profile. The response is
+rejected unless its `BackendMetadata` and `EmbeddingProfile` are equal to the
+generation's, which is how an incompatible or silently re-configured embedder
+is caught before it can contaminate results.
+
+Candidates are scored by cosine similarity, clamped to `[-1.0, 1.0]`, and
+ordered by descending similarity with ascending canonical `RecordId` as the
+only tie-break. Zero vectors are invalid for cosine and are rejected at
+construction.
+
+`DenseGeneration.search` performs that ranking without materialising the
+index. It streams `(record_id, vector)` rows, scores each against the
+unit-length query as a dot product, keeps only a heap of the requested size,
+and then hydrates content, source links, and vectors for the ranked winners
+alone. The query vector is normalised once per query rather than per
+candidate, so the reported similarity is a true cosine for a query of any
+magnitude. Per-query hydration is therefore bounded by the requested limit and
+not by corpus size; `read_entries` remains the full-materialisation reader
+used by incremental reuse and registration validation, which legitimately need
+every entry; its name says so rather than implying a lazy iterator. When the query carries a metadata filter, the predicate is
+evaluated in exact dense rank order before the requested limit is applied, so
+filtering never reorders surviving candidates. Because that evaluation happens
+before the limit, the channel ranks a bounded candidate window of
+`FILTERED_WINDOW_FACTOR` times the requested limit and doubles that window,
+capped at the generation's entry count, until enough candidates survive. The
+ranking is a total deterministic order, so a wider window only extends the
+previous one and the result is identical to ranking the whole generation.
+
+### Incremental reuse
+
+A build may name a parent generation reference. Vectors are reused from the
+parent only when the parent's `configuration_digest` equals the proposed
+compatibility digest **and** the candidate — record identity, kind, exact
+text, and complete source links — is unchanged. Everything else is
+re-embedded. A parent owned by another corpus, in a non-ready state, or
+declaring a different implementation or configuration digest fails closed
+rather than being partially trusted.
+
+Re-publishing an identical generation ID is a no-op: the existing durable
+generation is revalidated against the proposed inputs and returned with
+`generation_reused=true`. Build statistics report members processed, chunks
+processed, and vectors reused, embedded, replaced, and removed.
+
+### Failures
+
+`DenseError` carries one bounded category and a retryability hint:
+`invalid_request`, `generation_unavailable`, `corrupt_generation`,
+`incompatible_generation`, `embedding_failure`, `execution_failure`. It never
+carries SQL, paths, vectors, chunk text, query text, or raw exception
+messages. At the retrieval boundary, unavailable and corrupt generations
+become `channel_unavailable`; incompatible generations and invalid requests
+become `invalid_channel_response`; everything else becomes
+`channel_execution_failure`.
+
+### Build instrumentation
+
+The dense build is an observed `dense_index` stage, symmetric with
+`lexical_index`. It reports `items_processed` as the chunks it processed and
+`records_emitted` as the entries the generation holds, and it maps its typed
+failures into the closed profiling vocabulary: an invalid request is `input`,
+a dense or storage dependency failure is `dependency`, cancellation is
+`cancelled`, and anything else is `internal`. Publication passes its own
+profiling context and parent stage, so the dense build appears beneath the
+request stage rather than as an untracked gap between the lexical build and
+publication.
+
+Embedding is by far the longest step in a build — on the pinned 18-document
+corpus it is 0.27 seconds of lexical indexing against 27.8 **minutes** of
+embedding — and it writes nothing until every pending chunk is embedded. It
+therefore emits `dense_index_embedding_progress` every
+`_EMBED_PROGRESS_CHUNKS` chunks and once at the end, carrying embedded,
+pending and reused counts and no candidate content. The lexical build is
+stage-level only because it has no inference step and completes in
+milliseconds; progress records there would be noise.
+
+`DenseBuildRequest` carries the validated inputs for one build — source
+manifest, compatibility, storage locations, optional parent reference, and
+batch size — so the builder takes the request, the embedder, and its
+observation arguments only.
+
+### Storage participation
+
+The dense owner participates in corpus-version publication through
+`DenseGenerationParticipant` and `DenseGenerationValidator`. The validator
+returns a strict boolean and confirms that the registered reference is exactly
+the one derived from the manifest, that staged membership matches the chunk
+source manifest entry for entry, that each document version's persisted
+chunk-set selection still matches, and that the durable generation reopens by
+ID and matches the identities it recorded.
+
+The validator's boolean is a *verdict about the data*, never a report about
+the system's availability. A storage failure while reading chunk-set
+selections, or an unavailable generation, propagates so publication records a
+retryable availability failure; returning `False` there would be recorded as a
+permanent conflict. The lexical owner draws the same distinction through its
+own error type.
+
+Comparing a published generation against its inputs uses the identities both
+sides already recorded — corpus, source-manifest digest, configuration digest,
+membership, and entry count — and the caller passes membership it has already
+derived rather than having it re-derived. The full entry-by-entry comparison
+runs only where it proves a fresh write, immediately after staging and before
+publication. A database commit failure may leave an
+unreferenced immutable generation; it is unreachable through any committed
+manifest, and the dense owner retains cleanup responsibility under a future
+retention policy.
+
+### Outstanding against this contract
+
+These are known gaps, recorded here so the contract is not read as a
+description of finished work:
+
+- **Generation opening materialises every entry** to verify declared counts,
+  so opening cost still grows with corpus size even though query cost no
+  longer does.
+
+## RET-05 fusion and document deduplication
+
+Fusion combines the ranked lexical and dense channels into one corpus-version
+scoped result without treating their incomparable raw scores as a single
+scale. Both channels are executed against **one** pinned snapshot, and every
+candidate's source links are revalidated against that snapshot before fusion;
+a channel whose candidates do not resolve becomes a channel-scoped failure
+rather than contributing unverified evidence.
+
+### Ranked channels and the metadata predicate
+
+Only `lexical` and `dense` are ranked, fusible channels. **Metadata is a
+predicate, not a channel**: `RET-03` filters are applied inside each channel's
+execution before its result limit, so there is no metadata candidate list to
+fuse and no metadata weight. A metadata-only comparison is therefore
+unavailable by construction, and an evaluation that reports one must report it
+as unavailable rather than as zero recall. Presenting a metadata result
+alongside ranked channels would imply a ranking the system does not compute.
+
+### Algorithm
+
+The baseline policy is weighted reciprocal-rank fusion, version `1.0.0`:
+
+```text
+fused_score(record) = sum over each contributing channel of
+                          weight(channel)
+                      ───────────────────────────────
+                      rank_constant + rank(record, channel)
+```
+
+| Parameter | Default | Constraint |
+| --- | --- | --- |
+| `rank_constant` | `60` | positive integer |
+| `lexical_weight` | `1.0` | finite, strictly positive |
+| `dense_weight` | `1.0` | finite, strictly positive |
+
+Ranks are channel-local and strictly positive; raw scores are never read.
+`FusionPolicy.identity` renders every ranking parameter as
+`reciprocal_rank_fusion/<version>/k=<constant>/dense=<weight>/lexical=<weight>`
+with weights formatted at full double precision so an identity cannot hide a
+weight change.
+
+Records are merged by `RecordId`. A merge requires identical candidate kind
+and byte-identical content; a source span identity appearing twice must carry
+identical ownership. Merged source links are the union, in canonical
+`(document_id, document_version_id, source_span_id)` order. A record
+contributes at most once per channel, and every contributing channel's
+contribution is retained in the fused hit so downstream stages can see which
+channels found the evidence.
+
+Fused order is descending `fused_score`, then ascending canonical `RecordId`.
+Channel results are themselves processed in canonical channel order, so fusion
+is deterministic for identical inputs.
+
+### Deduplication, version `1.0.0`
+
+Deduplication runs **after** ranking and **before** the requested limit, so
+the highest-ranked member of a duplicate group survives and the caller still
+receives up to its requested number of distinct hits.
+
+Byte-identical duplicate relationships visible in the pinned snapshot are
+resolved into connected components by union–find; a component's root is its
+lexicographically smallest `DocumentVersionId`. Only
+`DuplicateClass.BYTE_IDENTICAL` participates, because only that class
+guarantees identical content, and persistence already enforces matching hash
+algorithm and digest for it. A relationship whose endpoint is not visible in
+the snapshot is a corrupt read, not a silently dropped edge.
+
+The key for one candidate is its kind plus the sorted set of per-source keys:
+
+| Condition | Per-source key |
+| --- | --- |
+| Owning document version is in a duplicate component of size > 1 | `("byte_identical_source_range", component_root, start_offset, end_offset, page_number, content_origin)` |
+| Otherwise | `("source_span", source_span_id)` |
+
+An absent page number is normalised to `-1` so a page-less span cannot collide
+with page one. The effect is that the same passage reached through two
+byte-identical copies of a document collapses to one hit, while two genuinely
+different passages never collapse.
+
+### Document families are deliberately not collapsed
+
+Family membership is resolved and validated against the snapshot, but it does
+**not** affect the deduplication key. Two members of one publication or patent
+family remain separate hits.
+
+This follows from the provenance contract: `DocumentFamilyId` "identifies a
+family grouping, not a document", family membership "does not merge member
+documents or their immutable source versions", and "each member remains
+independently citable". Collapsing family members would discard distinct,
+separately citable evidence — precisely the outcome the issue boundary warns
+against — and would do so before the stage that is actually responsible for
+diversity.
+
+Resolved family identities are therefore exposed as **diagnostics**: the fused
+completion event reports how many distinct families the evidence set touches.
+Later channel planning and answer construction may use that signal to
+diversify or to annotate an answer; fusion does not act on it.
+
+This is a settled decision, not a deferral. Fusion cannot see query intent, so
+it cannot judge when family members are redundant: they are interchangeable
+for an aggregation such as "how many patents mention Y after 2018" and
+materially distinct for a claim-level question, where jurisdictional members
+of one patent family carry different claim language. Byte-identical duplicates
+are collapsed here precisely because identical bytes are redundant for every
+question a caller could ask. A collapse at this stage is also irreversible:
+reranking and evidence reduction run downstream, so a member dropped here
+cannot be recovered by a stage that knows better.
+
+Family handling therefore belongs to the two stages that do know the question:
+
+- **Diversity** belongs to RET-07, whose configured policy already selects
+  between no diversity and per-document diversity. `per_family` is a candidate
+  value for `retrieval.diversity_policy`, gated on the family crowding
+  diagnostics that evaluation already measures showing that crowding occurs.
+- **Counting** belongs to RET-08. Whether a family counts once or per member
+  is an aggregation decision that must be explicit, versioned with the
+  aggregation algorithm identity, and visible in the result's uncertainty when
+  family membership is incomplete.
+
+### Snapshot resolution and duplicate expansion
+
+Fusion resolves each candidate source span exactly once per request. One
+resolver validates a span's ownership against the pinned snapshot and caches
+the exact location, so the visibility verdict that can fail a channel and the
+location map used to build evidence share a single read rather than resolving
+the same spans twice.
+
+Discovering byte-identical duplicate relationships walks a pre-sorted frontier
+and expands transitively, but stops after `MAX_DUPLICATE_EXPANSION_VERSIONS`
+visited versions. Reaching that bound is reported as
+`duplicate_expansion_truncated` on the `retrieval_fusion_completed` event, so
+a duplicate-heavy corpus yields partial duplicate groups visibly rather than
+silently.
+
+### Degraded channels and corpus-version mismatch
+
+Channel failures are preserved in the fused result and determine its status
+under the shared result rules: hits with failures is `partial`, no hits with
+failures is `failed`. Fusion requires at least one ranked channel result, and
+a channel result whose requested limit differs from the query's is invalid
+input.
+
+Any channel observing a corpus version other than the query's makes the whole
+fused result fail closed with no hits and an unscoped corpus-version mismatch
+failure. Fusion does not emit the channel-scoped partial form; a mismatch at
+this level means the snapshot and the query disagree, which is not a
+recoverable per-channel degradation.
+
+### Logging
+
+`retrieval_fusion_completed` is emitted once per execution at `INFO` when
+completed, `WARNING` when partial, and `ERROR` when failed. It carries the
+caller-supplied `corpus_id`, the result's `corpus_version`, the fusion policy
+identity, the deduplication policy version, result status, bounded per-channel
+candidate counts, the final result count, the family-diagnostic count, and the
+bounded failure categories. It excludes query text, candidate content, source
+passages, raw scores, paths, and raw exception messages.
+
 ## RET-06 limits
 
 Reranking uses the typed `[retrieval]` settings owned by
-`inference_lab.settings.RetrievalConfig`:
+`inference_lab.settings.RetrievalConfig`. Callers build the typed limits with
+`EvidenceCount.from_config` and `RerankCandidateLimit.from_config`; both limits
+are required arguments at every reranking entry point, so a deployment cannot
+fall back to the baseline silently. `settings` declares `MIN_EVIDENCE_COUNT`,
+`MAX_EVIDENCE_COUNT`, and `MAX_RERANK_CANDIDATES`, and the retrieval values
+enforce exactly those bounds:
 
 | Setting | Environment override | Default | Valid range |
 | --- | --- | --- | --- |
@@ -120,6 +556,14 @@ count is a separate downstream maximum; fewer passages may be returned when
 fewer eligible candidates exist. Neither setting changes the RET-01 wire
 schema or makes reranker scores evidence of claim support.
 
+Reranking's vocabulary is part of the retrieval package's contract and is
+exported from `inference_lab.retrieval` alongside the dense, fusion, and
+reduction types. The limits, the request and outcome values, the identity, and
+the execution entry points are all constructed, called, or annotated by
+consumers outside the package, which is what makes a name part of the export
+surface rather than an implementation detail. Consumers therefore import them
+from the package, not from `inference_lab.retrieval.reranking`.
+
 Each RET-06 execution outcome carries a stable `RerankingIdentity` for
 evaluation and replay. It includes backend/model name and revision, the
 backend's semantic preprocessing profile version, both limits, and the RET-06
@@ -127,9 +571,18 @@ policy and exact-deduplication versions. Its SHA-256 digest covers all of
 these fields. Identity values must not include deployment paths; raw scores,
 queries, passages, and prompts are not part of the identity.
 
+Every outcome also reports the candidate pool it actually worked on:
+`available_candidate_count` is the fused pool it was given,
+`submitted_candidate_count` is the pool the backend request contained, and
+`truncated_candidate_count` is the difference. These are taken from the
+prepared request rather than recomputed, and the available count is reported
+as observed, so a fused pool larger than the configured ceiling is visible
+instead of being clamped to it.
+
 The `reranking_completed` structured event includes the caller-supplied
-`corpus_id` and query-pinned `corpus_version`, bounded candidate and evidence
-counts, configured limits, result status, degraded state, a typed failure
+`corpus_id` and query-pinned `corpus_version`, the three candidate-pool counts
+above, the selected evidence count, configured limits, result status, degraded
+state, a typed failure
 category when present, the stable identity fields and digest, and elapsed
 milliseconds. It excludes query and candidate text, source passages, raw
 scores, prompts, raw exception messages, credentials, and deployment paths.
@@ -153,12 +606,37 @@ malformed responses, and corpus-version mismatches fail closed without hits.
 `reduce_retrieval_evidence` accepts one RET-06 `EvidenceResult`, a pinned
 `CorpusSnapshot`, the matching immutable lexical generation, an explicit local
 offset-bearing tokeniser, and validated `RetrievalConfig`. It rejects a corpus
-or version mismatch before reading candidate source data. The default token
+or version mismatch before reading candidate source data, and distinguishes the
+three ways that check can fail: `corpus_version_mismatch` when the snapshot,
+result, or generation disagree about the corpus version;
+`component_unavailable` when the snapshot publishes no ready lexical component;
+and `component_mismatch` when a ready component is not the generation that was
+opened. A missing index and a stale index need different operator responses, so
+they are never reported as the same cause.
+
+The lexical and dense generations of one corpus version are built from the
+same `BaselineChunkGenerationManifest`, so their record sets are identical by
+construction. Reduction relies on that: it maps a candidate's source ranges
+through the lexical generation whatever channel retrieved it. A result
+candidate the lexical generation does not hold therefore means the two
+component generations disagree despite claiming the same source manifest, and
+it fails closed with `component_record_sets_disagree`. It must never be
+treated as a merely unmappable candidate, because that would silently drop a
+dense-only passage at the budget instead of truncating it.
+
+Reduction failures name the cause the operator must act on. An item evicted
+because the token budget is exhausted is recorded as `dropped_budget` even when
+it had already been truncated; `failed_source_map` and its `source_map_*`
+failures are reserved for a candidate whose source ranges are genuinely absent
+or unusable. The default token
 ceiling is `retrieval.evidence_token_budget = 4096`; a request may supply a
 positive token-budget override. The default item ceiling is RET-06's configured
 `evidence_count` (at most eight by default), further capped by the request's
 result limit and an optional lower per-request item limit. The configured
-diversity policy defaults to `none`; `per_document` keeps the first
+diversity policy is the typed `EvidenceDiversityPolicy` owned by `settings`,
+which is where the supported values are fixed; a reserved value such as
+`per_family` is therefore rejected by configuration validation rather than
+compared as a bare string. It defaults to `none`; `per_document` keeps the first
 (highest-ranked) candidate for a document and drops later candidates for that
 document. A request may override this policy for one call. Selection follows
 RET-06 order and never re-ranks evidence.
@@ -187,6 +665,22 @@ bounded counts, tokeniser and policy identity, and elapsed time. Each
 bounded mapping counts. Failed calls emit a typed `ERROR` event. None of these
 events includes candidate text, queries, prompts, token IDs, paths or raw
 exceptions.
+
+## Operational failures
+
+Every failure crossing an operational retrieval boundary derives from
+`RetrievalOperationalError`. It carries a category drawn from that boundary's
+own `StrEnum` and an explicit `retryable` hint, and nothing else: no query
+text, candidate content, stored payloads, or paths. The concrete boundaries are
+`LexicalError`, `DenseError`, `EvidenceTokeniserError`, and
+`EvidenceReductionExecutionError`.
+
+Retryability is owned by the layer that failed and is propagated outwards, not
+re-decided by the caller. A channel executor copies the retry hint from the
+`BackendError`, `StorageError`, or boundary error it caught into the resulting
+`RetrievalFailure`. An exception a dependency does not declare retryable is
+reported as not retryable, so a caller never retries a request or protocol
+error indefinitely.
 
 ## Serialisation and privacy
 

@@ -9,11 +9,11 @@ import importlib.util
 import io
 import json
 import sys
-from collections.abc import Sequence
-from contextlib import redirect_stdout
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager, redirect_stdout
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import cast
 
 from inference_lab.evaluation import (
     HeldOutBaselineRequest,
@@ -70,18 +70,22 @@ def _load_module(module_spec: str) -> ModuleType:
     return importlib.import_module(module_spec)
 
 
-def _load_request(factory_spec: str) -> HeldOutBaselineRequest:
-    """Load and validate one complete baseline request."""
+@contextmanager
+def _load_request(factory_spec: str) -> Iterator[HeldOutBaselineRequest]:
+    """Load one baseline request, holding its resources open for the run."""
     module_spec, separator, attribute = factory_spec.rpartition(":")
     if not separator or not module_spec or not attribute:
         raise ValueError
-    factory: Any = getattr(_load_module(module_spec), attribute)
-    if not callable(factory):
+    loaded = getattr(_load_module(module_spec), attribute)
+    if not callable(loaded):
         raise TypeError
-    request = factory()
-    if not isinstance(request, HeldOutBaselineRequest):
-        raise TypeError
-    return request
+    # The factory protocol is a context manager so the run, not the factory,
+    # owns the lifetime of the repository and backends it opens.
+    factory = cast(Callable[[], AbstractContextManager[object]], loaded)
+    with factory() as request:
+        if not isinstance(request, HeldOutBaselineRequest):
+            raise TypeError
+        yield request
 
 
 def _validate_destinations(
@@ -108,13 +112,13 @@ def _validate_destinations(
 def _run(args: argparse.Namespace) -> tuple[dict[str, object], bool]:
     """Run, optionally compare, and publish one aggregate baseline report."""
     output, compare_to = _validate_destinations(args.output, args.compare_to)
-    request = _load_request(args.request_factory)
-    report = run_held_out_baseline(
-        request.contract,
-        request.cases,
-        request.run_channel,
-        limitations=request.limitations,
-    )
+    with _load_request(args.request_factory) as request:
+        report = run_held_out_baseline(
+            request.contract,
+            request.cases,
+            request.run_channel,
+            limitations=request.limitations,
+        )
     comparison: dict[str, object]
     if compare_to is None:
         comparison = {"status": "not_requested"}

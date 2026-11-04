@@ -1,4 +1,4 @@
-"""Tests for RET-02 lexical contracts and analysis policy."""
+"""Tests for lexical contracts and analysis policy."""
 
 import hashlib
 import json
@@ -87,7 +87,12 @@ def test_analyser_normalises_unicode_and_preserves_identifier_punctuation() -> N
 
 def test_fts_queries_are_literal_and_mode_specific() -> None:
     assert escape_fts5_literal('alpha"beta') == '"alpha""beta"'
-    assert build_fts5_query('alpha OR "beta"') == '"alpha" AND "OR" AND "beta"'
+    # Operators in the query text are literal terms, never FTS5 syntax, in
+    # either combining mode.
+    assert build_fts5_query('alpha OR "beta"') == '"alpha" OR "OR" OR "beta"'
+    assert build_fts5_query('alpha OR "beta"', LexicalMatchMode.ALL_TERMS) == (
+        '"alpha" AND "OR" AND "beta"'
+    )
     assert build_fts5_query("alpha beta", LexicalMatchMode.EXACT_PHRASE) == (
         '"alpha beta"'
     )
@@ -155,7 +160,7 @@ def test_score_semantics_and_stable_ordering_are_explicit() -> None:
     record_id = RecordId.from_str("00000000-0000-4000-8000-000000000010")
     assert expose_bm25_score(-2.5) == 2.5
     assert identifier_score(4) == 4
-    assert lexical_score_label(LexicalMatchMode.TERMS) == (
+    assert lexical_score_label(LexicalMatchMode.ANY_TERM) == (
         "sqlite_fts5_negated_bm25_v2"
     )
     assert lexical_score_label(LexicalMatchMode.IDENTIFIER) == (

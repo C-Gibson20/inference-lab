@@ -356,6 +356,16 @@ def _run_parser(
     return outcome
 
 
+@dataclass(frozen=True, slots=True)
+class _ParseStageIds:
+    """The stage identities one parse attempt emits its records under."""
+
+    source_stage_id: str
+    parse_stage_id: str
+    parse_persistence_stage_id: str
+    parent_stage_id: str | None
+
+
 def _publish_parse(
     repository: BaselineParseRepository,
     request: BaselineParseRequest,
@@ -365,12 +375,13 @@ def _publish_parse(
     filesystem: StableReadFileSystem | None,
     profiling: BaselineProfilingContext,
     document_id: DocumentId,
-    source_stage_id: str,
-    parse_stage_id: str,
-    parse_persistence_stage_id: str,
-    parent_stage_id: str | None,
+    stage_ids: _ParseStageIds,
 ) -> BaselineParseResult:
     """Acquire, parse, publish, and replay one new parse attempt."""
+    source_stage_id = stage_ids.source_stage_id
+    parse_stage_id = stage_ids.parse_stage_id
+    parse_persistence_stage_id = stage_ids.parse_persistence_stage_id
+    parent_stage_id = stage_ids.parent_stage_id
     content: bytes | None = None
     with profiling.observed_stage(
         stage="source_acquisition",
@@ -394,7 +405,6 @@ def _publish_parse(
         content = content_result
         source_stage.set_counts(items_processed=1, records_emitted=1)
 
-    assert content is not None
     parser_input: ParserInput | None = None
     outcome: ParseOutcome | None = None
     with profiling.observed_stage(
@@ -421,8 +431,6 @@ def _publish_parse(
         outcome = _run_parser(parser, parser_input, settings=settings)
         parse_stage.set_counts(items_processed=1, records_emitted=1)
 
-    assert parser_input is not None
-    assert outcome is not None
     reconstructed: ReconstructedParseOutcome | None = None
     with profiling.observed_stage(
         stage="parse_persistence",
@@ -463,7 +471,6 @@ def _publish_parse(
             request,
             require_existing=True,
         )
-        assert reconstructed is not None
         persistence_stage.set_counts(items_processed=1, records_emitted=1)
     assert reconstructed is not None
     return _result_from_reconstructed(
@@ -575,8 +582,10 @@ def execute_baseline_parse(
             filesystem=filesystem,
             profiling=selected_profiling,
             document_id=document_id,
-            source_stage_id=source_stage_id,
-            parse_stage_id=parse_stage_id,
-            parse_persistence_stage_id=parse_persistence_publish_stage_id,
-            parent_stage_id=parent_stage_id,
+            stage_ids=_ParseStageIds(
+                source_stage_id=source_stage_id,
+                parse_stage_id=parse_stage_id,
+                parse_persistence_stage_id=parse_persistence_publish_stage_id,
+                parent_stage_id=parent_stage_id,
+            ),
         )

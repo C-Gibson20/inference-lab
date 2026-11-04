@@ -1,7 +1,5 @@
 """Predeclared gate policy and coverage checks for held-out retrieval runs."""
 
-from __future__ import annotations
-
 import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
@@ -16,12 +14,28 @@ from inference_lab.evaluation.retrieval_contracts import (
     RetrievalEvaluationRunIdentity,
     RetrievalSystemIdentity,
 )
-from inference_lab.retrieval import FusionPolicy
-from inference_lab.retrieval.reranking import RerankingIdentity
+from inference_lab.retrieval import FusionPolicy, RerankingIdentity
 
 HELD_OUT_RUN_CONTRACT_VERSION: Final[str] = "1.0.0"
-HELD_OUT_GATE_POLICY_VERSION: Final[str] = "1.0.0"
+HELD_OUT_GATE_POLICY_VERSION: Final[str] = "2.0.0"
 HELD_OUT_UNCERTAINTY_METHOD: Final[str] = "leakage-cluster-bootstrap"
+
+
+class HeldOutGateReason(StrEnum):
+    """Closed set of reasons a held-out gate records with its verdict."""
+
+    MISSING_QUESTION_CATEGORIES = "missing_question_categories"
+    UNDERPOWERED_QUESTION_CATEGORIES = "underpowered_question_categories"
+    INCOMPLETE_CATEGORY_MEASUREMENT = "incomplete_category_measurement"
+    MISSING_ANSWERABILITY_STATUS = "missing_answerability_status"
+    INCOMPLETE_PASSAGE_RECALL = "incomplete_passage_recall"
+    INCOMPLETE_DOCUMENT_RECALL = "incomplete_document_recall"
+    FAILURE_RATE_EXCEEDS_POLICY = "failure_rate_exceeds_policy"
+    DEGRADED_RATE_EXCEEDS_POLICY = "degraded_rate_exceeds_policy"
+    PASSAGE_RECALL_BELOW_MINIMUM = "passage_recall_below_minimum"
+    PASSAGE_RECALL_UNCERTAIN_AT_THRESHOLD = "passage_recall_uncertain_at_threshold"
+    DOCUMENT_RECALL_FLOOR_BREACHED = "document_recall_floor_breached"
+    INCOMPLETE_FINAL_EVIDENCE_MEASUREMENT = "incomplete_final_evidence_measurement"
 
 
 class HeldOutGateOutcome(StrEnum):
@@ -33,7 +47,7 @@ class HeldOutGateOutcome(StrEnum):
 
 
 class HeldOutChannel(StrEnum):
-    """Retrieval paths compared by the Phase 6 baseline."""
+    """Retrieval paths compared by the hybrid retrieval baseline."""
 
     LEXICAL_ONLY = "lexical_only"
     DENSE_ONLY = "dense_only"
@@ -75,7 +89,7 @@ class HeldOutChannelIdentity:
         reranked = self.channel is HeldOutChannel.FUSED_RERANKED
         if reranked != isinstance(self.reranking_identity, RerankingIdentity):
             raise RetrievalEvaluationContractError(
-                "the reranked path must identify its RET-06 configuration."
+                "the reranked path must identify its reranking configuration."
             )
         if self.reranking_identity is not None and not isinstance(
             self.reranking_identity, RerankingIdentity
@@ -123,7 +137,7 @@ class HeldOutChannelIdentity:
 
 @dataclass(frozen=True, slots=True)
 class HeldOutRunContract:
-    """Frozen single-corpus run identity and gate policy for EVAL-04."""
+    """Frozen single-corpus run identity and gate policy for the held-out baseline."""
 
     evaluation_identity: RetrievalEvaluationRunIdentity
     gate_policy: "HeldOutGatePolicy"
@@ -136,14 +150,14 @@ class HeldOutRunContract:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate that the run is held out and pins each Phase 6 path."""
+        """Validate that the run is held out and pins each compared retrieval path."""
         if not isinstance(self.evaluation_identity, RetrievalEvaluationRunIdentity):
             raise TypeError(
                 "evaluation_identity must be a RetrievalEvaluationRunIdentity."
             )
         if self.evaluation_identity.selected_split != "held_out":
             raise RetrievalEvaluationContractError(
-                "EVAL-04 run identity must select the held_out split."
+                "the held-out run identity must select the held_out split."
             )
         if not isinstance(self.gate_policy, HeldOutGatePolicy):
             raise TypeError("gate_policy must be a HeldOutGatePolicy.")
@@ -160,7 +174,7 @@ class HeldOutRunContract:
         required = tuple(HeldOutChannel)
         if len(channels) != len(set(channels)) or set(channels) != set(required):
             raise RetrievalEvaluationContractError(
-                "run contract must identify every Phase 6 comparison path once."
+                "run contract must identify every compared retrieval path once."
             )
         identity_by_channel = {item.channel: item for item in self.channel_identities}
         pre_rerank_fusion = identity_by_channel[
@@ -189,7 +203,7 @@ class HeldOutRunContract:
             != self.final_evidence_count
         ):
             raise RetrievalEvaluationContractError(
-                "RET-06 evidence count must match final_evidence_count."
+                "the reranked evidence count must match final_evidence_count."
             )
         calculated = self._calculate_fingerprint()
         if self.fingerprint is None:
@@ -239,12 +253,17 @@ class HeldOutRunContract:
 class HeldOutGatePolicy:
     """Immutable thresholds fixed before opening held-out results.
 
-    Fractions are exact integer ratios. The policy deliberately has no guessed
-    defaults: a run must provide a threshold and its rationale before it can
-    be executed against held-out cases.
+    Passage recall is the gated metric: it decides the verdict. Document recall
+    is a floor, breached only when a channel retrieves almost nothing, so it
+    separates a dark channel from a quality regression.
+
+    Deliberately has no defaults: a run must state its threshold and rationale.
     """
 
-    minimum_document_recall_at_10: MetricFraction
+    minimum_passage_recall: MetricFraction
+    passage_recall_cutoff: int
+    minimum_document_recall: MetricFraction
+    document_recall_cutoff: int
     maximum_failure_rate: MetricFraction
     maximum_degraded_rate: MetricFraction
     minimum_category_cases: int
@@ -261,13 +280,16 @@ class HeldOutGatePolicy:
     def _validate(self) -> None:
         """Reject incomplete, unsupported, or mutable policy inputs."""
         for name in (
-            "minimum_document_recall_at_10",
+            "minimum_passage_recall",
+            "minimum_document_recall",
             "maximum_failure_rate",
             "maximum_degraded_rate",
         ):
             if not isinstance(getattr(self, name), MetricFraction):
                 raise TypeError(f"{name} must be a MetricFraction.")
         for name in (
+            "passage_recall_cutoff",
+            "document_recall_cutoff",
             "minimum_category_cases",
             "minimum_category_leakage_groups",
             "bootstrap_replicates",
@@ -304,9 +326,10 @@ class HeldOutGatePolicy:
         """Return the complete policy identity for inclusion in a run record."""
         return {
             "version": self.version,
-            "minimum_document_recall_at_10": (
-                self.minimum_document_recall_at_10.as_dict()
-            ),
+            "passage_recall_cutoff": self.passage_recall_cutoff,
+            "minimum_passage_recall": self.minimum_passage_recall.as_dict(),
+            "document_recall_cutoff": self.document_recall_cutoff,
+            "minimum_document_recall": (self.minimum_document_recall.as_dict()),
             "maximum_failure_rate": self.maximum_failure_rate.as_dict(),
             "maximum_degraded_rate": self.maximum_degraded_rate.as_dict(),
             "minimum_category_cases": self.minimum_category_cases,
@@ -439,110 +462,179 @@ def _fraction_less(left: MetricFraction, right: MetricFraction) -> bool:
     return left.numerator * right.denominator < right.numerator * left.denominator
 
 
-def evaluate_held_out_gate(
-    *,
-    policy: HeldOutGatePolicy,
-    categories: tuple[HeldOutCategoryCoverage, ...],
-    overall_document_recall_at_10: MetricFraction | None,
-    overall_recall_interval_lower: MetricFraction | None,
-    overall_recall_interval_upper: MetricFraction | None,
-    case_count: int,
-    failed_case_count: int,
-    degraded_case_count: int,
-) -> tuple[HeldOutGateOutcome, tuple[str, ...]]:
-    """Apply a fixed gate policy while preserving uncertainty and missing coverage."""
-    if not isinstance(policy, HeldOutGatePolicy):
-        raise TypeError("policy must be a HeldOutGatePolicy.")
-    if not isinstance(categories, tuple) or any(
-        not isinstance(category, HeldOutCategoryCoverage) for category in categories
-    ):
-        raise TypeError("categories must be a tuple of HeldOutCategoryCoverage.")
-    if len({category.question_type for category in categories}) != len(categories):
-        raise RetrievalEvaluationContractError("question categories must be unique.")
-    for name, value in (
-        ("case_count", case_count),
-        ("failed_case_count", failed_case_count),
-        ("degraded_case_count", degraded_case_count),
-    ):
-        if not is_strict_integer(value):
-            raise TypeError(f"{name} must be an integer.")
-        if value < 0:
-            raise RetrievalEvaluationContractError(f"{name} must not be negative.")
-    if (
-        case_count == 0
-        or failed_case_count > case_count
-        or degraded_case_count > case_count
-    ):
-        raise RetrievalEvaluationContractError("overall counts do not reconcile.")
-    for name, value in (
-        ("overall_document_recall_at_10", overall_document_recall_at_10),
-        ("overall_recall_interval_lower", overall_recall_interval_lower),
-        ("overall_recall_interval_upper", overall_recall_interval_upper),
-    ):
-        if value is not None and not isinstance(value, MetricFraction):
-            raise TypeError(f"{name} must be a MetricFraction or None.")
-    if categories:
-        category_case_count = sum(category.case_count for category in categories)
-        category_failure_count = sum(
-            category.failed_case_count for category in categories
-        )
-        category_degraded_count = sum(
-            category.degraded_case_count for category in categories
-        )
-        if (
-            category_case_count > case_count
-            or category_failure_count > failed_case_count
-            or category_degraded_count > degraded_case_count
+@dataclass(frozen=True, slots=True)
+class HeldOutGateObservations:
+    """The measured held-out outcome that a gate policy is applied to."""
+
+    categories: tuple[HeldOutCategoryCoverage, ...]
+    overall_passage_recall: MetricFraction | None
+    overall_passage_interval_lower: MetricFraction | None
+    overall_passage_interval_upper: MetricFraction | None
+    overall_document_recall: MetricFraction | None
+    overall_document_interval_lower: MetricFraction | None
+    overall_document_interval_upper: MetricFraction | None
+    case_count: int
+    failed_case_count: int
+    degraded_case_count: int
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Reject observations that cannot describe one complete held-out run."""
+        self._validate_categories()
+        self._validate_counts()
+        self._validate_metrics()
+
+    def _validate_categories(self) -> None:
+        """Require unique categories whose populations fit the overall run."""
+        if not isinstance(self.categories, tuple) or any(
+            not isinstance(category, HeldOutCategoryCoverage)
+            for category in self.categories
         ):
+            raise TypeError("categories must be a tuple of HeldOutCategoryCoverage.")
+        if len({category.question_type for category in self.categories}) != len(
+            self.categories
+        ):
+            raise RetrievalEvaluationContractError(
+                "question categories must be unique."
+            )
+        if not self.categories:
+            return
+        totals = (
+            sum(category.case_count for category in self.categories),
+            sum(category.failed_case_count for category in self.categories),
+            sum(category.degraded_case_count for category in self.categories),
+        )
+        overall = (self.case_count, self.failed_case_count, self.degraded_case_count)
+        if any(total > limit for total, limit in zip(totals, overall, strict=True)):
             raise RetrievalEvaluationContractError(
                 "category populations must not exceed overall counts."
             )
-        if len(categories) == len(QUESTION_TYPES) and (
-            category_case_count != case_count
-            or category_failure_count != failed_case_count
-            or category_degraded_count != degraded_case_count
-        ):
+        if len(self.categories) == len(QUESTION_TYPES) and totals != overall:
             raise RetrievalEvaluationContractError(
                 "complete category totals must reconcile to overall counts."
             )
-    if (overall_recall_interval_lower is None) != (
-        overall_recall_interval_upper is None
-    ):
-        raise RetrievalEvaluationContractError(
-            "overall recall interval bounds must be supplied together."
-        )
-    if (
-        overall_recall_interval_lower is not None
-        and overall_recall_interval_upper is not None
-        and _fraction_less(overall_recall_interval_upper, overall_recall_interval_lower)
-    ):
-        raise RetrievalEvaluationContractError(
-            "overall recall interval lower bound must not exceed its upper bound."
+
+    def _validate_counts(self) -> None:
+        """Require non-negative counts that reconcile with the case total."""
+        for name in ("case_count", "failed_case_count", "degraded_case_count"):
+            value = getattr(self, name)
+            if not is_strict_integer(value):
+                raise TypeError(f"{name} must be an integer.")
+            if value < 0:
+                raise RetrievalEvaluationContractError(f"{name} must not be negative.")
+        if (
+            self.case_count == 0
+            or self.failed_case_count > self.case_count
+            or self.degraded_case_count > self.case_count
+        ):
+            raise RetrievalEvaluationContractError("overall counts do not reconcile.")
+
+    def _validate_metrics(self) -> None:
+        """Require consistent gated and floor metrics with their intervals."""
+        for name in (
+            "overall_passage_recall",
+            "overall_passage_interval_lower",
+            "overall_passage_interval_upper",
+            "overall_document_recall",
+            "overall_document_interval_lower",
+            "overall_document_interval_upper",
+        ):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, MetricFraction):
+                raise TypeError(f"{name} must be a MetricFraction or None.")
+        for lower, upper in (
+            (self.overall_passage_interval_lower, self.overall_passage_interval_upper),
+            (
+                self.overall_document_interval_lower,
+                self.overall_document_interval_upper,
+            ),
+        ):
+            if (lower is None) != (upper is None):
+                raise RetrievalEvaluationContractError(
+                    "overall recall interval bounds must be supplied together."
+                )
+            if lower is not None and upper is not None and _fraction_less(upper, lower):
+                raise RetrievalEvaluationContractError(
+                    "overall recall interval lower bound must not exceed its upper "
+                    "bound."
+                )
+
+    @property
+    def passage_recall_incomplete(self) -> bool:
+        """Return whether the gated metric or its interval is missing."""
+        return (
+            self.overall_passage_recall is None
+            or self.overall_passage_interval_lower is None
+            or self.overall_passage_interval_upper is None
         )
 
-    reasons: list[str] = []
+    @property
+    def document_recall_incomplete(self) -> bool:
+        """Return whether the floor metric or its interval is missing."""
+        return (
+            self.overall_document_recall is None
+            or self.overall_document_interval_lower is None
+            or self.overall_document_interval_upper is None
+        )
+
+
+def evaluate_held_out_gate(
+    *,
+    policy: HeldOutGatePolicy,
+    observations: HeldOutGateObservations,
+) -> tuple[HeldOutGateOutcome, tuple[HeldOutGateReason, ...]]:
+    """Apply a fixed gate policy while preserving uncertainty and missing coverage."""
+    if not isinstance(policy, HeldOutGatePolicy):
+        raise TypeError("policy must be a HeldOutGatePolicy.")
+    if not isinstance(observations, HeldOutGateObservations):
+        raise TypeError("observations must be a HeldOutGateObservations.")
+    reasons = [
+        *_coverage_reasons(policy, observations),
+        *_rate_reasons(policy, observations),
+    ]
+    return _gate_verdict(policy, observations, reasons), tuple(reasons)
+
+
+_INCONCLUSIVE_REASONS: Final = (
+    HeldOutGateReason.MISSING_QUESTION_CATEGORIES,
+    HeldOutGateReason.UNDERPOWERED_QUESTION_CATEGORIES,
+    HeldOutGateReason.INCOMPLETE_CATEGORY_MEASUREMENT,
+    HeldOutGateReason.INCOMPLETE_PASSAGE_RECALL,
+    HeldOutGateReason.INCOMPLETE_DOCUMENT_RECALL,
+    HeldOutGateReason.MISSING_ANSWERABILITY_STATUS,
+)
+
+
+def _coverage_reasons(
+    policy: HeldOutGatePolicy,
+    observations: HeldOutGateObservations,
+) -> list[HeldOutGateReason]:
+    """Report every way this run is too thin to conclude anything."""
+    categories = observations.categories
     by_type = {coverage.question_type: coverage for coverage in categories}
     missing_categories = tuple(
         question_type
         for question_type in QUESTION_TYPES
         if question_type not in by_type
     )
+    reasons: list[HeldOutGateReason] = []
     if missing_categories:
-        reasons.append("missing_question_categories")
-    underpowered = any(
+        reasons.append(HeldOutGateReason.MISSING_QUESTION_CATEGORIES)
+    if any(
         coverage.case_count < policy.minimum_category_cases
         or coverage.leakage_group_count < policy.minimum_category_leakage_groups
         for coverage in categories
-    )
-    if underpowered:
-        reasons.append("underpowered_question_categories")
+    ):
+        reasons.append(HeldOutGateReason.UNDERPOWERED_QUESTION_CATEGORIES)
     if any(
         coverage.document_recall is None
         or coverage.recall_interval_lower is None
         or coverage.recall_interval_upper is None
         for coverage in categories
     ):
-        reasons.append("incomplete_category_measurement")
+        reasons.append(HeldOutGateReason.INCOMPLETE_CATEGORY_MEASUREMENT)
     if categories and not missing_categories:
         answerable_count = sum(
             coverage.answerable_case_count for coverage in categories
@@ -551,43 +643,75 @@ def evaluate_held_out_gate(
             coverage.expected_abstention_case_count for coverage in categories
         )
         if answerable_count == 0 or expected_abstention_count == 0:
-            reasons.append("missing_answerability_status")
-    if overall_document_recall_at_10 is None or (
-        overall_recall_interval_lower is None or overall_recall_interval_upper is None
-    ):
-        reasons.append("incomplete_primary_metric")
+            reasons.append(HeldOutGateReason.MISSING_ANSWERABILITY_STATUS)
+    if observations.passage_recall_incomplete:
+        reasons.append(HeldOutGateReason.INCOMPLETE_PASSAGE_RECALL)
+    if observations.document_recall_incomplete:
+        reasons.append(HeldOutGateReason.INCOMPLETE_DOCUMENT_RECALL)
+    return reasons
 
-    failure_rate = MetricFraction(failed_case_count, case_count)
-    degraded_rate = MetricFraction(degraded_case_count, case_count)
-    unacceptable_failure = _fraction_less(policy.maximum_failure_rate, failure_rate)
-    unacceptable_degradation = _fraction_less(
-        policy.maximum_degraded_rate, degraded_rate
-    )
-    if unacceptable_failure:
-        reasons.append("failure_rate_exceeds_policy")
-    if unacceptable_degradation:
-        reasons.append("degraded_rate_exceeds_policy")
 
-    if unacceptable_failure or unacceptable_degradation:
-        outcome = HeldOutGateOutcome.REJECT
-    elif (
-        "missing_question_categories" in reasons
-        or "underpowered_question_categories" in reasons
-        or "incomplete_category_measurement" in reasons
-        or "incomplete_primary_metric" in reasons
-        or "missing_answerability_status" in reasons
+def _rate_reasons(
+    policy: HeldOutGatePolicy,
+    observations: HeldOutGateObservations,
+) -> list[HeldOutGateReason]:
+    """Report failure and degradation rates that breach the approved policy."""
+    reasons: list[HeldOutGateReason] = []
+    if _fraction_less(
+        policy.maximum_failure_rate,
+        MetricFraction(observations.failed_case_count, observations.case_count),
     ):
-        outcome = HeldOutGateOutcome.INCONCLUSIVE
-    elif overall_recall_interval_upper is not None and _fraction_less(
-        overall_recall_interval_upper, policy.minimum_document_recall_at_10
+        reasons.append(HeldOutGateReason.FAILURE_RATE_EXCEEDS_POLICY)
+    if _fraction_less(
+        policy.maximum_degraded_rate,
+        MetricFraction(observations.degraded_case_count, observations.case_count),
     ):
-        outcome = HeldOutGateOutcome.REJECT
-        reasons.append("primary_metric_below_minimum")
-    elif overall_recall_interval_lower is not None and _fraction_less(
-        overall_recall_interval_lower, policy.minimum_document_recall_at_10
+        reasons.append(HeldOutGateReason.DEGRADED_RATE_EXCEEDS_POLICY)
+    return reasons
+
+
+def _gate_verdict(
+    policy: HeldOutGatePolicy,
+    observations: HeldOutGateObservations,
+    reasons: list[HeldOutGateReason],
+) -> HeldOutGateOutcome:
+    """Decide the verdict, appending any primary-metric reason it establishes."""
+    if (
+        HeldOutGateReason.FAILURE_RATE_EXCEEDS_POLICY in reasons
+        or HeldOutGateReason.DEGRADED_RATE_EXCEEDS_POLICY in reasons
     ):
-        outcome = HeldOutGateOutcome.INCONCLUSIVE
-        reasons.append("primary_metric_uncertain_at_threshold")
-    else:
-        outcome = HeldOutGateOutcome.PASS
-    return outcome, tuple(reasons)
+        return HeldOutGateOutcome.REJECT
+    if any(reason in reasons for reason in _INCONCLUSIVE_REASONS):
+        return HeldOutGateOutcome.INCONCLUSIVE
+    reasons.extend(_metric_reasons(policy, observations))
+    if (
+        HeldOutGateReason.DOCUMENT_RECALL_FLOOR_BREACHED in reasons
+        or HeldOutGateReason.PASSAGE_RECALL_BELOW_MINIMUM in reasons
+    ):
+        return HeldOutGateOutcome.REJECT
+    if HeldOutGateReason.PASSAGE_RECALL_UNCERTAIN_AT_THRESHOLD in reasons:
+        return HeldOutGateOutcome.INCONCLUSIVE
+    return HeldOutGateOutcome.PASS
+
+
+def _metric_reasons(
+    policy: HeldOutGatePolicy,
+    observations: HeldOutGateObservations,
+) -> list[HeldOutGateReason]:
+    """Report the gated metric and the floor against their fixed thresholds."""
+    reasons: list[HeldOutGateReason] = []
+    # The floor has no uncertain branch. It exists to catch a channel that has
+    # gone dark, so it fires only when even the optimistic bound falls short.
+    document_upper = observations.overall_document_interval_upper
+    if document_upper is not None and _fraction_less(
+        document_upper, policy.minimum_document_recall
+    ):
+        reasons.append(HeldOutGateReason.DOCUMENT_RECALL_FLOOR_BREACHED)
+    minimum = policy.minimum_passage_recall
+    upper = observations.overall_passage_interval_upper
+    lower = observations.overall_passage_interval_lower
+    if upper is not None and _fraction_less(upper, minimum):
+        reasons.append(HeldOutGateReason.PASSAGE_RECALL_BELOW_MINIMUM)
+    elif lower is not None and _fraction_less(lower, minimum):
+        reasons.append(HeldOutGateReason.PASSAGE_RECALL_UNCERTAIN_AT_THRESHOLD)
+    return reasons

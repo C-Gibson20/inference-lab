@@ -1,26 +1,37 @@
 """Versioned contracts and deterministic ranking for dense retrieval."""
 
-from __future__ import annotations
-
 import hashlib
 import math
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Final, Protocol
 
 from inference_lab._json import JsonObject, canonical_json_bytes
-from inference_lab._validation import is_canonical_semantic_version, is_lowercase_slug
+from inference_lab._validation import (
+    is_canonical_semantic_version,
+    is_lowercase_slug,
+    is_path_free_identifier,
+)
 from inference_lab.backends.runtime import BackendMetadata, EmbeddingProfile
-from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.provenance import (
+    CorpusId,
+    CorpusVersionId,
+    DocumentId,
+    DocumentVersionId,
+)
+from inference_lab.retrieval.errors import RetrievalOperationalError
 from inference_lab.retrieval.evidence import RetrievalCandidate
 from inference_lab.retrieval.query import RetrievalQuery
-from inference_lab.storage import ComponentKind
+from inference_lab.storage import (
+    ComponentGenerationReference,
+    ComponentGenerationState,
+    ComponentKind,
+)
 
 DENSE_COMPONENT_KIND: Final[ComponentKind] = ComponentKind("dense-index")
 DENSE_IMPLEMENTATION: Final[str] = "sqlite-flat"
-DENSE_FORMAT_VERSION: Final[str] = "1.0.0"
+DENSE_FORMAT_VERSION: Final[str] = "2.0.0"
 DENSE_CONTRACT_VERSION: Final[str] = "1.0.0"
 DENSE_SCORE_LABEL: Final[str] = "cosine_similarity"
 _SHA256_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{64}$")
@@ -65,11 +76,7 @@ def _validate_slug(value: object, field_name: str) -> str:
 
 
 def _path_free_identifier(value: str, field_name: str) -> str:
-    if (
-        value.startswith(("/", "\\", "~"))
-        or "://" in value
-        or (len(value) >= 3 and value[1] == ":" and value[2] in ("/", "\\"))
-    ):
+    if not is_path_free_identifier(value):
         raise InvalidDenseContractError(f"{field_name} must not be a local path.")
     return value
 
@@ -79,7 +86,6 @@ class DenseIndexConfiguration:
     """Versioned, path-free settings that affect index interpretation."""
 
     implementation: str = DENSE_IMPLEMENTATION
-    library_version: str = field(default_factory=lambda: sqlite3.sqlite_version)
     format_version: str = DENSE_FORMAT_VERSION
     contract_version: str = DENSE_CONTRACT_VERSION
     distance_metric: DenseDistanceMetric = DenseDistanceMetric.COSINE
@@ -91,10 +97,6 @@ class DenseIndexConfiguration:
     def _validate(self) -> None:
         """Validate that the configuration is consistent with the dense contract."""
         _validate_slug(self.implementation, "implementation")
-        _path_free_identifier(
-            _validate_non_empty_string(self.library_version, "library_version"),
-            "library_version",
-        )
         _validate_semantic_version(self.format_version, "format_version")
         _validate_semantic_version(self.contract_version, "contract_version")
         if not isinstance(self.distance_metric, DenseDistanceMetric):
@@ -111,7 +113,6 @@ class DenseIndexConfiguration:
             "distance_metric": self.distance_metric.value,
             "format_version": self.format_version,
             "implementation": self.implementation,
-            "library_version": self.library_version,
             "tie_break_policy": self.tie_break_policy,
         }
 
@@ -183,6 +184,12 @@ class DenseIndexCompatibility:
                 ],
                 "model_name": self.model_metadata.model_name,
                 "model_revision": self.model_metadata.model_revision,
+                # Preprocessing that affects vectors is part of the reuse
+                # identity, so a backend declaring a profile version must have
+                # it persisted rather than silently dropped.
+                "preprocessing_profile_version": (
+                    self.model_metadata.preprocessing_profile_version
+                ),
                 "supported_operations": [
                     item.value for item in self.model_metadata.supported_operations
                 ],
@@ -219,6 +226,16 @@ class DenseVector:
                 raise InvalidDenseContractError("vector values must be finite.")
         if not any(value != 0 for value in self.values):
             raise InvalidDenseContractError("cosine vectors must not be zero vectors.")
+
+
+def l2_normalised(vector: DenseVector) -> DenseVector:
+    """Return the unit-length form used for stored and compared vectors."""
+    if not isinstance(vector, DenseVector):
+        raise TypeError("vector must be a DenseVector.")
+    norm = math.sqrt(sum(value * value for value in vector.values))
+    if not math.isfinite(norm) or norm == 0.0:
+        raise InvalidDenseContractError("vectors must have a positive finite norm.")
+    return DenseVector(tuple(value / norm for value in vector.values))
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,7 +301,7 @@ class DenseIndexBuildRequest:
 
 @dataclass(frozen=True, slots=True)
 class DenseIndexQuery:
-    """Pair a RET-01 query with its query-purpose vector and compatibility."""
+    """Pair a retrieval query with its query-purpose vector and compatibility."""
 
     query: RetrievalQuery
     query_vector: DenseVector
@@ -425,3 +442,213 @@ class ExactDenseVectorIndex:
             request.query_vector,
             limit=request.query.limit.value,
         )
+
+
+class DenseFailureCategory(StrEnum):
+    """Bounded failure categories for dense generation operations."""
+
+    INVALID_REQUEST = "invalid_request"
+    GENERATION_UNAVAILABLE = "generation_unavailable"
+    CORRUPT_GENERATION = "corrupt_generation"
+    INCOMPATIBLE_GENERATION = "incompatible_generation"
+    EMBEDDING_FAILURE = "embedding_failure"
+    EXECUTION_FAILURE = "execution_failure"
+
+
+class DenseError(RetrievalOperationalError[DenseFailureCategory]):
+    """A privacy-safe failure from dense generation operations."""
+
+    category_type = DenseFailureCategory
+
+
+@dataclass(frozen=True, slots=True)
+class DenseMemberSelection:
+    """Identity and chunk count for one selected document version."""
+
+    document_id: DocumentId
+    document_version_id: DocumentVersionId
+    selection_digest: str
+    chunk_count: int
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate that the member selection is consistent with the dense contract."""
+        if not isinstance(self.document_id, DocumentId):
+            raise TypeError("document_id must be a DocumentId.")
+        if not isinstance(self.document_version_id, DocumentVersionId):
+            raise TypeError("document_version_id must be a DocumentVersionId.")
+        if not isinstance(self.selection_digest, str):
+            raise TypeError("selection_digest must be a string.")
+        if len(self.selection_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in self.selection_digest
+        ):
+            raise ValueError("selection_digest must be a lowercase SHA-256 digest.")
+        if type(self.chunk_count) is not int:
+            raise TypeError("chunk_count must be an integer.")
+        if self.chunk_count < 0:
+            raise ValueError("chunk_count must not be negative.")
+
+
+@dataclass(frozen=True, slots=True)
+class DenseIndexManifest:
+    """Durable ownership and compatibility identity for one generation."""
+
+    generation_id: str
+    corpus_id: CorpusId
+    corpus_version: CorpusVersionId
+    source_manifest_digest: str
+    compatibility: DenseIndexCompatibility
+    members: tuple[DenseMemberSelection, ...]
+    entry_count: int
+    database_digest: str
+    library_version: str
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate that the manifest is consistent with the dense contract."""
+        if (
+            not isinstance(self.generation_id, str)
+            or len(self.generation_id) != 70
+            or not self.generation_id.startswith("dense-")
+            or any(
+                character not in "0123456789abcdef"
+                for character in self.generation_id[6:]
+            )
+        ):
+            raise ValueError("generation_id must be a dense generation identifier.")
+        if not isinstance(self.corpus_id, CorpusId):
+            raise TypeError("corpus_id must be a CorpusId.")
+        if not isinstance(self.corpus_version, CorpusVersionId):
+            raise TypeError("corpus_version must be a CorpusVersionId.")
+        _validate_sha256(self.source_manifest_digest, "source_manifest_digest")
+        if not isinstance(self.compatibility, DenseIndexCompatibility):
+            raise TypeError("compatibility must be a DenseIndexCompatibility.")
+        if not isinstance(self.members, tuple):
+            raise TypeError("members must be a tuple.")
+        if any(not isinstance(item, DenseMemberSelection) for item in self.members):
+            raise TypeError("members must contain DenseMemberSelection values.")
+        keys = tuple(item.document_id.as_str() for item in self.members)
+        if keys != tuple(sorted(keys)) or len(keys) != len(set(keys)):
+            raise ValueError("members must be unique and canonically ordered.")
+        if type(self.entry_count) is not int or self.entry_count < 0:
+            raise ValueError("entry_count must be a non-negative integer.")
+        _validate_sha256(self.database_digest, "database_digest")
+        # Recorded for restore decisions only; deliberately outside the
+        # configuration digest so a host library upgrade cannot invalidate
+        # an otherwise reusable generation.
+        if not isinstance(self.library_version, str) or not self.library_version:
+            raise ValueError("library_version must be a non-empty string.")
+        if not is_path_free_identifier(self.library_version):
+            raise ValueError("library_version must not be a local path.")
+
+    @property
+    def configuration_digest(self) -> str:
+        """Return the canonical embedding and index compatibility digest."""
+        return self.compatibility.configuration_digest
+
+    @property
+    def source_chunk_count(self) -> int:
+        """Return the total number of chunks declared by membership."""
+        return sum(member.chunk_count for member in self.members)
+
+    def component_generation(self) -> ComponentGenerationReference:
+        """Return the preparing reference used by corpus-version registration."""
+        return ComponentGenerationReference(
+            component_kind=DENSE_COMPONENT_KIND,
+            generation_id=self.generation_id,
+            implementation=self.compatibility.configuration.implementation,
+            format_version=self.compatibility.configuration.format_version,
+            contract_version=self.compatibility.configuration.contract_version,
+            configuration_digest=self.configuration_digest,
+            source_manifest_digest=self.source_manifest_digest,
+            corpus_id=self.corpus_id,
+            corpus_version=self.corpus_version,
+            state=ComponentGenerationState.PREPARING,
+        )
+
+    def as_payload(self) -> JsonObject:
+        """Return the exact path-free manifest payload for durable storage."""
+        return {
+            "compatibility": self.compatibility.canonical_payload(),
+            "corpus_id": self.corpus_id.as_str(),
+            "corpus_version": self.corpus_version.as_str(),
+            "database_digest": self.database_digest,
+            "entry_count": self.entry_count,
+            "format_version": DENSE_FORMAT_VERSION,
+            "generation_id": self.generation_id,
+            "library_version": self.library_version,
+            "members": [
+                {
+                    "chunk_count": item.chunk_count,
+                    "document_id": item.document_id.as_str(),
+                    "document_version_id": item.document_version_id.as_str(),
+                    "selection_digest": item.selection_digest,
+                }
+                for item in self.members
+            ],
+            "source_manifest_digest": self.source_manifest_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DenseIndexBuildStatistics:
+    """Bounded build counts for one complete proposed generation."""
+
+    members_processed: int
+    chunks_processed: int
+    reused_vectors: int
+    embedded_vectors: int
+    replaced_vectors: int
+    removed_vectors: int
+    generation_reused: bool = False
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate that the statistics are consistent with the dense contract."""
+        for field_name in (
+            "members_processed",
+            "chunks_processed",
+            "reused_vectors",
+            "embedded_vectors",
+            "replaced_vectors",
+            "removed_vectors",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not int:
+                raise TypeError(f"{field_name} must be an integer.")
+            if value < 0:
+                raise ValueError(f"{field_name} must not be negative.")
+        if type(self.generation_reused) is not bool:
+            raise TypeError("generation_reused must be a boolean.")
+
+
+@dataclass(frozen=True, slots=True)
+class DenseIndexBuildOutcome:
+    """A validated immutable generation and its build statistics."""
+
+    manifest: DenseIndexManifest
+    statistics: DenseIndexBuildStatistics
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate that the outcome is consistent with the dense contract."""
+        if not isinstance(self.manifest, DenseIndexManifest):
+            raise TypeError("manifest must be a DenseIndexManifest.")
+        if not isinstance(self.statistics, DenseIndexBuildStatistics):
+            raise TypeError("statistics must be DenseIndexBuildStatistics.")
+
+
+def _validate_sha256(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string.")
+    if _SHA256_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{field_name} must be a lowercase SHA-256 digest.")
+    return value

@@ -1,18 +1,19 @@
 """Deterministic, source-preserving reduction of retrieved evidence."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
 from inference_lab.provenance import CorpusId, CorpusVersionId, RecordId
-from inference_lab.retrieval.errors import InvalidRetrievalContractError
+from inference_lab.retrieval.errors import (
+    InvalidRetrievalContractError,
+    RetrievalOperationalError,
+)
 from inference_lab.retrieval.evidence import (
     EvidenceHit,
     EvidenceSource,
@@ -23,19 +24,31 @@ from inference_lab.retrieval.results import (
     ResultStatus,
     RetrievalFailure,
 )
+from inference_lab.settings import EvidenceDiversityPolicy
 
 EVIDENCE_SEPARATOR = "\n\n"
 REDUCTION_POLICY_VERSION = "1.0.0"
 REDUCTION_ACCOUNTING_VERSION = "1.0.0"
+# A merge across a clip point shifts the joined count by about one token.
+PREFIX_CONFIRMATION_BOUNDARIES = 2
 
 
-class EvidenceTokeniserError(ValueError):
+class EvidenceTokeniserFailureCategory(StrEnum):
+    """Bounded reasons the evidence tokeniser boundary could not be used."""
+
+    TOKENISER_UNAVAILABLE = "tokeniser_unavailable"
+    UNMEASURABLE_TEXT = "unmeasurable_text"
+    INVALID_TOKENISER_OUTPUT = "invalid_tokeniser_output"
+    INVALID_TOKEN_OFFSETS = "invalid_token_offsets"
+    INCONSISTENT_TOKEN_COUNT = "inconsistent_token_count"
+
+
+class EvidenceTokeniserError(
+    RetrievalOperationalError[EvidenceTokeniserFailureCategory]
+):
     """Report a bounded failure at the evidence tokeniser boundary."""
 
-    def __init__(self, category: str) -> None:
-        """Create a payload-free tokeniser error."""
-        super().__init__(category)
-        self.category = category
+    category_type = EvidenceTokeniserFailureCategory
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,7 +308,7 @@ class EvidenceReductionIdentity:
     tokeniser: EvidenceTokeniserIdentity
     token_budget: int
     item_budget: int
-    diversity_policy: Literal["none", "per_document"] = "none"
+    diversity_policy: EvidenceDiversityPolicy = EvidenceDiversityPolicy.NONE
     separator: str = EVIDENCE_SEPARATOR
     policy_version: str = REDUCTION_POLICY_VERSION
     accounting_version: str = REDUCTION_ACCOUNTING_VERSION
@@ -321,17 +334,15 @@ class EvidenceReductionIdentity:
             self.policy_version
         ) or not is_canonical_semantic_version(self.accounting_version):
             raise ValueError("reduction versions must be semantic versions.")
-        if not isinstance(self.diversity_policy, str):
-            raise TypeError("diversity_policy must be a string.")
-        if self.diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        if not isinstance(self.diversity_policy, EvidenceDiversityPolicy):
+            raise TypeError("diversity_policy must be an EvidenceDiversityPolicy.")
 
     @property
     def digest(self) -> str:
         """Return a stable digest of every reduction-affecting identity field."""
         payload = {
             "accounting_version": self.accounting_version,
-            "diversity_policy": self.diversity_policy,
+            "diversity_policy": self.diversity_policy.value,
             "item_budget": self.item_budget,
             "policy_version": self.policy_version,
             "separator": self.separator,
@@ -349,7 +360,7 @@ class EvidenceReductionIdentity:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceReductionRequest:
-    """Reduce one RET-06 result for exactly one corpus and version."""
+    """Reduce one reranked result for exactly one corpus and version."""
 
     corpus_id: CorpusId
     corpus_version: CorpusVersionId
@@ -358,7 +369,7 @@ class EvidenceReductionRequest:
     token_budget: int
     item_budget: int
     source_ranges: Mapping[RecordId, tuple[EvidenceTextSourceRange, ...]]
-    diversity_policy: Literal["none", "per_document"] = "none"
+    diversity_policy: EvidenceDiversityPolicy = EvidenceDiversityPolicy.NONE
 
     def __post_init__(self) -> None:
         self._validate()
@@ -385,10 +396,8 @@ class EvidenceReductionRequest:
             raise ValueError("item_budget must be a positive integer.")
         if self.item_budget > self.result.requested_limit.value:
             raise ValueError("item_budget must not exceed the retrieval result limit.")
-        if not isinstance(self.diversity_policy, str):
-            raise TypeError("diversity_policy must be a string.")
-        if self.diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        if not isinstance(self.diversity_policy, EvidenceDiversityPolicy):
+            raise TypeError("diversity_policy must be an EvidenceDiversityPolicy.")
         if not isinstance(self.source_ranges, Mapping):
             raise TypeError("source_ranges must be a mapping.")
         for record_id, ranges in self.source_ranges.items():
@@ -470,165 +479,155 @@ class EvidenceReductionOutcome:
             raise ValueError("dropped_count does not match reduction decisions.")
 
 
+class _ReductionLedger:
+    """Accumulate the items, decisions, and failures of one reduction pass."""
+
+    def __init__(self, dropped: int = 0) -> None:
+        self.dropped = dropped
+        self.items: list[ReducedEvidenceItem] = []
+        self.decisions: list[EvidenceReductionDecision] = []
+        self.failures: list[EvidenceReductionFailure] = []
+        self.seen_documents: set[str] = set()
+
+    def texts(self) -> list[str]:
+        """Return the retained text in order, for joined-budget counting."""
+        return [item.text for item in self.items]
+
+    def retain(
+        self,
+        hit: EvidenceHit,
+        text: str,
+        source_ranges: tuple[EvidenceTextSourceRange, ...],
+        action: EvidenceReductionAction,
+    ) -> None:
+        """Record one passage that survived, whole or shortened."""
+        self.items.append(
+            ReducedEvidenceItem(
+                hit=hit, text=text, source_ranges=source_ranges, action=action
+            )
+        )
+        self.decisions.append(
+            EvidenceReductionDecision(hit.candidate.record_id, action)
+        )
+
+    def drop(self, record_id: RecordId, action: EvidenceReductionAction) -> None:
+        """Record one passage excluded by a budget or a diversity policy."""
+        self.dropped += 1
+        self.decisions.append(EvidenceReductionDecision(record_id, action))
+
+    def fail(self, record_id: RecordId, category: str) -> None:
+        """Record one passage excluded because its source map was unusable."""
+        self.failures.append(EvidenceReductionFailure(record_id, category))
+        self.drop(record_id, EvidenceReductionAction.FAILED_SOURCE_MAP)
+
+    def note_item_limit(self, record_id: RecordId) -> None:
+        """Record one passage never considered because the item budget was full."""
+        self.decisions.append(
+            EvidenceReductionDecision(
+                record_id, EvidenceReductionAction.DROPPED_ITEM_LIMIT
+            )
+        )
+
+    def evict_last(self) -> None:
+        """Remove the lowest-ranked retained passage as a budget eviction."""
+        removed = self.items.pop()
+        self.dropped += 1
+        # A truncated item that still does not fit was evicted by the budget,
+        # not by a defective source map.
+        self.decisions = [
+            EvidenceReductionDecision(
+                decision.record_id,
+                EvidenceReductionAction.DROPPED_BUDGET
+                if decision.record_id == removed.hit.candidate.record_id
+                else decision.action,
+            )
+            for decision in self.decisions
+        ]
+
+
+def _reduce_one_candidate(
+    request: EvidenceReductionRequest,
+    ledger: _ReductionLedger,
+    hit: EvidenceHit,
+) -> None:
+    """Keep, shorten, or drop one ranked candidate against the live budget."""
+    candidate = hit.candidate
+    document_ids = {source.document_id.as_str() for source in candidate.sources}
+    if request.diversity_policy is EvidenceDiversityPolicy.PER_DOCUMENT:
+        if not document_ids or ledger.seen_documents.intersection(document_ids):
+            ledger.drop(candidate.record_id, EvidenceReductionAction.DROPPED_DIVERSITY)
+            return
+        ledger.seen_documents.update(document_ids)
+
+    full_text = candidate.content
+    if (
+        _count_joined(request.tokeniser, [*ledger.texts(), full_text])
+        <= request.token_budget
+    ):
+        ledger.retain(hit, full_text, (), EvidenceReductionAction.KEPT)
+        return
+
+    ranges = request.source_ranges.get(candidate.record_id)
+    if not ranges:
+        ledger.fail(candidate.record_id, "source_map_unavailable")
+        return
+    if not _valid_source_ranges(candidate, ranges):
+        ledger.fail(candidate.record_id, "source_map_invalid")
+        return
+    prefix, has_safe_prefix = _longest_fitting_prefix(
+        request, ledger.items, hit, ranges
+    )
+    if prefix is None:
+        if has_safe_prefix:
+            ledger.drop(candidate.record_id, EvidenceReductionAction.DROPPED_BUDGET)
+        else:
+            ledger.fail(candidate.record_id, "source_map_invalid")
+        return
+    text, clipped_ranges, token_count = prefix
+    if not text.strip():
+        ledger.drop(candidate.record_id, EvidenceReductionAction.DROPPED_BUDGET)
+        return
+    ledger.retain(hit, text, clipped_ranges, EvidenceReductionAction.TRUNCATED)
+    # The next iteration recounts the complete joined representation.
+    if token_count > request.token_budget:
+        raise InvalidRetrievalContractError("reducer exceeded the token budget.")
+
+
 def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutcome:
     """Fit ranked hits into exact joined-text budgets without inventing spans."""
     if not isinstance(request, EvidenceReductionRequest):
         raise TypeError("request must be an EvidenceReductionRequest.")
     source_hits = request.result.hits
     considered = source_hits[: request.item_budget]
-    dropped = len(source_hits) - len(considered)
-    failures: list[EvidenceReductionFailure] = []
-    items: list[ReducedEvidenceItem] = []
-    decisions: list[EvidenceReductionDecision] = []
-    seen_documents: set[str] = set()
+    ledger = _ReductionLedger(dropped=len(source_hits) - len(considered))
 
     for hit in considered:
-        candidate = hit.candidate
-        document_ids = {source.document_id.as_str() for source in candidate.sources}
-        if request.diversity_policy == "per_document" and (
-            not document_ids or seen_documents.intersection(document_ids)
-        ):
-            dropped += 1
-            decisions.append(
-                EvidenceReductionDecision(
-                    candidate.record_id, EvidenceReductionAction.DROPPED_DIVERSITY
-                )
-            )
-            continue
-        if request.diversity_policy == "per_document":
-            seen_documents.update(document_ids)
-        full_text = candidate.content
-        if (
-            _count_joined(
-                request.tokeniser, [*(item.text for item in items), full_text]
-            )
-            <= request.token_budget
-        ):
-            items.append(
-                ReducedEvidenceItem(
-                    hit=hit,
-                    text=full_text,
-                    source_ranges=(),
-                    action=EvidenceReductionAction.KEPT,
-                )
-            )
-            decisions.append(
-                EvidenceReductionDecision(
-                    candidate.record_id, EvidenceReductionAction.KEPT
-                )
-            )
-            continue
-
-        ranges = request.source_ranges.get(candidate.record_id)
-        if not ranges:
-            dropped += 1
-            failures.append(
-                EvidenceReductionFailure(candidate.record_id, "source_map_unavailable")
-            )
-            decisions.append(
-                EvidenceReductionDecision(
-                    candidate.record_id, EvidenceReductionAction.FAILED_SOURCE_MAP
-                )
-            )
-            continue
-        if not _valid_source_ranges(candidate, ranges):
-            dropped += 1
-            failures.append(
-                EvidenceReductionFailure(candidate.record_id, "source_map_invalid")
-            )
-            decisions.append(
-                EvidenceReductionDecision(
-                    candidate.record_id, EvidenceReductionAction.FAILED_SOURCE_MAP
-                )
-            )
-            continue
-        prefix, has_safe_prefix = _longest_fitting_prefix(request, items, hit, ranges)
-        if prefix is None:
-            dropped += 1
-            if has_safe_prefix:
-                action = EvidenceReductionAction.DROPPED_BUDGET
-            else:
-                failures.append(
-                    EvidenceReductionFailure(candidate.record_id, "source_map_invalid")
-                )
-                action = EvidenceReductionAction.FAILED_SOURCE_MAP
-            decisions.append(EvidenceReductionDecision(candidate.record_id, action))
-            continue
-        text, clipped_ranges, token_count = prefix
-        if not text.strip():
-            dropped += 1
-            decisions.append(
-                EvidenceReductionDecision(
-                    candidate.record_id, EvidenceReductionAction.DROPPED_BUDGET
-                )
-            )
-            continue
-        items.append(
-            ReducedEvidenceItem(
-                hit=hit,
-                text=text,
-                source_ranges=clipped_ranges,
-                action=EvidenceReductionAction.TRUNCATED,
-            )
-        )
-        decisions.append(
-            EvidenceReductionDecision(
-                candidate.record_id, EvidenceReductionAction.TRUNCATED
-            )
-        )
-        # The next iteration recounts the complete joined representation.
-        if token_count > request.token_budget:
-            raise InvalidRetrievalContractError("reducer exceeded the token budget.")
-
+        _reduce_one_candidate(request, ledger, hit)
     for hit in source_hits[len(considered) :]:
-        decisions.append(
-            EvidenceReductionDecision(
-                hit.candidate.record_id, EvidenceReductionAction.DROPPED_ITEM_LIMIT
-            )
-        )
+        ledger.note_item_limit(hit.candidate.record_id)
 
-    final_count = _count_joined(request.tokeniser, [item.text for item in items])
-    while items and final_count > request.token_budget:
-        removed = items.pop()
-        dropped += 1
-        final_count = _count_joined(request.tokeniser, [item.text for item in items])
-        if removed.action is EvidenceReductionAction.TRUNCATED:
-            failures.append(
-                EvidenceReductionFailure(
-                    removed.hit.candidate.record_id, "source_map_invalid"
-                )
-            )
-            action = EvidenceReductionAction.FAILED_SOURCE_MAP
-        else:
-            action = EvidenceReductionAction.DROPPED_BUDGET
-        decisions = [
-            EvidenceReductionDecision(
-                decision.record_id,
-                action
-                if decision.record_id == removed.hit.candidate.record_id
-                else decision.action,
-            )
-            for decision in decisions
-        ]
+    final_count = _count_joined(request.tokeniser, ledger.texts())
+    while ledger.items and final_count > request.token_budget:
+        ledger.evict_last()
+        final_count = _count_joined(request.tokeniser, ledger.texts())
 
-    identity = EvidenceReductionIdentity(
-        tokeniser=request.tokeniser.identity,
-        token_budget=request.token_budget,
-        item_budget=request.item_budget,
-        diversity_policy=request.diversity_policy,
-    )
     return EvidenceReductionOutcome(
         corpus_id=request.corpus_id,
         corpus_version=request.corpus_version,
-        items=tuple(items),
-        decisions=tuple(decisions),
+        items=tuple(ledger.items),
+        decisions=tuple(ledger.decisions),
         input_count=len(source_hits),
-        dropped_count=dropped,
+        dropped_count=ledger.dropped,
         token_count=final_count,
         source_status=request.result.status,
         source_failures=request.result.failures,
-        identity=identity,
-        failures=tuple(failures),
+        identity=EvidenceReductionIdentity(
+            tokeniser=request.tokeniser.identity,
+            token_budget=request.token_budget,
+            item_budget=request.item_budget,
+            diversity_policy=request.diversity_policy,
+        ),
+        failures=tuple(ledger.failures),
     )
 
 
@@ -638,24 +637,60 @@ def _longest_fitting_prefix(
     hit: EvidenceHit,
     ranges: tuple[EvidenceTextSourceRange, ...],
 ) -> tuple[tuple[str, tuple[EvidenceTextSourceRange, ...], int] | None, bool]:
-    """Try safe token boundaries longest-first against the complete joined text."""
+    """Find the longest safe token boundary whose joined text fits the budget."""
     text = hit.candidate.content
     tokenisation = _tokenise(request.tokeniser, text)
-    boundaries = sorted({offset.end for offset in tokenisation.offsets}, reverse=True)
+    boundaries = sorted(
+        end
+        for end in {offset.end for offset in tokenisation.offsets}
+        if 0 < end < len(text)
+    )
+    if not boundaries:
+        return None, False
+    retained_texts = [item.text for item in retained]
+    counted: dict[int, int] = {}
+
+    def joined_count(index: int) -> int:
+        """Count the joined text ending at one boundary, measuring it once."""
+        if index not in counted:
+            counted[index] = _count_joined(
+                request.tokeniser, [*retained_texts, text[: boundaries[index]]]
+            )
+        return counted[index]
+
+    # Extending a prefix never lowers its count, so the fitting boundaries form
+    # a run at the start of this list and its end can be bisected.
+    low, high, last_fitting = 0, len(boundaries) - 1, -1
+    while low <= high:
+        middle = (low + high) // 2
+        if joined_count(middle) <= request.token_budget:
+            last_fitting = middle
+            low = middle + 1
+        else:
+            high = middle - 1
+    # That ordering is measured, not guaranteed: a merge could hide a longer fit.
+    for index in range(
+        last_fitting + 1,
+        min(len(boundaries), last_fitting + 1 + PREFIX_CONFIRMATION_BOUNDARIES),
+    ):
+        if joined_count(index) <= request.token_budget:
+            last_fitting = index
+
     has_safe_prefix = False
-    for end in boundaries:
-        if end <= 0 or end >= len(text):
-            continue
-        clipped = _clip_source_ranges(ranges, end)
+    for index in range(last_fitting, -1, -1):
+        clipped = _clip_source_ranges(ranges, boundaries[index])
         if clipped is None:
             continue
         has_safe_prefix = True
-        prefix = text[:end]
-        token_count = _count_joined(
-            request.tokeniser, [*(item.text for item in retained), prefix]
-        )
+        token_count = joined_count(index)
         if token_count <= request.token_budget:
-            return (prefix, clipped, token_count), True
+            return (text[: boundaries[index]], clipped, token_count), True
+    if not has_safe_prefix:
+        # A budget drop and an unusable source map are different failures.
+        has_safe_prefix = any(
+            _clip_source_ranges(ranges, boundaries[index]) is not None
+            for index in range(last_fitting + 1, len(boundaries))
+        )
     return None, has_safe_prefix
 
 
@@ -716,9 +751,11 @@ def _count_joined(tokeniser: EvidenceTokeniser, values: list[str]) -> int:
     try:
         count = tokeniser.count_tokens(EVIDENCE_SEPARATOR.join(values))
     except Exception:
-        raise EvidenceTokeniserError("tokeniser_unavailable") from None
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.TOKENISER_UNAVAILABLE
+        ) from None
     if not is_strict_integer(count) or count < 0:
-        raise EvidenceTokeniserError("unmeasurable_text")
+        raise EvidenceTokeniserError(EvidenceTokeniserFailureCategory.UNMEASURABLE_TEXT)
     return count
 
 
@@ -727,18 +764,28 @@ def _tokenise(tokeniser: EvidenceTokeniser, text: str) -> EvidenceTokenisation:
     try:
         result = tokeniser.tokenise(text)
     except Exception:
-        raise EvidenceTokeniserError("tokeniser_unavailable") from None
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.TOKENISER_UNAVAILABLE
+        ) from None
     if not isinstance(result, EvidenceTokenisation):
-        raise EvidenceTokeniserError("invalid_tokeniser_output")
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.INVALID_TOKENISER_OUTPUT
+        )
     previous_end = 0
     for offset in result.offsets:
         if offset.end > len(text) or offset.start < previous_end:
-            raise EvidenceTokeniserError("invalid_token_offsets")
+            raise EvidenceTokeniserError(
+                EvidenceTokeniserFailureCategory.INVALID_TOKEN_OFFSETS
+            )
         previous_end = offset.end
     try:
         count = tokeniser.count_tokens(text)
     except Exception:
-        raise EvidenceTokeniserError("tokeniser_unavailable") from None
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.TOKENISER_UNAVAILABLE
+        ) from None
     if not is_strict_integer(count) or count != len(result.offsets):
-        raise EvidenceTokeniserError("inconsistent_token_count")
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.INCONSISTENT_TOKEN_COUNT
+        )
     return result

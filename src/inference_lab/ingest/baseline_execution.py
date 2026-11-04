@@ -179,17 +179,17 @@ def _emit_document_event(
         pass
 
 
-def execute_baseline_documents(
+def _validate_execution_inputs(
     tasks: tuple[BaselineDocumentTask, ...],
     *,
     settings: Settings,
     corpus_id: CorpusId,
     proposed_corpus_version: CorpusVersionId,
-    cancellation: Event | None = None,
-    profiling: BaselineProfilingContext | None = None,
-    parent_stage_id: str | None = None,
-) -> tuple[BaselineDocumentOutcome, ...]:
-    """Run independent document work with bounded admission and stable output."""
+    cancellation: Event | None,
+    profiling: BaselineProfilingContext | None,
+    parent_stage_id: str | None,
+) -> None:
+    """Reject execution inputs before any worker or context is created."""
     _validate_tasks(tasks)
     if not isinstance(settings, Settings):
         raise TypeError("settings must be Settings.")
@@ -203,6 +203,28 @@ def execute_baseline_documents(
         raise TypeError("profiling must be a BaselineProfilingContext or None.")
     if parent_stage_id is not None and not isinstance(parent_stage_id, str):
         raise TypeError("parent_stage_id must be a string or None.")
+
+
+def execute_baseline_documents(
+    tasks: tuple[BaselineDocumentTask, ...],
+    *,
+    settings: Settings,
+    corpus_id: CorpusId,
+    proposed_corpus_version: CorpusVersionId,
+    cancellation: Event | None = None,
+    profiling: BaselineProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+) -> tuple[BaselineDocumentOutcome, ...]:
+    """Run independent document work with bounded admission and stable output."""
+    _validate_execution_inputs(
+        tasks,
+        settings=settings,
+        corpus_id=corpus_id,
+        proposed_corpus_version=proposed_corpus_version,
+        cancellation=cancellation,
+        profiling=profiling,
+        parent_stage_id=parent_stage_id,
+    )
 
     cancel_event = cancellation if cancellation is not None else Event()
     selected_profiling = (

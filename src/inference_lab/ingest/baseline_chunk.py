@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from types import TracebackType
-from typing import Protocol, Self
+from typing import Literal, Protocol, Self
 
 import structlog
 from structlog.contextvars import bound_contextvars
@@ -87,7 +87,7 @@ class BaselineChunkTransaction(Protocol):
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Commit on success or roll back after an exception."""
         ...
 
@@ -373,8 +373,6 @@ def _build_and_publish(
             items_processed=len(chunk_set.chunks),
             records_emitted=len(replayed.chunks),
         )
-    assert write_outcome is not None
-    assert replayed is not None
     return BaselineChunkResult(
         corpus_id=request.corpus_id,
         work_key=request.work_key,

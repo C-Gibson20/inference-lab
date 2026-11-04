@@ -1,7 +1,5 @@
 """Deployment-local adapter for pinned lexical+dense retrieval fusion."""
 
-from __future__ import annotations
-
 import hashlib
 from pathlib import Path
 
@@ -22,6 +20,7 @@ from inference_lab.retrieval import (
     DENSE_COMPONENT_KIND,
     FUSION_DEDUPLICATION_VERSION,
     LEXICAL_COMPONENT_KIND,
+    BorrowedRetrievalState,
     DenseError,
     DenseGeneration,
     FusionPolicy,
@@ -35,30 +34,26 @@ from inference_lab.retrieval import (
 )
 from inference_lab.storage import (
     ComponentGenerationReference,
-    ComponentGenerationState,
+    ComponentKind,
     CorpusSnapshot,
     MetadataRepository,
+    generation_matches_reference,
+    select_ready_component_generation,
 )
 
 
 def _component_reference(
     snapshot: CorpusSnapshot,
-    component_kind: str,
+    component_kind: ComponentKind,
 ) -> ComponentGenerationReference:
     """Select one ready component generation from a pinned snapshot."""
-    references = tuple(
-        reference
-        for reference in snapshot.manifest.component_generations
-        if reference.component_kind.as_str() == component_kind
+    reference = select_ready_component_generation(
+        snapshot.manifest,
+        component_kind,
+        corpus_id=snapshot.corpus_id,
+        corpus_version=snapshot.version.corpus_version,
     )
-    if len(references) != 1:
-        raise RetrievalEvaluationExecutionError("invalid_hybrid_generation")
-    reference = references[0]
-    if (
-        reference.state is not ComponentGenerationState.READY
-        or reference.corpus_id != snapshot.corpus_id
-        or reference.corpus_version != snapshot.version.corpus_version
-    ):
+    if reference is None:
         raise RetrievalEvaluationExecutionError("invalid_hybrid_generation")
     return reference
 
@@ -68,28 +63,9 @@ def _validate_lexical_generation(
     generation: LexicalGeneration,
 ) -> None:
     """Require the lexical manifest to match its committed reference."""
-    manifest = generation.manifest
-    actual = (
-        manifest.corpus_id,
-        manifest.corpus_version,
-        manifest.generation_id,
-        manifest.implementation,
-        manifest.format_version,
-        manifest.contract_version,
-        manifest.configuration_digest,
-        manifest.source_manifest_digest,
-    )
-    expected = (
-        reference.corpus_id,
-        reference.corpus_version,
-        reference.generation_id,
-        reference.implementation,
-        reference.format_version,
-        reference.contract_version,
-        reference.configuration_digest,
-        reference.source_manifest_digest,
-    )
-    if actual != expected:
+    if not generation_matches_reference(
+        reference, generation.manifest.component_generation()
+    ):
         raise RetrievalEvaluationExecutionError("invalid_hybrid_generation")
 
 
@@ -98,29 +74,9 @@ def _validate_dense_generation(
     generation: DenseGeneration,
 ) -> None:
     """Require the dense manifest to match its committed reference."""
-    manifest = generation.manifest
-    configuration = manifest.compatibility.configuration
-    actual = (
-        manifest.corpus_id,
-        manifest.corpus_version,
-        manifest.generation_id,
-        configuration.implementation,
-        configuration.format_version,
-        configuration.contract_version,
-        manifest.configuration_digest,
-        manifest.source_manifest_digest,
-    )
-    expected = (
-        reference.corpus_id,
-        reference.corpus_version,
-        reference.generation_id,
-        reference.implementation,
-        reference.format_version,
-        reference.contract_version,
-        reference.configuration_digest,
-        reference.source_manifest_digest,
-    )
-    if actual != expected:
+    if not generation_matches_reference(
+        reference, generation.manifest.component_generation()
+    ):
         raise RetrievalEvaluationExecutionError("invalid_hybrid_generation")
 
 
@@ -238,9 +194,7 @@ class LocalFusedEvaluationAdapter:
             self._corpus_id, self._corpus_version
         ) as snapshot:
             lexical_reference = _component_reference(snapshot, LEXICAL_COMPONENT_KIND)
-            dense_reference = _component_reference(
-                snapshot, DENSE_COMPONENT_KIND.as_str()
-            )
+            dense_reference = _component_reference(snapshot, DENSE_COMPONENT_KIND)
             try:
                 with (
                     open_lexical_generation(
@@ -301,7 +255,7 @@ class LocalFusedEvaluationAdapter:
             if (
                 _component_reference(snapshot, LEXICAL_COMPONENT_KIND)
                 != self._lexical_reference
-                or _component_reference(snapshot, DENSE_COMPONENT_KIND.as_str())
+                or _component_reference(snapshot, DENSE_COMPONENT_KIND)
                 != self._dense_reference
             ):
                 raise RetrievalEvaluationExecutionError("system_identity_changed")
@@ -327,9 +281,11 @@ class LocalFusedEvaluationAdapter:
                         policy=self._policy,
                         profiling=profiling,
                         profiling_identity=profiling_identity,
-                        snapshot=snapshot,
-                        lexical_generation=lexical_generation,
-                        dense_generation=dense_generation,
+                        borrowed=BorrowedRetrievalState(
+                            snapshot=snapshot,
+                            lexical_generation=lexical_generation,
+                            dense_generation=dense_generation,
+                        ),
                     )
             except (DenseError, LexicalError):
                 raise RetrievalEvaluationExecutionError(

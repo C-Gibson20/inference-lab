@@ -133,6 +133,31 @@ class EvidenceResult:
             )
 
     @classmethod
+    def corpus_version_mismatch(
+        cls,
+        query: RetrievalQuery,
+        observed_corpus_version: CorpusVersionId,
+    ) -> "EvidenceResult":
+        """Build the hit-free result a channel serving another version must return."""
+        if not isinstance(query, RetrievalQuery):
+            raise TypeError("query must be a RetrievalQuery.")
+        if not isinstance(observed_corpus_version, CorpusVersionId):
+            raise TypeError("observed_corpus_version must be a CorpusVersionId.")
+        if observed_corpus_version == query.corpus_version:
+            raise InvalidRetrievalResultError(
+                "observed_corpus_version must differ from the requested version."
+            )
+        return cls(
+            corpus_version=query.corpus_version,
+            requested_limit=query.limit,
+            hits=(),
+            status=ResultStatus.FAILED,
+            failures=(
+                RetrievalFailure(FailureCategory.CORPUS_VERSION_MISMATCH, False),
+            ),
+        )
+
+    @classmethod
     def from_query(
         cls,
         query: RetrievalQuery,
@@ -148,18 +173,7 @@ class EvidenceResult:
         if not isinstance(observed_corpus_version, CorpusVersionId):
             raise TypeError("observed_corpus_version must be a CorpusVersionId.")
         if observed_corpus_version != query.corpus_version:
-            return cls(
-                corpus_version=query.corpus_version,
-                requested_limit=query.limit,
-                hits=(),
-                status=ResultStatus.FAILED,
-                failures=(
-                    RetrievalFailure(
-                        FailureCategory.CORPUS_VERSION_MISMATCH,
-                        False,
-                    ),
-                ),
-            )
+            return cls.corpus_version_mismatch(query, observed_corpus_version)
         return cls(
             corpus_version=query.corpus_version,
             requested_limit=query.limit,

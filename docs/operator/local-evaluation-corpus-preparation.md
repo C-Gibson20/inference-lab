@@ -15,7 +15,7 @@ sources or models, or run retrieval evaluation.
 - Set `EVALUATION_CORPUS_INCLUDE_DENSE=true` to include the configured local
   Qwen embedding model in the same atomic publication. Its files must already
   be present at `models.embedder_path` in `config.toml` and pass the backend's
-  artifact verification. The default is `false` for lexical-only preparation.
+  artefact verification. The default is `false` for lexical-only preparation.
 - Choose one stable `EVALUATION_CORPUS_ID` and a new
   `EVALUATION_CORPUS_PROPOSED_VERSION`. Retain both identities for the
   evaluation manifest. An update must also set

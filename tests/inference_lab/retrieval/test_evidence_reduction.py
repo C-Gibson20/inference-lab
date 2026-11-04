@@ -1,4 +1,4 @@
-"""RET-07 deterministic evidence reduction and provenance contracts."""
+"""Deterministic evidence reduction and provenance contracts."""
 
 from dataclasses import dataclass, replace
 
@@ -34,6 +34,7 @@ from inference_lab.retrieval.reduction import (
 )
 from inference_lab.retrieval.results import EvidenceResult, ResultStatus
 from inference_lab.retrieval.values import RetrievalChannel, RetrievalLimit
+from inference_lab.settings import EvidenceDiversityPolicy
 
 
 @dataclass(frozen=True)
@@ -201,7 +202,7 @@ def test_unmapped_oversize_item_is_reported_and_does_not_break_budget() -> None:
     assert outcome.token_count == 0
 
 
-def test_item_ceiling_and_deterministic_order_follow_ret06_rank() -> None:
+def test_item_ceiling_and_deterministic_order_follow_the_reranked_rank() -> None:
     hits = (_hit(1, "first"), _hit(2, "second"), _hit(3, "third"))
 
     first = reduce_evidence(_request(hits, token_budget=10, item_budget=2))
@@ -234,7 +235,7 @@ def test_per_document_diversity_keeps_highest_ranked_candidate() -> None:
     )
     request = replace(
         _request((first, second), token_budget=10),
-        diversity_policy="per_document",
+        diversity_policy=EvidenceDiversityPolicy.PER_DOCUMENT,
     )
 
     outcome = reduce_evidence(request)
@@ -245,7 +246,7 @@ def test_per_document_diversity_keeps_highest_ranked_candidate() -> None:
         EvidenceReductionAction.DROPPED_DIVERSITY,
     )
     assert outcome.dropped_count == 1
-    assert outcome.identity.diversity_policy == "per_document"
+    assert outcome.identity.diversity_policy is EvidenceDiversityPolicy.PER_DOCUMENT
     assert outcome.identity.digest == reduce_evidence(request).identity.digest
 
 

@@ -1,11 +1,11 @@
 """Single-snapshot execution and validation for hybrid retrieval."""
 
-from __future__ import annotations
-
+from collections import deque
 from collections.abc import Hashable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final, cast
 
 import structlog
 
@@ -27,7 +27,7 @@ from inference_lab.retrieval.errors import (
     InvalidRetrievalContractError,
     InvalidRetrievalResultError,
 )
-from inference_lab.retrieval.evidence import RetrievalCandidate
+from inference_lab.retrieval.evidence import EvidenceSource, RetrievalCandidate
 from inference_lab.retrieval.fusion import FusionPolicy, fuse_evidence_results
 from inference_lab.retrieval.lexical_retrieval import execute_lexical_retrieval
 from inference_lab.retrieval.lexical_store import LexicalGeneration
@@ -61,6 +61,43 @@ class _CandidateSource:
     content_origin: str
 
 
+# A duplicate-heavy corpus can connect many byte-identical versions, so the
+# transitive expansion stops after this many versions and reports that it did
+# rather than returning silently partial duplicate groups.
+MAX_DUPLICATE_EXPANSION_VERSIONS: Final = 256
+_UNRESOLVED: Final = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _ChannelRequest:
+    """What both ranked channels need to execute one query."""
+
+    repository: MetadataRepository
+    index_dir: Path
+    corpus_id: CorpusId
+    query: RetrievalQuery
+    embedder: EmbeddingBackend
+
+
+@dataclass(frozen=True, slots=True)
+class BorrowedRetrievalState:
+    """Pinned snapshot and generations a caller has already opened."""
+
+    snapshot: CorpusSnapshot | None = None
+    lexical_generation: LexicalGeneration | None = None
+    dense_generation: DenseGeneration | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _FusionOutcome:
+    """One fused result with the bounded diagnostics its stage reports."""
+
+    result: EvidenceResult
+    channel_counts: Mapping[RetrievalChannel, int]
+    family_count: int
+    duplicate_expansion_truncated: bool
+
+
 @dataclass(frozen=True, slots=True)
 class _SnapshotEvidence:
     """Bounded identity data resolved from one selected corpus snapshot."""
@@ -69,35 +106,19 @@ class _SnapshotEvidence:
     duplicate_roots: Mapping[DocumentVersionId, DocumentVersionId]
     duplicate_component_sizes: Mapping[DocumentVersionId, int]
     family_ids: frozenset[DocumentFamilyId]
+    duplicate_expansion_truncated: bool = False
 
 
-def execute_hybrid_retrieval(
-    repository: MetadataRepository,
-    index_dir: Path,
-    corpus_id: CorpusId,
-    query: RetrievalQuery,
-    embedder: EmbeddingBackend,
-    *,
-    policy: FusionPolicy | None = None,
-    profiling: ProfilingContext | None = None,
-    parent_stage_id: str | None = None,
-    profiling_identity: str = "request",
-    snapshot: CorpusSnapshot | None = None,
-    lexical_generation: LexicalGeneration | None = None,
-    dense_generation: DenseGeneration | None = None,
-) -> EvidenceResult:
-    """Execute lexical and dense retrieval against one pinned corpus snapshot.
-
-    Channel failures remain visible in the returned RET-01 outcome. Candidate
-    source links are revalidated against the shared snapshot before fusion;
-    metadata predicates are applied by each channel before its result limit.
-    """
-    if not callable(getattr(repository, "open_corpus_snapshot", None)):
-        raise TypeError("repository must provide the metadata repository contract.")
-    if not isinstance(index_dir, Path):
-        raise TypeError("index_dir must be a Path.")
-    if not isinstance(corpus_id, CorpusId):
-        raise TypeError("corpus_id must be a CorpusId.")
+def _validate_hybrid_inputs(
+    query: object,
+    embedder: object,
+    policy: object,
+    profiling: object,
+    parent_stage_id: object,
+    profiling_identity: object,
+    snapshot: object,
+) -> None:
+    """Reject inputs that cannot describe one pinned hybrid request."""
     if not isinstance(query, RetrievalQuery):
         raise TypeError("query must be a RetrievalQuery.")
     if not callable(getattr(embedder, "embed", None)):
@@ -113,12 +134,48 @@ def execute_hybrid_retrieval(
     if snapshot is not None and not _is_hybrid_snapshot(snapshot):
         raise TypeError("snapshot must provide the corpus snapshot contract or None.")
 
+
+def execute_hybrid_retrieval(
+    repository: MetadataRepository,
+    index_dir: Path,
+    corpus_id: CorpusId,
+    query: RetrievalQuery,
+    embedder: EmbeddingBackend,
+    *,
+    policy: FusionPolicy | None = None,
+    profiling: ProfilingContext | None = None,
+    parent_stage_id: str | None = None,
+    profiling_identity: str = "request",
+    borrowed: BorrowedRetrievalState | None = None,
+) -> EvidenceResult:
+    """Execute lexical and dense retrieval against one pinned snapshot."""
+    borrowed = BorrowedRetrievalState() if borrowed is None else borrowed
+    if not isinstance(borrowed, BorrowedRetrievalState):
+        raise TypeError("borrowed must be a BorrowedRetrievalState or None.")
+    snapshot = borrowed.snapshot
+    if not callable(getattr(repository, "open_corpus_snapshot", None)):
+        raise TypeError("repository must provide the metadata repository contract.")
+    if not isinstance(index_dir, Path):
+        raise TypeError("index_dir must be a Path.")
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    _validate_hybrid_inputs(
+        query,
+        embedder,
+        policy,
+        profiling,
+        parent_stage_id,
+        profiling_identity,
+        snapshot,
+    )
+
     selected_policy = FusionPolicy() if policy is None else policy
     selected_profiling = profiling or ProfilingContext.create()
     stage_id = selected_profiling.stage_id("retrieval_fusion", profiling_identity)
     result: EvidenceResult | None = None
     channel_counts: dict[RetrievalChannel, int] = {}
     family_count = 0
+    duplicate_expansion_truncated = False
     with selected_profiling.observed_stage(
         stage="retrieval_fusion",
         stage_id=stage_id,
@@ -147,30 +204,29 @@ def execute_hybrid_retrieval(
                         FailureCategory.INVALID_CHANNEL_RESPONSE,
                     )
                 elif selected_snapshot.version.corpus_version != query.corpus_version:
-                    result = EvidenceResult.from_query(
-                        query,
-                        observed_corpus_version=(
-                            selected_snapshot.version.corpus_version
-                        ),
-                        hits=(),
-                        status=ResultStatus.COMPLETED,
-                        failures=(),
+                    result = EvidenceResult.corpus_version_mismatch(
+                        query, selected_snapshot.version.corpus_version
                     )
                 else:
-                    result, channel_counts, family_count = _retrieve_and_fuse(
-                        repository,
-                        index_dir,
-                        corpus_id,
-                        query,
-                        embedder,
+                    fused = _retrieve_and_fuse(
+                        _ChannelRequest(
+                            repository=repository,
+                            index_dir=index_dir,
+                            corpus_id=corpus_id,
+                            query=query,
+                            embedder=embedder,
+                        ),
                         selected_snapshot,
                         selected_policy,
                         selected_profiling,
                         stage_id,
                         profiling_identity,
-                        lexical_generation,
-                        dense_generation,
+                        borrowed,
                     )
+                    result = fused.result
+                    channel_counts = dict(fused.channel_counts)
+                    family_count = fused.family_count
+                    duplicate_expansion_truncated = fused.duplicate_expansion_truncated
         except StorageError:
             result = _failed_result(
                 query,
@@ -182,22 +238,21 @@ def execute_hybrid_retrieval(
                 FailureCategory.INVALID_CHANNEL_RESPONSE,
             )
 
-        assert result is not None
         stage.set_counts(
             items_processed=sum(channel_counts.values()),
             records_emitted=len(result.hits),
         )
-        failure = _map_result_failure(result)
+        failure = _map_aggregate_failure(result)
         if failure is not None:
             stage.mark_failure(failure)
 
-    assert result is not None
     _log_fusion_outcome(
         result,
         corpus_id=corpus_id,
         policy=selected_policy,
         channel_counts=channel_counts,
         family_count=family_count,
+        duplicate_expansion_truncated=duplicate_expansion_truncated,
         run_id=selected_profiling.run_id,
         request_id=selected_profiling.request_id,
     )
@@ -205,48 +260,45 @@ def execute_hybrid_retrieval(
 
 
 def _retrieve_and_fuse(
-    repository: MetadataRepository,
-    index_dir: Path,
-    corpus_id: CorpusId,
-    query: RetrievalQuery,
-    embedder: EmbeddingBackend,
+    request: _ChannelRequest,
     snapshot: CorpusSnapshot,
     policy: FusionPolicy,
     profiling: ProfilingContext,
     stage_id: str,
     profiling_identity: str,
-    lexical_generation: LexicalGeneration | None,
-    dense_generation: DenseGeneration | None,
-) -> tuple[EvidenceResult, dict[RetrievalChannel, int], int]:
+    borrowed: BorrowedRetrievalState,
+) -> _FusionOutcome:
     """Run both ranked channels, validate provenance, then fuse candidates."""
+    query = request.query
     channel_results = {
         RetrievalChannel.LEXICAL: execute_lexical_retrieval(
-            repository,
-            index_dir,
-            corpus_id,
+            request.repository,
+            request.index_dir,
+            request.corpus_id,
             query,
             profiling=profiling,
             parent_stage_id=stage_id,
             profiling_identity=f"{profiling_identity}-lexical",
             snapshot=snapshot,
-            generation=lexical_generation,
+            generation=borrowed.lexical_generation,
         ),
         RetrievalChannel.DENSE: execute_dense_retrieval(
-            repository,
-            index_dir,
-            corpus_id,
+            request.repository,
+            request.index_dir,
+            request.corpus_id,
             query,
-            embedder,
+            request.embedder,
             profiling=profiling,
             parent_stage_id=stage_id,
             profiling_identity=f"{profiling_identity}-dense",
             snapshot=snapshot,
-            generation=dense_generation,
+            generation=borrowed.dense_generation,
         ),
     }
     channel_counts: dict[RetrievalChannel, int] = {}
+    resolver = _SpanResolver(snapshot)
     for channel, result in tuple(channel_results.items()):
-        if not _channel_candidates_visible(snapshot, result):
+        if not _channel_candidates_visible(resolver, result):
             result = _failed_channel_result(
                 query,
                 channel,
@@ -255,7 +307,7 @@ def _retrieve_and_fuse(
             channel_results[channel] = result
         channel_counts[channel] = len(result.hits)
 
-    snapshot_evidence = _resolve_snapshot_evidence(snapshot, channel_results)
+    snapshot_evidence = _resolve_snapshot_evidence(snapshot, resolver, channel_results)
     result = fuse_evidence_results(
         query,
         channel_results,
@@ -265,35 +317,73 @@ def _retrieve_and_fuse(
             snapshot_evidence,
         ),
     )
-    return result, channel_counts, len(snapshot_evidence.family_ids)
+    return _FusionOutcome(
+        result=result,
+        channel_counts=channel_counts,
+        family_count=len(snapshot_evidence.family_ids),
+        duplicate_expansion_truncated=(snapshot_evidence.duplicate_expansion_truncated),
+    )
+
+
+class _SpanResolver:
+    """Resolve and validate each candidate source span once per request."""
+
+    def __init__(self, snapshot: CorpusSnapshot) -> None:
+        self._snapshot = snapshot
+        self._resolved: dict[SourceSpanId, _CandidateSource | None] = {}
+
+    def candidate_source(self, source: EvidenceSource) -> _CandidateSource | None:
+        """Return the exact location, or ``None`` when it is not visible here."""
+        cached = self._resolved.get(source.source_span_id, _UNRESOLVED)
+        if cached is not _UNRESOLVED:
+            return cast("_CandidateSource | None", cached)
+        resolved = self._resolve(source)
+        self._resolved[source.source_span_id] = resolved
+        return resolved
+
+    def _resolve(self, source: EvidenceSource) -> _CandidateSource | None:
+        """Read the snapshot once and reject any inconsistent ownership."""
+        document_version = self._snapshot.get_document_version(
+            source.document_version_id
+        )
+        if (
+            document_version is None
+            or document_version.document_id != source.document_id
+        ):
+            return None
+        resolved = self._snapshot.resolve_source_span(source.source_span_id)
+        if (
+            resolved is None
+            or resolved.document_id != source.document_id
+            or resolved.location.document_version_id != source.document_version_id
+            or resolved.location.source_span_id != source.source_span_id
+        ):
+            return None
+        return _CandidateSource(
+            document_version_id=source.document_version_id,
+            source_span_id=source.source_span_id,
+            start_offset=resolved.location.start_offset,
+            end_offset=resolved.location.end_offset,
+            page_number=resolved.location.page_number,
+            content_origin=resolved.location.content_origin.value,
+        )
 
 
 def _channel_candidates_visible(
-    snapshot: CorpusSnapshot,
+    resolver: _SpanResolver,
     result: EvidenceResult,
 ) -> bool:
     """Require every channel source link to resolve inside the pinned snapshot."""
-    for hit in result.hits:
-        for source in hit.candidate.sources:
-            document_version = snapshot.get_document_version(source.document_version_id)
-            if (
-                document_version is None
-                or document_version.document_id != source.document_id
-            ):
-                return False
-            resolved = snapshot.resolve_source_span(source.source_span_id)
-            if (
-                resolved is None
-                or resolved.document_id != source.document_id
-                or resolved.location.document_version_id != source.document_version_id
-                or resolved.location.source_span_id != source.source_span_id
-            ):
-                return False
-    return True
+    return all(
+        resolver.candidate_source(source) is not None
+        for hit in result.hits
+        for source in hit.candidate.sources
+    )
 
 
 def _resolve_snapshot_evidence(
     snapshot: CorpusSnapshot,
+    resolver: _SpanResolver,
     channel_results: Mapping[RetrievalChannel, EvidenceResult],
 ) -> _SnapshotEvidence:
     """Resolve exact locations and visible duplicate/family relationships."""
@@ -311,12 +401,19 @@ def _resolve_snapshot_evidence(
 
     relationships: set[DuplicateRelationship] = set()
     queried_versions: set[DocumentVersionId] = set()
-    pending_versions = list(sorted(versions, key=lambda item: item.as_str()))
+    pending_versions = deque(sorted(versions, key=lambda item: item.as_str()))
+    expansion_truncated = False
     while pending_versions:
-        version_id = pending_versions.pop(0)
+        if len(queried_versions) >= MAX_DUPLICATE_EXPANSION_VERSIONS:
+            # Stop expanding rather than walking a duplicate-heavy corpus, and
+            # report the bound instead of silently returning partial groups.
+            expansion_truncated = True
+            break
+        version_id = pending_versions.popleft()
         if version_id in queried_versions:
             continue
         queried_versions.add(version_id)
+        discovered: list[DocumentVersionId] = []
         for relationship in snapshot.list_duplicate_relationships(version_id):
             if not isinstance(relationship, DuplicateRelationship):
                 raise InvalidRetrievalContractError(
@@ -333,32 +430,23 @@ def _resolve_snapshot_evidence(
                         "duplicate relationship endpoint is outside the snapshot."
                     )
                 if endpoint not in queried_versions:
-                    pending_versions.append(endpoint)
+                    discovered.append(endpoint)
             relationships.add(relationship)
-        pending_versions.sort(key=lambda item: item.as_str())
+        pending_versions.extend(sorted(discovered, key=lambda item: item.as_str()))
 
     for span_id, version_id in source_versions.items():
-        resolved = snapshot.resolve_source_span(span_id)
-        if resolved is None:
+        candidate_source = resolver.candidate_source(
+            EvidenceSource(
+                document_id=source_documents[span_id],
+                document_version_id=version_id,
+                source_span_id=span_id,
+            )
+        )
+        if candidate_source is None:
             raise InvalidRetrievalContractError(
                 "candidate source span is outside the selected snapshot."
             )
-        if (
-            resolved.document_id != source_documents[span_id]
-            or resolved.location.document_version_id != version_id
-            or resolved.location.source_span_id != span_id
-        ):
-            raise InvalidRetrievalContractError(
-                "candidate source span ownership is inconsistent."
-            )
-        locations[span_id] = _CandidateSource(
-            document_version_id=version_id,
-            source_span_id=span_id,
-            start_offset=resolved.location.start_offset,
-            end_offset=resolved.location.end_offset,
-            page_number=resolved.location.page_number,
-            content_origin=resolved.location.content_origin.value,
-        )
+        locations[span_id] = candidate_source
         for membership in snapshot.list_family_memberships_by_document_version(
             version_id
         ):
@@ -380,6 +468,7 @@ def _resolve_snapshot_evidence(
         duplicate_roots=roots,
         duplicate_component_sizes=component_sizes,
         family_ids=frozenset(family_ids),
+        duplicate_expansion_truncated=expansion_truncated,
     )
 
 
@@ -526,7 +615,7 @@ def _map_fusion_exception(error: BaseException) -> FailureMapping:
     )
 
 
-def _map_result_failure(result: EvidenceResult) -> FailureMapping | None:
+def _map_aggregate_failure(result: EvidenceResult) -> FailureMapping | None:
     """Map failed aggregate results without retaining channel payloads."""
     if result.status is ResultStatus.COMPLETED:
         return None
@@ -545,6 +634,7 @@ def _log_fusion_outcome(
     policy: FusionPolicy,
     channel_counts: Mapping[RetrievalChannel, int],
     family_count: int,
+    duplicate_expansion_truncated: bool,
     run_id: str,
     request_id: str | None,
 ) -> None:
@@ -572,5 +662,6 @@ def _log_fusion_outcome(
         dense_candidate_count=channel_counts.get(RetrievalChannel.DENSE, 0),
         result_count=len(result.hits),
         family_count=family_count,
+        duplicate_expansion_truncated=duplicate_expansion_truncated,
         failure_categories=tuple(failure.category.value for failure in result.failures),
     )

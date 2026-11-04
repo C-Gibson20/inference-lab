@@ -1,7 +1,5 @@
 """Immutable local publication for aggregate held-out baseline reports."""
 
-from __future__ import annotations
-
 import hashlib
 import shutil
 from dataclasses import asdict, dataclass
@@ -9,6 +7,11 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import cast
 
+from inference_lab._fs import (
+    fsync_directory,
+    fsync_tree_directories,
+    rename_directory_without_replacement,
+)
 from inference_lab._json import (
     JsonObject,
     canonical_json_bytes,
@@ -27,15 +30,15 @@ from inference_lab.evaluation.heldout_reporting import (
 )
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.serialisation import (
-    _fsync_directory,
-    _fsync_tree_directories,
-    _rename_directory_without_replacement,
     atomic_write,
 )
 
-HELDOUT_REPORT_SCHEMA_VERSION = "1.0.0"
-HELDOUT_REPORT_ARTIFACT_NAMES = ("report.json", "report.md")
-_MANIFEST_ARTIFACT_NAMES = (*HELDOUT_REPORT_ARTIFACT_NAMES, "manifest.json")
+# Version 2.0.0 renamed the serialised "artifacts" array to "artefacts" to
+# match the project's British spelling. A 1.0.0 bundle is rejected on its
+# version rather than on an unknown field.
+HELDOUT_REPORT_SCHEMA_VERSION = "2.0.0"
+HELDOUT_REPORT_ARTEFACT_NAMES = ("report.json", "report.md")
+_MANIFEST_ARTEFACT_NAMES = (*HELDOUT_REPORT_ARTEFACT_NAMES, "manifest.json")
 
 
 class HeldOutPublicationError(OSError):
@@ -58,8 +61,8 @@ class HeldOutPublicationMismatchError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class HeldOutReportArtifact:
-    """Checksum and byte length for one public aggregate report artifact."""
+class HeldOutReportArtefact:
+    """Checksum and byte length for one public aggregate report artefact."""
 
     name: str
     size_bytes: int
@@ -69,13 +72,13 @@ class HeldOutReportArtifact:
         self._validate()
 
     def _validate(self) -> None:
-        """Validate the held-out report artifact fields."""
-        if self.name not in HELDOUT_REPORT_ARTIFACT_NAMES:
-            raise ValueError("unsupported held-out report artifact name.")
+        """Validate the held-out report artefact fields."""
+        if self.name not in HELDOUT_REPORT_ARTEFACT_NAMES:
+            raise ValueError("unsupported held-out report artefact name.")
         if type(self.size_bytes) is not int or self.size_bytes < 0:
-            raise ValueError("artifact size_bytes must be non-negative.")
+            raise ValueError("artefact size_bytes must be non-negative.")
         if not is_sha256_checksum(self.checksum):
-            raise ValueError("artifact checksum must be SHA-256.")
+            raise ValueError("artefact checksum must be SHA-256.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +88,7 @@ class HeldOutReportManifest:
     schema_version: str
     run_fingerprint: str
     report_digest: str
-    artifacts: tuple[HeldOutReportArtifact, ...]
+    artefacts: tuple[HeldOutReportArtefact, ...]
 
     def __post_init__(self) -> None:
         self._validate()
@@ -98,12 +101,12 @@ class HeldOutReportManifest:
             raise ValueError("run_fingerprint must be SHA-256.")
         if not is_sha256_checksum(self.report_digest):
             raise ValueError("report_digest must be SHA-256.")
-        if not isinstance(self.artifacts, tuple) or any(
-            not isinstance(item, HeldOutReportArtifact) for item in self.artifacts
+        if not isinstance(self.artefacts, tuple) or any(
+            not isinstance(item, HeldOutReportArtefact) for item in self.artefacts
         ):
-            raise TypeError("artifacts must be a tuple of report artifacts.")
-        if tuple(item.name for item in self.artifacts) != HELDOUT_REPORT_ARTIFACT_NAMES:
-            raise ValueError("manifest artifacts must use canonical order.")
+            raise TypeError("artefacts must be a tuple of report artefacts.")
+        if tuple(item.name for item in self.artefacts) != HELDOUT_REPORT_ARTEFACT_NAMES:
+            raise ValueError("manifest artefacts must use canonical order.")
 
 
 def serialise_heldout_report_manifest(manifest: HeldOutReportManifest) -> bytes:
@@ -120,26 +123,26 @@ def deserialise_heldout_report_manifest(data: bytes) -> HeldOutReportManifest:
         raise ValueError("held-out report manifest is not canonical JSON.")
     require_exact_json_fields(
         payload,
-        frozenset({"schema_version", "run_fingerprint", "report_digest", "artifacts"}),
+        frozenset({"schema_version", "run_fingerprint", "report_digest", "artefacts"}),
     )
-    artifacts: list[HeldOutReportArtifact] = []
-    for value in require_json_array(payload["artifacts"]):
-        artifact = require_json_object(value)
+    artefacts: list[HeldOutReportArtefact] = []
+    for value in require_json_array(payload["artefacts"]):
+        artefact = require_json_object(value)
         require_exact_json_fields(
-            artifact, frozenset({"name", "size_bytes", "checksum"})
+            artefact, frozenset({"name", "size_bytes", "checksum"})
         )
-        artifacts.append(
-            HeldOutReportArtifact(
-                name=require_json_string(artifact["name"]),
-                size_bytes=require_json_integer(artifact["size_bytes"]),
-                checksum=require_json_string(artifact["checksum"]),
+        artefacts.append(
+            HeldOutReportArtefact(
+                name=require_json_string(artefact["name"]),
+                size_bytes=require_json_integer(artefact["size_bytes"]),
+                checksum=require_json_string(artefact["checksum"]),
             )
         )
     return HeldOutReportManifest(
         schema_version=require_json_string(payload["schema_version"]),
         run_fingerprint=require_json_string(payload["run_fingerprint"]),
         report_digest=require_json_string(payload["report_digest"]),
-        artifacts=tuple(artifacts),
+        artefacts=tuple(artefacts),
     )
 
 
@@ -155,11 +158,11 @@ def publish_heldout_baseline_report(
     if raw_destination.is_symlink() or destination.exists() or destination.is_symlink():
         raise FileExistsError("Held-out report destination already exists")
 
-    artifact_bytes = {
+    artefact_bytes = {
         "report.json": serialise_held_out_baseline_report(report),
         "report.md": render_held_out_baseline_report(report).encode("utf-8"),
     }
-    manifest = _build_manifest(report, artifact_bytes)
+    manifest = _build_manifest(report, artefact_bytes)
     manifest_bytes = serialise_heldout_report_manifest(manifest)
     staging_path: Path | None = None
     try:
@@ -171,14 +174,14 @@ def publish_heldout_baseline_report(
                 suffix=".staging",
             )
         )
-        for name in HELDOUT_REPORT_ARTIFACT_NAMES:
-            atomic_write(staging_path / name, artifact_bytes[name])
+        for name in HELDOUT_REPORT_ARTEFACT_NAMES:
+            atomic_write(staging_path / name, artefact_bytes[name])
         atomic_write(staging_path / "manifest.json", manifest_bytes)
-        _verify_staged(staging_path, artifact_bytes, manifest_bytes, report)
-        _fsync_tree_directories(staging_path)
-        _rename_directory_without_replacement(staging_path, destination)
+        _verify_staged(staging_path, artefact_bytes, manifest_bytes, report)
+        fsync_tree_directories(staging_path)
+        rename_directory_without_replacement(staging_path, destination)
         staging_path = None
-        _fsync_directory(destination.parent)
+        fsync_directory(destination.parent)
         return manifest
     except FileExistsError:
         _cleanup_staging(staging_path)
@@ -200,23 +203,23 @@ def verify_heldout_baseline_publication(
         raise ValueError("destination must identify a held-out report directory.")
     try:
         actual_names = {path.name for path in destination.iterdir()}
-        if actual_names != set(_MANIFEST_ARTIFACT_NAMES):
+        if actual_names != set(_MANIFEST_ARTEFACT_NAMES):
             raise ValueError("held-out report directory has an invalid inventory.")
         manifest = deserialise_heldout_report_manifest(
             (destination / "manifest.json").read_bytes()
         )
         contents: dict[str, bytes] = {}
-        for artifact in manifest.artifacts:
-            path = destination / artifact.name
+        for artefact in manifest.artefacts:
+            path = destination / artefact.name
             if path.is_symlink() or not path.is_file():
-                raise ValueError("held-out report artifact is not a regular file.")
+                raise ValueError("held-out report artefact is not a regular file.")
             content = path.read_bytes()
             if (
-                len(content) != artifact.size_bytes
-                or _sha256(content) != artifact.checksum
+                len(content) != artefact.size_bytes
+                or _sha256(content) != artefact.checksum
             ):
-                raise ValueError("held-out report artifact checksum mismatch.")
-            contents[artifact.name] = content
+                raise ValueError("held-out report artefact checksum mismatch.")
+            contents[artefact.name] = content
         report_payload = load_json_object(contents["report.json"])
         if canonical_json_bytes(report_payload) != contents["report.json"]:
             raise ValueError("held-out report is not canonical JSON.")
@@ -243,17 +246,17 @@ def compare_heldout_baseline_publication(
         raise TypeError("report must be a HeldOutBaselineReport.")
     try:
         manifest = verify_heldout_baseline_publication(destination)
-        artifact_bytes = {
+        artefact_bytes = {
             "report.json": serialise_held_out_baseline_report(report),
             "report.md": render_held_out_baseline_report(report).encode("utf-8"),
         }
-        expected_manifest = _build_manifest(report, artifact_bytes)
+        expected_manifest = _build_manifest(report, artefact_bytes)
         if manifest != expected_manifest:
             raise HeldOutPublicationMismatchError
         root = validate_local_path(destination, field_name="destination")
         if any(
             (root / name).read_bytes() != content
-            for name, content in artifact_bytes.items()
+            for name, content in artefact_bytes.items()
         ):
             raise HeldOutPublicationMismatchError
         return True
@@ -265,10 +268,10 @@ def compare_heldout_baseline_publication(
 
 def _build_manifest(
     report: HeldOutBaselineReport,
-    artifact_bytes: dict[str, bytes],
+    artefact_bytes: dict[str, bytes],
 ) -> HeldOutReportManifest:
-    if tuple(artifact_bytes) != HELDOUT_REPORT_ARTIFACT_NAMES:
-        raise ValueError("report artifacts are not in canonical order.")
+    if tuple(artefact_bytes) != HELDOUT_REPORT_ARTEFACT_NAMES:
+        raise ValueError("report artefacts are not in canonical order.")
     fingerprint = report.contract.fingerprint
     if fingerprint is None:
         raise ValueError("held-out report contract must have a fingerprint.")
@@ -276,28 +279,28 @@ def _build_manifest(
         schema_version=HELDOUT_REPORT_SCHEMA_VERSION,
         run_fingerprint=fingerprint,
         report_digest=report.digest,
-        artifacts=tuple(
-            HeldOutReportArtifact(
+        artefacts=tuple(
+            HeldOutReportArtefact(
                 name=name,
-                size_bytes=len(artifact_bytes[name]),
-                checksum=_sha256(artifact_bytes[name]),
+                size_bytes=len(artefact_bytes[name]),
+                checksum=_sha256(artefact_bytes[name]),
             )
-            for name in HELDOUT_REPORT_ARTIFACT_NAMES
+            for name in HELDOUT_REPORT_ARTEFACT_NAMES
         ),
     )
 
 
 def _verify_staged(
     staging_path: Path,
-    artifact_bytes: dict[str, bytes],
+    artefact_bytes: dict[str, bytes],
     manifest_bytes: bytes,
     report: HeldOutBaselineReport,
 ) -> None:
-    for name, expected in (*artifact_bytes.items(), ("manifest.json", manifest_bytes)):
+    for name, expected in (*artefact_bytes.items(), ("manifest.json", manifest_bytes)):
         if (staging_path / name).read_bytes() != expected:
             raise OSError("staged held-out report bytes changed")
     verified = verify_heldout_baseline_publication(staging_path)
-    if verified != _build_manifest(report, artifact_bytes):
+    if verified != _build_manifest(report, artefact_bytes):
         raise OSError("staged held-out report failed validation")
 
 

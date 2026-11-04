@@ -1,5 +1,6 @@
 """Local-only Qwen3 embedding backend for scientific literature retrieval."""
 
+import gc
 import hashlib
 from collections.abc import Mapping
 from dataclasses import replace
@@ -38,6 +39,9 @@ from inference_lab.backends.runtime.types import (
 
 _LOGGER = structlog.get_logger(__name__)
 _MODEL_NAME: Final = "Qwen/Qwen3-Embedding-0.6B"
+# Preprocessing that changes vectors changes this version, so a downstream
+# identity can tell two otherwise identical model revisions apart.
+_PREPROCESSING_PROFILE_VERSION: Final = "1.0.0"
 _MODEL_REVISION: Final = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
 _EMBEDDING_DIMENSIONS: Final = 1024
 _MIN_EMBEDDING_DIMENSIONS: Final = 32
@@ -123,7 +127,7 @@ def _validate_local_path(artefact_dir: str | Path) -> Path:
     if not isinstance(artefact_dir, (str, Path)):
         raise TypeError("artefact_dir must be a local path")
     if not is_local_path_shape(artefact_dir):
-        raise BackendRequestError()
+        raise BackendRequestError("The embedder artefact path is not local.")
     return Path(artefact_dir)
 
 
@@ -149,7 +153,7 @@ def _verify_local_artefacts(artefact_dir: Path) -> None:
 def _build_profile(*, normalise: bool) -> EmbeddingProfile:
     """Return the complete path-free identity for one vector request."""
     return EmbeddingProfile(
-        profile_version="1.0.0",
+        profile_version=_PREPROCESSING_PROFILE_VERSION,
         tokenizer_id=_MODEL_NAME,
         tokenizer_revision=_MODEL_REVISION,
         query_prefix=_QUERY_PREFIX,
@@ -188,6 +192,7 @@ class QwenEmbeddingBackend:
                 BackendCapability.TOKEN_USAGE,
             ),
             embedding_dimensions=_EMBEDDING_DIMENSIONS,
+            preprocessing_profile_version=_PREPROCESSING_PROFILE_VERSION,
         )
 
     @property
@@ -296,6 +301,9 @@ class QwenEmbeddingBackend:
         if self._is_closed:
             return
         self._is_closed = True
+        # A loaded model participates in reference cycles, so release it here
+        # rather than at an arbitrary later collection on a 24GB budget.
+        gc.collect()
         _LOGGER.info(
             "backend_close_completed",
             pipeline_stage="runtime",
@@ -305,7 +313,7 @@ class QwenEmbeddingBackend:
         )
 
     def measure_memory(self) -> tuple[MemoryMeasurement, ...]:
-        """Return inspectable model tensor memory for the optional RUN-03 contract."""
+        """Report inspectable model tensor memory for memory accounting."""
         adapter = PyTorchMemoryCalibrationAdapter(
             cast(torch.nn.Module | None, self._model),
             component_id="embedder",
@@ -332,37 +340,35 @@ class QwenEmbeddingBackend:
             <= _EMBEDDING_DIMENSIONS
         ):
             self._log_failure("request", retryable=False)
-            raise BackendRequestError()
+            raise BackendRequestError(
+                "The requested embedding dimension is unsupported."
+            )
         if any(not text.strip() for text in request.input_texts):
             self._log_failure("request", retryable=False)
-            raise BackendRequestError()
+            raise BackendRequestError("An embedding input text is empty.")
 
         try:
             prefix = _QUERY_PREFIX if request.purpose == "query" else _DOCUMENT_PREFIX
-            vectors: list[tuple[float, ...]] = []
-            total_input_tokens = 0
-            affected_input_count = 0
-            original_token_count = 0
-            retained_token_count = 0
-            for start in range(0, len(request.input_texts), _INTERNAL_BATCH_SIZE):
-                prepared, token_counts, truncation = self._prepare_inputs(
+            prepared, token_counts, truncation = self._prepare_inputs(
+                tokenizer,
+                request.input_texts,
+                prefix=prefix,
+            )
+            total_input_tokens = sum(token_counts)
+            affected_input_count, original_token_count, retained_token_count = (
+                truncation
+            )
+            # Inference batching belongs to _run_batches, which bounds how much
+            # the model holds at once.
+            vectors = list(
+                self._run_batches(
+                    model,
                     tokenizer,
-                    request.input_texts[start : start + _INTERNAL_BATCH_SIZE],
-                    prefix=prefix,
+                    prepared,
+                    dimensions=request.options.dimensions or _EMBEDDING_DIMENSIONS,
+                    normalise=request.options.normalise,
                 )
-                total_input_tokens += sum(token_counts)
-                affected_input_count += truncation[0]
-                original_token_count += truncation[1]
-                retained_token_count += truncation[2]
-                vectors.extend(
-                    self._run_batches(
-                        model,
-                        tokenizer,
-                        prepared,
-                        dimensions=request.options.dimensions or _EMBEDDING_DIMENSIONS,
-                        normalise=request.options.normalise,
-                    )
-                )
+            )
             if affected_input_count:
                 _LOGGER.warning(
                     "embedding_input_truncated",

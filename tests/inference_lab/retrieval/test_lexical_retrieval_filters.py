@@ -37,11 +37,15 @@ from inference_lab.retrieval import (
 from inference_lab.retrieval.lexical_store import LexicalGeneration
 from inference_lab.retrieval.results import ResultStatus
 from inference_lab.storage import (
+    ComponentGenerationReference,
     ComponentGenerationState,
+    ComponentKind,
     CorpusSnapshot,
     CorruptStorageError,
     MetadataRepository,
     RepositoryUnavailableError,
+    StorageConcurrencyError,
+    StorageError,
 )
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
@@ -66,23 +70,34 @@ class _RankedGeneration:
             yield match
 
 
+_CONFIGURATION_DIGEST = "c" * 64
+_SOURCE_MANIFEST_DIGEST = "5" * 64
+
+
+def _reference(
+    generation_id: str, state: ComponentGenerationState
+) -> ComponentGenerationReference:
+    """Build the committed reference the fake generation stands for."""
+    return ComponentGenerationReference(
+        component_kind=ComponentKind("lexical-index"),
+        generation_id=generation_id,
+        implementation="sqlite-fts5",
+        format_version="1.0.0",
+        contract_version="1.0.0",
+        configuration_digest=_CONFIGURATION_DIGEST,
+        source_manifest_digest=_SOURCE_MANIFEST_DIGEST,
+        corpus_id=CORPUS_ID,
+        corpus_version=CORPUS_VERSION_ID,
+        state=state,
+    )
+
+
 class _SnapshotContext:
     """Minimal pinned snapshot projection for orchestration tests."""
 
     def __init__(self, generation_id: str) -> None:
         self.version = SimpleNamespace(corpus_version=CORPUS_VERSION_ID)
-        reference = SimpleNamespace(
-            component_kind=SimpleNamespace(as_str=lambda: "lexical-index"),
-            state=ComponentGenerationState.READY,
-            corpus_id=CORPUS_ID,
-            corpus_version=CORPUS_VERSION_ID,
-            generation_id=generation_id,
-            implementation="sqlite-fts5",
-            format_version="1.0.0",
-            contract_version="1.0.0",
-            configuration_digest="configuration-digest",
-            source_manifest_digest="source-manifest-digest",
-        )
+        reference = _reference(generation_id, ComponentGenerationState.READY)
         self.manifest = SimpleNamespace(component_generations=(reference,))
         self.closed = False
 
@@ -119,8 +134,11 @@ class _GenerationContext(_RankedGeneration):
             implementation="sqlite-fts5",
             format_version="1.0.0",
             contract_version="1.0.0",
-            configuration_digest="configuration-digest",
-            source_manifest_digest="source-manifest-digest",
+            configuration_digest=_CONFIGURATION_DIGEST,
+            source_manifest_digest=_SOURCE_MANIFEST_DIGEST,
+            component_generation=lambda: _reference(
+                generation_id, ComponentGenerationState.PREPARING
+            ),
             configuration=SimpleNamespace(
                 score_label="sqlite_fts5_negated_bm25_v1",
                 identifier_score_label="sqlite_exact_identifier_occurrences_v1",
@@ -319,7 +337,18 @@ def test_execute_filtered_retrieval_uses_pinned_generation_and_preserves_hits(
     assert snapshot.closed is True
 
 
-def test_profiled_unavailable_dependency_returns_safe_failed_result() -> None:
+@pytest.mark.parametrize(
+    ("storage_error", "expected_retryable"),
+    [
+        (RepositoryUnavailableError, False),
+        (StorageConcurrencyError, True),
+    ],
+    ids=["permanent", "transient"],
+)
+def test_profiled_unavailable_dependency_returns_safe_failed_result(
+    storage_error: type[StorageError],
+    expected_retryable: bool,
+) -> None:
     query = _query(
         text="private-query-marker",
         filter_expression=ExactFilter("language", "private-filter-marker"),
@@ -327,7 +356,7 @@ def test_profiled_unavailable_dependency_returns_safe_failed_result() -> None:
 
     class _UnavailableRepository:
         def open_corpus_snapshot(self, *_: object) -> None:
-            raise RepositoryUnavailableError()
+            raise storage_error()
 
     sink = _CollectingSink()
     result = lexical_retrieval.execute_lexical_retrieval(
@@ -340,6 +369,7 @@ def test_profiled_unavailable_dependency_returns_safe_failed_result() -> None:
 
     assert result.status is ResultStatus.FAILED
     assert result.hits == ()
+    assert result.failures[0].retryable is expected_retryable
     assert _metadata_completions(sink)[0].status == "failed"
     assert _metadata_completions(sink)[0].items_processed is None
     assert _metadata_completions(sink)[0].records_emitted is None

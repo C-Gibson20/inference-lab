@@ -48,7 +48,7 @@ PASSAGE_RECALL_POLICY_VERSION: Final[str] = "1.0.0"
 DUPLICATE_POLICY_VERSION: Final[str] = "1.0.0"
 FAMILY_POLICY_VERSION: Final[str] = "1.0.0"
 AGGREGATION_POLICY_VERSION: Final[str] = "1.0.0"
-PUBLISHED_ARTIFACT_NAMES: Final[tuple[str, ...]] = (
+PUBLISHED_ARTEFACT_NAMES: Final[tuple[str, ...]] = (
     "run.json",
     "cases.jsonl",
     "report.json",
@@ -153,7 +153,7 @@ def _require_positive_integer(value: object, field_name: str) -> int:
 
 
 def _require_case_id(value: object, field_name: str = "case_id") -> str:
-    """Validate the immutable EVAL-01 case identifier shape."""
+    """Validate the immutable evaluation case identifier shape."""
     if not isinstance(value, str):
         raise TypeError(f"{field_name} must be a string.")
     if _CASE_ID_PATTERN.fullmatch(value) is None:
@@ -747,7 +747,7 @@ class SanitisedHitReference:
 
     @classmethod
     def from_hit(cls, hit: EvidenceHit) -> "SanitisedHitReference":
-        """Build a safe reference from one validated RET-01 hit."""
+        """Build a safe reference from one validated retrieval hit."""
         if not isinstance(hit, EvidenceHit):
             raise TypeError("hit must be an EvidenceHit.")
         return cls(
@@ -1058,7 +1058,7 @@ class RetrievalCaseResult:
         corpus_id: CorpusId,
         result: EvidenceResult,
     ) -> "RetrievalCaseResult":
-        """Sanitise one validated RET-01 result for later scoring/publication."""
+        """Sanitise one validated retrieval result for later scoring/publication."""
         if not isinstance(case, EvaluationCase):
             raise TypeError("case must be an EvaluationCase.")
         _require_type(corpus_id, CorpusId, "corpus_id")
@@ -1368,7 +1368,7 @@ class RetrievalEvaluationRunIdentity:
 
 
 @dataclass(frozen=True, slots=True)
-class PublishedArtifact:
+class PublishedArtefact:
     """Checksum and size for one required published run artefact."""
 
     name: str
@@ -1380,7 +1380,7 @@ class PublishedArtifact:
 
     def _validate(self) -> None:
         """Validate the bounded artefact inventory entry."""
-        if self.name not in PUBLISHED_ARTIFACT_NAMES:
+        if self.name not in PUBLISHED_ARTEFACT_NAMES:
             raise RetrievalEvaluationContractError(
                 "name is not a required retrieval-evaluation artefact."
             )
@@ -1402,7 +1402,7 @@ class PublishedRetrievalEvaluationManifest:
 
     run_fingerprint: str
     result_digest: str
-    artefacts: tuple[PublishedArtifact, ...]
+    artefacts: tuple[PublishedArtefact, ...]
     schema_version: str = RETRIEVAL_EVALUATION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -1414,13 +1414,13 @@ class PublishedRetrievalEvaluationManifest:
         _require_checksum(self.result_digest, "result_digest")
         _require_semver(self.schema_version, "schema_version")
         artefacts = cast(
-            tuple[PublishedArtifact, ...],
+            tuple[PublishedArtefact, ...],
             _require_tuple(self.artefacts, "artefacts"),
         )
-        if any(not isinstance(artefact, PublishedArtifact) for artefact in artefacts):
-            raise TypeError("artefacts must contain only PublishedArtifact values.")
+        if any(not isinstance(artefact, PublishedArtefact) for artefact in artefacts):
+            raise TypeError("artefacts must contain only PublishedArtefact values.")
         names = tuple(artefact.name for artefact in artefacts)
-        if names != PUBLISHED_ARTIFACT_NAMES:
+        if names != PUBLISHED_ARTEFACT_NAMES:
             raise RetrievalEvaluationContractError(
                 "artefacts must contain the required files in canonical order."
             )

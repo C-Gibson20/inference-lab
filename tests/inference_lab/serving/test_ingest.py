@@ -45,7 +45,11 @@ from inference_lab.provenance import (
     CorpusId,
     CorpusVersionId,
 )
-from inference_lab.retrieval import LexicalIndexConfiguration, open_lexical_generation
+from inference_lab.retrieval import (
+    DenseIndexCompatibility,
+    LexicalIndexConfiguration,
+    open_lexical_generation,
+)
 from inference_lab.retrieval.lexical_store_reader import (
     _sha256_file,
     _validate_database,
@@ -75,6 +79,7 @@ from inference_lab.storage import (
     WorkerRepositoryOpener,
     open_metadata_repository,
 )
+from tests.inference_lab.retrieval.pipeline_fixtures import PipelineEmbedder
 
 
 def _settings(
@@ -105,6 +110,7 @@ def _request(
     *,
     proposed: CorpusVersionId,
     expected: CorpusVersionId | None,
+    dense_embedder: PipelineEmbedder | None = None,
 ) -> ServingIngestRequest:
     """Build one explicit corpus-scoped request over local files."""
     return ServingIngestRequest(
@@ -125,6 +131,16 @@ def _request(
         ),
         chunking_policy=ChunkingPolicy(min_tokens=1, max_tokens=32),
         tokeniser=FakeChunkTokeniser(),
+        dense_embedder=dense_embedder,
+        dense_compatibility=(
+            None
+            if dense_embedder is None
+            else DenseIndexCompatibility(
+                model_metadata=dense_embedder.metadata,
+                dimensions=3,
+                embedding_profile=dense_embedder.profile,
+            )
+        ),
     )
 
 
@@ -167,6 +183,7 @@ def test_ingest_profiles_discovery_and_work_under_one_request(
         (source,),
         proposed=CorpusVersionId.generate(),
         expected=None,
+        dense_embedder=PipelineEmbedder(),
     )
     repository = open_metadata_repository(
         settings.storage.metadata_db_path,
@@ -191,8 +208,14 @@ def test_ingest_profiles_discovery_and_work_under_one_request(
             "chunk",
             "membership",
             "lexical_index",
+            "dense_index",
             "publication",
         } <= by_stage.keys()
+        # Both index builds report bounded counts under the request stage.
+        dense_stage = by_stage["dense_index"]
+        assert dense_stage.items_processed == 1
+        assert dense_stage.records_emitted == 1
+        assert dense_stage.parent_stage_id == request_id
         assert by_stage["serving"].stage_id == request_id
         assert by_stage["serving"].items_processed == 1
         assert by_stage["serving"].records_emitted == 1
@@ -208,6 +231,7 @@ def test_ingest_profiles_discovery_and_work_under_one_request(
                 "chunk",
                 "membership",
                 "lexical_index",
+                "dense_index",
                 "publication",
             }
         )

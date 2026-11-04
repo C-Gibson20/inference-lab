@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
 
+from inference_lab._fs import (
+    fsync_directory,
+    fsync_tree_directories,
+    rename_directory_without_replacement,
+)
 from inference_lab.ingest import (
     BaselineChunkGenerationManifest,
 )
@@ -38,9 +42,7 @@ from inference_lab.retrieval.lexical_store_builder import (
     _reuse_existing_generation,
 )
 from inference_lab.retrieval.lexical_store_models import (
-    LEXICAL_COMPONENT_KIND as _LEXICAL_COMPONENT_KIND,
-)
-from inference_lab.retrieval.lexical_store_models import (
+    LEXICAL_COMPONENT_KIND,
     LEXICAL_DATABASE_NAME,
     LEXICAL_DIRECTORY_NAME,
     LEXICAL_MANIFEST_NAME,
@@ -98,18 +100,7 @@ def _component_generation_reference(
     """Return the storage reference represented by one lexical manifest."""
     if not isinstance(manifest, LexicalIndexManifest):
         raise TypeError("manifest must be a LexicalIndexManifest.")
-    return ComponentGenerationReference(
-        component_kind=_LEXICAL_COMPONENT_KIND,
-        generation_id=manifest.generation_id,
-        implementation=manifest.implementation,
-        format_version=manifest.format_version,
-        contract_version=manifest.contract_version,
-        configuration_digest=manifest.configuration_digest,
-        source_manifest_digest=manifest.source_manifest_digest,
-        corpus_id=manifest.corpus_id,
-        corpus_version=manifest.corpus_version,
-        state=ComponentGenerationState.PREPARING,
-    )
+    return manifest.component_generation()
 
 
 class LexicalGenerationParticipant:
@@ -140,7 +131,7 @@ class LexicalGenerationParticipant:
                 "or None."
             )
         if expected_parent_reference is not None and (
-            expected_parent_reference.component_kind != _LEXICAL_COMPONENT_KIND
+            expected_parent_reference.component_kind != LEXICAL_COMPONENT_KIND
             or expected_parent_reference.state is not ComponentGenerationState.READY
             or expected_parent_reference.corpus_id != source_manifest.corpus_id
             or expected_parent_reference.corpus_version
@@ -200,7 +191,7 @@ def select_lexical_parent_reference(
             lexical_references = tuple(
                 generation
                 for generation in snapshot.manifest.component_generations
-                if generation.component_kind == _LEXICAL_COMPONENT_KIND
+                if generation.component_kind == LEXICAL_COMPONENT_KIND
             )
             if len(lexical_references) != 1:
                 raise LexicalError(LexicalFailureCategory.INCOMPATIBLE_GENERATION)
@@ -327,7 +318,7 @@ class LexicalGenerationValidator:
                 if opened.member_selections() != expected_selections:
                     return False
 
-                actual_chunks = opened.iter_chunks()
+                actual_chunks = opened.read_chunks()
                 if len(actual_chunks) != len(expected_chunks):
                     return False
                 seen_record_ids: set[RecordId] = set()
@@ -350,8 +341,13 @@ class LexicalGenerationValidator:
                     ):
                         return False
                 return seen_record_ids == set(expected_by_record_id)
+        except LexicalError as error:
+            # An availability failure is not a mismatch verdict, so it must
+            # reach the adapter rather than being reported as a conflict.
+            if error.category is LexicalFailureCategory.GENERATION_UNAVAILABLE:
+                raise
+            return False
         except (
-            LexicalError,
             OSError,
             sqlite3.Error,
             TypeError,
@@ -434,8 +430,9 @@ def _build_lexical_generation(
             expected_generation_id=generation_id,
         )
         staged_generation.close()
+        fsync_tree_directories(staging_dir)
         try:
-            os.rename(staging_dir, target_dir)
+            rename_directory_without_replacement(staging_dir, target_dir)
         except FileExistsError:
             return _reuse_existing_generation(
                 target_dir,
@@ -443,6 +440,7 @@ def _build_lexical_generation(
                 configuration=configuration,
                 generation_id=generation_id,
             )
+        fsync_directory(lexical_dir)
         return LexicalIndexBuildOutcome(
             manifest=manifest,
             statistics=statistics,
@@ -510,5 +508,4 @@ def build_lexical_generation(
             items_processed=outcome.statistics.chunks_processed,
             records_emitted=outcome.manifest.chunk_count,
         )
-    assert outcome is not None
     return outcome

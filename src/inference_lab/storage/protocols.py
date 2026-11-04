@@ -3,7 +3,7 @@
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, Self, runtime_checkable
+from typing import Literal, Protocol, Self, runtime_checkable
 
 from inference_lab.provenance import (
     ConfigurationIdentity,
@@ -320,7 +320,7 @@ class MetadataReader(Protocol):
         corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[KnownSourceSpan, ...]:
-        """Return a version's validated PROV-03 source-span catalogue."""
+        """Return a version's validated derived-record source-span catalogue."""
         ...
 
     def find_document_versions_by_content_hash(
@@ -633,7 +633,7 @@ class MetadataTransaction(MetadataReader, MetadataWriter, ChunkSetWriter, Protoc
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Commit on success or roll back while preserving primary failures."""
         ...
 

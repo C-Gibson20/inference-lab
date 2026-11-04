@@ -7,7 +7,12 @@ from typing import cast
 
 import pytest
 
-from inference_lab.profiling import ProfilingContext, ProfilingSink, StageTiming
+from inference_lab.profiling import (
+    ProfilingContext,
+    ProfilingSink,
+    StageCondition,
+    StageTiming,
+)
 from inference_lab.provenance import (
     CorpusId,
     CorpusMetadata,
@@ -44,6 +49,7 @@ from inference_lab.settings import (
 )
 from inference_lab.storage import (
     ComponentGenerationState,
+    ComponentKind,
     ContentOrigin,
     MetadataRepository,
     StructuralBlockKind,
@@ -82,7 +88,7 @@ class _Snapshot:
         self.manifest = SimpleNamespace(
             component_generations=(
                 SimpleNamespace(
-                    component_kind=SimpleNamespace(as_str=lambda: "lexical-index"),
+                    component_kind=ComponentKind("lexical-index"),
                     state=ComponentGenerationState.READY,
                     corpus_id=CORPUS_ID,
                     corpus_version=corpus_version,
@@ -437,7 +443,7 @@ def test_search_rejects_unsupported_filter_before_execution(
 def test_search_profiles_serving_as_parent_of_lexical_retrieval(
     monkeypatch,
     tmp_path: Path,
-    condition: str,
+    condition: StageCondition,
 ) -> None:
     snapshot = _Snapshot(CORPUS_VERSION_ID)
     repository = _Repository(
@@ -449,7 +455,7 @@ def test_search_profiles_serving_as_parent_of_lexical_retrieval(
     profiling = ProfilingContext.create(
         run_id="run-serving-search",
         request_id="request-1",
-        condition=condition,  # type: ignore[arg-type]
+        condition=condition,
         sink=cast(ProfilingSink, sink),
         clock=iter(range(0, 100_000_000, 10_000_000)).__next__,
         observed_at_factory=lambda: datetime(2026, 9, 20, tzinfo=UTC),

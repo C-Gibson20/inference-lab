@@ -19,10 +19,18 @@ from inference_lab.provenance import (
     DigestAlgorithm,
     RecordId,
 )
-from inference_lab.retrieval.errors import InvalidRetrievalContractError
+from inference_lab.retrieval.errors import (
+    InvalidRetrievalContractError,
+    RetrievalOperationalError,
+)
+from inference_lab.retrieval.lexical_store_models import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.query import RetrievalQuery
+from inference_lab.storage import (
+    ComponentGenerationReference,
+    ComponentGenerationState,
+)
 
-LEXICAL_COMPONENT_KIND: Final[str] = "lexical-index"
+LEXICAL_COMPONENT_KIND_VALUE: Final[str] = LEXICAL_COMPONENT_KIND.as_str()
 LEXICAL_IMPLEMENTATION: Final[str] = "sqlite-fts5"
 LEXICAL_FORMAT_VERSION: Final[str] = "2.0.0"
 LEXICAL_CONTRACT_VERSION: Final[str] = "1.2.0"
@@ -57,9 +65,16 @@ _CONFIGURATION_FIELDS: Final[frozenset[str]] = frozenset(
 
 
 class LexicalMatchMode(StrEnum):
-    """Closed lexical matching modes supported by the baseline."""
+    """Closed lexical matching modes supported by the baseline.
 
-    TERMS = "terms"
+    ``ANY_TERM`` is the recall-oriented mode a ranked channel should use:
+    BM25 weighting separates signal from noise, so requiring every term is a
+    filter rather than a ranking choice. ``ALL_TERMS`` is that filter, for
+    callers that mean "all of these".
+    """
+
+    ANY_TERM = "any_term"
+    ALL_TERMS = "all_terms"
     EXACT_PHRASE = "exact_phrase"
     IDENTIFIER = "identifier"
 
@@ -75,14 +90,10 @@ class LexicalFailureCategory(StrEnum):
     CANCELLED = "cancelled"
 
 
-class LexicalError(Exception):
+class LexicalError(RetrievalOperationalError[LexicalFailureCategory]):
     """A lexical operational failure containing only a bounded category."""
 
-    def __init__(self, category: LexicalFailureCategory) -> None:
-        if not isinstance(category, LexicalFailureCategory):
-            raise TypeError("category must be a LexicalFailureCategory.")
-        super().__init__(category.value)
-        self.category = category
+    category_type = LexicalFailureCategory
 
 
 class InvalidLexicalContractError(InvalidRetrievalContractError):
@@ -166,6 +177,13 @@ class LexicalIndexConfiguration:
 
     def _validate(self) -> None:
         """Validate all result-affecting lexical choices."""
+        self._validate_engine()
+        self._validate_analysis_policy()
+        self._validate_bm25_parameters()
+        self._validate_score_exposure()
+
+    def _validate_engine(self) -> None:
+        """Require a supported engine, revision, and index schema version."""
         _validate_slug(self.engine, "engine")
         if not isinstance(self.engine_revision, str) or not self.engine_revision:
             raise InvalidLexicalContractError("engine_revision must be non-empty.")
@@ -175,6 +193,9 @@ class LexicalIndexConfiguration:
         }:
             raise InvalidLexicalContractError("unsupported lexical engine revision.")
         _validate_semantic_version(self.index_schema_version, "index_schema_version")
+
+    def _validate_analysis_policy(self) -> None:
+        """Require the tokeniser and the baseline normalisation policies."""
         if not isinstance(self.fts_tokenizer, str) or not self.fts_tokenizer:
             raise InvalidLexicalContractError("fts_tokenizer must be non-empty.")
         if "\x00" in self.fts_tokenizer:
@@ -198,6 +219,9 @@ class LexicalIndexConfiguration:
             raise InvalidLexicalContractError(
                 "identifier_case_policy must use the baseline binary policy."
             )
+
+    def _validate_bm25_parameters(self) -> None:
+        """Require finite BM25 parameters the selected revision permits."""
         if not isinstance(self.bm25_k1, float) or not math.isfinite(self.bm25_k1):
             raise TypeError("bm25_k1 must be a finite float.")
         if self.engine_revision == LEXICAL_ENGINE_REVISION:
@@ -212,6 +236,9 @@ class LexicalIndexConfiguration:
                 raise InvalidLexicalContractError("SQLite FTS5 fixes bm25_b at 0.75.")
         elif not 0 <= self.bm25_b <= 1:
             raise InvalidLexicalContractError("bm25_b must be between zero and one.")
+
+    def _validate_score_exposure(self) -> None:
+        """Require positive column weights and named score fields."""
         if not isinstance(self.column_weights, tuple):
             raise TypeError("column_weights must be a tuple.")
         if self.engine_revision == LEXICAL_ENGINE_REVISION:
@@ -328,7 +355,7 @@ def escape_fts5_literal(value: str) -> str:
 
 def build_fts5_query(
     text: str,
-    mode: LexicalMatchMode = LexicalMatchMode.TERMS,
+    mode: LexicalMatchMode = LexicalMatchMode.ANY_TERM,
 ) -> str:
     """Build a literal FTS5 expression for terms or exact-phrase matching."""
     if not isinstance(text, str):
@@ -344,15 +371,16 @@ def build_fts5_query(
         raise InvalidLexicalContractError("text must contain an analysable term.")
     if mode is LexicalMatchMode.EXACT_PHRASE:
         return escape_fts5_literal(" ".join(terms))
-    return " AND ".join(escape_fts5_literal(term) for term in terms)
+    operator = " AND " if mode is LexicalMatchMode.ALL_TERMS else " OR "
+    return operator.join(escape_fts5_literal(term) for term in terms)
 
 
 @dataclass(frozen=True, slots=True)
 class LexicalQuery:
-    """A RET-01 query plus one closed lexical matching mode."""
+    """A retrieval query plus one closed lexical matching mode."""
 
     query: RetrievalQuery
-    mode: LexicalMatchMode = LexicalMatchMode.TERMS
+    mode: LexicalMatchMode = LexicalMatchMode.ANY_TERM
 
     def __post_init__(self) -> None:
         self._validate()
@@ -365,7 +393,8 @@ class LexicalQuery:
             raise TypeError("mode must be a LexicalMatchMode.")
         if self.query.filter is not None:
             raise InvalidLexicalContractError(
-                "lexical requests do not support filters; RET-03 owns filter execution."
+                "lexical requests do not support filters; metadata "
+                "filtering owns filter execution."
             )
         if not analyse_terms(self.query.text):
             raise InvalidLexicalContractError(
@@ -398,7 +427,6 @@ class LexicalQuery:
 
 # The longer name is useful at integration boundaries while the short name is
 # convenient for callers constructing a request.
-LexicalRetrievalRequest = LexicalQuery
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,7 +444,7 @@ class LexicalIndexManifest:
     chunk_count: int
     identifier_count: int
     schema_version: str = LEXICAL_MANIFEST_SCHEMA_VERSION
-    component_kind: str = LEXICAL_COMPONENT_KIND
+    component_kind: str = LEXICAL_COMPONENT_KIND_VALUE
     implementation: str = LEXICAL_IMPLEMENTATION
     format_version: str = LEXICAL_FORMAT_VERSION
     contract_version: str = LEXICAL_CONTRACT_VERSION
@@ -445,7 +473,7 @@ class LexicalIndexManifest:
             raise TypeError("configuration must be a LexicalIndexConfiguration.")
         if self.schema_version != LEXICAL_MANIFEST_SCHEMA_VERSION:
             raise InvalidLexicalContractError("unsupported lexical manifest version.")
-        if self.component_kind != LEXICAL_COMPONENT_KIND:
+        if self.component_kind != LEXICAL_COMPONENT_KIND_VALUE:
             raise InvalidLexicalContractError("unsupported lexical component kind.")
         if self.implementation != self.configuration.engine:
             raise InvalidLexicalContractError(
@@ -476,6 +504,21 @@ class LexicalIndexManifest:
             "identifier_count",
         ):
             _validate_non_negative_integer(getattr(self, field_name), field_name)
+
+    def component_generation(self) -> ComponentGenerationReference:
+        """Return the preparing reference represented by this manifest."""
+        return ComponentGenerationReference(
+            component_kind=LEXICAL_COMPONENT_KIND,
+            generation_id=self.generation_id,
+            implementation=self.implementation,
+            format_version=self.format_version,
+            contract_version=self.contract_version,
+            configuration_digest=self.configuration_digest,
+            source_manifest_digest=self.source_manifest_digest,
+            corpus_id=self.corpus_id,
+            corpus_version=self.corpus_version,
+            state=ComponentGenerationState.PREPARING,
+        )
 
     def as_payload(self) -> JsonObject:
         """Return the complete manifest payload without filesystem details."""
@@ -601,7 +644,7 @@ def derive_lexical_generation_id(
         raise TypeError("configuration must be a LexicalIndexConfiguration.")
     _validate_sha256(source_manifest_digest, "source_manifest_digest")
     payload: JsonObject = {
-        "component_kind": LEXICAL_COMPONENT_KIND,
+        "component_kind": LEXICAL_COMPONENT_KIND_VALUE,
         "configuration_digest": configuration.configuration_identity.digest,
         "contract_version": LEXICAL_CONTRACT_VERSION,
         "corpus_id": corpus_id.as_str(),

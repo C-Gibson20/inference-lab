@@ -6,6 +6,11 @@ import shutil
 from pathlib import Path
 from tempfile import mkdtemp
 
+from inference_lab._fs import (
+    fsync_directory,
+    fsync_tree_directories,
+    rename_directory_without_replacement,
+)
 from inference_lab.evaluation.audit_errors import AuditPublicationError
 from inference_lab.evaluation.audit_report_codec import (
     deserialise_audit_report,
@@ -20,9 +25,6 @@ from inference_lab.evaluation.audit_report_rendering import render_audit_report
 from inference_lab.evaluation.audit_reports import CorpusAuditReport
 from inference_lab.evaluation.privacy import validate_local_path
 from inference_lab.evaluation.serialisation import (
-    _fsync_directory,
-    _fsync_tree_directories,
-    _rename_directory_without_replacement,
     atomic_write,
 )
 
@@ -69,11 +71,11 @@ def publish_audit_report(
             manifest_json,
             report,
         )
-        _fsync_tree_directories(staging_path)
+        fsync_tree_directories(staging_path)
 
-        _rename_directory_without_replacement(staging_path, destination)
+        rename_directory_without_replacement(staging_path, destination)
         staging_path = None
-        _fsync_directory(destination.parent)
+        fsync_directory(destination.parent)
         return manifest
     except FileExistsError:
         _cleanup_staging(staging_path)

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from types import TracebackType
+from typing import Literal
 
 from inference_lab.ingest import (
     CURRENT_DISCOVERY_POLICY,
@@ -67,7 +68,7 @@ class _Transaction:
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         del exception_type, traceback
         assert self.active
         self.active = False

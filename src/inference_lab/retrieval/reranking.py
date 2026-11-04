@@ -1,15 +1,17 @@
-"""Validated request boundary for RET-06 evidence reranking."""
-
-from __future__ import annotations
+"""Validated request boundary for evidence reranking."""
 
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import structlog
 
-from inference_lab._validation import is_canonical_semantic_version
+from inference_lab._validation import (
+    is_canonical_semantic_version,
+    is_path_free_identifier,
+    is_strict_integer,
+)
 from inference_lab.backends.runtime import (
     BackendClosedError,
     BackendError,
@@ -29,10 +31,15 @@ from inference_lab.retrieval.results import (
     ResultStatus,
     RetrievalFailure,
 )
+from inference_lab.settings import (
+    MAX_EVIDENCE_COUNT,
+    MAX_RERANK_CANDIDATES,
+    MIN_EVIDENCE_COUNT,
+    RetrievalConfig,
+)
 
-MAX_RERANK_CANDIDATES = 100
 RERANK_DEDUPLICATION_VERSION = "1.0.0"
-RET06_POLICY_VERSION = "1.0.0"
+RERANK_POLICY_VERSION = "1.0.0"
 _LOGGER = structlog.get_logger("inference_lab.retrieval")
 
 
@@ -45,15 +52,23 @@ class EvidenceCount:
     def __post_init__(self) -> None:
         if type(self.value) is not int:
             raise TypeError("value must be an integer.")
-        if not 5 <= self.value <= 10:
+        if not MIN_EVIDENCE_COUNT <= self.value <= MAX_EVIDENCE_COUNT:
             raise InvalidRetrievalContractError(
-                "evidence count must be between 5 and 10."
+                "evidence count must be between "
+                f"{MIN_EVIDENCE_COUNT} and {MAX_EVIDENCE_COUNT}."
             )
+
+    @classmethod
+    def from_config(cls, configuration: RetrievalConfig) -> "EvidenceCount":
+        """Build the configured evidence count from validated settings."""
+        if not isinstance(configuration, RetrievalConfig):
+            raise TypeError("configuration must be a RetrievalConfig.")
+        return cls(configuration.evidence_count)
 
 
 @dataclass(frozen=True, slots=True)
 class RerankCandidateLimit:
-    """Configured reranker request size, bounded by RUN-05's hard cap."""
+    """Configured reranker request size, bounded by the reranker backend's hard cap."""
 
     value: int = MAX_RERANK_CANDIDATES
 
@@ -62,18 +77,21 @@ class RerankCandidateLimit:
             raise TypeError("value must be an integer.")
         if not 1 <= self.value <= MAX_RERANK_CANDIDATES:
             raise InvalidRetrievalContractError(
-                "reranker candidate limit must be between 1 and 100."
+                f"reranker candidate limit must be between 1 and "
+                f"{MAX_RERANK_CANDIDATES}."
             )
+
+    @classmethod
+    def from_config(cls, configuration: RetrievalConfig) -> "RerankCandidateLimit":
+        """Build the configured candidate limit from validated settings."""
+        if not isinstance(configuration, RetrievalConfig):
+            raise TypeError("configuration must be a RetrievalConfig.")
+        return cls(configuration.candidate_limit)
 
 
 @dataclass(frozen=True, slots=True)
 class RerankingRequest:
-    """Pair one query with the fused evidence result from the same snapshot.
-
-    The request retains RET-01 candidates and their provenance unchanged.
-    Ranking scores are supplied only by the backend at execution time and are
-    not added to this input contract.
-    """
+    """Pair one query with the fused evidence result from the same snapshot."""
 
     query: RetrievalQuery
     fused_result: EvidenceResult
@@ -131,25 +149,8 @@ class ScoredEvidence:
 
 
 @dataclass(frozen=True, slots=True)
-class RerankingOutcome:
-    """RET-01 result plus an explicit marker for fused-order degradation."""
-
-    result: EvidenceResult
-    degraded: bool
-    identity: RerankingIdentity
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.result, EvidenceResult):
-            raise TypeError("result must be an EvidenceResult.")
-        if type(self.degraded) is not bool:
-            raise TypeError("degraded must be a boolean.")
-        if not isinstance(self.identity, RerankingIdentity):
-            raise TypeError("identity must be a RerankingIdentity.")
-
-
-@dataclass(frozen=True, slots=True)
 class RerankingIdentity:
-    """Stable, path-free configuration identity for one RET-06 run."""
+    """Stable, path-free configuration identity for one reranking run."""
 
     backend_name: str
     model_name: str
@@ -158,56 +159,67 @@ class RerankingIdentity:
     evidence_count: int
     candidate_limit: int
     deduplication_version: str = RERANK_DEDUPLICATION_VERSION
-    policy_version: str = RET06_POLICY_VERSION
+    policy_version: str = RERANK_POLICY_VERSION
 
     def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate every field that participates in the run identity."""
+        self._validate_identities()
+        self._validate_versions()
+        self._validate_limits()
+
+    def _validate_identities(self) -> None:
+        """Require non-empty backend and model identities free of local paths."""
         for name, value in (
             ("backend_name", self.backend_name),
             ("model_name", self.model_name),
             ("model_revision", self.model_revision),
+        ):
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string.")
+            if not is_path_free_identifier(value):
+                raise InvalidRetrievalContractError(
+                    f"{name} must not contain a deployment path."
+                )
+
+    def _validate_versions(self) -> None:
+        """Require each contract version to be a canonical semantic version."""
+        for name, value in (
             ("preprocessing_profile_version", self.preprocessing_profile_version),
             ("deduplication_version", self.deduplication_version),
             ("policy_version", self.policy_version),
         ):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string.")
-        for name, value in (
-            ("backend_name", self.backend_name),
-            ("model_name", self.model_name),
-            ("model_revision", self.model_revision),
-        ):
-            if (
-                value.startswith(("/", "\\", "~"))
-                or "://" in value
-                or (len(value) >= 3 and value[1] == ":" and value[2] in ("/", "\\"))
-            ):
-                raise InvalidRetrievalContractError(
-                    f"{name} must not contain a deployment path."
-                )
-        for name, value in (
-            ("preprocessing_profile_version", self.preprocessing_profile_version),
-            ("deduplication_version", self.deduplication_version),
-            ("policy_version", self.policy_version),
-        ):
             if not is_canonical_semantic_version(value):
                 raise InvalidRetrievalContractError(
                     f"{name} must be a semantic version."
                 )
-        if type(self.evidence_count) is not int or not 5 <= self.evidence_count <= 10:
+
+    def _validate_limits(self) -> None:
+        """Require both limits to stay inside the configured baseline ranges."""
+        if (
+            type(self.evidence_count) is not int
+            or not MIN_EVIDENCE_COUNT <= self.evidence_count <= MAX_EVIDENCE_COUNT
+        ):
             raise InvalidRetrievalContractError(
-                "identity evidence count must be between 5 and 10."
+                "identity evidence count must be between "
+                f"{MIN_EVIDENCE_COUNT} and {MAX_EVIDENCE_COUNT}."
             )
         if (
             type(self.candidate_limit) is not int
             or not 1 <= self.candidate_limit <= MAX_RERANK_CANDIDATES
         ):
             raise InvalidRetrievalContractError(
-                "identity candidate limit must be between 1 and 100."
+                "identity candidate limit must be between 1 and "
+                f"{MAX_RERANK_CANDIDATES}."
             )
 
     @property
     def digest(self) -> str:
-        """Return a stable digest over every result-affecting RET-06 choice."""
+        """Return a stable digest over every result-affecting reranking choice."""
         encoded = json.dumps(
             {
                 "backend_name": self.backend_name,
@@ -225,17 +237,55 @@ class RerankingIdentity:
         return hashlib.sha256(encoded).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class RerankingOutcome:
+    """Reranked result plus an explicit marker for fused-order degradation."""
+
+    result: EvidenceResult
+    degraded: bool
+    identity: RerankingIdentity
+    available_candidate_count: int = 0
+    submitted_candidate_count: int = 0
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    @property
+    def truncated_candidate_count(self) -> int:
+        """Return how many fused candidates the declared pool cap excluded."""
+        return self.available_candidate_count - self.submitted_candidate_count
+
+    def _validate(self) -> None:
+        """Validate the outcome's result, degradation marker, and identity."""
+        if not isinstance(self.result, EvidenceResult):
+            raise TypeError("result must be an EvidenceResult.")
+        if type(self.degraded) is not bool:
+            raise TypeError("degraded must be a boolean.")
+        if not isinstance(self.identity, RerankingIdentity):
+            raise TypeError("identity must be a RerankingIdentity.")
+        self._validate_counts()
+
+    def _validate_counts(self) -> None:
+        """Validate that the submitted pool is a subset of the available pool."""
+        for name in ("available_candidate_count", "submitted_candidate_count"):
+            value = getattr(self, name)
+            if not is_strict_integer(value):
+                raise TypeError(f"{name} must be an integer.")
+            if value < 0:
+                raise InvalidRetrievalContractError(f"{name} must not be negative.")
+        if self.submitted_candidate_count > self.available_candidate_count:
+            raise InvalidRetrievalContractError(
+                "submitted_candidate_count must not exceed the available count."
+            )
+
+
 def prepare_rerank_request(
     request: RerankingRequest,
     *,
-    evidence_count: EvidenceCount = EvidenceCount(),
-    candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
+    evidence_count: EvidenceCount,
+    candidate_limit: RerankCandidateLimit,
 ) -> PreparedReranking:
-    """Build a bounded RUN-05 request while retaining original source evidence.
-
-    The pool policy retains the leading RET-05 fused candidates in their
-    existing deterministic order. An empty pool requires no backend request.
-    """
+    """Build a bounded reranker request retaining original source evidence."""
     if not isinstance(request, RerankingRequest):
         raise TypeError("request must be a RerankingRequest.")
     if not isinstance(evidence_count, EvidenceCount):
@@ -321,12 +371,7 @@ def map_rerank_result(
 def rank_evidence_hits(
     scored_evidence: tuple[ScoredEvidence, ...],
 ) -> tuple[EvidenceHit, ...]:
-    """Return score-ordered evidence with deterministic ties and fresh ranks.
-
-    Scores affect ordering only. The returned hits are rebuilt from the
-    original candidates and channel contributions, so source provenance and
-    RET-05 diagnostics survive unchanged.
-    """
+    """Return score-ordered evidence with fresh ranks; scores order only."""
     if not isinstance(scored_evidence, tuple):
         raise TypeError("scored_evidence must be a tuple.")
     if any(not isinstance(item, ScoredEvidence) for item in scored_evidence):
@@ -349,12 +394,7 @@ def rank_evidence_hits(
 def deduplicate_evidence_hits(
     ranked_hits: tuple[EvidenceHit, ...],
 ) -> tuple[EvidenceHit, ...]:
-    """Drop exact repeated source evidence, retaining the highest-ranked hit.
-
-    The key uses candidate kind and the complete ordered-independent set of
-    source-span identities with their owning document versions. Document- or
-    family-level similarity and span overlap do not make candidates duplicates.
-    """
+    """Drop only exact repeated source spans, never document or family peers."""
     if not isinstance(ranked_hits, tuple):
         raise TypeError("ranked_hits must be a tuple.")
     if any(not isinstance(hit, EvidenceHit) for hit in ranked_hits):
@@ -403,10 +443,10 @@ def rerank_evidence(
     backend: RerankerBackend,
     request: RerankingRequest,
     *,
-    evidence_count: EvidenceCount = EvidenceCount(),
-    candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
+    evidence_count: EvidenceCount,
+    candidate_limit: RerankCandidateLimit,
 ) -> tuple[PreparedReranking, tuple[ScoredEvidence, ...]]:
-    """Call RUN-05 with the bounded request and map scores to source evidence."""
+    """Call the reranker with the bounded request and map scores to source evidence."""
     if not callable(getattr(backend, "rerank", None)):
         raise TypeError("backend must implement the reranker contract.")
     prepared = prepare_rerank_request(
@@ -414,10 +454,110 @@ def rerank_evidence(
         evidence_count=evidence_count,
         candidate_limit=candidate_limit,
     )
+    return prepared, _score_prepared_reranking(backend, prepared)
+
+
+def _score_prepared_reranking(
+    backend: RerankerBackend,
+    prepared: PreparedReranking,
+) -> tuple[ScoredEvidence, ...]:
+    """Call the reranker for one prepared request and map scores to evidence."""
     if prepared.backend_request is None:
-        return prepared, ()
-    response = backend.rerank(prepared.backend_request)
-    return prepared, map_rerank_result(prepared, response)
+        return ()
+    return map_rerank_result(prepared, backend.rerank(prepared.backend_request))
+
+
+@dataclass(frozen=True, slots=True)
+class _RerankingContext:
+    """What every reranking outcome needs in order to be constructed."""
+
+    query: RetrievalQuery
+    fused_result: EvidenceResult
+    identity: RerankingIdentity
+    evidence_count: EvidenceCount
+    available_candidate_count: int = 0
+    submitted_candidate_count: int = 0
+
+    def with_pool(self, prepared: PreparedReranking) -> "_RerankingContext":
+        """Return the same context carrying the prepared candidate pool."""
+        return replace(
+            self,
+            available_candidate_count=prepared.available_candidate_count,
+            submitted_candidate_count=len(prepared.candidate_hits),
+        )
+
+    def failed(
+        self,
+        failure: RetrievalFailure,
+    ) -> tuple[RerankingOutcome, FailureCategory]:
+        """Build a hit-free outcome that retains the fused result's failures."""
+        return (
+            _failed_reranking_outcome(
+                self.query,
+                failure,
+                prior_failures=self.fused_result.failures,
+                identity=self.identity,
+                available_candidate_count=self.available_candidate_count,
+                submitted_candidate_count=self.submitted_candidate_count,
+            ),
+            failure.category,
+        )
+
+
+def _rejected_before_reranking(
+    context: _RerankingContext,
+) -> tuple[RerankingOutcome, FailureCategory | None] | None:
+    """Reject a fused result the reranker must not be asked to score."""
+    query = context.query
+    fused_result = context.fused_result
+    if fused_result.corpus_version != query.corpus_version:
+        return context.failed(
+            RetrievalFailure(FailureCategory.CORPUS_VERSION_MISMATCH, retryable=False)
+        )
+    if fused_result.requested_limit != query.limit:
+        return context.failed(
+            RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, retryable=False)
+        )
+    if fused_result.status is ResultStatus.FAILED or not fused_result.hits:
+        return (
+            RerankingOutcome(fused_result, degraded=False, identity=context.identity),
+            fused_result.failures[-1].category if fused_result.failures else None,
+        )
+    return None
+
+
+def _backend_failure_outcome(
+    context: _RerankingContext,
+    error: BackendError,
+) -> tuple[RerankingOutcome, FailureCategory]:
+    """Degrade to the fused order when retryable, otherwise fail closed."""
+    failure = RetrievalFailure(
+        category=(
+            FailureCategory.CHANNEL_UNAVAILABLE
+            if isinstance(error, (BackendNotReadyError, BackendClosedError))
+            else FailureCategory.CHANNEL_EXECUTION_FAILURE
+        ),
+        retryable=error.retryable,
+    )
+    if not error.retryable:
+        return context.failed(failure)
+    fallback = deduplicate_evidence_hits(context.fused_result.hits)[
+        : context.evidence_count.value
+    ]
+    return (
+        RerankingOutcome(
+            _result_with_outcome(
+                context.query,
+                fallback,
+                (*context.fused_result.failures, failure),
+            ),
+            degraded=bool(fallback),
+            identity=context.identity,
+            available_candidate_count=context.available_candidate_count,
+            submitted_candidate_count=context.submitted_candidate_count,
+        ),
+        failure.category,
+    )
 
 
 def execute_reranking(
@@ -426,17 +566,13 @@ def execute_reranking(
     fused_result: EvidenceResult,
     *,
     corpus_id: CorpusId,
-    evidence_count: EvidenceCount = EvidenceCount(),
-    candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
+    evidence_count: EvidenceCount,
+    candidate_limit: RerankCandidateLimit,
 ) -> RerankingOutcome:
     """Select evidence and convert backend failures to bounded outcomes.
 
-    The caller supplies the corpus identity selected with the pinned query so
-    the stage can emit consistent retrieval context without changing RET-01.
-    Retryable backend failures may return the deterministic fused order as a
-    partial result. Invalid inputs, malformed responses, and non-retryable
-    failures return no hits. Error messages and candidate payloads never cross
-    into the result contract.
+    ``corpus_id`` is supplied for logging context only; it does not widen the
+    pinned query.
     """
     if not isinstance(query, RetrievalQuery):
         raise TypeError("query must be a RetrievalQuery.")
@@ -451,7 +587,7 @@ def execute_reranking(
     if not callable(getattr(backend, "rerank", None)):
         raise TypeError("backend must implement the reranker contract.")
     started_at = time.perf_counter()
-    identity = _reranking_identity(backend, evidence_count, candidate_limit)
+    identity = reranking_identity_for_backend(backend, evidence_count, candidate_limit)
 
     def finish(
         outcome: RerankingOutcome,
@@ -459,7 +595,6 @@ def execute_reranking(
     ) -> RerankingOutcome:
         return _log_reranking_outcome(
             outcome,
-            candidate_count=len(fused_result.hits),
             evidence_count=evidence_count,
             candidate_limit=candidate_limit,
             corpus_id=corpus_id.as_str(),
@@ -468,106 +603,50 @@ def execute_reranking(
             duration_ms=(time.perf_counter() - started_at) * 1000,
         )
 
-    if fused_result.corpus_version != query.corpus_version:
-        return finish(
-            _failed_reranking_outcome(
-                query,
-                RetrievalFailure(
-                    FailureCategory.CORPUS_VERSION_MISMATCH,
-                    retryable=False,
-                ),
-                identity=identity,
-            ),
-            FailureCategory.CORPUS_VERSION_MISMATCH,
-        )
-    if fused_result.requested_limit != query.limit:
-        return finish(
-            _failed_reranking_outcome(
-                query,
-                RetrievalFailure(
-                    FailureCategory.INVALID_CHANNEL_RESPONSE,
-                    retryable=False,
-                ),
-                identity=identity,
-            ),
-            FailureCategory.INVALID_CHANNEL_RESPONSE,
-        )
-    if fused_result.status is ResultStatus.FAILED or not fused_result.hits:
-        category = fused_result.failures[-1].category if fused_result.failures else None
-        return finish(
-            RerankingOutcome(fused_result, degraded=False, identity=identity),
-            category,
-        )
+    context = _RerankingContext(
+        query=query,
+        fused_result=fused_result,
+        identity=identity,
+        evidence_count=evidence_count,
+    )
+    rejected = _rejected_before_reranking(context)
+    if rejected is not None:
+        return finish(*rejected)
 
-    request = RerankingRequest(query, fused_result)
+    prepared = prepare_rerank_request(
+        RerankingRequest(query, fused_result),
+        evidence_count=evidence_count,
+        candidate_limit=candidate_limit,
+    )
+    context = context.with_pool(prepared)
     try:
-        _, scored = rerank_evidence(
-            backend,
-            request,
-            evidence_count=evidence_count,
-            candidate_limit=candidate_limit,
-        )
+        scored = _score_prepared_reranking(backend, prepared)
     except BackendError as error:
-        failure = RetrievalFailure(
-            category=(
-                FailureCategory.CHANNEL_UNAVAILABLE
-                if isinstance(error, (BackendNotReadyError, BackendClosedError))
-                else FailureCategory.CHANNEL_EXECUTION_FAILURE
-            ),
-            retryable=error.retryable,
-        )
-        if error.retryable:
-            fallback = deduplicate_evidence_hits(fused_result.hits)[
-                : evidence_count.value
-            ]
-            return finish(
-                RerankingOutcome(
-                    _result_with_outcome(
-                        query,
-                        fallback,
-                        (*fused_result.failures, failure),
-                    ),
-                    degraded=bool(fallback),
-                    identity=identity,
-                ),
-                failure.category,
-            )
-        return finish(
-            _failed_reranking_outcome(
-                query,
-                failure,
-                prior_failures=fused_result.failures,
-                identity=identity,
-            ),
-            failure.category,
-        )
+        return finish(*_backend_failure_outcome(context, error))
     except InvalidRetrievalContractError:
         return finish(
-            _failed_reranking_outcome(
-                query,
-                RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False),
-                prior_failures=fused_result.failures,
-                identity=identity,
-            ),
-            FailureCategory.INVALID_CHANNEL_RESPONSE,
+            *context.failed(
+                RetrievalFailure(FailureCategory.INVALID_CHANNEL_RESPONSE, False)
+            )
         )
     except Exception:
         return finish(
-            _failed_reranking_outcome(
-                query,
-                RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False),
-                prior_failures=fused_result.failures,
-                identity=identity,
-            ),
-            FailureCategory.CHANNEL_EXECUTION_FAILURE,
+            *context.failed(
+                RetrievalFailure(FailureCategory.CHANNEL_EXECUTION_FAILURE, False)
+            )
         )
 
-    hits = rank_evidence_hits(scored)[: evidence_count.value]
     return finish(
         RerankingOutcome(
-            _result_with_outcome(query, hits, fused_result.failures),
+            _result_with_outcome(
+                query,
+                rank_evidence_hits(scored)[: evidence_count.value],
+                fused_result.failures,
+            ),
             degraded=False,
             identity=identity,
+            available_candidate_count=context.available_candidate_count,
+            submitted_candidate_count=context.submitted_candidate_count,
         )
     )
 
@@ -575,7 +654,6 @@ def execute_reranking(
 def _log_reranking_outcome(
     outcome: RerankingOutcome,
     *,
-    candidate_count: int,
     evidence_count: EvidenceCount,
     candidate_limit: RerankCandidateLimit,
     corpus_id: str,
@@ -603,8 +681,9 @@ def _log_reranking_outcome(
         failure_category=(
             failure_category.value if failure_category is not None else None
         ),
-        candidate_count=min(candidate_count, MAX_RERANK_CANDIDATES),
-        submitted_candidate_count=min(candidate_count, candidate_limit.value),
+        candidate_count=outcome.available_candidate_count,
+        submitted_candidate_count=outcome.submitted_candidate_count,
+        truncated_candidate_count=outcome.truncated_candidate_count,
         selected_evidence_count=len(outcome.result.hits),
         evidence_count_limit=evidence_count.value,
         candidate_limit=candidate_limit.value,
@@ -620,7 +699,7 @@ def _log_reranking_outcome(
     return outcome
 
 
-def _reranking_identity(
+def reranking_identity_for_backend(
     backend: RerankerBackend,
     evidence_count: EvidenceCount,
     candidate_limit: RerankCandidateLimit,
@@ -646,7 +725,7 @@ def _result_with_outcome(
     hits: tuple[EvidenceHit, ...],
     failures: tuple[RetrievalFailure, ...],
 ) -> EvidenceResult:
-    """Construct a valid final RET-01 result with contiguous ranks."""
+    """Construct a valid final retrieval result with contiguous ranks."""
     ranked_hits = tuple(
         EvidenceHit(hit.candidate, hit.contributions, rank)
         for rank, hit in enumerate(hits, start=1)
@@ -670,10 +749,14 @@ def _failed_reranking_outcome(
     *,
     identity: RerankingIdentity,
     prior_failures: tuple[RetrievalFailure, ...] = (),
+    available_candidate_count: int = 0,
+    submitted_candidate_count: int = 0,
 ) -> RerankingOutcome:
     """Build a hit-free failure result without retaining private error data."""
     return RerankingOutcome(
         _result_with_outcome(query, (), (*prior_failures, failure)),
         degraded=False,
         identity=identity,
+        available_candidate_count=available_candidate_count,
+        submitted_candidate_count=submitted_candidate_count,
     )

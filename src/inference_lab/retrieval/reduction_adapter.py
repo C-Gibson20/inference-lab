@@ -1,10 +1,8 @@
-"""Snapshot-pinned RET-07 integration and exact lexical source mapping."""
-
-from __future__ import annotations
+"""Snapshot-pinned evidence reduction with exact lexical source mapping."""
 
 import time
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
 
 import structlog
 
@@ -13,12 +11,13 @@ from inference_lab.ingest import (
     build_canonical_source_boundary_map,
 )
 from inference_lab.provenance import CorpusId, CorpusVersionId, RecordId
+from inference_lab.retrieval.errors import RetrievalOperationalError
 from inference_lab.retrieval.evidence import EvidenceSource
-from inference_lab.retrieval.lexical import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.lexical_store import (
     LexicalGeneration,
     LexicalIndexedChunk,
 )
+from inference_lab.retrieval.lexical_store_models import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.metadata_adapter import resolve_lexical_candidate_metadata
 from inference_lab.retrieval.reduction import (
     EvidenceReductionOutcome,
@@ -26,33 +25,161 @@ from inference_lab.retrieval.reduction import (
     EvidenceTextSourceRange,
     EvidenceTokeniser,
     EvidenceTokeniserError,
+    EvidenceTokeniserFailureCategory,
     EvidenceTokeniserIdentity,
     TextSourceBoundary,
     reduce_evidence,
 )
 from inference_lab.retrieval.results import EvidenceResult
-from inference_lab.settings import RetrievalConfig
-from inference_lab.storage import ComponentGenerationState, CorpusSnapshot
+from inference_lab.settings import EvidenceDiversityPolicy, RetrievalConfig
+from inference_lab.storage import (
+    CorpusSnapshot,
+    generation_matches_reference,
+    select_ready_component_generation,
+)
 
 _LOGGER = structlog.get_logger("inference_lab.retrieval")
 
 
 class EvidenceReductionFailureCategory(StrEnum):
-    """Bounded reasons the RET-07 boundary could not complete."""
+    """Bounded reasons the evidence-reduction boundary could not complete."""
 
     CORPUS_VERSION_MISMATCH = "corpus_version_mismatch"
+    COMPONENT_UNAVAILABLE = "component_unavailable"
+    COMPONENT_MISMATCH = "component_mismatch"
+    COMPONENT_RECORD_SETS_DISAGREE = "component_record_sets_disagree"
+    INVALID_REQUEST = "invalid_request"
     TOKENISER_MISMATCH = "tokeniser_mismatch"
     TOKENISER_UNAVAILABLE = "tokeniser_unavailable"
     INVALID_TOKENISER_OUTPUT = "invalid_tokeniser_output"
     REDUCTION_FAILURE = "reduction_failure"
 
 
-class EvidenceReductionExecutionError(RuntimeError):
-    """A privacy-safe failure raised by the RET-07 execution boundary."""
+class EvidenceReductionExecutionError(
+    RetrievalOperationalError[EvidenceReductionFailureCategory]
+):
+    """A privacy-safe failure raised by the evidence-reduction execution boundary."""
 
-    def __init__(self, category: EvidenceReductionFailureCategory) -> None:
-        self.category = category
-        super().__init__(category.value)
+    category_type = EvidenceReductionFailureCategory
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceReductionOverrides:
+    """Per-request narrowings of the configured reduction limits."""
+
+    token_budget: int | None = None
+    item_budget: int | None = None
+    diversity_policy: EvidenceDiversityPolicy | None = None
+    expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ReductionBudgets:
+    """The limits one reduction request will actually be executed under."""
+
+    token_budget: int
+    item_budget: int
+    diversity_policy: EvidenceDiversityPolicy
+
+
+def _verify_tokeniser_identity(
+    tokeniser: EvidenceTokeniser,
+    expected: EvidenceTokeniserIdentity | None,
+) -> None:
+    """Require a usable tokeniser whose identity matches any pinned one."""
+    if not callable(getattr(tokeniser, "tokenise", None)) or not callable(
+        getattr(tokeniser, "count_tokens", None)
+    ):
+        raise EvidenceReductionExecutionError(
+            EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
+        )
+    if expected is not None and not isinstance(expected, EvidenceTokeniserIdentity):
+        raise TypeError(
+            "expected_tokeniser_identity must be an EvidenceTokeniserIdentity."
+        )
+    try:
+        identity = tokeniser.identity
+    except Exception:
+        raise EvidenceReductionExecutionError(
+            EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
+        ) from None
+    if not isinstance(identity, EvidenceTokeniserIdentity):
+        raise EvidenceReductionExecutionError(
+            EvidenceReductionFailureCategory.INVALID_TOKENISER_OUTPUT
+        )
+    if expected is not None and identity != expected:
+        raise EvidenceReductionExecutionError(
+            EvidenceReductionFailureCategory.TOKENISER_MISMATCH
+        )
+
+
+def _resolve_reduction_budgets(
+    configuration: RetrievalConfig,
+    result: EvidenceResult,
+    overrides: EvidenceReductionOverrides,
+) -> _ReductionBudgets:
+    """Narrow the configured limits by any valid per-request override."""
+    token_override = overrides.token_budget
+    if token_override is not None and (
+        type(token_override) is not int or token_override <= 0
+    ):
+        raise ValueError("token_budget_override must be a positive integer.")
+    item_budget = min(result.requested_limit.value, configuration.evidence_count)
+    item_override = overrides.item_budget
+    if item_override is not None:
+        if type(item_override) is not int or item_override <= 0:
+            raise ValueError("item_budget_override must be a positive integer.")
+        item_budget = min(item_budget, item_override)
+    diversity_policy = (
+        configuration.diversity_policy
+        if overrides.diversity_policy is None
+        else overrides.diversity_policy
+    )
+    if not isinstance(diversity_policy, EvidenceDiversityPolicy):
+        raise TypeError("diversity_policy_override must be an EvidenceDiversityPolicy.")
+    return _ReductionBudgets(
+        token_budget=(
+            configuration.evidence_token_budget
+            if token_override is None
+            else token_override
+        ),
+        item_budget=item_budget,
+        diversity_policy=diversity_policy,
+    )
+
+
+def _validate_reduction_inputs(
+    corpus_id: object,
+    snapshot: object,
+    generation: object,
+    result: object,
+    configuration: object,
+) -> None:
+    """Reject inputs that cannot describe one pinned reduction request."""
+    if not isinstance(corpus_id, CorpusId):
+        raise TypeError("corpus_id must be a CorpusId.")
+    if any(
+        not callable(getattr(snapshot, method_name, None))
+        for method_name in (
+            "get_source_artefact",
+            "get_parsed_representation",
+            "resolve_source_span",
+            "get_document_version",
+        )
+    ):
+        raise TypeError("snapshot must implement CorpusSnapshot.")
+    if (
+        not hasattr(snapshot, "corpus_id")
+        or not hasattr(snapshot, "version")
+        or not hasattr(snapshot, "manifest")
+    ):
+        raise TypeError("snapshot must expose its selected corpus version.")
+    if not isinstance(generation, LexicalGeneration):
+        raise TypeError("generation must be a LexicalGeneration.")
+    if not isinstance(result, EvidenceResult):
+        raise TypeError("result must be an EvidenceResult.")
+    if not isinstance(configuration, RetrievalConfig):
+        raise TypeError("configuration must be a RetrievalConfig.")
 
 
 def reduce_retrieval_evidence(
@@ -63,46 +190,18 @@ def reduce_retrieval_evidence(
     tokeniser: EvidenceTokeniser,
     configuration: RetrievalConfig,
     *,
-    token_budget_override: int | None = None,
-    item_budget_override: int | None = None,
-    diversity_policy_override: Literal["none", "per_document"] | None = None,
-    expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None,
+    overrides: EvidenceReductionOverrides | None = None,
 ) -> EvidenceReductionOutcome:
-    """Reduce one RET-06 result against its exact pinned corpus snapshot.
-
-    The lexical generation supplies immutable chunk source intervals. Parsed
-    text and the ING-04 canonical boundary map turn those intervals into exact
-    candidate-to-source ranges. Any candidate whose map cannot be proved can
-    still be retained whole, but the pure reducer will fail that candidate
-    closed if it needs shortening.
-    """
+    """Reduce one reranked result against its exact pinned corpus snapshot."""
+    selected = EvidenceReductionOverrides() if overrides is None else overrides
+    if not isinstance(selected, EvidenceReductionOverrides):
+        raise TypeError("overrides must be an EvidenceReductionOverrides or None.")
     started = time.perf_counter()
     corpus_version: CorpusVersionId | None = None
     try:
-        if not isinstance(corpus_id, CorpusId):
-            raise TypeError("corpus_id must be a CorpusId.")
-        if any(
-            not callable(getattr(snapshot, method_name, None))
-            for method_name in (
-                "get_source_artefact",
-                "get_parsed_representation",
-                "resolve_source_span",
-                "get_document_version",
-            )
-        ):
-            raise TypeError("snapshot must implement CorpusSnapshot.")
-        if (
-            not hasattr(snapshot, "corpus_id")
-            or not hasattr(snapshot, "version")
-            or not hasattr(snapshot, "manifest")
-        ):
-            raise TypeError("snapshot must expose its selected corpus version.")
-        if not isinstance(generation, LexicalGeneration):
-            raise TypeError("generation must be a LexicalGeneration.")
-        if not isinstance(result, EvidenceResult):
-            raise TypeError("result must be an EvidenceResult.")
-        if not isinstance(configuration, RetrievalConfig):
-            raise TypeError("configuration must be a RetrievalConfig.")
+        _validate_reduction_inputs(
+            corpus_id, snapshot, generation, result, configuration
+        )
         corpus_version = snapshot.version.corpus_version
         if (
             snapshot.corpus_id != corpus_id
@@ -114,85 +213,26 @@ def reduce_retrieval_evidence(
                 EvidenceReductionFailureCategory.CORPUS_VERSION_MISMATCH
             )
         _validate_result_source_versions(snapshot, result)
-        references = tuple(
-            reference
-            for reference in snapshot.manifest.component_generations
-            if reference.component_kind.as_str() == LEXICAL_COMPONENT_KIND
+        reference = select_ready_component_generation(
+            snapshot.manifest,
+            LEXICAL_COMPONENT_KIND,
+            corpus_id=corpus_id,
+            corpus_version=corpus_version,
         )
-        if len(references) != 1:
+        if reference is None:
             raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.CORPUS_VERSION_MISMATCH
+                EvidenceReductionFailureCategory.COMPONENT_UNAVAILABLE
             )
-        reference = references[0]
         manifest = generation.manifest
-        if (
-            reference.state is not ComponentGenerationState.READY
-            or reference.corpus_id != corpus_id
-            or reference.corpus_version != corpus_version
-            or reference.generation_id != manifest.generation_id
-            or reference.implementation != manifest.implementation
-            or reference.format_version != manifest.format_version
-            or reference.contract_version != manifest.contract_version
-            or reference.configuration_digest != manifest.configuration_digest
-            or reference.source_manifest_digest != manifest.source_manifest_digest
-        ):
+        if not generation_matches_reference(reference, manifest.component_generation()):
             raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.CORPUS_VERSION_MISMATCH
+                EvidenceReductionFailureCategory.COMPONENT_MISMATCH
             )
-        if not callable(getattr(tokeniser, "tokenise", None)) or not callable(
-            getattr(tokeniser, "count_tokens", None)
-        ):
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
-            )
-        if expected_tokeniser_identity is not None and not isinstance(
-            expected_tokeniser_identity, EvidenceTokeniserIdentity
-        ):
-            raise TypeError(
-                "expected_tokeniser_identity must be an EvidenceTokeniserIdentity."
-            )
-        try:
-            identity = tokeniser.identity
-        except Exception:
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
-            ) from None
-        if not isinstance(identity, EvidenceTokeniserIdentity):
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.INVALID_TOKENISER_OUTPUT
-            )
-        if (
-            expected_tokeniser_identity is not None
-            and identity != expected_tokeniser_identity
-        ):
-            raise EvidenceReductionExecutionError(
-                EvidenceReductionFailureCategory.TOKENISER_MISMATCH
-            )
-
-        if token_budget_override is not None and (
-            type(token_budget_override) is not int or token_budget_override <= 0
-        ):
-            raise ValueError("token_budget_override must be a positive integer.")
-
-        token_budget = (
-            configuration.evidence_token_budget
-            if token_budget_override is None
-            else token_budget_override
-        )
-        item_budget = min(result.requested_limit.value, configuration.evidence_count)
-        if item_budget_override is not None:
-            if type(item_budget_override) is not int or item_budget_override <= 0:
-                raise ValueError("item_budget_override must be a positive integer.")
-            item_budget = min(item_budget, item_budget_override)
-        diversity_policy = (
-            configuration.diversity_policy
-            if diversity_policy_override is None
-            else diversity_policy_override
-        )
-        if not isinstance(diversity_policy, str):
-            raise TypeError("diversity policy override must be a string.")
-        if diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        _verify_tokeniser_identity(tokeniser, selected.expected_tokeniser_identity)
+        budgets = _resolve_reduction_budgets(configuration, result, selected)
+        token_budget = budgets.token_budget
+        item_budget = budgets.item_budget
+        diversity_policy = budgets.diversity_policy
         source_ranges: dict[RecordId, tuple[EvidenceTextSourceRange, ...]] = {}
         for hit in result.hits[:item_budget]:
             mapped = _source_ranges_for_candidate(
@@ -230,16 +270,22 @@ def reduce_retrieval_evidence(
             EvidenceReductionFailureCategory.INVALID_TOKENISER_OUTPUT
             if error.category
             in {
-                "invalid_tokeniser_output",
-                "invalid_token_offsets",
-                "inconsistent_token_count",
-                "unmeasurable_text",
+                EvidenceTokeniserFailureCategory.INVALID_TOKENISER_OUTPUT,
+                EvidenceTokeniserFailureCategory.INVALID_TOKEN_OFFSETS,
+                EvidenceTokeniserFailureCategory.INCONSISTENT_TOKEN_COUNT,
+                EvidenceTokeniserFailureCategory.UNMEASURABLE_TEXT,
             }
             else EvidenceReductionFailureCategory.TOKENISER_UNAVAILABLE
         )
         _log_failure(corpus_id, corpus_version, category, started=started)
         raise EvidenceReductionExecutionError(category) from None
     except TypeError:
+        _log_failure(
+            corpus_id,
+            corpus_version,
+            EvidenceReductionFailureCategory.INVALID_REQUEST,
+            started=started,
+        )
         raise
     except Exception:
         category = EvidenceReductionFailureCategory.REDUCTION_FAILURE
@@ -257,7 +303,11 @@ def _source_ranges_for_candidate(
     """Build exact per-span text mappings, returning None when proof fails."""
     try:
         chunk = generation.get_chunk(record_id)
-        if chunk is None or not _candidate_matches_chunk(chunk, content, sources):
+        if chunk is None:
+            raise EvidenceReductionExecutionError(
+                EvidenceReductionFailureCategory.COMPONENT_RECORD_SETS_DISAGREE
+            )
+        if not _candidate_matches_chunk(chunk, content, sources):
             return None
         metadata = resolve_lexical_candidate_metadata(snapshot, chunk)
         boundary_map = build_canonical_source_boundary_map(
@@ -321,6 +371,9 @@ def _source_ranges_for_candidate(
                 )
             )
         return tuple(sorted(ranges, key=lambda item: item.text_start))
+    except EvidenceReductionExecutionError:
+        # A broken component invariant is not an unmappable candidate.
+        raise
     except Exception:
         return None
 

@@ -19,11 +19,15 @@ from inference_lab.evaluation import (
     load_dataset,
 )
 from inference_lab.provenance import CorpusId, CorpusVersionId
+from inference_lab.retrieval.reranking import (
+    EvidenceCount,
+    RerankCandidateLimit,
+)
 from inference_lab.settings import get_settings
 from inference_lab.storage import open_metadata_repository
 
 _ROOT = Path(__file__).resolve().parents[3]
-_DATASET_MANIFEST = _ROOT / ".dev/benchmark-authoring/bound-manifest.json"
+_BENCHMARK_DIR = _ROOT / ".dev/benchmark-authoring"
 _SETUP_RECORD = _ROOT / ".dev/local-evaluation/setup.json"
 _OPEN_RESOURCES: list[object] = []
 
@@ -38,6 +42,14 @@ def _close_resources() -> None:
 atexit.register(_close_resources)
 
 
+def _bound_manifest(setup: dict[str, object]) -> Path:
+    """Locate the bound manifest for the dataset version the setup declares."""
+    version = setup.get("bound_dataset_version")
+    if not isinstance(version, str) or not version:
+        raise ValueError("local setup must declare its bound dataset version")
+    return _BENCHMARK_DIR / f"bound-manifest-{version}.json"
+
+
 def make_development_request() -> RetrievalEvaluationRequest:
     """Build one development-only request for a pinned local channel."""
     channel = os.environ.get("EVALUATION_CHANNEL")
@@ -45,15 +57,16 @@ def make_development_request() -> RetrievalEvaluationRequest:
         raise ValueError("EVALUATION_CHANNEL must select a supported local channel")
 
     settings = get_settings()
-    dataset = load_dataset(_DATASET_MANIFEST)
-    bound_manifest = dataset.manifest
     setup = json.loads(_SETUP_RECORD.read_text(encoding="utf-8"))
+    dataset = load_dataset(_bound_manifest(setup))
+    bound_manifest = dataset.manifest
     corpus_id = CorpusId.from_str(bound_manifest.corpus_id)
     corpus_version = CorpusVersionId.from_str(bound_manifest.corpus_version)
     if (
         setup.get("status") != "ready"
         or setup.get("corpus_id") != corpus_id.as_str()
         or setup.get("proposed_corpus_version") != corpus_version.as_str()
+        or setup.get("bound_dataset_version") != bound_manifest.dataset_version
     ):
         raise ValueError("local setup and bound benchmark corpus identities differ")
 
@@ -104,7 +117,12 @@ def make_development_request() -> RetrievalEvaluationRequest:
             reranker = LocalRerankerBackend(settings.models.reranker_path)
             _OPEN_RESOURCES.append(reranker)
             reranker.load()
-            adapter = LocalRerankedEvaluationAdapter(fused, reranker)
+            adapter = LocalRerankedEvaluationAdapter(
+                fused,
+                reranker,
+                evidence_count=EvidenceCount.from_config(settings.retrieval),
+                candidate_limit=RerankCandidateLimit.from_config(settings.retrieval),
+            )
 
     return RetrievalEvaluationRequest(
         dataset=dataset,

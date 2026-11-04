@@ -1,4 +1,4 @@
-"""Tests for immutable aggregate-only EVAL-04 report publication."""
+"""Tests for immutable aggregate-only held-out report publication."""
 
 from pathlib import Path
 from typing import cast
@@ -65,7 +65,7 @@ def test_publication_is_immutable_and_mismatch_is_rejected(tmp_path: Path) -> No
         compare_heldout_baseline_publication(destination, altered)
 
 
-def test_verification_rejects_tampered_artifact(tmp_path: Path) -> None:
+def test_verification_rejects_tampered_artefact(tmp_path: Path) -> None:
     destination = tmp_path / "run"
     publish_heldout_baseline_report(destination, _report())
     (destination / "report.md").write_text("changed", encoding="utf-8")

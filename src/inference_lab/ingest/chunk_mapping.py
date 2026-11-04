@@ -1,4 +1,4 @@
-"""Explicit mappings from ING-04 chunk values to storage records."""
+"""Explicit mappings from canonical chunk values to storage records."""
 
 import hashlib
 from typing import Final
@@ -32,7 +32,7 @@ from inference_lab.storage.source_locations import (
 
 
 class ChunkMappingError(ValueError):
-    """Report a payload-free failure at the ING-04 storage boundary."""
+    """Report a payload-free failure at the chunk storage boundary."""
 
 
 _STRUCTURAL_BLOCK_KIND_MAP: Final[
@@ -60,7 +60,7 @@ _OVERSIZE_UNIT_POLICY_MAP: Final[dict[OversizeUnitPolicy, ChunkOversizeUnitPolic
 def map_chunk_source_reference(
     reference: ChunkSourceReference,
 ) -> ChunkSourceReferenceRecord:
-    """Map one validated ING-04 source reference to a storage record."""
+    """Map one validated chunk source reference to a storage record."""
     if not isinstance(reference, ChunkSourceReference):
         raise TypeError("reference must be a ChunkSourceReference.")
     try:
@@ -86,7 +86,7 @@ def map_chunk_source_reference(
 
 
 def map_chunk_set(chunk_set: ChunkSet) -> ChunkSetSelectionRecord:
-    """Map one validated ING-04 chunk set to its corpus-free storage record."""
+    """Map one validated chunk set to its corpus-free storage record."""
     if not isinstance(chunk_set, ChunkSet):
         raise TypeError("chunk_set must be a ChunkSet.")
 

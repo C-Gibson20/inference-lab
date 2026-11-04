@@ -1,4 +1,4 @@
-"""Strict serialisation and privacy tests for RET-02 manifests."""
+"""Strict serialisation and privacy tests for lexical index manifests."""
 
 import json
 

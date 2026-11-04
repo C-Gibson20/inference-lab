@@ -676,16 +676,21 @@ def test_pr4_query_keeps_payloads_out_of_observability_surfaces(
             )
 
         assert result.status.value == "completed"
-        assert result.hits == ()
         assert result.failures == ()
-        safe_surfaces = (repr(result), repr(sink.records), repr(logs))
+        # Disjunctive matching means this query does retrieve the passage, so
+        # the result carries its content to the caller by design. The
+        # observability surfaces must still disclose nothing.
+        assert result.hits
+        assert chunk_marker in repr(result)
+        observability_surfaces = (repr(sink.records), repr(logs))
         for marker in (
             query_marker,
             chunk_marker,
             identifier_marker,
             str(tmp_path),
         ):
-            assert all(marker not in surface for surface in safe_surfaces)
+            assert all(marker not in surface for surface in observability_surfaces)
+        assert query_marker not in repr(result)
 
         database = (
             tmp_path
@@ -955,7 +960,7 @@ def test_pr3_failed_publication_keeps_active_version_and_leaves_orphan_unreachab
         repository.close()
 
 
-def test_stor03_reference_and_validator_require_exact_reopenable_generation(
+def test_reference_and_validator_require_an_exact_reopenable_generation(
     tmp_path: Path,
 ) -> None:
     source_manifest, _, _ = lexical_fixtures.source_manifest()
@@ -989,7 +994,7 @@ def test_stor03_reference_and_validator_require_exact_reopenable_generation(
     )
 
 
-def test_stor03_validator_rejects_checksum_corruption_without_disclosure(
+def test_validator_rejects_checksum_corruption_without_disclosure(
     tmp_path: Path,
 ) -> None:
     source_manifest, _, _ = lexical_fixtures.source_manifest()
@@ -1230,7 +1235,7 @@ def test_compatible_parent_diff_reuses_adds_replaces_and_removes_chunks(
     assert child.manifest.generation_id != parent.manifest.generation_id
 
     with open_lexical_generation(tmp_path, child.manifest.generation_id) as generation:
-        assert {chunk.content for chunk in generation.iter_chunks()} == {
+        assert {chunk.content for chunk in generation.read_chunks()} == {
             "unchanged",
             "new version",
             "inserted",
@@ -1303,7 +1308,7 @@ def test_parent_diff_reuses_unchanged_chunk_rows_inside_changed_member(
     assert child.statistics.removed_chunks == 1
     assert child.statistics.inserted_chunks == 0
     with open_lexical_generation(tmp_path, child.manifest.generation_id) as generation:
-        assert {chunk.content for chunk in generation.iter_chunks()} == {
+        assert {chunk.content for chunk in generation.read_chunks()} == {
             "one two ",
             "three five",
         }

@@ -103,6 +103,7 @@ def test_all_retrieval_channels_share_one_provenance_preserving_envelope() -> No
 
 def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
     expected = {
+        "BorrowedRetrievalState",
         "CandidateKind",
         "ChannelScore",
         "EvidenceHit",
@@ -111,6 +112,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "EvidenceReductionExecutionError",
         "EvidenceReductionFailure",
         "EvidenceReductionFailureCategory",
+        "EvidenceReductionOverrides",
         "EvidenceReductionIdentity",
         "EvidenceReductionOutcome",
         "EvidenceReductionRequest",
@@ -121,6 +123,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "EvidenceTokenisation",
         "EvidenceTokeniser",
         "EvidenceTokeniserError",
+        "EvidenceTokeniserFailureCategory",
         "EvidenceTokeniserIdentity",
         "EVIDENCE_SEPARATOR",
         "FailureCategory",
@@ -128,6 +131,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "FUSION_DEDUPLICATION_VERSION",
         "FusionPolicy",
         "InvalidRetrievalContractError",
+        "RetrievalOperationalError",
         "InvalidRetrievalResultError",
         "InvalidRetrievalSerialisationError",
         "ResultStatus",
@@ -164,10 +168,10 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "DENSE_SCORE_LABEL",
         "DenseDistanceMetric",
         "DenseError",
+        "DenseBuildRequest",
         "DenseFailureCategory",
         "DenseGeneration",
         "DenseGenerationParticipant",
-        "DenseGenerationValidator",
         "DenseIndexBuildOutcome",
         "DenseIndexBuildRequest",
         "DenseIndexBuildStatistics",
@@ -185,6 +189,7 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "build_dense_generation",
         "build_dense_generation_for_corpus_update",
         "open_dense_generation",
+        "l2_normalised",
         "rank_dense_entries",
         "reduce_evidence",
         "reduce_retrieval_evidence",
@@ -207,13 +212,11 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "LexicalIndexManifest",
         "LexicalGeneration",
         "LexicalGenerationParticipant",
-        "LexicalGenerationValidator",
         "LexicalCandidateMetadata",
         "LexicalIndexedChunk",
         "LexicalMemberSelection",
         "LexicalMatchMode",
         "LexicalQuery",
-        "LexicalRetrievalRequest",
         "LexicalSourceLink",
         "MetadataCardinality",
         "MetadataFieldDescriptor",
@@ -223,7 +226,6 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "MetadataFilterRegistry",
         "MetadataFilterValidation",
         "MetadataMissingPolicy",
-        "MetadataValue",
         "MetadataValues",
         "analyse_terms",
         "build_fts5_query",
@@ -251,6 +253,22 @@ def test_retrieval_public_api_contains_only_completed_contract_values() -> None:
         "resolve_lexical_candidate_metadata",
         "validate_metadata_filter",
         "select_lexical_parent_reference",
+        "RERANK_DEDUPLICATION_VERSION",
+        "RERANK_POLICY_VERSION",
+        "EvidenceCount",
+        "PreparedReranking",
+        "RerankCandidateLimit",
+        "RerankingIdentity",
+        "RerankingOutcome",
+        "RerankingRequest",
+        "ScoredEvidence",
+        "deduplicate_evidence_hits",
+        "execute_reranking",
+        "map_rerank_result",
+        "prepare_rerank_request",
+        "rank_evidence_hits",
+        "rerank_evidence",
+        "reranking_identity_for_backend",
     }
     assert set(retrieval.__all__) == expected
     assert not hasattr(retrieval, "_filter_payload")
@@ -285,7 +303,7 @@ def test_failure_values_remain_typed_and_do_not_change_empty_result_semantics() 
     assert failed.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
 
 
-def test_ret01_query_candidate_and_score_boundaries_reject_invalid_values() -> None:
+def test_query_candidate_and_score_boundaries_reject_invalid_values() -> None:
     source = _source(31)
     candidate = RetrievalCandidate(
         RecordId.generate(), CandidateKind.ORIGINAL_PASSAGE, "passage", (source,)
@@ -316,7 +334,7 @@ def test_ret01_query_candidate_and_score_boundaries_reject_invalid_values() -> N
         EvidenceHit(candidate, (lexical, lexical), 1)
 
 
-def test_ret01_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
+def test_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
     version = CorpusVersionId.generate()
     other_version = CorpusVersionId.generate()
     first = RetrievalCandidate(
@@ -339,7 +357,10 @@ def test_ret01_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
     assert result.status is ResultStatus.FAILED
     assert result.hits == ()
     assert result.failures[0].category is FailureCategory.CORPUS_VERSION_MISMATCH
+    assert result == EvidenceResult.corpus_version_mismatch(query, other_version)
 
+    with pytest.raises(InvalidRetrievalResultError):
+        EvidenceResult.corpus_version_mismatch(query, version)
     with pytest.raises(InvalidRetrievalResultError):
         EvidenceResult(
             version,
@@ -358,7 +379,7 @@ def test_ret01_order_limit_and_corpus_version_mismatch_fail_closed() -> None:
         )
 
 
-def test_ret01_query_serialisation_round_trips_nested_filter_shapes() -> None:
+def test_query_serialisation_round_trips_nested_filter_shapes() -> None:
     expression = AllFilter(
         (
             AnyFilter(

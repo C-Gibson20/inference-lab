@@ -68,7 +68,7 @@ manifest must never collapse the set into a fictitious global corpus version.
 - Ensure all indexes for the selected corpus version are committed and durable
   before capture completes.
 - Permit read-only queries to continue during backup creation.
-- Finalize a backup only after all components are captured, validated, and
+- Finalise a backup only after all components are captured, validated, and
   recorded in the manifest.
 
 ### Invalid backups
@@ -177,6 +177,18 @@ the complete backup invalid.
 
 Restore is permitted only when the metadata schema and every included index are
 compatible, migratable, or safely rebuildable from canonical records.
+
+Dense-index compatibility covers the whole embedding profile, not the model
+alone. Pooling strategy, prefixes, input normalisation, token limit, tokeniser
+revision, inference dtype, and device type all form part of a generation's
+reuse identity, so restoring onto different inference hardware can require a
+rebuild even when the model is unchanged.
+
+A rebuild must be planned rather than assumed cheap. Embedding dominates its
+cost and scales with corpus token volume: an 18-document corpus of 2,524 chunks
+and 1.19 million tokens takes about 27 minutes at the 731 tokens per second
+measured for a 0.6B-parameter embedder on CPU. Record the expected embedding
+time for the deployed corpus and embedder.
 
 ### Source-data backup
 

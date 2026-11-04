@@ -150,6 +150,13 @@ def test_qwen_backend_loads_only_verified_local_files_and_closes_idempotently(
     assert backend.is_ready
     assert backend.metadata.supported_operations == (BackendOperation.EMBED,)
     assert backend.metadata.embedding_dimensions == 1024
+    # Preprocessing affects the vectors, so the backend must declare its
+    # profile version for downstream identities to compare.
+    assert backend.metadata.preprocessing_profile_version is not None
+    assert (
+        backend.metadata.preprocessing_profile_version
+        == qwen_embedding._PREPROCESSING_PROFILE_VERSION
+    )
     assert len(loaded_backend.load_calls) == 2
     for _, options in loaded_backend.load_calls:
         assert options["local_files_only"] is True

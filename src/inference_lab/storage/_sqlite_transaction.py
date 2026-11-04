@@ -5,7 +5,16 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, Self, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Concatenate,
+    Literal,
+    ParamSpec,
+    Self,
+    TypeVar,
+    cast,
+)
 
 from inference_lab.provenance import (
     ConfigurationIdentity,
@@ -218,7 +227,7 @@ class SQLiteMetadataTransaction:
         exception_type: type[BaseException] | None,
         exception: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Commit success or roll back while preserving a primary failure."""
         del exception_type, traceback
         connection = self._connection_or_raise()
@@ -844,7 +853,7 @@ class SQLiteMetadataTransaction:
         corpus_id: CorpusId,
         document_version_id: DocumentVersionId,
     ) -> tuple[KnownSourceSpan, ...]:
-        """Return a version's validated PROV-03 source-span catalogue."""
+        """Return a version's validated derived-record source-span catalogue."""
         return self._execute(
             list_known_source_spans,
             corpus_id,

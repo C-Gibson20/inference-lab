@@ -19,7 +19,6 @@ from inference_lab.retrieval.evidence import (
     RetrievalCandidate,
 )
 from inference_lab.retrieval.lexical import (
-    LEXICAL_COMPONENT_KIND,
     LexicalError,
     LexicalFailureCategory,
     LexicalMatchMode,
@@ -32,6 +31,7 @@ from inference_lab.retrieval.lexical_store import (
     map_lexical_failure,
     open_lexical_generation,
 )
+from inference_lab.retrieval.lexical_store_models import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.metadata_adapter import (
     resolve_lexical_candidate_metadata,
 )
@@ -50,11 +50,12 @@ from inference_lab.retrieval.results import (
 )
 from inference_lab.retrieval.values import RetrievalChannel
 from inference_lab.storage import (
-    ComponentGenerationState,
     CorpusSnapshot,
     CorruptStorageError,
     MetadataRepository,
     StorageError,
+    generation_matches_reference,
+    select_ready_component_generation,
 )
 
 
@@ -69,6 +70,8 @@ class _MetadataFilterObservation:
 def _failed_result(
     query: RetrievalQuery,
     category: FailureCategory,
+    *,
+    retryable: bool = False,
 ) -> EvidenceResult:
     """Return one payload-free failed lexical result."""
     return EvidenceResult.from_query(
@@ -79,7 +82,7 @@ def _failed_result(
         failures=(
             RetrievalFailure(
                 category=category,
-                retryable=False,
+                retryable=retryable,
                 channel=RetrievalChannel.LEXICAL,
             ),
         ),
@@ -87,7 +90,7 @@ def _failed_result(
 
 
 def _map_lexical_failure(error: LexicalError) -> FailureCategory:
-    """Map one bounded lexical failure to RET-01's channel vocabulary."""
+    """Map one bounded lexical failure to the shared channel vocabulary."""
     if error.category in {
         LexicalFailureCategory.GENERATION_UNAVAILABLE,
         LexicalFailureCategory.CORRUPT_GENERATION,
@@ -99,7 +102,7 @@ def _map_lexical_failure(error: LexicalError) -> FailureCategory:
 
 
 def _map_result_failure(result: EvidenceResult) -> FailureMapping | None:
-    """Map a returned RET-01 failure to the shared profiling vocabulary."""
+    """Map a returned retrieval failure to the shared profiling vocabulary."""
     if result.status is not ResultStatus.FAILED:
         return None
     if not result.failures:
@@ -180,12 +183,7 @@ def execute_lexical_retrieval(
     snapshot: CorpusSnapshot | None = None,
     generation: LexicalGeneration | None = None,
 ) -> EvidenceResult:
-    """Execute one lexical query and instrument its bounded retrieval stage.
-
-    Supplied snapshot and generation handles are borrowed, never closed here.
-    This lets serving use one pinned version and one validated lexical handle
-    through retrieval and source-location resolution.
-    """
+    """Execute one lexical query; supplied handles stay owned by the caller."""
     if profiling is not None and not isinstance(profiling, ProfilingContext):
         raise TypeError("profiling must be a ProfilingContext or None.")
     if parent_stage_id is not None and not isinstance(parent_stage_id, str):
@@ -265,7 +263,6 @@ def execute_lexical_retrieval(
                     )
                 else:
                     metadata_stage.mark_failure(_map_metadata_result_failure(result))
-        assert result is not None
         # SQLite FTS5 does not expose a cheap, reliable count of candidates
         # examined by its scorer; leave items_processed unavailable rather than
         # performing a second payload-bearing scan.
@@ -273,7 +270,6 @@ def execute_lexical_retrieval(
         failure = _map_result_failure(result)
         if failure is not None:
             stage.mark_failure(failure)
-    assert result is not None
     return result
 
 
@@ -319,26 +315,16 @@ def _execute_lexical_retrieval(
             if selected_snapshot is None:
                 return _failed_result(query, FailureCategory.CHANNEL_UNAVAILABLE)
             if selected_snapshot.version.corpus_version != query.corpus_version:
-                return EvidenceResult.from_query(
-                    query,
-                    observed_corpus_version=selected_snapshot.version.corpus_version,
-                    hits=(),
-                    status=ResultStatus.FAILED,
-                    failures=(),
+                return EvidenceResult.corpus_version_mismatch(
+                    query, selected_snapshot.version.corpus_version
                 )
-            references = tuple(
-                generation
-                for generation in selected_snapshot.manifest.component_generations
-                if generation.component_kind.as_str() == LEXICAL_COMPONENT_KIND
+            reference = select_ready_component_generation(
+                selected_snapshot.manifest,
+                LEXICAL_COMPONENT_KIND,
+                corpus_id=corpus_id,
+                corpus_version=query.corpus_version,
             )
-            if len(references) != 1:
-                return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
-            reference = references[0]
-            if (
-                reference.state is not ComponentGenerationState.READY
-                or reference.corpus_id != corpus_id
-                or reference.corpus_version != query.corpus_version
-            ):
+            if reference is None:
                 return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
 
             try:
@@ -348,22 +334,9 @@ def _execute_lexical_retrieval(
                     else open_lexical_generation(index_dir, reference.generation_id)
                 )
                 with generation_context as selected_generation:
-                    if (
-                        selected_generation.manifest.corpus_id != corpus_id
-                        or selected_generation.manifest.corpus_version
-                        != query.corpus_version
-                        or selected_generation.manifest.generation_id
-                        != reference.generation_id
-                        or selected_generation.manifest.implementation
-                        != reference.implementation
-                        or selected_generation.manifest.format_version
-                        != reference.format_version
-                        or selected_generation.manifest.contract_version
-                        != reference.contract_version
-                        or selected_generation.manifest.configuration_digest
-                        != reference.configuration_digest
-                        or selected_generation.manifest.source_manifest_digest
-                        != reference.source_manifest_digest
+                    if not generation_matches_reference(
+                        reference,
+                        selected_generation.manifest.component_generation(),
                     ):
                         return _failed_result(
                             query,
@@ -419,11 +392,19 @@ def _execute_lexical_retrieval(
                     and error.category is LexicalFailureCategory.CORRUPT_GENERATION
                 ):
                     failure_category = FailureCategory.CHANNEL_EXECUTION_FAILURE
-                return _failed_result(query, failure_category)
+                return _failed_result(
+                    query, failure_category, retryable=error.retryable
+                )
     except StorageError as error:
         if metadata_observation is not None and isinstance(error, CorruptStorageError):
-            return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
-        return _failed_result(query, FailureCategory.CHANNEL_UNAVAILABLE)
+            return _failed_result(
+                query,
+                FailureCategory.CHANNEL_EXECUTION_FAILURE,
+                retryable=error.retryable,
+            )
+        return _failed_result(
+            query, FailureCategory.CHANNEL_UNAVAILABLE, retryable=error.retryable
+        )
     return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
 
 
@@ -445,14 +426,14 @@ def _normalise_request(
     request: LexicalQuery | RetrievalQuery,
     mode: LexicalMatchMode | None,
 ) -> tuple[RetrievalQuery, LexicalQuery]:
-    """Keep the public query envelope separate from the RET-02 request."""
+    """Keep the public query envelope separate from the lexical request."""
     if isinstance(request, LexicalQuery):
         if mode is not None and mode is not request.mode:
             raise InvalidRetrievalContractError(
                 "mode must match the supplied LexicalQuery."
             )
         return request.query, request
-    selected_mode = LexicalMatchMode.TERMS if mode is None else mode
+    selected_mode = LexicalMatchMode.ANY_TERM if mode is None else mode
     lexical_query = RetrievalQuery(
         request.text,
         request.corpus_version,

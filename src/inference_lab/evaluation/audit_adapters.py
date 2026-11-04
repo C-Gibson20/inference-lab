@@ -31,7 +31,7 @@ def adapt_source_inventory(
     classification: ClassificationInventory,
     discovery: DiscoveryResult,
 ) -> AuditSourceInventory:
-    """Adapt complete ING-02 evidence while dropping source-level metadata."""
+    """Adapt complete discovery evidence while dropping source-level metadata."""
     return AuditSourceInventory.from_ingest(classification, discovery)
 
 
@@ -40,7 +40,7 @@ def adapt_parse_persistence_request(
     *,
     membership: CorpusDocumentVersionMembership,
 ) -> AuditParseObservation:
-    """Adapt one corpus-authorised ING-01 parser attempt.
+    """Adapt one corpus-authorised parser attempt.
 
     The source bytes are inspected only to derive their byte count.  The
     returned observation retains neither the parser input nor any source
@@ -74,7 +74,7 @@ def adapt_reconstructed_parse_outcome(
     media_type: str | None = None,
     source_byte_count: int | None = None,
 ) -> AuditParseObservation:
-    """Adapt a storage-reconstructed ING-01 outcome without storage leakage."""
+    """Adapt a storage-reconstructed parse outcome without storage leakage."""
     if not isinstance(reconstructed, ReconstructedParseOutcome):
         raise TypeError("reconstructed must be a ReconstructedParseOutcome.")
     if not isinstance(membership, CorpusDocumentVersionMembership):

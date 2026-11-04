@@ -26,6 +26,7 @@ from inference_lab.backends.runtime import (
     RerankRequest,
     reranker,
 )
+from inference_lab.backends.runtime.reranker import _MAX_CANDIDATES
 from inference_lab.logging.logging_config import configure_logging
 from inference_lab.provenance import (
     CorpusId,
@@ -52,7 +53,7 @@ from inference_lab.retrieval.reranking import (
     RerankCandidateLimit,
     execute_reranking,
 )
-from inference_lab.settings import LoggingConfig
+from inference_lab.settings import MAX_RERANK_CANDIDATES, LoggingConfig
 
 
 class _TestTokenizer:
@@ -263,7 +264,7 @@ def test_backend_orders_complete_scores_stably_batches_and_applies_top_k(
     assert tuple(item.rank for item in all_results.scored_candidates) == (1, 2, 3, 4, 5)
 
 
-def test_local_backend_adapter_preserves_ret06_source_provenance(
+def test_local_backend_adapter_preserves_reranked_source_provenance(
     loaded_backend: _LoadedBackend,
 ) -> None:
     corpus_id = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
@@ -472,31 +473,67 @@ def test_backend_failure_logs_omit_query_candidate_and_raw_errors(
     assert records[-1]["failure_category"] == "execution"
 
 
-def test_artifact_verification_checks_full_inventory_and_digests(
+def test_artefact_verification_pins_required_files_and_ignores_others(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    asset_dir = tmp_path / "assets"
-    asset_dir.mkdir()
-    files = {"config.json": b"{}", "assets/model-card.png": b"fixture"}
-    for name, payload in files.items():
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
+    required = {"config.json": b"{}", "tokenizer.json": b"[]"}
+    for name, payload in required.items():
+        (tmp_path / name).write_bytes(payload)
     monkeypatch.setattr(
         reranker,
-        "_EXPECTED_ARTEFACT_DIGESTS",
+        "_REQUIRED_ARTEFACT_DIGESTS",
         tuple(
             (name, hashlib.sha256(payload).hexdigest())
-            for name, payload in sorted(files.items())
+            for name, payload in sorted(required.items())
         ),
     )
 
     reranker._verify_local_artefacts(tmp_path)
-    (tmp_path / "extra.txt").write_text("extra", encoding="utf-8")
-    with pytest.raises(ValueError, match="inventory"):
-        reranker._verify_local_artefacts(tmp_path)
-    (tmp_path / "extra.txt").unlink()
+
+    # Operator tooling and caches leave unreferenced files behind; none of
+    # them may prevent a load.
+    (tmp_path / ".DS_Store").write_bytes(b"\x00")
+    (tmp_path / "model.safetensors.lock").write_text("", encoding="utf-8")
+    cache_dir = tmp_path / ".huggingface"
+    cache_dir.mkdir()
+    (cache_dir / "download.metadata").write_text("x", encoding="utf-8")
+    reranker._verify_local_artefacts(tmp_path)
+
     (tmp_path / "config.json").write_text("changed", encoding="utf-8")
-    with pytest.raises(ValueError, match="digest"):
+    with pytest.raises(ValueError, match="identity"):
         reranker._verify_local_artefacts(tmp_path)
+
+    (tmp_path / "config.json").write_bytes(required["config.json"])
+    (tmp_path / "tokenizer.json").unlink()
+    with pytest.raises(ValueError, match="unavailable"):
+        reranker._verify_local_artefacts(tmp_path)
+
+
+def test_configured_candidate_ceiling_matches_the_backend_hard_cap() -> None:
+    # The settings ceiling exists because of this backend's cap. Settings is a
+    # dependency-free leaf and cannot import the backend, so assert equality.
+    assert MAX_RERANK_CANDIDATES == _MAX_CANDIDATES
+
+
+def test_pinned_artefacts_agree_with_the_committed_candidate_manifest() -> None:
+    # The backend source is the authority for what may load. The benchmark
+    # manifest describes the same acquired revision, so every digest the
+    # backend pins must match it, and a drift in either direction is a defect.
+    manifest = json.loads(
+        (
+            Path(__file__).parents[4]
+            / "benchmarks"
+            / "run-05"
+            / "artefact-manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    candidate = manifest[reranker._MODEL_NAME.removeprefix("BAAI/")]
+
+    assert candidate["revision"] == reranker._MODEL_REVISION
+    recorded = candidate["files"]
+    pinned = dict(reranker._REQUIRED_ARTEFACT_DIGESTS)
+    assert set(pinned) <= set(recorded), (
+        "the backend pins a file the acquired revision does not contain"
+    )
+    assert {name: recorded[name] for name in pinned} == pinned

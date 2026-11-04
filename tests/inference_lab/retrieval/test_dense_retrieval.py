@@ -15,7 +15,9 @@ import pytest
 
 from inference_lab.backends.runtime import (
     BackendMetadata,
+    BackendNotReadyError,
     BackendOperation,
+    BackendRequestError,
     EmbeddingProfile,
     EmbeddingRequest,
     EmbeddingResult,
@@ -45,6 +47,7 @@ from inference_lab.provenance import (
     RecordId,
 )
 from inference_lab.retrieval import (
+    DenseBuildRequest,
     DenseIndexCompatibility,
     execute_dense_retrieval,
 )
@@ -110,6 +113,7 @@ class _QueryEmbedder:
             supported_operations=(BackendOperation.EMBED,),
             capabilities=(),
             embedding_dimensions=3,
+            preprocessing_profile_version="1.0.0",
         )
         self.profile = EmbeddingProfile(
             profile_version="1.0.0",
@@ -127,6 +131,7 @@ class _QueryEmbedder:
         )
         self.requests: list[EmbeddingRequest] = []
         self.fail = False
+        self.failure: Exception = RuntimeError("private query embedding marker")
         self.is_ready = True
         self.is_closed = False
         self.output_metadata = self.metadata
@@ -142,7 +147,7 @@ class _QueryEmbedder:
     def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
         self.requests.append(request)
         if self.fail:
-            raise RuntimeError("private query embedding marker")
+            raise self.failure
         vectors = tuple(self._vector(text) for text in request.input_texts)
         return EmbeddingResult(vectors, self.output_metadata, self.output_profile)
 
@@ -292,18 +297,20 @@ def _prepared_query(
     index_dir = tmp_path / "index"
     outcome = build_dense_generation(
         index_dir,
-        source_manifest,
+        DenseBuildRequest(
+            source_manifest=source_manifest,
+            compatibility=compatibility,
+            metadata_db_path=tmp_path / "metadata.sqlite3",
+            source_dir=tmp_path / "sources",
+        ),
         embedder,
-        metadata_db_path=tmp_path / "metadata.sqlite3",
-        source_dir=tmp_path / "sources",
-        compatibility=compatibility,
     )
     reference = replace(
         outcome.manifest.component_generation(),
         state=ComponentGenerationState.READY,
     )
     with open_dense_generation(index_dir, outcome.manifest.generation_id) as opened:
-        entries = opened.iter_entries()
+        entries = opened.read_entries()
     snapshot = _Snapshot(CORPUS_ID, _VERSION, reference, entries)
     return _Repository(snapshot), snapshot, embedder, index_dir
 
@@ -424,15 +431,17 @@ def test_query_against_empty_generation_completes_without_embedding(
     )
     outcome = build_dense_generation(
         tmp_path / "index",
-        source,
-        embedder,
-        metadata_db_path=tmp_path / "metadata.sqlite3",
-        source_dir=tmp_path / "sources",
-        compatibility=DenseIndexCompatibility(
-            model_metadata=embedder.metadata,
-            dimensions=3,
-            embedding_profile=embedder.profile,
+        DenseBuildRequest(
+            source_manifest=source,
+            compatibility=DenseIndexCompatibility(
+                model_metadata=embedder.metadata,
+                dimensions=3,
+                embedding_profile=embedder.profile,
+            ),
+            metadata_db_path=tmp_path / "metadata.sqlite3",
+            source_dir=tmp_path / "sources",
         ),
+        embedder,
     )
     reference = replace(
         outcome.manifest.component_generation(),
@@ -488,11 +497,23 @@ def test_dense_rejects_cross_corpus_or_nonmember_hits(
     assert result.failures[0].category is expected_category
 
 
-def test_dense_embedding_failures_are_bounded_and_do_not_leak_query_text(
+@pytest.mark.parametrize(
+    ("failure", "expected_retryable"),
+    [
+        (BackendNotReadyError("private query embedding marker"), True),
+        (BackendRequestError("private query embedding marker"), False),
+        (RuntimeError("private query embedding marker"), False),
+    ],
+    ids=["retryable_backend", "non_retryable_backend", "undeclared_exception"],
+)
+def test_dense_embedding_failures_report_backend_retryability_without_query_text(
     tmp_path: Path,
+    failure: Exception,
+    expected_retryable: bool,
 ) -> None:
     repository, _, embedder, index_dir = _prepared_query(tmp_path)
     embedder.fail = True
+    embedder.failure = failure
 
     result = _execute(
         repository,
@@ -503,8 +524,9 @@ def test_dense_embedding_failures_are_bounded_and_do_not_leak_query_text(
 
     assert result.status is ResultStatus.FAILED
     assert result.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
-    assert result.failures[0].retryable
+    assert result.failures[0].retryable is expected_retryable
     assert "secret query marker" not in repr(result)
+    assert "private query embedding marker" not in repr(result)
 
 
 def test_dense_rejects_query_embedding_profile_mismatch(tmp_path: Path) -> None:
@@ -655,11 +677,13 @@ def test_RET_04_committed_dense_generation_reopens_and_corruption_fails_closed(
     )
     outcome = build_dense_generation(
         index_dir,
-        source_manifest,
+        DenseBuildRequest(
+            source_manifest=source_manifest,
+            compatibility=compatibility,
+            metadata_db_path=database_path,
+            source_dir=source_dir,
+        ),
         embedder,
-        metadata_db_path=database_path,
-        source_dir=source_dir,
-        compatibility=compatibility,
     )
     from inference_lab.retrieval import DenseGenerationParticipant
 
@@ -787,12 +811,12 @@ def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new
         dimensions=3,
         embedding_profile=rebuilding_embedder.profile,
     )
-    build_arguments = {
-        "expected_corpus_version": _VERSION,
-        "metadata_db_path": tmp_path / "metadata.sqlite3",
-        "source_dir": tmp_path / "sources",
-        "compatibility": compatibility,
-    }
+    build_request = DenseBuildRequest(
+        source_manifest=proposed_manifest,
+        compatibility=compatibility,
+        metadata_db_path=tmp_path / "metadata.sqlite3",
+        source_dir=tmp_path / "sources",
+    )
     generation_ids_before = {
         generation_path.name for generation_path in (index_dir / "dense").iterdir()
     }
@@ -801,10 +825,10 @@ def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new
     with pytest.raises(DenseError) as failure:
         build_dense_generation_for_corpus_update(
             index_dir,
-            proposed_manifest,
+            build_request,
             rebuilding_embedder,
             cast(MetadataRepository, repository),
-            **build_arguments,
+            expected_corpus_version=_VERSION,
         )
 
     assert failure.value.category is DenseFailureCategory.EMBEDDING_FAILURE
@@ -820,10 +844,10 @@ def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new
     rebuilding_embedder.fail = False
     rebuilt = build_dense_generation_for_corpus_update(
         index_dir,
-        proposed_manifest,
+        build_request,
         rebuilding_embedder,
         cast(MetadataRepository, repository),
-        **build_arguments,
+        expected_corpus_version=_VERSION,
     )
 
     assert rebuilt.manifest.generation_id != active_reference.generation_id
@@ -831,6 +855,6 @@ def test_RET_04_failed_rebuild_keeps_prior_generation_serving_and_success_is_new
     assert rebuilt.statistics.reused_vectors == 0
     assert old_database.read_bytes() == old_database_bytes
     with open_dense_generation(index_dir, rebuilt.manifest.generation_id) as opened:
-        assert tuple(entry.candidate.content for entry in opened.iter_entries()) == (
+        assert tuple(entry.candidate.content for entry in opened.read_entries()) == (
             "alpha passage",
         )
