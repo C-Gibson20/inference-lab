@@ -87,7 +87,13 @@ Results are scoped to one corpus version:
 - `failed` has no hits and at least one typed failure.
 
 Every result retains the query's `requested_limit` and must contain no more
-hits than that limit. A corpus-version mismatch fails closed: an unscoped
+hits than that limit. A stage that detects a mismatch returns
+`EvidenceResult.corpus_version_mismatch(query, observed)`, which rejects an
+observed version equal to the requested one so a matching version can never
+report a mismatch. `from_query` keeps the same override as a backstop for a
+stage that does not check, and discards any hits it was given.
+
+A corpus-version mismatch fails closed: an unscoped
 mismatch requires a failed, hit-free result, while a channel-scoped mismatch
 may appear in a partial aggregate only when none of its hits contains a score
 contribution from that channel. Failure values expose only a bounded category,
@@ -425,7 +431,12 @@ passages, raw scores, paths, and raw exception messages.
 ## RET-06 limits
 
 Reranking uses the typed `[retrieval]` settings owned by
-`inference_lab.settings.RetrievalConfig`:
+`inference_lab.settings.RetrievalConfig`. Callers build the typed limits with
+`EvidenceCount.from_config` and `RerankCandidateLimit.from_config`; both limits
+are required arguments at every reranking entry point, so a deployment cannot
+fall back to the baseline silently. `settings` declares `MIN_EVIDENCE_COUNT`,
+`MAX_EVIDENCE_COUNT`, and `MAX_RERANK_CANDIDATES`, and the retrieval values
+enforce exactly those bounds:
 
 | Setting | Environment override | Default | Valid range |
 | --- | --- | --- | --- |
@@ -444,9 +455,18 @@ policy and exact-deduplication versions. Its SHA-256 digest covers all of
 these fields. Identity values must not include deployment paths; raw scores,
 queries, passages, and prompts are not part of the identity.
 
+Every outcome also reports the candidate pool it actually worked on:
+`available_candidate_count` is the fused pool it was given,
+`submitted_candidate_count` is the pool the backend request contained, and
+`truncated_candidate_count` is the difference. These are taken from the
+prepared request rather than recomputed, and the available count is reported
+as observed, so a fused pool larger than the configured ceiling is visible
+instead of being clamped to it.
+
 The `reranking_completed` structured event includes the caller-supplied
-`corpus_id` and query-pinned `corpus_version`, bounded candidate and evidence
-counts, configured limits, result status, degraded state, a typed failure
+`corpus_id` and query-pinned `corpus_version`, the three candidate-pool counts
+above, the selected evidence count, configured limits, result status, degraded
+state, a typed failure
 category when present, the stable identity fields and digest, and elapsed
 milliseconds. It excludes query and candidate text, source passages, raw
 scores, prompts, raw exception messages, credentials, and deployment paths.
@@ -470,12 +490,27 @@ malformed responses, and corpus-version mismatches fail closed without hits.
 `reduce_retrieval_evidence` accepts one RET-06 `EvidenceResult`, a pinned
 `CorpusSnapshot`, the matching immutable lexical generation, an explicit local
 offset-bearing tokeniser, and validated `RetrievalConfig`. It rejects a corpus
-or version mismatch before reading candidate source data. The default token
+or version mismatch before reading candidate source data, and distinguishes the
+three ways that check can fail: `corpus_version_mismatch` when the snapshot,
+result, or generation disagree about the corpus version;
+`component_unavailable` when the snapshot publishes no ready lexical component;
+and `component_mismatch` when a ready component is not the generation that was
+opened. A missing index and a stale index need different operator responses, so
+they are never reported as the same cause.
+
+Reduction failures name the cause the operator must act on. An item evicted
+because the token budget is exhausted is recorded as `dropped_budget` even when
+it had already been truncated; `failed_source_map` and its `source_map_*`
+failures are reserved for a candidate whose source ranges are genuinely absent
+or unusable. The default token
 ceiling is `retrieval.evidence_token_budget = 4096`; a request may supply a
 positive token-budget override. The default item ceiling is RET-06's configured
 `evidence_count` (at most eight by default), further capped by the request's
 result limit and an optional lower per-request item limit. The configured
-diversity policy defaults to `none`; `per_document` keeps the first
+diversity policy is the typed `EvidenceDiversityPolicy` owned by `settings`,
+which is where the supported values are fixed; a reserved value such as
+`per_family` is therefore rejected by configuration validation rather than
+compared as a bare string. It defaults to `none`; `per_document` keeps the first
 (highest-ranked) candidate for a document and drops later candidates for that
 document. A request may override this policy for one call. Selection follows
 RET-06 order and never re-ranks evidence.
@@ -504,6 +539,22 @@ bounded counts, tokeniser and policy identity, and elapsed time. Each
 bounded mapping counts. Failed calls emit a typed `ERROR` event. None of these
 events includes candidate text, queries, prompts, token IDs, paths or raw
 exceptions.
+
+## Operational failures
+
+Every failure crossing an operational retrieval boundary derives from
+`RetrievalOperationalError`. It carries a category drawn from that boundary's
+own `StrEnum` and an explicit `retryable` hint, and nothing else: no query
+text, candidate content, stored payloads, or paths. The concrete boundaries are
+`LexicalError`, `DenseError`, `EvidenceTokeniserError`, and
+`EvidenceReductionExecutionError`.
+
+Retryability is owned by the layer that failed and is propagated outwards, not
+re-decided by the caller. A channel executor copies the retry hint from the
+`BackendError`, `StorageError`, or boundary error it caught into the resulting
+`RetrievalFailure`. An exception a dependency does not declare retryable is
+reported as not retryable, so a caller never retries a request or protocol
+error indefinitely.
 
 ## Serialisation and privacy
 

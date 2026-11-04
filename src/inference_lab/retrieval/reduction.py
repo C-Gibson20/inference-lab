@@ -6,11 +6,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from inference_lab._validation import is_canonical_semantic_version, is_strict_integer
 from inference_lab.provenance import CorpusId, CorpusVersionId, RecordId
-from inference_lab.retrieval.errors import InvalidRetrievalContractError
+from inference_lab.retrieval.errors import (
+    InvalidRetrievalContractError,
+    RetrievalOperationalError,
+)
 from inference_lab.retrieval.evidence import (
     EvidenceHit,
     EvidenceSource,
@@ -21,19 +24,29 @@ from inference_lab.retrieval.results import (
     ResultStatus,
     RetrievalFailure,
 )
+from inference_lab.settings import EvidenceDiversityPolicy
 
 EVIDENCE_SEPARATOR = "\n\n"
 REDUCTION_POLICY_VERSION = "1.0.0"
 REDUCTION_ACCOUNTING_VERSION = "1.0.0"
 
 
-class EvidenceTokeniserError(ValueError):
+class EvidenceTokeniserFailureCategory(StrEnum):
+    """Bounded reasons the evidence tokeniser boundary could not be used."""
+
+    TOKENISER_UNAVAILABLE = "tokeniser_unavailable"
+    UNMEASURABLE_TEXT = "unmeasurable_text"
+    INVALID_TOKENISER_OUTPUT = "invalid_tokeniser_output"
+    INVALID_TOKEN_OFFSETS = "invalid_token_offsets"
+    INCONSISTENT_TOKEN_COUNT = "inconsistent_token_count"
+
+
+class EvidenceTokeniserError(
+    RetrievalOperationalError[EvidenceTokeniserFailureCategory]
+):
     """Report a bounded failure at the evidence tokeniser boundary."""
 
-    def __init__(self, category: str) -> None:
-        """Create a payload-free tokeniser error."""
-        super().__init__(category)
-        self.category = category
+    category_type = EvidenceTokeniserFailureCategory
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,7 +306,7 @@ class EvidenceReductionIdentity:
     tokeniser: EvidenceTokeniserIdentity
     token_budget: int
     item_budget: int
-    diversity_policy: Literal["none", "per_document"] = "none"
+    diversity_policy: EvidenceDiversityPolicy = EvidenceDiversityPolicy.NONE
     separator: str = EVIDENCE_SEPARATOR
     policy_version: str = REDUCTION_POLICY_VERSION
     accounting_version: str = REDUCTION_ACCOUNTING_VERSION
@@ -319,17 +332,15 @@ class EvidenceReductionIdentity:
             self.policy_version
         ) or not is_canonical_semantic_version(self.accounting_version):
             raise ValueError("reduction versions must be semantic versions.")
-        if not isinstance(self.diversity_policy, str):
-            raise TypeError("diversity_policy must be a string.")
-        if self.diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        if not isinstance(self.diversity_policy, EvidenceDiversityPolicy):
+            raise TypeError("diversity_policy must be an EvidenceDiversityPolicy.")
 
     @property
     def digest(self) -> str:
         """Return a stable digest of every reduction-affecting identity field."""
         payload = {
             "accounting_version": self.accounting_version,
-            "diversity_policy": self.diversity_policy,
+            "diversity_policy": self.diversity_policy.value,
             "item_budget": self.item_budget,
             "policy_version": self.policy_version,
             "separator": self.separator,
@@ -356,7 +367,7 @@ class EvidenceReductionRequest:
     token_budget: int
     item_budget: int
     source_ranges: Mapping[RecordId, tuple[EvidenceTextSourceRange, ...]]
-    diversity_policy: Literal["none", "per_document"] = "none"
+    diversity_policy: EvidenceDiversityPolicy = EvidenceDiversityPolicy.NONE
 
     def __post_init__(self) -> None:
         self._validate()
@@ -383,10 +394,8 @@ class EvidenceReductionRequest:
             raise ValueError("item_budget must be a positive integer.")
         if self.item_budget > self.result.requested_limit.value:
             raise ValueError("item_budget must not exceed the retrieval result limit.")
-        if not isinstance(self.diversity_policy, str):
-            raise TypeError("diversity_policy must be a string.")
-        if self.diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        if not isinstance(self.diversity_policy, EvidenceDiversityPolicy):
+            raise TypeError("diversity_policy must be an EvidenceDiversityPolicy.")
         if not isinstance(self.source_ranges, Mapping):
             raise TypeError("source_ranges must be a mapping.")
         for record_id, ranges in self.source_ranges.items():
@@ -483,7 +492,7 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
     for hit in considered:
         candidate = hit.candidate
         document_ids = {source.document_id.as_str() for source in candidate.sources}
-        if request.diversity_policy == "per_document" and (
+        if request.diversity_policy is EvidenceDiversityPolicy.PER_DOCUMENT and (
             not document_ids or seen_documents.intersection(document_ids)
         ):
             dropped += 1
@@ -493,7 +502,7 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
                 )
             )
             continue
-        if request.diversity_policy == "per_document":
+        if request.diversity_policy is EvidenceDiversityPolicy.PER_DOCUMENT:
             seen_documents.update(document_ids)
         full_text = candidate.content
         if (
@@ -590,19 +599,12 @@ def reduce_evidence(request: EvidenceReductionRequest) -> EvidenceReductionOutco
         removed = items.pop()
         dropped += 1
         final_count = _count_joined(request.tokeniser, [item.text for item in items])
-        if removed.action is EvidenceReductionAction.TRUNCATED:
-            failures.append(
-                EvidenceReductionFailure(
-                    removed.hit.candidate.record_id, "source_map_invalid"
-                )
-            )
-            action = EvidenceReductionAction.FAILED_SOURCE_MAP
-        else:
-            action = EvidenceReductionAction.DROPPED_BUDGET
+        # A truncated item that still does not fit was evicted by the budget,
+        # not by a defective source map.
         decisions = [
             EvidenceReductionDecision(
                 decision.record_id,
-                action
+                EvidenceReductionAction.DROPPED_BUDGET
                 if decision.record_id == removed.hit.candidate.record_id
                 else decision.action,
             )
@@ -714,9 +716,11 @@ def _count_joined(tokeniser: EvidenceTokeniser, values: list[str]) -> int:
     try:
         count = tokeniser.count_tokens(EVIDENCE_SEPARATOR.join(values))
     except Exception:
-        raise EvidenceTokeniserError("tokeniser_unavailable") from None
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.TOKENISER_UNAVAILABLE
+        ) from None
     if not is_strict_integer(count) or count < 0:
-        raise EvidenceTokeniserError("unmeasurable_text")
+        raise EvidenceTokeniserError(EvidenceTokeniserFailureCategory.UNMEASURABLE_TEXT)
     return count
 
 
@@ -725,18 +729,28 @@ def _tokenise(tokeniser: EvidenceTokeniser, text: str) -> EvidenceTokenisation:
     try:
         result = tokeniser.tokenise(text)
     except Exception:
-        raise EvidenceTokeniserError("tokeniser_unavailable") from None
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.TOKENISER_UNAVAILABLE
+        ) from None
     if not isinstance(result, EvidenceTokenisation):
-        raise EvidenceTokeniserError("invalid_tokeniser_output")
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.INVALID_TOKENISER_OUTPUT
+        )
     previous_end = 0
     for offset in result.offsets:
         if offset.end > len(text) or offset.start < previous_end:
-            raise EvidenceTokeniserError("invalid_token_offsets")
+            raise EvidenceTokeniserError(
+                EvidenceTokeniserFailureCategory.INVALID_TOKEN_OFFSETS
+            )
         previous_end = offset.end
     try:
         count = tokeniser.count_tokens(text)
     except Exception:
-        raise EvidenceTokeniserError("tokeniser_unavailable") from None
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.TOKENISER_UNAVAILABLE
+        ) from None
     if not is_strict_integer(count) or count != len(result.offsets):
-        raise EvidenceTokeniserError("inconsistent_token_count")
+        raise EvidenceTokeniserError(
+            EvidenceTokeniserFailureCategory.INCONSISTENT_TOKEN_COUNT
+        )
     return result

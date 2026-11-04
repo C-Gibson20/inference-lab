@@ -15,7 +15,9 @@ import pytest
 
 from inference_lab.backends.runtime import (
     BackendMetadata,
+    BackendNotReadyError,
     BackendOperation,
+    BackendRequestError,
     EmbeddingProfile,
     EmbeddingRequest,
     EmbeddingResult,
@@ -127,6 +129,7 @@ class _QueryEmbedder:
         )
         self.requests: list[EmbeddingRequest] = []
         self.fail = False
+        self.failure: Exception = RuntimeError("private query embedding marker")
         self.is_ready = True
         self.is_closed = False
         self.output_metadata = self.metadata
@@ -142,7 +145,7 @@ class _QueryEmbedder:
     def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
         self.requests.append(request)
         if self.fail:
-            raise RuntimeError("private query embedding marker")
+            raise self.failure
         vectors = tuple(self._vector(text) for text in request.input_texts)
         return EmbeddingResult(vectors, self.output_metadata, self.output_profile)
 
@@ -488,11 +491,23 @@ def test_dense_rejects_cross_corpus_or_nonmember_hits(
     assert result.failures[0].category is expected_category
 
 
-def test_dense_embedding_failures_are_bounded_and_do_not_leak_query_text(
+@pytest.mark.parametrize(
+    ("failure", "expected_retryable"),
+    [
+        (BackendNotReadyError("private query embedding marker"), True),
+        (BackendRequestError("private query embedding marker"), False),
+        (RuntimeError("private query embedding marker"), False),
+    ],
+    ids=["retryable_backend", "non_retryable_backend", "undeclared_exception"],
+)
+def test_dense_embedding_failures_report_backend_retryability_without_query_text(
     tmp_path: Path,
+    failure: Exception,
+    expected_retryable: bool,
 ) -> None:
     repository, _, embedder, index_dir = _prepared_query(tmp_path)
     embedder.fail = True
+    embedder.failure = failure
 
     result = _execute(
         repository,
@@ -503,8 +518,9 @@ def test_dense_embedding_failures_are_bounded_and_do_not_leak_query_text(
 
     assert result.status is ResultStatus.FAILED
     assert result.failures[0].category is FailureCategory.CHANNEL_EXECUTION_FAILURE
-    assert result.failures[0].retryable
+    assert result.failures[0].retryable is expected_retryable
     assert "secret query marker" not in repr(result)
+    assert "private query embedding marker" not in repr(result)
 
 
 def test_dense_rejects_query_embedding_profile_mismatch(tmp_path: Path) -> None:

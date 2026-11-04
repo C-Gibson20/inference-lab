@@ -65,6 +65,7 @@ from inference_lab.retrieval.dense import (
     DenseVector,
     InvalidDenseContractError,
 )
+from inference_lab.retrieval.errors import RetrievalOperationalError
 from inference_lab.retrieval.evidence import (
     CandidateKind,
     EvidenceSource,
@@ -98,24 +99,10 @@ class DenseFailureCategory(StrEnum):
     EXECUTION_FAILURE = "execution_failure"
 
 
-class DenseError(RuntimeError):
+class DenseError(RetrievalOperationalError[DenseFailureCategory]):
     """A privacy-safe failure from dense generation operations."""
 
-    def __init__(self, category: str, *, retryable: bool = False) -> None:
-        if category not in {
-            DenseFailureCategory.INVALID_REQUEST,
-            DenseFailureCategory.GENERATION_UNAVAILABLE,
-            DenseFailureCategory.CORRUPT_GENERATION,
-            DenseFailureCategory.INCOMPATIBLE_GENERATION,
-            DenseFailureCategory.EMBEDDING_FAILURE,
-            DenseFailureCategory.EXECUTION_FAILURE,
-        }:
-            raise ValueError("category must be a supported dense failure category.")
-        if type(retryable) is not bool:
-            raise TypeError("retryable must be a boolean.")
-        super().__init__(category)
-        self.category = category
-        self.retryable = retryable
+    category_type = DenseFailureCategory
 
 
 @dataclass(frozen=True, slots=True)

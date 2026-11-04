@@ -36,8 +36,8 @@ class LocalRerankedEvaluationAdapter:
         fused_adapter: LocalFusedEvaluationAdapter,
         reranker: RerankerBackend,
         *,
-        evidence_count: EvidenceCount = EvidenceCount(),
-        candidate_limit: RerankCandidateLimit = RerankCandidateLimit(),
+        evidence_count: EvidenceCount,
+        candidate_limit: RerankCandidateLimit,
     ) -> None:
         if not isinstance(fused_adapter, LocalFusedEvaluationAdapter):
             raise TypeError("fused_adapter must be a LocalFusedEvaluationAdapter.")

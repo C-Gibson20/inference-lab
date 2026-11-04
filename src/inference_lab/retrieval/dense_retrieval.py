@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import cast
 
 from inference_lab.backends.runtime import (
+    BackendError,
     EmbeddingBackend,
     EmbeddingOptions,
     EmbeddingRequest,
@@ -209,12 +210,8 @@ def _execute_dense_retrieval(
             if selected_snapshot.corpus_id != corpus_id:
                 return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
             if selected_snapshot.version.corpus_version != query.corpus_version:
-                return EvidenceResult.from_query(
-                    query,
-                    observed_corpus_version=selected_snapshot.version.corpus_version,
-                    hits=(),
-                    status=ResultStatus.FAILED,
-                    failures=(),
+                return EvidenceResult.corpus_version_mismatch(
+                    query, selected_snapshot.version.corpus_version
                 )
 
             reference = select_ready_component_generation(
@@ -259,11 +256,18 @@ def _execute_dense_retrieval(
                             purpose="query",
                         )
                     )
+                except BackendError as error:
+                    # The backend owns retryability; a request or protocol
+                    # error must not be reported as worth retrying.
+                    return _failed_result(
+                        query,
+                        FailureCategory.CHANNEL_EXECUTION_FAILURE,
+                        retryable=error.retryable,
+                    )
                 except Exception:
                     return _failed_result(
                         query,
                         FailureCategory.CHANNEL_EXECUTION_FAILURE,
-                        retryable=True,
                     )
 
                 compatibility = selected_generation.manifest.compatibility
@@ -312,14 +316,16 @@ def _execute_dense_retrieval(
     except InvalidMetadataFilterError:
         return _failed_result(query, FailureCategory.INVALID_CHANNEL_RESPONSE)
     except DenseError as error:
-        return _failed_result(query, _map_dense_failure(error))
+        return _failed_result(
+            query, _map_dense_failure(error), retryable=error.retryable
+        )
     except StorageError as error:
         category = (
             FailureCategory.CHANNEL_EXECUTION_FAILURE
             if validation is not None and isinstance(error, CorruptStorageError)
             else FailureCategory.CHANNEL_UNAVAILABLE
         )
-        return _failed_result(query, category)
+        return _failed_result(query, category, retryable=error.retryable)
     except (AttributeError, OSError, TypeError, ValueError, KeyError, IndexError):
         return _failed_result(query, FailureCategory.CHANNEL_EXECUTION_FAILURE)
 

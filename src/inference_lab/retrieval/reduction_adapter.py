@@ -2,7 +2,6 @@
 
 import time
 from enum import StrEnum
-from typing import Literal
 
 import structlog
 
@@ -11,6 +10,7 @@ from inference_lab.ingest import (
     build_canonical_source_boundary_map,
 )
 from inference_lab.provenance import CorpusId, CorpusVersionId, RecordId
+from inference_lab.retrieval.errors import RetrievalOperationalError
 from inference_lab.retrieval.evidence import EvidenceSource
 from inference_lab.retrieval.lexical_store import (
     LexicalGeneration,
@@ -29,7 +29,7 @@ from inference_lab.retrieval.reduction import (
     reduce_evidence,
 )
 from inference_lab.retrieval.results import EvidenceResult
-from inference_lab.settings import RetrievalConfig
+from inference_lab.settings import EvidenceDiversityPolicy, RetrievalConfig
 from inference_lab.storage import (
     CorpusSnapshot,
     generation_matches_reference,
@@ -43,6 +43,7 @@ class EvidenceReductionFailureCategory(StrEnum):
     """Bounded reasons the evidence-reduction boundary could not complete."""
 
     CORPUS_VERSION_MISMATCH = "corpus_version_mismatch"
+    COMPONENT_UNAVAILABLE = "component_unavailable"
     COMPONENT_MISMATCH = "component_mismatch"
     TOKENISER_MISMATCH = "tokeniser_mismatch"
     TOKENISER_UNAVAILABLE = "tokeniser_unavailable"
@@ -50,12 +51,12 @@ class EvidenceReductionFailureCategory(StrEnum):
     REDUCTION_FAILURE = "reduction_failure"
 
 
-class EvidenceReductionExecutionError(RuntimeError):
+class EvidenceReductionExecutionError(
+    RetrievalOperationalError[EvidenceReductionFailureCategory]
+):
     """A privacy-safe failure raised by the evidence-reduction execution boundary."""
 
-    def __init__(self, category: EvidenceReductionFailureCategory) -> None:
-        self.category = category
-        super().__init__(category.value)
+    category_type = EvidenceReductionFailureCategory
 
 
 def reduce_retrieval_evidence(
@@ -68,7 +69,7 @@ def reduce_retrieval_evidence(
     *,
     token_budget_override: int | None = None,
     item_budget_override: int | None = None,
-    diversity_policy_override: Literal["none", "per_document"] | None = None,
+    diversity_policy_override: EvidenceDiversityPolicy | None = None,
     expected_tokeniser_identity: EvidenceTokeniserIdentity | None = None,
 ) -> EvidenceReductionOutcome:
     """Reduce one reranked result against its exact pinned corpus snapshot."""
@@ -116,10 +117,12 @@ def reduce_retrieval_evidence(
             corpus_id=corpus_id,
             corpus_version=corpus_version,
         )
+        if reference is None:
+            raise EvidenceReductionExecutionError(
+                EvidenceReductionFailureCategory.COMPONENT_UNAVAILABLE
+            )
         manifest = generation.manifest
-        if reference is None or not generation_matches_reference(
-            reference, manifest.component_generation()
-        ):
+        if not generation_matches_reference(reference, manifest.component_generation()):
             raise EvidenceReductionExecutionError(
                 EvidenceReductionFailureCategory.COMPONENT_MISMATCH
             )
@@ -173,10 +176,10 @@ def reduce_retrieval_evidence(
             if diversity_policy_override is None
             else diversity_policy_override
         )
-        if not isinstance(diversity_policy, str):
-            raise TypeError("diversity policy override must be a string.")
-        if diversity_policy not in {"none", "per_document"}:
-            raise ValueError("unsupported diversity policy.")
+        if not isinstance(diversity_policy, EvidenceDiversityPolicy):
+            raise TypeError(
+                "diversity_policy_override must be an EvidenceDiversityPolicy."
+            )
         source_ranges: dict[RecordId, tuple[EvidenceTextSourceRange, ...]] = {}
         for hit in result.hits[:item_budget]:
             mapped = _source_ranges_for_candidate(

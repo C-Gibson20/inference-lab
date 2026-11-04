@@ -19,7 +19,10 @@ from inference_lab.provenance import (
     DigestAlgorithm,
     RecordId,
 )
-from inference_lab.retrieval.errors import InvalidRetrievalContractError
+from inference_lab.retrieval.errors import (
+    InvalidRetrievalContractError,
+    RetrievalOperationalError,
+)
 from inference_lab.retrieval.lexical_store_models import LEXICAL_COMPONENT_KIND
 from inference_lab.retrieval.query import RetrievalQuery
 from inference_lab.storage import (
@@ -80,14 +83,10 @@ class LexicalFailureCategory(StrEnum):
     CANCELLED = "cancelled"
 
 
-class LexicalError(Exception):
+class LexicalError(RetrievalOperationalError[LexicalFailureCategory]):
     """A lexical operational failure containing only a bounded category."""
 
-    def __init__(self, category: LexicalFailureCategory) -> None:
-        if not isinstance(category, LexicalFailureCategory):
-            raise TypeError("category must be a LexicalFailureCategory.")
-        super().__init__(category.value)
-        self.category = category
+    category_type = LexicalFailureCategory
 
 
 class InvalidLexicalContractError(InvalidRetrievalContractError):

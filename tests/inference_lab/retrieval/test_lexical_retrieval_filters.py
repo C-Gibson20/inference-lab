@@ -44,6 +44,8 @@ from inference_lab.storage import (
     CorruptStorageError,
     MetadataRepository,
     RepositoryUnavailableError,
+    StorageConcurrencyError,
+    StorageError,
 )
 
 CORPUS_ID = CorpusId.from_str("00000000-0000-4000-8000-000000000001")
@@ -335,7 +337,18 @@ def test_execute_filtered_retrieval_uses_pinned_generation_and_preserves_hits(
     assert snapshot.closed is True
 
 
-def test_profiled_unavailable_dependency_returns_safe_failed_result() -> None:
+@pytest.mark.parametrize(
+    ("storage_error", "expected_retryable"),
+    [
+        (RepositoryUnavailableError, False),
+        (StorageConcurrencyError, True),
+    ],
+    ids=["permanent", "transient"],
+)
+def test_profiled_unavailable_dependency_returns_safe_failed_result(
+    storage_error: type[StorageError],
+    expected_retryable: bool,
+) -> None:
     query = _query(
         text="private-query-marker",
         filter_expression=ExactFilter("language", "private-filter-marker"),
@@ -343,7 +356,7 @@ def test_profiled_unavailable_dependency_returns_safe_failed_result() -> None:
 
     class _UnavailableRepository:
         def open_corpus_snapshot(self, *_: object) -> None:
-            raise RepositoryUnavailableError()
+            raise storage_error()
 
     sink = _CollectingSink()
     result = lexical_retrieval.execute_lexical_retrieval(
@@ -356,6 +369,7 @@ def test_profiled_unavailable_dependency_returns_safe_failed_result() -> None:
 
     assert result.status is ResultStatus.FAILED
     assert result.hits == ()
+    assert result.failures[0].retryable is expected_retryable
     assert _metadata_completions(sink)[0].status == "failed"
     assert _metadata_completions(sink)[0].items_processed is None
     assert _metadata_completions(sink)[0].records_emitted is None
